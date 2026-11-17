@@ -1,5 +1,3 @@
-"""``documents.py expire``: what has expired is read from the tree, and deleted with its answers."""
-
 import datetime as dt
 from pathlib import Path
 

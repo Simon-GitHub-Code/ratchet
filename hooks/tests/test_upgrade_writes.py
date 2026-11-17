@@ -1,10 +1,3 @@
-"""What an upgrade writes by itself, so that no safeguard it binds is off and none it leaves is hid.
-
-Each edit here is one the upgrade makes without judgement: the template's own text, a gate the
-plugin ships, or the day-one value adoption writes. What needs judgement stays for an agent, and
-the checks that do not run until it is done are named.
-"""
-
 import json
 import shutil
 import subprocess
@@ -46,7 +39,6 @@ def repo(tmp_path: Path) -> Path:
 
 
 def settle(root: Path) -> list[conformance.Finding]:
-    """Make every edit the upgrade would make of ``root``, in place; what is left after."""
     return upgrade.converge(root, {}).left
 
 
@@ -157,8 +149,6 @@ def test_a_change_ceiling_the_project_set_is_left_as_it_is(repo: Path) -> None:
 
 
 def test_the_older_change_ceiling_moves_to_product_keys_at_the_same_values(repo: Path) -> None:
-    # Why: ADR 0045. The values carry over unchanged, so the move loosens nothing and the lowered
-    # gate reads it as the same ceiling; only the tests get a ceiling of their own.
     replace(THRESHOLDS, LIVE_CEILING, "[ceilings.change]\nfiles = 12\nlines = 700\n")(repo)
     [found] = [f for f in conformance.findings(repo) if "ceilings.change" in f.problem]
     assert isinstance(found.fix, conformance.Auto)
@@ -294,7 +284,6 @@ def test_a_gate_the_plugin_ships_that_no_tier_runs_is_named_and_left_when_the_ti
 
 
 def tiers_by_name(root: Path) -> str:
-    """The template justfile with tier 0 naming its gates, as older templates did; the names."""
     justfile = text(root, JUSTFILE)
     gates = justfile_text.STRING.search(
         next(line for line in justfile.splitlines() if line.startswith("tier0_tree_gates :="))

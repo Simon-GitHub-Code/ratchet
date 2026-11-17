@@ -1,16 +1,3 @@
-"""What a scripted session may do: a short list of tools, and a shell that reaches no forge.
-
-The driver puts every tool call through ``decide`` twice: in a PreToolUse hook, which sees each
-call, and in ``can_use_tool``, which sees each prompt. A tool that is not in ``TOOLS`` is denied;
-nothing is approved by default.
-
-For a shell command this is the layer that says no first, so that each refusal is recorded and
-the session is told why; the sandbox (``sandbox.py``) is what makes a write outside the run, a
-read of the operator's files and a forge login impossible when a command gets past it. The file
-tools run in the Claude Code process, outside the sandbox, so for them this is the only layer:
-their paths are judged as that process sees them, links followed.
-"""
-
 from __future__ import annotations
 
 import os
@@ -27,8 +14,6 @@ if TYPE_CHECKING:
 
 
 class Kind(StrEnum):
-    """What a tool touches, which decides how its input is judged."""
-
     READ = "read"
     WRITE = "write"
     SHELL = "shell"
@@ -39,8 +24,6 @@ class Kind(StrEnum):
 
 @dataclass(frozen=True)
 class Tool:
-    """How a tool on the list is judged: what it touches, and which input keys name a path."""
-
     kind: Kind
     paths: tuple[str, ...] = ()
 
@@ -67,12 +50,8 @@ TOOLS: Mapping[str, Tool] = {
     "TaskStop": Tool(Kind.SESSION),
     "ToolSearch": Tool(Kind.SESSION),
     "SendMessage": Tool(Kind.MESSAGE),
-    # Why: a workflow agent or subagent given a `schema` returns its result through this tool.
-    # Without it the `/ratchet:feature` pipeline cannot finish its first step.
     "StructuredOutput": Tool(Kind.SESSION),
 }
-# Why: named so the CLI refuses them before the model can call them; `decide` denies every tool
-# not in TOOLS whatever this list says.
 DENIED_TOOLS = (
     "Monitor",
     "WebFetch",
@@ -103,10 +82,7 @@ SECRET = re.compile(
     r"\.credentials\.json|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|/proc/\S*environ"
 )
 
-# Why: a program counts wherever it can start a command: after a separator, a `$(`, a quote, a
-# path prefix or `env`/`xargs`. A word in prose ("use curl") is refused too, which is cheap.
 _AT = r"(?:^|(?<=[\s;&|()`'\"/{]))"
-# Why: `command -v glab` and `which gh` look a program up; they do not run it.
 _RUN = _AT + r"(?<!-v )(?<!which )(?<!type )"
 _END = r"(?=$|[\s;&|()`'\"}])"
 GIT = rf"{_AT}git(?:\s+-[cC]\s+\S+|\s+--[\w-]+(?:=\S+)?)*\s+"
@@ -135,9 +111,6 @@ FORBIDDEN = (
 )
 _FORBIDDEN = tuple((re.compile(pattern), why) for pattern, why in FORBIDDEN)
 
-# Why: judged on the commands the line runs (`shellpaths.scan`), not on its text, so a word in a
-# heredoc that writes a file or in a string literal of a script is not a command. A line that
-# cannot be read that way falls back to the text.
 _CURL = re.compile(rf"{_RUN}curl{_END}")
 PUBLISHERS = frozenset(
     {
@@ -160,8 +133,6 @@ _PUBLISH_TEXT = re.compile(
     rf"{_RUN}(?:{'|'.join(sorted(PUBLISHERS))})(?:[ \t]+\S+)*?[ \t]+"
     rf"(?:{'|'.join(sorted(PUBLISH_VERBS))})\b"
 )
-# Why: the network modules of the languages a session writes inline. Module names are looked for
-# outside string literals, so a script that edits a file about `urllib` is not one that uses it.
 _NETWORK_CODE = re.compile(
     r"\b(?:urllib|requests|http\.client|httpx|aiohttp|socket|fetch\(|https?\.request"
     r"|net\.connect|Net::HTTP|open-uri|LWP)"
@@ -177,14 +148,11 @@ _INLINE_TEXT = re.compile(
     r"\b(?:python3?(?:\.\d+)?|node|deno|bun|perl|ruby)\s+(?:-\S*[ce]\b|-\s|<<)[\s\S]*"
     + _NETWORK_CODE.pattern
 )
-# Why: inside the sandbox these are the run's own temp directory; outside it they are not.
 TEMP = ("/tmp", "/var/tmp")
 
 
 @dataclass(frozen=True)
 class Scope:
-    """Where a session lives: its run, its project, its home and the trees it may write."""
-
     root: Path
     cwd: Path
     home: Path
@@ -193,8 +161,6 @@ class Scope:
     readonly: tuple[Path, ...] = ()
 
 
-# Why: a refusal that names only what is refused leaves a model to guess the rest, and it guessed
-# that the whole network was gone. Every refusal says what still works.
 STILL_WORKS = (
     "Only this call is refused. Package installs and unauthenticated HTTPS GET reads of public "
     "package-registry metadata still work, and so do the project's files, tests and gates."
@@ -203,14 +169,11 @@ STILL_WORKS = (
 
 @dataclass(frozen=True)
 class Decision:
-    """Whether a call may go ahead, and if not, why: ``why`` is a verb phrase the log keeps."""
-
     allowed: bool
     why: str = ""
 
     @property
     def told(self) -> str:
-        """What the session is told when the call is refused: what is refused, and what works."""
         return f"This call is refused: it {self.why}. {STILL_WORKS}"
 
 
@@ -222,11 +185,6 @@ def _under(path: str, parent: str) -> bool:
 
 
 def _resolve(raw: str, scope: Scope, *, sandboxed: bool) -> str:
-    """A path as the process that uses it sees it.
-
-    A sandboxed shell sees the run's temp at ``/tmp``; a file tool in the Claude Code process
-    sees the real ``/tmp``, and follows links, so its path is the link's target.
-    """
     text = raw.split("*", 1)[0] if "*" in raw else raw
     for name, value in (("${HOME}", scope.home), ("$HOME", scope.home), ("~", scope.home)):
         if text.startswith(name):
@@ -251,16 +209,6 @@ def _writable(path: str, scope: Scope) -> bool:
 
 
 def shell(command: str, scope: Scope) -> Decision:
-    """Whether a shell command line may run; it is judged as a whole, chained or not.
-
-    A path outside the run directory and the system's read-only trees is refused whatever the
-    command does with it. What counts as a path is ``shellpaths.words``: a word that starts like
-    one, not the text a ``sed`` script, a message or a heredoc body holds.
-
-    A write into a system tree, or into a read-only part of the run, is left to the sandbox,
-    which mounts them read-only: telling a write from a read in a shell string is the arms race
-    this layer does not run.
-    """
     for pattern, why in _FORBIDDEN:
         if pattern.search(command):
             return Decision(allowed=False, why=why)
@@ -278,11 +226,6 @@ def shell(command: str, scope: Scope) -> Decision:
 
 
 def _refused_by_what_runs(command: str) -> str | None:
-    """Why a line is refused for the commands it runs, or ``None``.
-
-    ``curl`` is allowed to read a public registry and nothing else (``registry.is_registry_read``);
-    a registry tool may not publish or sign in; inline code may not open a connection.
-    """
     scanned = shellpaths.scan(command)
     mentions = len(_CURL.findall(command))
     if scanned is None:
@@ -298,7 +241,6 @@ def _refused_by_what_runs(command: str) -> str | None:
 
 
 def _refused_as_text(command: str, *, mentions: int) -> str | None:
-    """The same, for a line a shell would not read: any mention counts."""
     if mentions:
         return "opens a network connection"
     if _PUBLISH_TEXT.search(command):
@@ -315,11 +257,6 @@ def _opens_connection(code: str) -> bool:
 def decide(
     tool: str, tool_input: Mapping[str, object], scope: Scope, *, agents: Collection[str] = ()
 ) -> Decision:
-    """Whether one tool call may go ahead.
-
-    ``agents`` are the ids of the subagents and tasks this session started: the only ones a
-    message may go to.
-    """
     known = TOOLS.get(tool)
     if known is None:
         return Decision(
@@ -340,7 +277,6 @@ def decide(
 
 
 def _refusal(raw: str, kind: Kind, scope: Scope) -> str | None:
-    """Why a path a file tool names is refused, or ``None``."""
     if SECRET.search(raw):
         return "reads the session's model credential"
     path = _resolve(raw, scope, sandboxed=False)

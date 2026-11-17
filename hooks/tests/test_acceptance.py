@@ -1,5 +1,3 @@
-"""The acceptance harness end to end: real boots, a real proxy, real records and real signals."""
-
 import contextlib
 import datetime as dt
 import fcntl
@@ -62,7 +60,6 @@ def write_record(directory: Path, record: dict[str, object]) -> None:
 
 @pytest.fixture
 def product(tmp_path: Path) -> Iterator[Path]:
-    """A product to try; whatever a test left running of it is stopped at the end."""
     root = products.make(tmp_path / "product", env=f"SLOW={tmp_path / 'slow'}")
     yield root
     acceptance.main(["acceptance.py", "down", "--slug", SLUG, "--root", str(root)])
@@ -71,7 +68,6 @@ def product(tmp_path: Path) -> Iterator[Path]:
 
 @pytest.fixture
 def tried(product: Path, capsys: pytest.CaptureFixture[str]) -> Path:
-    """A session that was tried as the good record says, ended, with that record written."""
     code, (url, _) = up(product, capsys)
     assert code == 0
     products.tried(url)
@@ -95,6 +91,22 @@ def test_a_process_left_running_is_seen_however_narrow_the_terminal(
     finally:
         left.kill()
         left.wait()
+
+
+def test_a_supervisor_that_does_not_hold_its_lock_is_never_signalled_so_a_reused_pid_survives(
+    tmp_path: Path,
+) -> None:
+    unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        directory = tmp_path / "session"
+        directory.mkdir()
+        (directory / "live.lock").write_text(f"{unrelated.pid}\n", encoding="utf-8")
+        assert acceptance.end(directory) == []
+        with pytest.raises(subprocess.TimeoutExpired):
+            unrelated.wait(timeout=0.5)
+    finally:
+        unrelated.kill()
+        unrelated.wait()
 
 
 def test_up_puts_the_proxy_before_the_head_and_down_stops_all_of_it(
@@ -146,7 +158,6 @@ def test_the_supervisor_is_started_in_the_background_of_a_shell_that_prints_its_
 
 
 def commit_all(root: Path, message: str) -> str:
-    """Commit everything the work tree holds, as the orchestrator does; the commit's tree."""
     products.repos.git(root, "add", "-A")
     products.repos.git(root, "commit", "-qm", message)
     return products.repos.git(root, "rev-parse", "HEAD^{tree}")
@@ -216,9 +227,6 @@ def test_a_session_whose_work_tree_was_removed_is_stale(
 
 
 def test_a_session_that_cannot_say_what_it_served_is_stale(tmp_path: Path) -> None:
-    # Why: a work tree that is gone, or a session file that lost its facts, cannot be shown to
-    # hold the tree that was served. This is the except of `still_served`, reached here with no
-    # boot and no timing, so the coverage gate does not lean on a test that boots a product.
     directory = tmp_path / "session"
     directory.mkdir()
     assert not acceptance.still_served(directory)
@@ -578,7 +586,6 @@ def change_first_answer(directory: Path) -> None:
     (directory / "probes" / f"{first}.response").write_bytes(b"There is nothing left.")
 
 
-# Each way a careless or dishonest tester might change what is on disk, and what `check` says.
 SEEDED: dict[str, tuple[Callable[[Path], object], str]] = {
     "truncated log": (
         lambda d: edit_lines(d / "requests.jsonl", lambda lines: lines[:-1]),

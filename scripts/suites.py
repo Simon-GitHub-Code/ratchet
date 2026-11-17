@@ -1,12 +1,3 @@
-"""The suites table of the binding's ``## Tests`` section (ADR 0073): which files make a suite.
-
-One row per suite: its name, the gate that runs it whole, the globs of its test files, and how to
-run given files of it, either ``just <recipe>`` taking the files as arguments or ``none:`` with the
-reason the suite cannot run by file. ``changed_tests.py`` runs the files a change touches through
-that command, conformance holds the table's shape, and ``project_bite.py`` reads a changed row as
-a change to the gate that runs the files.
-"""
-
 from __future__ import annotations
 
 import re
@@ -29,8 +20,6 @@ COMMAND = re.compile(r"just [A-Za-z_][\w-]*")
 
 @dataclass(frozen=True)
 class Suite:
-    """One row: a suite's gate, its test files' globs, and how given files of it run."""
-
     name: str
     gate: str
     globs: tuple[str, ...]
@@ -84,13 +73,11 @@ def _suite(name: str, cells: tuple[str, str, str], problems: list[str]) -> Suite
 
 
 def table(binding: str) -> markdown_text.Table | None:
-    """The first table of the Tests section with the suites columns."""
     found = [t for t in markdown_text.tables(binding, SECTION) if t.header == COLUMNS]
     return found[0] if found else None
 
 
 def parse(binding: str | None) -> tuple[list[Suite] | None, list[str]]:
-    """The suites of a binding, or ``None`` and what is wrong with the section or its table."""
     if binding is None or not markdown_text.has_section(binding, SECTION):
         return None, [f"has no '{SECTION}' section"]
     found = table(binding)
@@ -105,10 +92,6 @@ def parse(binding: str | None) -> tuple[list[Suite] | None, list[str]]:
 
 
 def split(binding: str) -> tuple[dict[str, str], str]:
-    """The suites table's rows by their first cell, and the binding with the table taken out.
-
-    A row is its cells stripped and joined, so padding a table changes none of them.
-    """
     found = table(binding)
     if found is None:
         return {}, binding
@@ -119,5 +102,4 @@ def split(binding: str) -> tuple[dict[str, str], str]:
 
 
 def owners(suites: list[Suite], path: str) -> list[Suite]:
-    """Every suite whose globs the path matches."""
     return [suite for suite in suites if gatelib.matches(path, list(suite.globs))]

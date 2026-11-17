@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""Claude Code SessionStart and SubagentStart hook of the Ratchet plugin.
-
-Delegates to ``ratchet_guards.session``. Standard library only and run on the system
-``python3``. The repository root is the hook input's ``cwd``, else ``$CLAUDE_PROJECT_DIR``,
-else the working directory. It also records the plugin folder it runs from in the repository's
-git common directory. The hook only adds context, so any failure prints nothing.
-Antigravity's input names its event in ``hookEventName``, Claude Code's in
-``hook_event_name``; the form of the answer follows.
-"""
-
 import importlib
 import os
 import sys
@@ -21,14 +11,12 @@ ANTIGRAVITY_EVENT = "hookEventName"
 
 
 def event_of(text: str) -> str:
-    """The hook event name in the payload, or empty."""
     payload = payload_of(text)
     event = payload.get("hook_event_name", payload.get(ANTIGRAVITY_EVENT))
     return event if isinstance(event, str) else ""
 
 
 def main() -> int:
-    """Load the session module and print its context for this checkout, if any."""
     if sys.version_info < MINIMUM_PYTHON:
         return 0
     text = sys.stdin.read()

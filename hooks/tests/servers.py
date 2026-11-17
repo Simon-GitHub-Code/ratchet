@@ -1,5 +1,3 @@
-"""Small HTTP servers and process probes for the service-gate tests; localhost only."""
-
 import http.server
 import shlex
 import shutil
@@ -12,25 +10,21 @@ from contextlib import contextmanager
 from pathlib import Path
 
 PYTHON = f"{shlex.quote(sys.executable)} -S"
-# Why: a service that is slow to answer makes the probe give up and the server print a traceback
-# for each broken connection, which would push the boot's own lines out of the gate's output tail.
 SERVE = (
     "import os, http.server as h\n"
-    "class Server(h.ThreadingHTTPServer):\n"
+    "class SilentWhenAClientHangsUp(h.ThreadingHTTPServer):\n"
     "    def handle_error(self, request, client_address): pass\n"
     "class Handler(h.SimpleHTTPRequestHandler):\n"
     "    def log_message(self, *args): pass\n"
-    "Server(('127.0.0.1', int(os.environ['PORT'])), Handler).serve_forever()"
+    "SilentWhenAClientHangsUp(('127.0.0.1', int(os.environ['PORT'])), Handler).serve_forever()"
 )
 
 
 def python(code: str) -> str:
-    """A shell line that runs ``code`` with this interpreter."""
     return f"{PYTHON} -c {shlex.quote(code)}"
 
 
 def alive(pid: int) -> bool:
-    """Whether the process exists and is not a zombie."""
     state = subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
         ["ps", "-o", "stat=", "-p", str(pid)],  # noqa: S607 # -- ps is resolved from PATH
         capture_output=True,
@@ -41,11 +35,6 @@ def alive(pid: int) -> bool:
 
 
 def gone(pid: int, wait: float = 10.0) -> bool:
-    """Whether the process is gone within ``wait`` seconds.
-
-    A killed process takes a moment to die, and longer when the machine is busy; the tests that
-    kill one run beside many others.
-    """
     deadline = time.monotonic() + wait
     while alive(pid):
         if time.monotonic() > deadline:
@@ -62,8 +51,6 @@ def pid_of(path: Path) -> int:
 def server(
     handle: Callable[[http.server.BaseHTTPRequestHandler], None],
 ) -> Iterator[str]:
-    """A server on a free loopback port whose handler calls ``handle`` for GET and POST."""
-
     class Handler(http.server.BaseHTTPRequestHandler):
         body = b""
 
@@ -76,13 +63,12 @@ def server(
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002 # -- the override
             pass
 
-    class Quiet(http.server.ThreadingHTTPServer):
+    class SilentWhenAClientHangsUp(http.server.ThreadingHTTPServer):
         daemon_threads = False
 
-        def handle_error(self, request: object, client_address: object) -> None:
-            """A client that gave up mid-reply is the tests' doing, not a failure."""
+        def handle_error(self, request: object, client_address: object) -> None: ...
 
-    httpd = Quiet(("127.0.0.1", 0), Handler)
+    httpd = SilentWhenAClientHangsUp(("127.0.0.1", 0), Handler)
     thread = threading.Thread(
         target=httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
     )
@@ -103,27 +89,12 @@ def reply(handler: http.server.BaseHTTPRequestHandler, status: int, body: bytes 
 
 
 def sleeper(tree: Path) -> subprocess.Popen[bytes]:
-    """Start a copy of ``sleep`` that is a file of ``tree``: a service somebody built and left."""
     program = tree / "target" / "sleep"
     program.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy(shutil.which("sleep") or "", program)
     return subprocess.Popen([str(program), "60"])  # noqa: S603 # -- a copy of sleep, no shell
 
 
-# Why: one service whose behaviour on SIGTERM is chosen by ``MODE``, so each way of failing the
-# graceful-shutdown check is a real process meeting a real signal. ``/work`` is held until the stop,
-# and the stop waits for one, so a request is in flight at the signal however late a busy machine
-# delivers either. The stop runs on a thread started at boot: a signal handler that started one
-# could deadlock on the lock the server takes to start each request's thread. Modes: ``drain``
-# answers the requests in flight and exits 0; ``ignore`` never stops; ``drop`` exits 0 at once and
-# cuts them off; ``late`` drains but exits 1; ``slow`` drains after a 3 s pause; ``die`` exits
-# before it is signalled. ``queue`` serves one request at a time, so the connections behind the held
-# one wait in the kernel's accept queue, and its stop waits until three do; it answers the held one
-# and exits 0, and the kernel resets the connections it never accepted, as any correct server's
-# listener close does. ``abandon`` is ``queue`` exiting at once instead, so it drops the held one,
-# which it accepted, as well. ``shut`` is ``queue`` shutting its listener down, which resets the
-# connections waiting on it at once, and closing it only a second after it answers the held one.
-# ``HIDDEN`` makes the service non-dumpable, so no other process may look at its open files.
 STOPS = (
     "import ctypes, os, signal, socket, struct, sys, threading, time, http.server as h\n"
     "if os.environ.get('HIDDEN'): ctypes.CDLL(None).prctl(4, 0, 0, 0, 0)\n"
@@ -146,7 +117,7 @@ STOPS = (
     "def waiting():\n"
     "    info = server.socket.getsockopt(socket.IPPROTO_TCP, socket.TCP_INFO, 32)\n"
     "    return struct.unpack_from('I', info, 24)[0]\n"
-    "def stop():\n"
+    "def stop_off_the_signal_handler():\n"
     "    signalled.wait()\n"
     "    held.wait()\n"
     "    while QUEUES and waiting() < 3: time.sleep(0.01)\n"
@@ -156,7 +127,7 @@ STOPS = (
     "    stopping.set()\n"
     "    server.shutdown()\n"
     "if MODE == 'die': threading.Timer(0.3, os._exit, [5]).start()\n"
-    "threading.Thread(target=stop, daemon=True).start()\n"
+    "threading.Thread(target=stop_off_the_signal_handler, daemon=True).start()\n"
     "signal.signal(signal.SIGTERM, lambda *_: signalled.set())\n"
     "if MODE == 'ignore': signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
     "server.serve_forever()\n"
@@ -165,11 +136,6 @@ STOPS = (
     "sys.exit(1 if MODE == 'late' else 0)"
 )
 
-# Why: a broken service that forges the gate's excuse. It holds each ``/work`` until it is
-# stopped, and on SIGTERM goes on accepting until it holds one. It then stops accepting and, for
-# each request in hand, connects to its own listener from 127.0.0.2 with that request's client
-# port, so the gate takes a connection with the same ports. It closes the listener, waits until
-# the gate has taken and reset each of those, and resets the requests it holds: those it dropped.
 FORGE = (
     "import os, signal, socket, struct, threading\n"
     "PORT = int(os.environ['PORT'])\n"
@@ -205,9 +171,6 @@ FORGE = (
     "os._exit(0)\n"
 )
 
-# Why: a service that reads ``NAME``, and what it does when it is missing is chosen by ``MODE``:
-# ``refuse`` names it and exits 2, ``silent`` exits 2 without a word, ``zero`` names it and exits
-# 0, ``hang`` waits, ``boot`` answers anyway. ``ALSO`` is a second setting it needs.
 NEEDS = (
     "import os, sys, time\n"
     "MODE = os.environ['MODE']\n"

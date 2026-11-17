@@ -1,5 +1,3 @@
-"""A ticket split by size: its parts inherit the label under a deterministic scope check."""
-
 import pytest
 
 from ratchet_guards import hook, splits
@@ -89,8 +87,6 @@ def test_a_part_may_carry_the_label_only_while_its_parent_does_and_is_no_part() 
     sibling = child("A note is saved")
     assert "carried 2" in (splits.refusal(text, PARENT, LABEL, siblings=[sibling]) or "")
 
-
-# --- the guard ---------------------------------------------------------------------------------
 
 TICKET = "/repo/.scratch/f/issues/02-part.md"
 SIBLING = "/repo/.scratch/f/issues/03-other.md"

@@ -139,22 +139,17 @@ QUOTES_RED = (
 )
 
 
-class MalformedError(ValueError):
-    """The start state is missing, or a member of it is missing or malformed."""
+class MalformedError(ValueError): ...
 
 
-class ResultError(ValueError):
-    """The run's result file is missing, or it is not a result with its lists of findings."""
+class ResultError(ValueError): ...
 
 
-class UnreadableError(RuntimeError):
-    """The checkout or the forge cannot be read."""
+class UnreadableError(RuntimeError): ...
 
 
 @dataclass(frozen=True)
 class Result:
-    """What the check reads of the run's result: its owed findings, its spec's path, its ticket."""
-
     owed: list[object]
     spec: str | None
     ref: str | None
@@ -162,39 +157,28 @@ class Result:
 
 @dataclass(frozen=True)
 class Forge:
-    """What the forge holds for the branch: its commit there, and its open pull requests."""
-
     remote: str | None
     pull_requests: tuple[int, ...]
 
 
 @dataclass(frozen=True)
 class Commit:
-    """A commit ahead of the base, as a finished rebase keeps it: author date and message."""
-
     author_date: str
     message_sha256: str
 
 
 @dataclass(frozen=True)
 class Rebase:
-    """The rebase a role is to finish: the base's name and the commits ahead of it, oldest first."""
-
     base: str
     commits: tuple[Commit, ...]
 
 
 @dataclass(frozen=True)
 class Start:
-    """The state a run started from: the branch, its commit, the forge, and a rebase to finish."""
-
     branch: str
     head: str
     forge: Forge | None
     rebase: Rebase | None = None
-
-
-# --- the start state -------------------------------------------------------------------------
 
 
 def member(table: dict[str, object], name: str, path: str) -> object:
@@ -212,7 +196,6 @@ def a_commit(value: object, path: str) -> str:
 
 
 def parse(text: str) -> Start:
-    """The start state in ``text``; raises ``MalformedError`` naming what is missing or wrong."""
     try:
         data: object = json.loads(text)
     except ValueError as error:
@@ -291,7 +274,6 @@ def a_commit_ahead(entry: object, path: str) -> Commit:
 
 
 def read_start(path: Path) -> Start:
-    """The start state in the file at ``path``; raises ``MalformedError`` when it has none."""
     text = gatelib.read_text(path)
     if text is None:
         message = "there is no such file, or it is not text"
@@ -299,16 +281,11 @@ def read_start(path: Path) -> Start:
     return parse(text)
 
 
-# --- reading the checkout and the forge ------------------------------------------------------
-
-
 def head_of(root: Path, branch: str) -> str | None:
-    """The commit the local ``branch`` is at, or ``None`` when there is no such branch."""
     return gatelib.git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")
 
 
 def open_pull_requests(output: str | None) -> tuple[int, ...] | None:
-    """The numbers in ``gh pr list --json number`` output, or ``None`` when it is not that."""
     if output is None:
         return None
     try:
@@ -323,7 +300,6 @@ def open_pull_requests(output: str | None) -> tuple[int, ...] | None:
 
 
 def forge_of(root: Path, branch: str, gh: preflight.Runner) -> Forge:
-    """What the forge holds for ``branch`` now; raises ``UnreadableError`` when it cannot tell."""
     ref = f"refs/heads/{branch}"
     listed = gatelib.git(root, "ls-remote", REMOTE, ref)
     if listed is None:
@@ -343,7 +319,6 @@ def forge_of(root: Path, branch: str, gh: preflight.Runner) -> Forge:
 
 
 def ahead_of(root: Path, base: str, head: str) -> tuple[Commit, ...] | None:
-    """The commits on ``head`` that ``base`` does not hold, oldest first; ``None`` with no base."""
     tip = gatelib.git(
         root, "rev-parse", "--verify", "--quiet", "--end-of-options", f"{base}^{{commit}}"
     )
@@ -361,7 +336,6 @@ def ahead_of(root: Path, base: str, head: str) -> tuple[Commit, ...] | None:
 
 
 def rebasing(root: Path) -> bool:
-    """Whether a rebase is under way in the checkout at ``root``."""
     return any(
         (path := gatelib.git(root, "rev-parse", "--git-path", name)) is not None
         and (root / path).is_dir()
@@ -372,11 +346,6 @@ def rebasing(root: Path) -> bool:
 def start_of(
     root: Path, branch: str, gh: preflight.Runner, *, rebase_onto: str | None = None
 ) -> Start:
-    """The start state of a run on ``branch``, read the way the check reads the present.
-
-    With ``rebase_onto``, the start of a rejudge whose rebase onto that base conflicted: it
-    records the commits ahead of the base, which a reconcile that finishes the rebase keeps.
-    """
     head = head_of(root, branch)
     if head is None:
         message = f"there is no branch `{branch}`"
@@ -392,16 +361,11 @@ def start_of(
     return Start(branch, head, forge, Rebase(rebase_onto, commits))
 
 
-# --- the run's result ------------------------------------------------------------------------
-
-
 def result_path(start: Path) -> Path:
-    """Where the run's result is: the start file's path with ``.result.json`` added."""
     return start.with_name(start.name + RESULT_SUFFIX)
 
 
 def read_result(path: Path) -> Result:
-    """The result in the file at ``path``; raises ``ResultError`` naming what is wrong."""
     text = gatelib.read_text(path)
     if text is None:
         message = "there is no such file, or it is not text"
@@ -441,7 +405,6 @@ def quoted_record(finding: object) -> object:
 
 
 def given_records(result: Result, root: Path, gh: preflight.Runner) -> quotes.Records:
-    """The texts of the records no fixed place holds: the result's spec, and its ticket."""
     given: quotes.Records = {
         "spec.md": None if result.spec is None else quotes.files_of(root, result.spec)
     }
@@ -452,7 +415,6 @@ def given_records(result: Result, root: Path, gh: preflight.Runner) -> quotes.Re
 
 
 def quote_lines(result: Result, root: Path, gh: preflight.Runner) -> list[str]:
-    """A line for each owed finding whose record does not hold its quote."""
     verdict = quotes.check(result.owed, root, given_records(result, root, gh))
     return [
         f"{SAID} the finding `{entry['title']}` quotes `{entry['record']}` with"
@@ -461,19 +423,11 @@ def quote_lines(result: Result, root: Path, gh: preflight.Runner) -> list[str]:
     ]
 
 
-# --- what moved ------------------------------------------------------------------------------
-
-
 def short(commit: str) -> str:
     return commit[:SHORT]
 
 
 def branch_moves(root: Path, start: Start, *, halted: bool, drained: bool) -> list[str]:
-    """How ``HEAD`` and the local branch moved since ``start``.
-
-    ``halted``: a rebase the start asked for is under way, so a detached ``HEAD`` is said apart.
-    ``drained``: the start is a drain note's, so the step the line names is its final check.
-    """
     on = gatelib.git(root, "rev-parse", "--abbrev-ref", "HEAD")
     if on is None:
         message = f"{root} is not a git checkout with a commit"
@@ -493,7 +447,6 @@ def branch_moves(root: Path, start: Start, *, halted: bool, drained: bool) -> li
 
 
 def head_move(root: Path, start: Start, new: str, *, drained: bool) -> str | None:
-    """How the local branch moved to ``new``; ``None`` when it finished the start's rebase."""
     branch, old = start.branch, short(start.head)
     step = FINAL_CHECK if drained else "this check"
     if gatelib.git(root, "merge-base", "--is-ancestor", start.head, new) is not None:
@@ -529,7 +482,6 @@ def head_move(root: Path, start: Start, new: str, *, drained: bool) -> str | Non
 
 
 def unmatched(dropped: list[Commit], landed: tuple[Commit, ...]) -> list[Commit]:
-    """The dropped commits left once each takes a twin of its own from ``landed``."""
     twins = list(landed)
     missing: list[Commit] = []
     for commit in dropped:
@@ -541,7 +493,6 @@ def unmatched(dropped: list[Commit], landed: tuple[Commit, ...]) -> list[Commit]
 
 
 def dropped_from(was: tuple[Commit, ...], now: tuple[Commit, ...]) -> list[Commit] | None:
-    """The commits of ``was`` ``now`` lacks; ``None`` unless ``now`` keeps the others in order."""
     dropped: list[Commit] = []
     kept = 0
     for commit in was:
@@ -553,7 +504,6 @@ def dropped_from(was: tuple[Commit, ...], now: tuple[Commit, ...]) -> list[Commi
 
 
 def remote_move(branch: str, old: str | None, new: str | None) -> list[str]:
-    """How the forge's branch moved from ``old`` to ``new``, ``None`` meaning it had none."""
     if old is None and new is not None:
         return [f"the forge gained the branch `{branch}` at {short(new)}: a role pushed"]
     if old is not None and new is None:
@@ -566,7 +516,6 @@ def remote_move(branch: str, old: str | None, new: str | None) -> list[str]:
 
 
 def forge_moves(branch: str, start: Forge, now: Forge) -> list[str]:
-    """How the forge's branch and the branch's open pull requests moved since ``start``."""
     opened = [
         f"pull request #{number} is open for `{branch}` and was not when the run started:"
         " a role opened it"
@@ -585,10 +534,6 @@ def forge_moves(branch: str, start: Forge, now: Forge) -> list[str]:
 def check(
     root: Path, start: Start, gh: preflight.Runner, *, drained: bool = False
 ) -> tuple[list[str], bool, str | None]:
-    """Every move since ``start``, a rebase it asked for left halfway, and an unread forge's why.
-
-    Raises ``UnreadableError`` when the checkout cannot be read.
-    """
     halted = start.rebase is not None and rebasing(root)
     moves = branch_moves(root, start, halted=halted, drained=drained)
     if start.forge is None:
@@ -601,7 +546,6 @@ def check(
 
 
 def read_inputs(options: argparse.Namespace) -> tuple[Start, Result | None] | int:
-    """The start and the result the check reads, or the exit status of refusing to."""
     try:
         start = read_start(options.start)
     except MalformedError as error:
@@ -622,7 +566,6 @@ def read_inputs(options: argparse.Namespace) -> tuple[Start, Result | None] | in
 
 
 def settle(moves: list[str], quoted: list[str], *, halted: bool, unread: str | None) -> int:
-    """Say what the check found and return its exit status."""
     for move in moves:
         print(f"{SAID} {move}")
     if halted:

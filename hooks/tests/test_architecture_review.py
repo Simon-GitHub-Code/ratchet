@@ -1,5 +1,3 @@
-"""The architecture review: an arrival that reopens the architecture owes a review (ADR 0052)."""
-
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -55,7 +53,6 @@ def binding(*rows: str, events: str = "none") -> str:
 def project(
     tmp_path: Path, files: dict[str, str] | None = None, *rows: str, events: str = "none"
 ) -> Path:
-    """An adopted repository whose binding asks the review, on ``main``, then a change branch."""
     text = binding(REVIEW_ROW, *rows, events=events)
     root = repository(tmp_path, {BINDING: text, "README.md": "# A\n", **(files or {})})
     branch(root)
@@ -67,13 +64,11 @@ def run(root: Path) -> int:
 
 
 def land(root: Path, subject: str) -> None:
-    """Commit the work tree and make it the default branch, as a landed change does."""
     commit(root, subject)
     git(root, "branch", "-f", "main")
 
 
 def record(*keys: str, outcome: str = "holds", options: int = 0, refuted: bool = True) -> str:
-    """A decision record that reviews ``keys``."""
     listed = "".join(
         f"- Option {n}: a way to build it, and its cost to undo.\n" for n in range(options)
     )
@@ -92,7 +87,6 @@ def record(*keys: str, outcome: str = "holds", options: int = 0, refuted: bool =
 
 
 def arrived(tmp_path: Path) -> Path:
-    """A repository where stored data arrived after the reviews started, landed."""
     root = project(tmp_path)
     write(root, "src/store.py", STORE)
     land(root, "feat(core): keep the links")
@@ -132,8 +126,6 @@ def test_another_instance_while_the_review_is_owed_is_red(tmp_path: Path, capsys
 
 
 def test_a_review_in_the_same_change_as_the_instance_does_not_count(tmp_path: Path) -> None:
-    # Why: the review lands on its own, so an unattended build cannot decide the architecture
-    # beside the code that grows under it.
     root = arrived(tmp_path)
     write(root, "docs/adr/0002-holds.md", record("code:stored-format"))
     assert triggers.reviews_owed(root) == []
@@ -211,8 +203,6 @@ def test_an_event_declared_when_the_reviews_started_was_reviewed_by_the_adoption
 def test_a_kind_already_there_when_the_reviews_started_is_reviewed_by_the_adoption(
     tmp_path: Path, capsys: Out
 ) -> None:
-    # Why: an adopted repository must not turn red for what it already had. Before the upgrade
-    # adds the row nothing is asked; the commit that adds it is where the reviews start.
     root = repository(tmp_path, {BINDING: binding(), "src/store.py": STORE})
     branch(root)
     write(root, "src/more.py", STORE)
@@ -383,8 +373,6 @@ def test_conformance_asks_for_a_row_of_each_kind_that_reopens_the_architecture(
 def test_the_reviews_start_where_the_row_was_bound_not_where_it_was_first_written(
     tmp_path: Path, capsys: Out
 ) -> None:
-    # Why: binding the row's Tool cell keeps how often its question appears, so the start is
-    # found by the line that changed, and a row bound after it was written still asks the review.
     unbound = REVIEW_ROW.replace("`ratchet` plugin `scripts/triggers.py`", "a manual check")
     root = repository(tmp_path, {BINDING: binding(unbound), "README.md": "# A\n"})
     write(root, BINDING, binding(REVIEW_ROW))

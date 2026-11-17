@@ -1,27 +1,3 @@
-"""A pure model of the safeguard a project owes as it grows (ADR 0028, ADR 0030).
-
-One kind of code and one life event in a repository with a default branch and one open branch.
-The open branch forks from the default branch's tip with one change and may stay open while
-other branches land, each forked from the tip and landed at once. Landing follows
-``merge.attempt``: the branch is merged into the tip with ``--no-ff``, the triggers gate judges the
-merge result against the tip, and the default branch moves to it only when the merge is clean and
-the gate is green.
-
-``judge`` is the gate as ``scripts/triggers.py`` documents it, with ADR 0048: a kind arrives free
-once, and one that went back to none and returns is owed. With ADR 0052 the kind is also one whose
-arrival reopens the architecture: once the binding asks for the review, another instance is red
-until a decision record citing the kind lands, unless the kind was already held when the binding
-first asked. The event is not one that reopens it, so it owes rows alone. ``RULES`` are promises
-about whole histories. The tests check each on every reachable state and step of ``graph()``, and
-check ``judge``, ``merge``, ``owed`` and ``reviews_owed`` against the real gate on real
-repositories.
-
-Some rules hold only with the merge judge behind the gate. The binding is a guard path
-(``docs/process/**``, the template manifest's ``decisions`` group), so a change to it lands only
-when the owner merges it (ADR 0021, ADR 0033). A rule named ``..., with the guard`` exempts such a
-change; the same rule without the suffix is the gate alone.
-"""
-
 from __future__ import annotations
 
 import enum
@@ -36,63 +12,38 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
 Field = TypeVar("Field")
-# Why: two instances are several, and a third id lets a branch move one of them. The model with
-# four ids, three instances and every change free to wait on the open branch has 123,597 states
-# and gives every rule the verdict this one gives; this one is small enough for every test run.
 IDS = 3
 WIDEST = 2
 
 
 class Row(enum.StrEnum):
-    """A Gates row's Tool cell: ``later: <trigger>``, a bound tool, or no row at all."""
-
     LATER = "later"
     BOUND = "bound"
     ABSENT = "absent"
 
 
 class Table(enum.StrEnum):
-    """Whether the kind's Triggers row finds its instances, or points where none are."""
-
     FINDS = "finds"
     BLIND = "blind"
 
 
 class Event(enum.StrEnum):
-    """Whether the binding's ``- Life events:`` line declares the event."""
-
     UNDECLARED = "undeclared"
     DECLARED = "declared"
 
 
 class Start(enum.StrEnum):
-    """Whether the binding has asked for the architecture review, and what it found then.
-
-    The reviews start at the first commit of the default branch whose binding has the review's
-    row. A kind held at or before it was there when the architecture was chosen, so it owes none.
-    """
-
     NONE = "not asked"
     FRESH = "asked before the kind"
     HELD = "asked with the kind held"
 
 
 class Debt(enum.StrEnum):
-    """A row that can be owed: the kind's, or the event's."""
-
     KIND = "kind"
     EVENT = "event"
 
 
 class Tree(NamedTuple):
-    """What one commit holds that the gate reads: the kind's instances, the binding, the review.
-
-    ``review`` is the binding's architecture review row, ``BOUND`` to the plugin's gate or
-    ``ABSENT``; ``reviewed`` is whether a decision record citing the kind that counts is held, one
-    that landed after the kind first arrived. ``early`` is whether one that landed before it is
-    held: the gate never reads it, since a review settles only the arrivals it could have seen.
-    """
-
     instances: frozenset[int] = frozenset()
     row: Row = Row.LATER
     table: Table = Table.FINDS
@@ -103,7 +54,6 @@ class Tree(NamedTuple):
     early: bool = False
 
     def found(self, table: Table) -> frozenset[int]:
-        """The instances a Triggers row as ``table`` says finds."""
         return self.instances if table is Table.FINDS else frozenset()
 
     @property
@@ -112,8 +62,6 @@ class Tree(NamedTuple):
 
 
 class Change(enum.StrEnum):
-    """The one change a branch makes."""
-
     ADD_ONE = "add one instance"
     ADD_SEVERAL = "add several instances"
     MOVE = "move an instance"
@@ -132,11 +80,6 @@ class Change(enum.StrEnum):
     ADD_REVIEWED = "add one instance with its review"
 
 
-# Why: these changes land at once and never wait on an open branch. The event is never red and
-# its lines merge apart from the kind's; the others change the binding or add a decision record,
-# which only the owner merges, and a record beside an instance is judged at the tip as on a
-# branch. Letting them wait, and letting the event's and the review's changes land while a branch
-# is open, takes 8,994 states to 62,300 and changes no rule's verdict.
 EVENT_CHANGES = frozenset({Change.DECLARE, Change.BIND_EVENT})
 BINDING_CHANGES = frozenset({Change.UNBIND, Change.DROP, Change.RESTORE, Change.RETARGET})
 REVIEW_CHANGES = frozenset({Change.ASK_REVIEW, Change.REVIEW, Change.ADD_REVIEWED})
@@ -145,12 +88,6 @@ NO_BRANCH_OPEN = EVENT_CHANGES | REVIEW_CHANGES
 
 
 class Branch(NamedTuple):
-    """The open branch: the tip it forked from, its change, what it holds, and the fork's past.
-
-    ``held`` is whether any commit of the default branch up to the fork held an instance;
-    ``start`` is where the reviews stood at the fork.
-    """
-
     fork: Tree
     change: Change
     head: Tree
@@ -159,14 +96,6 @@ class Branch(NamedTuple):
 
 
 class State(NamedTuple):
-    """The default branch, the open branch, and two variables of history.
-
-    ``allowance`` is how many instances the kind had when its row came to be owed, kept while the
-    row is ``later:``. No commit holds it; rule 5 is about it. ``held`` is whether any commit of
-    the default branch up to its tip held an instance, which the gate reads from the log, and
-    ``start`` is where the reviews stood when they started, which it reads from the log too.
-    """
-
     main: Tree
     allowance: int | None
     branch: Branch | None
@@ -179,8 +108,6 @@ INITIAL = State(Tree(), None, None)
 
 @dataclass(frozen=True)
 class Verdict:
-    """The gate's answer on one change: red, and the three notes it may print."""
-
     red: bool
     arrived: bool
     event_owes: bool
@@ -195,14 +122,6 @@ def judge(
     *,
     start: Start = Start.NONE,
 ) -> Verdict:
-    """The triggers gate on the change from ``base`` to ``head``.
-
-    The rows, the Triggers table, the events, the review row and its records are read at
-    ``base``; a row bound at ``head`` is owed no longer, and a record ``head`` brings counts not.
-    The kind is red when its count rose while its row or its review is owed, unless it rose from
-    none and no commit of the default branch up to ``base`` held an instance (``held``). The
-    review is owed while the base asks for it, holds no record, and the kind came after ``start``.
-    """
     before, now = base.found(base.table), head.found(base.table)
     rose = len(now) > len(before)
     owes = base.row is Row.LATER and bool(now) and head.row is not Row.BOUND
@@ -224,7 +143,6 @@ def judge(
 
 
 def owed(tree: Tree) -> dict[Debt, int]:
-    """The rows ``tree`` owes with each one's count, as ``triggers.owed`` reads them."""
     debts: dict[Debt, int] = {}
     if tree.row is Row.LATER and tree.found(tree.table):
         debts[Debt.KIND] = len(tree.instances)
@@ -238,7 +156,6 @@ def owes_kind(tree: Tree) -> bool:
 
 
 def reviews_owed(state: State) -> int | None:
-    """The kind's count when the default branch owes its review, as ``triggers.reviews_owed``."""
     main = state.main
     found = main.found(main.table)
     asked = main.review is Row.BOUND and not main.reviewed
@@ -246,12 +163,10 @@ def reviews_owed(state: State) -> int | None:
 
 
 def review_owed(tree: Tree, start: Start) -> bool:
-    """Whether a change to ``tree`` that raises the count is judged against an owed review."""
     return tree.review is Row.BOUND and not tree.reviewed and start is not Start.HELD
 
 
 def three_way(fork: Field, ours: Field, theirs: Field) -> tuple[Field] | None:
-    """One line's merge: the side that changed it, or ``None`` when both changed it apart."""
     if theirs in (fork, ours):
         return (ours,)
     if ours == fork:
@@ -261,11 +176,6 @@ def three_way(fork: Field, ours: Field, theirs: Field) -> tuple[Field] | None:
 
 @functools.cache
 def merge(fork: Tree, tip: Tree, head: Tree) -> Tree | None:
-    """``git merge`` of ``head`` into ``tip``; ``None`` when it conflicts.
-
-    Each instance is a file of its own and each field of the binding a line apart from the
-    others, so only one field changed two ways conflicts.
-    """
     removed, added = fork.instances - head.instances, head.instances - fork.instances
     fields = [
         three_way(*sides) for sides in zip(fork.binding, tip.binding, head.binding, strict=True)
@@ -281,8 +191,6 @@ def merge(fork: Tree, tip: Tree, head: Tree) -> Tree | None:
 
 @dataclass(frozen=True)
 class Landing:
-    """One attempt to land a branch: what the gate saw, and whether the default branch moved."""
-
     tip: Tree
     fork: Tree
     head: Tree
@@ -296,12 +204,10 @@ class Landing:
 
     @property
     def touches_binding(self) -> bool:
-        """Whether the change edits the binding, which only the owner merges."""
         return self.fork.binding != self.head.binding
 
     @property
     def count_rose(self) -> bool:
-        """Whether the merge holds more instances than the tip, as the tip's table counts."""
         table = self.tip.table
         if self.merged is None:
             return False
@@ -316,11 +222,6 @@ def attempt(
     held: tuple[bool, bool],
     start: tuple[Start, Start],
 ) -> Landing:
-    """``merge.attempt`` of a branch forked at ``fork`` holding ``head`` into ``tip``.
-
-    ``held`` says whether the default branch up to the tip and up to the fork ever held an
-    instance, and ``start`` where the reviews stood at each.
-    """
     merged = merge(fork, tip, head)
     green = merged is not None and not judge(tip, merged, held[0], start=start[0]).red
     on_branch = not judge(fork, head, held[1], start=start[1]).red
@@ -328,11 +229,6 @@ def attempt(
 
 
 def allowance_after(allowance: int | None, tree: Tree) -> int | None:
-    """The history variable once the default branch holds ``tree``.
-
-    Why: a kind whose row is bound or dropped is not owed, so what it gains then is no growth of
-    an owed kind; the owner putting the row back to ``later:`` starts the count again.
-    """
     if tree.row is not Row.LATER:
         return None
     if allowance is None and tree.instances:
@@ -346,7 +242,6 @@ def trees(state: State) -> list[Tree]:
 
 
 def places(state: State) -> dict[int, int]:
-    """Which trees of ``state`` hold each instance, as bits in the order of ``trees``."""
     bits: dict[int, int] = {}
     for n, tree in enumerate(trees(state)):
         for instance in tree.instances:
@@ -355,23 +250,10 @@ def places(state: State) -> dict[int, int]:
 
 
 def settled(state: State) -> bool:
-    """Whether the review can never be owed again: its record is held, or it began held."""
     return state.start is Start.HELD or (state.start is Start.FRESH and state.main.reviewed)
 
 
 def canonical(state: State) -> State:
-    """``state`` with its instances numbered by where they are, so an id carries no history.
-
-    Two instances the same trees hold are interchangeable, so numbering them in the order of
-    the trees that hold them makes one state of every way to name them. Once the review is
-    settled the gate never reads its record or its start again, so every settled state is
-    numbered as one that began held and holds no record, early or not.
-
-    Why folding "a record landed" into "started held" is sound: the two differ in one verdict,
-    ``reopens``, which needs the kind never to have been held. A record counts only once the
-    kind is held (``record``), and a start that is held has the kind held, so a settled state of
-    either kind has ``held`` set, which this keeps, and ``reopens`` is false in both.
-    """
     bits = places(state)
     order = sorted(bits, key=lambda n: (bits[n], n))
     names = {old: new for new, old in enumerate(order)}
@@ -396,7 +278,6 @@ def canonical(state: State) -> State:
 
 
 def fresh(state: State, count: int) -> frozenset[int] | None:
-    """``count`` ids above every id ``state`` holds, or ``None`` when ``IDS`` would be passed."""
     used = places(state)
     if len(used) + count > IDS:
         return None
@@ -405,7 +286,6 @@ def fresh(state: State, count: int) -> frozenset[int] | None:
 
 
 def choices(state: State) -> list[int]:
-    """One instance of the tip from each set of instances the same trees hold."""
     bits = places(state)
     picked: dict[int, int] = {}
     for instance in sorted(state.main.instances):
@@ -414,7 +294,6 @@ def choices(state: State) -> list[int]:
 
 
 def heads(state: State, change: Change) -> Iterator[Tree]:
-    """Each tree ``change`` can make of the default branch's tip; none when it cannot be made."""
     tip = state.main
     held_now = tip.instances
     new = fresh(state, 2 if change is Change.ADD_SEVERAL else 1)
@@ -437,10 +316,6 @@ def heads(state: State, change: Change) -> Iterator[Tree]:
 
 
 def edit(state: State, change: Change, new: frozenset[int] | None) -> Tree | None:
-    """The tip with ``change`` made to its binding or its records, with the instances it brings.
-
-    ``None`` when it cannot be made there.
-    """
     if change is Change.REVIEW:
         return record(state, frozenset())
     if change is Change.ADD_REVIEWED:
@@ -454,14 +329,6 @@ def edit(state: State, change: Change, new: frozenset[int] | None) -> Tree | Non
 
 
 def record(state: State, new: frozenset[int] | None) -> Tree | None:
-    """The tip with the review's record landed beside ``new`` instances; ``None`` when it cannot.
-
-    Why: a record matters only while the review is owed; one landed after it settled is one the
-    gate never reads. A record counts only when the kind has been held before its change: one
-    landed while no commit held the kind, or in the change that first brings it, is older than
-    the arrival, which it could not have seen, and the gate reads it not. One landed before the
-    review was asked is the same file, so only the asked case is modelled.
-    """
     tip = state.main
     if state.start is not Start.FRESH or new is None or len(tip.instances | new) > WIDEST:
         return None
@@ -471,7 +338,6 @@ def record(state: State, new: frozenset[int] | None) -> Tree | None:
 
 
 def binding_edit(tip: Tree, change: Change) -> Tree | None:
-    """The tip with ``change`` made to its binding, or ``None`` when it cannot be made there."""
     edits = {
         Change.BIND: (tip.row is Row.LATER, {"row": Row.BOUND}),
         Change.UNBIND: (tip.row is Row.BOUND, {"row": Row.LATER}),
@@ -490,8 +356,6 @@ def binding_edit(tip: Tree, change: Change) -> Tree | None:
 
 
 class Verb(enum.StrEnum):
-    """What an action does with a branch."""
-
     FORK = "fork"
     LAND = "land"
     ABANDON = "abandon"
@@ -499,26 +363,16 @@ class Verb(enum.StrEnum):
 
 
 class Step(NamedTuple):
-    """A named action: its verb, and the change a fork or a branch landed at once makes."""
-
     verb: Verb
     change: Change | None = None
 
 
 def forks(state: State) -> bool:
-    """Whether a branch forked from the tip waits open, or lands at once.
-
-    Why: a branch that waits matters only where the gate's verdict can change while it waits.
-    Once the Triggers row finds nothing the kind is never red again. With the kind's row gone it
-    is red no more for its row, but still red for its review while one is owed, so a branch waits
-    there too; with neither, a branch lands as it would at once.
-    """
     tip = state.main
     return tip.table is Table.FINDS and (tip.row is not Row.ABSENT or review_owed(tip, state.start))
 
 
 def landed(state: State, result: Landing) -> State:
-    """``state`` after ``result``: the default branch at the merge when it landed."""
     if not result.landed or result.merged is None:
         return state
     held = state.held or bool(result.merged.instances)
@@ -530,11 +384,6 @@ def landed(state: State, result: Landing) -> State:
 
 
 def outcomes(step: Step, state: State) -> Iterator[tuple[State, Landing | None]]:
-    """Each state ``step`` can lead to from ``state``, with the landing it attempts, if any.
-
-    Ids are kept as given and a new instance takes an id above them all, so the world can take
-    the same step on a repository whose ids name files.
-    """
     branch = state.branch
     if step.verb is Verb.LAND and branch is not None:
         result = attempt(
@@ -578,7 +427,6 @@ STEPS: dict[str, Step] = {
 
 
 def successors(step: Step, state: State) -> Iterator[State]:
-    """The states ``step`` leads to from ``state``, each numbered by ``canonical``."""
     yield from dict.fromkeys(canonical(after) for after, _ in outcomes(step, state))
 
 
@@ -590,8 +438,6 @@ Edge = tuple[State, str, State]
 
 
 class Graph(NamedTuple):
-    """Every state reachable from ``INITIAL`` in breadth-first order, and every step."""
-
     states: tuple[State, ...]
     edges: tuple[Edge, ...]
     parents: dict[State, tuple[State, str] | None]
@@ -599,7 +445,6 @@ class Graph(NamedTuple):
 
 @functools.cache
 def graph() -> Graph:
-    """The reachable states and the edges ``(state, action name, state)`` between them."""
     parents: dict[State, tuple[State, str] | None] = {INITIAL: None}
     queue = deque([INITIAL])
     edges: list[Edge] = []
@@ -615,7 +460,6 @@ def graph() -> Graph:
 
 
 def path_to(state: State) -> tuple[str, ...]:
-    """The shortest run of action names from ``INITIAL`` to ``state``."""
     names: list[str] = []
     parents = graph().parents
     step = parents[state]
@@ -628,7 +472,6 @@ def path_to(state: State) -> tuple[str, ...]:
 
 @functools.cache
 def landings_of(edge: Edge) -> tuple[Landing, ...]:
-    """The landing attempts that take ``edge``; none for a fork or an abandon."""
     before, name, after = edge
     return tuple(
         result
@@ -639,20 +482,16 @@ def landings_of(edge: Edge) -> tuple[Landing, ...]:
 
 @dataclass(frozen=True)
 class Rule:
-    """A promise about histories, held by every reachable state or by every landing attempt."""
-
     about: Literal["state", "step"]
     state_check: Callable[[State], bool] | None = None
     step_check: Callable[[Landing], bool] | None = None
 
     @property
     def doc(self) -> str:
-        """The promise in the reader's words."""
         check = self.state_check or self.step_check
         return (check.__doc__ or "").strip() if check else ""
 
     def __call__(self, subject: State | Edge) -> bool:
-        """Whether the state, or every landing attempt the edge makes, keeps the promise."""
         if isinstance(subject, State):
             assert self.state_check is not None
             return self.state_check(subject)
@@ -661,7 +500,6 @@ class Rule:
 
 
 def counterexample(name: str) -> tuple[str, ...] | None:
-    """The shortest run of actions that breaks the rule ``name``; ``None`` when it holds."""
     rule = RULES[name]
     found = graph()
     if rule.about == "state":
@@ -771,8 +609,6 @@ def route_owes_what_the_gate_refuses(result: Landing) -> bool:
     if not result.landed or merged is None or not merged.found(merged.table):
         return True
     after = landed(State(result.tip, None, None, result.tip_held, result.tip_start), result)
-    # Why: a row bound at the probe's head is owed no longer, so the gate can be red only for the
-    # review, which is the one reason this asks about.
     probe = merged._replace(instances=merged.instances | {-1}, row=Row.BOUND)
     refused = judge(merged, probe, after.held, start=after.start).red
     return (reviews_owed(after) is not None) == refused
@@ -862,7 +698,6 @@ RULES: dict[str, Rule] = {
 
 
 def exported_rule(rule: Rule) -> model_tla.Rule:
-    """A rule as the module checks it: an invariant on a state, or a rule on every step."""
     if rule.state_check is not None:
         return model_tla.Invariant(rule.doc, rule.state_check)
 
@@ -873,8 +708,6 @@ def exported_rule(rule: Rule) -> model_tla.Rule:
 
 
 class Kind(NamedTuple):
-    """What the default branch holds of the kind, the event and the review, and the histories."""
-
     instances: int
     row: str
     table: str
@@ -888,7 +721,6 @@ class Kind(NamedTuple):
 
 
 def kind(state: State) -> Kind:
-    """What the charts read of a state."""
     main = state.main
     allowance = -1 if state.allowance is None else state.allowance
     return Kind(
@@ -906,11 +738,6 @@ def kind(state: State) -> Kind:
 
 
 def export() -> model_tla.Export:
-    """The reachable graph as a TLA+ module, with the eighteen rules.
-
-    Fifteen rules are about a landing, so each is a ``model_tla.Step``, and the module holds a
-    state once for each set of them the step into it broke.
-    """
     return model_tla.export(
         "Safeguard",
         graph(),
@@ -927,6 +754,5 @@ def export() -> model_tla.Export:
 
 
 def summary() -> model_tla.Export:
-    """The graph seen through ``kind``, small enough for the statechart tool to draw whole."""
     seen = model_tla.summary(graph(), kind, model_tla.identifier)
     return model_tla.export("SafeguardKind", seen, {}, fields=Kind._fields)

@@ -1,5 +1,3 @@
-"""Application types: which Gates rows apply to a repository, and what a row may then say."""
-
 import re
 import tomllib
 from pathlib import Path
@@ -33,8 +31,13 @@ def bound(question: str, tool: str) -> list[tuple[str, str]]:
     return [(name, tool if name == question else cell) for name, cell in ROWS]
 
 
+DEPENDED_ON_SIGNS = (
+    "every repository has a README, so it would propose depended-on everywhere;"
+    " with no sign ADR 0028's refuter cannot run"
+)
+
+
 def test_the_shipped_catalogue_names_six_types_and_only_rows_of_the_binding_template() -> None:
-    # Why: a question the catalogue misspells would apply to every type again, silently.
     rows = set(QUESTION.findall(TEMPLATE_BINDING))
     assert list(SHIPPED.types) == ["service", "web-ui", "app", "cli", "job", "library"]
     assert SHIPPED.questions <= rows, sorted(SHIPPED.questions - rows)
@@ -147,7 +150,6 @@ def test_a_row_that_does_not_apply_may_say_which_type_it_is_not() -> None:
     assert failures("library", bound("load", "none: not a service")) == []
     assert failures("library", bound("a11y", "none: not an app")) == []
     assert failures("app, library", bound("load", "none: not a service")) == []
-    # Why: the reason names a type the question is asked of, never just any type.
     hint = "; it is not asked of these types, so write `none: not a service`"
     assert failures("library", bound("load", "none: not an app")) == [
         f"gate 'load' is bound to none and names no ADR that accepts the gap{hint}"
@@ -266,10 +268,8 @@ def test_the_shipped_catalogue_gives_every_question_a_trigger_it_can_fire() -> N
     assert "outbound-call" in SHIPPED.kinds
     assert SHIPPED.events["irreplaceable-data"].signs == ()
     assert SHIPPED.events["deployed"].in_binding
-    # Why: with no signs the route could never propose `depended-on`, and ADR 0028's refuter
-    # (a project people rely on is asked its depended-on questions) could not be tried.
-    assert "CONTRIBUTING.md" in SHIPPED.events["depended-on"].signs
-    assert "README.md" not in SHIPPED.events["depended-on"].signs
+    assert "CONTRIBUTING.md" in SHIPPED.events["depended-on"].signs, DEPENDED_ON_SIGNS
+    assert "README.md" not in SHIPPED.events["depended-on"].signs, DEPENDED_ON_SIGNS
 
 
 def test_a_trigger_the_catalogue_cannot_fire_is_named() -> None:
@@ -349,7 +349,6 @@ def test_a_later_row_must_name_the_trigger_of_its_question_and_only_when_asked()
     assert later("format", "later: code:listener") == [
         "gate 'format' says `later: code:listener`, but it is asked from the first commit: bind it"
     ]
-    # A bound row for a type that is not asked is already accepted, so a waiting one is too.
     assert later("listen", "later: code:listener", "cli") == []
 
 

@@ -1,12 +1,3 @@
-"""Turn the logs of the hand-driven dogfood run into an event log the reducer reads.
-
-That run had no event log. Its steps are in ``timeline.jsonl``, its answers and prompts in
-``owner.jsonl`` (classified by text patterns), each step's SDK messages in ``<step>.jsonl``, and
-each merge the observer did by hand in ``*-owner-merge-*.txt``, timed by the file's mtime. Its
-cross-check is approximate where the logs are: prompts carry no origin, and the pastes per merge
-are read back from what the merge file shows was run.
-"""
-
 from __future__ import annotations
 
 import datetime as dt
@@ -92,7 +83,6 @@ def _owner(logs: Path, zero: int) -> Iterator[Event]:
 
 
 def _merges(logs: Path, zero: int, day: dt.date) -> Iterator[Event]:
-    """Each hand merge, the commands its file shows the owner ran, and the gates they printed."""
     run_id = 0
     for path in sorted(logs.glob("*-owner-merge-*.txt")):
         match = MERGE_FILE.match(path.name)
@@ -160,7 +150,6 @@ def _merges(logs: Path, zero: int, day: dt.date) -> Iterator[Event]:
 
 
 def events(logs: Path) -> list[Event]:
-    """The one-off run's events, in time order."""
     starts = [i for i in _lines(logs / "timeline.jsonl") if i["step"] != "probe"]
     zero = _clock(str(starts[0]["t"]))
     day = dt.datetime.fromtimestamp((logs / "timeline.jsonl").stat().st_mtime, dt.UTC).date()
@@ -193,7 +182,6 @@ def events(logs: Path) -> list[Event]:
 
 
 def convert(logs: Path, out: Path) -> None:
-    """Write the one-off run's events to ``out``."""
     with out.open("w", encoding="utf-8") as lines:
         for event in events(logs):
             lines.write(json.dumps(event, default=str) + "\n")

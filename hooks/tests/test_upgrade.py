@@ -1,5 +1,3 @@
-"""``upgrade``: the plan, the write, and the report, on repositories adoption left behind."""
-
 import hashlib
 import io
 import os
@@ -35,13 +33,11 @@ DENY = "Bash(terraform apply:*)"
 
 
 def fixture(name: str, tmp_path: Path) -> Path:
-    """A copy of an adopted repository for one test to upgrade."""
     source = adopted.half_done() if name == "half-done" else adopted.adopted(name)
     return adopted.copy(source, tmp_path / "repo")
 
 
 def files(root: Path) -> dict[str, str]:
-    """Every file under ``root`` but the repository's own, by path, with a digest of its bytes."""
     return {
         str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(root.rglob("*"))
@@ -50,7 +46,6 @@ def files(root: Path) -> dict[str, str]:
 
 
 def counts(root: Path) -> tuple[int, int, int]:
-    """How many findings are auto, agent and owner."""
     kinds = [f.fix for f in conformance.findings(root)]
     return (
         sum(isinstance(fix, conformance.Auto) for fix in kinds),
@@ -70,12 +65,10 @@ def lines(found: Sequence[conformance.Finding]) -> list[str]:
 
 
 def verdict(report: str) -> str:
-    """The report's line for an agent: the counts."""
     return next(line for line in reversed(report.splitlines()) if line.startswith("upgrade: "))
 
 
 def plain(report: str) -> str:
-    """The report's block for the owner."""
     return report[report.index("In plain words:") :].rstrip("\n")
 
 
@@ -249,7 +242,6 @@ def test_an_upgrade_that_stops_after_any_file_is_finished_by_running_it_again(
 
 
 def keeps_in_order(before: str, after: str) -> bool:
-    """Whether every line of ``before`` is in ``after``, in the same order."""
     rest = iter(after.splitlines())
     return all(line in rest for line in before.splitlines())
 
@@ -351,7 +343,6 @@ def test_the_dropped_gates_rows_appear_without_a_types_line_and_the_line_adds_no
 
 
 def flip_flop(root: Path) -> list[conformance.Finding]:
-    """Two edits of one file, each clearing its own finding and raising the other's."""
     text = (root / "AGENTS.md").read_text()
     if text.endswith("left\n"):
         right = conformance.Edit("lean right", lambda now: f"{now}right\n", conformance.Agent())
@@ -855,7 +846,6 @@ def test_the_plan_reads_the_plugin_the_script_runs_from(
 def test_an_unfiltered_changed_recipe_is_red_in_the_summary_and_not_owed(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The summary says 0 red only when check stays green; this recipe makes the check red."""
     root = fixture("0.8.2", tmp_path)
     script = '"{{ratchet_plugin}}/scripts/mutation_survivors.py"'
     recipe = (

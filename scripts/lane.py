@@ -1,25 +1,4 @@
 #!/usr/bin/env python3
-"""Say which lane CI runs a pull request in, and the tests it owes.
-
-A change whose every path is a decision record or a page has no code for the full suite to judge.
-It runs only the tests that read the pages it changed, and the job that reports under each
-required name stays: it runs that short list instead of the full path.
-
-``PAGES`` is the one mapping, an allow-list: each glob is a page CI knows, with the test files
-that read it, none for a page no test reads. ``test_skills`` reads the README, every page under
-``docs/`` but the records, and ADR 0034. Each path changed against the merge base with the
-base, a rename or deletion counted by both its paths, must match one or more; the change then owes
-the union of their tests. A path that matches none (a new directory under ``docs/``, a new
-model page, a file that is not a page), an empty diff, a git failure and an output that cannot be
-read each send the change to ``full``. The script, the justfile and ``.github`` match nothing,
-so a change to any of them is always ``full``. Skill pages stay out: ``test_skills``,
-``test_conformance``, ``test_templates``, ``test_owed`` and ``test_upgrade`` read them, along with
-the templates under them, and a skills change would owe all of those.
-
-Usage: ``lane.py [BASE]``. Prints ``full``, or ``pages`` followed by the test files; no ``BASE`` is
-``full``. Exits 0.
-"""
-
 from __future__ import annotations
 
 import re

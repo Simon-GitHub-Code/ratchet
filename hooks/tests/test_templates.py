@@ -1,5 +1,3 @@
-"""The adopt templates: pinned, naming the plugin by commit, and the records' placeholders."""
-
 import json
 import os
 import re
@@ -36,7 +34,6 @@ SHARDS_STEP = re.compile(r"      - id: shards\n        run: \|\n((?:          .*
 
 
 def gate_list(name: str) -> list[str]:
-    """A gate list of the justfile, evaluated by ``just`` as CI's shape job reads it."""
     just = shutil.which("just")
     if just is None:
         pytest.skip("just is not installed")
@@ -64,7 +61,6 @@ def recipe(name: str) -> str:
 def shards(
     binding: str, tmp_path: Path, workflow: str, *, justfile: str = JUSTFILE
 ) -> tuple[int, dict[str, str], str]:
-    """Run the workflow's shape step as the runner would: exit code, outputs, what it printed."""
     step = SHARDS_STEP.search(WORKFLOWS[workflow])
     bash = shutil.which("bash")
     assert step, workflow
@@ -93,8 +89,6 @@ def needs_just() -> None:
 
 @pytest.mark.parametrize(("workflow", "tier"), [("ci.yml", "tier1"), ("deep.yml", "tier2")])
 def test_ci_runs_every_gate_of_its_tier_once(workflow: str, tier: str, tmp_path: Path) -> None:
-    # Why: commitment 1, CI runs the same entry points. The justfile's list is the only list: the
-    # shape job reads it, so a gate the tier lists is a job, and no job names a gate the tier lacks.
     needs_just()
     code, outputs, _ = shards(BINDING, tmp_path, workflow)
     assert code == 0
@@ -114,8 +108,6 @@ def test_no_workflow_keeps_a_gate_list_of_its_own() -> None:
 def test_a_tier_with_no_long_gate_skips_its_long_job_rather_than_an_empty_matrix(
     workflow: str, tier: str, tmp_path: Path
 ) -> None:
-    # Why: observed on GitHub, 2026-11-12: a matrix vector with no values fails the whole run, and
-    # a job-level `if` that is false skips the job before its matrix is read.
     needs_just()
     emptied = f'{tier}_sharded := ""'
     none = re.sub(rf'^{tier}_sharded := ".*"$', emptied, JUSTFILE, flags=re.MULTILINE)
@@ -146,7 +138,6 @@ def test_the_long_gates_run_one_job_per_shard_the_binding_counts(
 
 
 def dry_run(recipe_name: str, justfile: Path = TEMPLATES / "justfile") -> str:
-    """The command line a recipe would run, as ``just`` expands it."""
     just = shutil.which("just")
     assert just
     done = subprocess.run(  # noqa: S603 # -- a fixed argv; the justfile is the template's own
@@ -178,7 +169,6 @@ RUNNER = '"$RATCHET_PLUGIN_DIR/scripts/parallel.py" --runner'
 def test_every_tier_runs_its_gates_at_once_through_the_runner(
     name: str, lists: list[str], flag: str
 ) -> None:
-    # Why: a developer's wall clock is the slowest gate, not the sum, from the first adoption.
     needs_just()
     pin, runner, gates = dry_run(name).partition(RUNNER)
     said = runner + gates
@@ -320,7 +310,6 @@ def run_template(tmp_path: Path, settings: dict[str, str], *words: str) -> str:
     return done.stdout
 
 
-# Why: the first ticket of the 2026-11-13 dogfood, measured by change_size.py (ADR 0032).
 FIRST_SLICE_FILES = 20
 FIRST_SLICE_LINES = 683
 
@@ -328,9 +317,6 @@ FIRST_SLICE_LINES = 683
 def test_the_change_size_ceiling_is_there_before_the_first_feature_and_its_first_slice_fits(
     tmp_path: Path,
 ) -> None:
-    # Why: ADRs 0032 and 0045. The product ceiling is the stop itself, so a first slice the
-    # pipeline builds must fit under it with every line counted, as it is before the Test paths
-    # section is filled, and with no ceiling to record first.
     path = TEMPLATES / "quality/thresholds.toml"
     ceiling = tomllib.loads(path.read_text(encoding="utf-8"))["ceilings"]["change"]
     assert ceiling["product_files"] >= FIRST_SLICE_FILES, "the first slice's files fit"
@@ -365,8 +351,6 @@ def test_start_hands_a_tool_with_no_address_the_words_after_it(tmp_path: Path) -
 
 
 def test_start_gives_the_port_to_the_whole_boot_line_as_the_gates_do(tmp_path: Path) -> None:
-    # Why: `boot` builds what it runs, so a line of `build && run` is usual, and an assignment in
-    # front of the line would reach `build` alone; with_service.py exports PORT to the whole line.
     needs_just()
     boot = {"boot": "true && sh -c 'echo port is $PORT'", "ready": "none", "port": "3000"}
     assert "port is 3000" in run_template(tmp_path, boot, "start")
@@ -388,9 +372,6 @@ SERVE = f"{sys.executable} -m http.server --bind 127.0.0.1"
 def test_smoke_boots_a_deliverable_on_the_port_the_gate_picked(
     tmp_path: Path, boot: str, port: str | None
 ) -> None:
-    # Why: PR 43's verifier. `booted` once wrapped `boot` in double quotes, so the recipe's shell
-    # expanded `$PORT` before with_service.py chose it (unbound, or another port) and a `"` in
-    # `boot` split the argument.
     just = shutil.which("just")
     if just is None:
         pytest.skip("just is not installed")
@@ -443,7 +424,6 @@ def test_start_and_test_files_are_entry_points_and_in_no_tier() -> None:
 
 
 def entry_point_blocks() -> tuple[list[str], list[list[str]]]:
-    """The template binding's Entry points section: its paragraphs, and each table's rows."""
     section = BINDING.split("\n## Entry points\n", 1)[1].split("\n## ", 1)[0]
     blocks = section.strip().split("\n\n")
     tables = [block.splitlines()[2:] for block in blocks if block.startswith("|")]
@@ -460,8 +440,6 @@ def test_every_entry_point_the_binding_names_is_a_recipe_of_the_justfile() -> No
 
 
 def test_the_binding_says_which_entry_points_the_conformance_gate_requires() -> None:
-    # Why: PR 43 added `test-files` and `start` to the one table its sentence said the conformance
-    # gate requires, and the gate requires neither, so every new binding said something untrue.
     paragraphs, tables = entry_point_blocks()
     names = [[row.split("|")[1].strip() for row in table] for table in tables]
     assert set(names[0]) == set(conformance.ENTRY_POINTS), "the first table is what it requires"
@@ -486,8 +464,6 @@ def test_the_binding_names_the_tests_every_role_writes_and_how_they_run() -> Non
 
 
 def test_the_ci_templates_are_green_on_the_pins_gate() -> None:
-    # Why: item 6 of the owner-free brief; a template that fails its own gate teaches the
-    # wrong shape to every adopter.
     for name in ("ci.yml", "deep.yml", "weekly.yml"):
         path = f".github/workflows/{name}"
         text = (TEMPLATES / path).read_text(encoding="utf-8")
@@ -498,7 +474,6 @@ def test_the_ci_templates_are_green_on_the_pins_gate() -> None:
 
 
 def test_ci_reports_a_ceiling_on_a_pull_request_and_holds_each_job_to_its_tier() -> None:
-    # Why: tiers.md, Speed. Runners vary, so a ceiling blocks on the default branch and nightly.
     ci, deep = WORKFLOWS["ci.yml"], WORKFLOWS["deep.yml"]
     assert "  OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}\n" in ci
     assert ci.count('budget.py" tier0 --over "$OVER" --report') == 1
@@ -514,7 +489,6 @@ def test_the_plugins_own_ci_reports_a_ceiling_on_a_pull_request_as_the_template_
     over = "  OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}\n"
     assert over in WORKFLOWS["ci.yml"]
     assert over in own
-    # Why: one wrapped command in the gates job, one in the sharded job; each held to its ceiling.
     assert own.count('budget.py "${{ matrix.gate }}" --over "$OVER" --report') == 2
     assert own.count("budget.py") == 2
 
@@ -543,7 +517,6 @@ def test_the_weekly_workflow_is_scheduled_and_may_only_read_and_write_issues() -
 def test_the_weekly_entry_point_runs_its_gates_one_after_another() -> None:
     needs_just()
     gates = gate_list("weekly_gates")
-    # Why: ADR 0028. The two drills are weekly gates: each is `later:` until its life event.
     assert gates == [
         *("audit-all", "licenses", "drift", "load-soak"),
         *("restore-drill", "prod-probe"),
@@ -568,7 +541,6 @@ ISSUE_STEP = re.compile(
 
 
 def finding(root: Path, open_issue: str) -> tuple[list[str], str]:
-    """The calls the issue step makes to ``gh`` and the body it files, given the open issue."""
     step = ISSUE_STEP.search(WEEKLY)
     bash = shutil.which("bash")
     assert step
@@ -613,8 +585,6 @@ def test_a_red_weekly_run_opens_one_issue_and_then_comments_on_it(tmp_path: Path
 def test_the_issue_carries_the_output_of_each_red_gate_and_not_the_green_gates_that_followed(
     tmp_path: Path,
 ) -> None:
-    # Why: observed on a forge, 2026-11-12: the last 60 lines of the log were the green gates'
-    # output, and the red gate's reason was above them.
     noise = "".join(f"a green gate says {n}\n" for n in range(100))
     (tmp_path / "weekly.txt").write_text(
         "parallel: audit-all: started\n==> audit-all <==\nthe audit found CVE-1\n"
@@ -680,8 +650,6 @@ def test_a_tier_is_red_until_the_binding_pins_the_plugin_it_runs_from(tmp_path: 
 
 
 def test_adopt_names_the_records_skill_and_the_owner_s_steps() -> None:
-    # Why: ADR 0034. `grilling` ran only in the deleted interactive mode; the deeper interview
-    # is the owner's own `/mattpocock-skills:grill-with-docs`.
     assert "mattpocock-skills:grilling" not in ADOPT
     assert "`/mattpocock-skills:grill-with-docs`" in ADOPT
     assert "`mattpocock-skills:domain-modeling`" in ADOPT
@@ -694,8 +662,6 @@ def test_adopt_names_the_records_skill_and_the_owner_s_steps() -> None:
     assert 'ref: "<ratchet-sha>"' in ADOPT
 
 
-# Why: `-S` skips the site hook through which coverage measures subprocesses. The fake is not
-# code under test, and coverage starting in each of its calls was most of these tests' time.
 FAKE_GH = """#!{python} -S
 import json, os, sys
 def path_of(args):
@@ -760,7 +726,6 @@ def one_pull(number: int, sha: str, branch: str, *, base: str = "main") -> dict[
 def ci_runs(
     number: int, sha: str, branch: str, *, conclusion: str = "success"
 ) -> dict[str, object]:
-    """The forge's answer for the ``ci`` runs on ``sha``: one, for pull request ``number``."""
     run = {
         "id": number,
         "event": "pull_request",
@@ -777,7 +742,6 @@ def ci_runs(
 
 
 def forge(heads: dict[int, tuple[str, str]]) -> dict[str, Any]:
-    """A forge where every pull request in ``heads`` is green, alone on its branch and unmoved."""
     return {
         "open": [f"{n} {sha} {branch} main" for n, (sha, branch) in heads.items()],
         "deep": {"total_count": 1, "workflow_runs": [{**ON_THE_TIP, "head_repository": OURS}]},
@@ -793,7 +757,6 @@ def forge(heads: dict[int, tuple[str, str]]) -> dict[str, Any]:
 
 
 def merge_job(tmp_path: Path, world: dict[str, Any]) -> tuple[int, str, str]:
-    """Run the template's merge step against ``world``: its exit code, its output, its calls."""
     step = MERGE_STEP.search(MERGE)
     bash = shutil.which("bash")
     assert step
@@ -834,11 +797,6 @@ def merge_job(tmp_path: Path, world: dict[str, Any]) -> tuple[int, str, str]:
 def test_the_merge_job_judges_every_green_pull_request_not_only_the_one_that_woke_it(
     tmp_path: Path,
 ) -> None:
-    # Why: observed on GitHub, 2026-11-12: of four runs queued together, two were cancelled, and
-    # the pull requests they stood for were never judged. A run that judges all of them loses none.
-    # One pull request per way the job goes: 1 merges, 2 is the owner's, 3 is red, 4 the forge
-    # refuses, 5 has a twin against another base (ADR 0024), 6 moved while it was judged, and 7
-    # has a branch name a URL would read.
     heads = {n: (letter * 4, f"feat/{letter}") for n, letter in enumerate("abcdef", 1)}
     heads[7] = ("gggg", "feat/g#x")
     world = forge(heads)
@@ -873,7 +831,6 @@ def test_the_merge_job_judges_every_green_pull_request_not_only_the_one_that_wok
 
 
 def test_the_merge_job_counts_nothing_the_forge_did_not_answer(tmp_path: Path) -> None:
-    # Why: an answer that is missing or cut short must read as red, and never as green.
     world = forge({1: ("aaaa", "feat/a"), 2: ("bbbb", "feat/b"), 3: ("cccc", "feat/c")})
     del world["deep"]
     del world["tier1"]
@@ -905,7 +862,6 @@ def test_the_merge_job_hands_the_judge_the_ci_a_push_started_on_the_default_bran
 
 
 def bodies(root: Path) -> dict[str, str]:
-    """The comment bodies the merge job sent, by the API path they went to."""
     sent = (root / "calls.bodies").read_text(encoding="utf-8").split("---\n")[:-1]
     return dict(entry.split("\n", 1) for entry in sent)
 
@@ -913,9 +869,6 @@ def bodies(root: Path) -> dict[str, str]:
 def test_the_merge_job_tells_the_owner_of_a_pull_request_it_leaves_alone_for_the_owner_s_sake(
     tmp_path: Path,
 ) -> None:
-    # Why: observed on a forge, 2026-11-12: a twin against another base, a retarget and a pull
-    # request against another branch were left alone with a line in the log and no comment. 1 has
-    # a twin, 2 is against `develop`, 3 was retargeted, 4 has a red ci and 5 is clean.
     heads = {n: (letter * 4, f"feat/{letter}") for n, letter in enumerate("abcde", 1)}
     world = forge(heads)
     world["ci"]["aaaa"]["workflow_runs"][0]["pull_requests"].append(
@@ -959,7 +912,6 @@ def test_the_merge_job_tells_the_owner_of_a_pull_request_it_leaves_alone_for_the
 
 
 def test_no_markdown_template_escapes_a_backtick_inside_inline_code() -> None:
-    """A backslash does not escape a backtick in a code span, so a formatter misreads the span."""
     skills = TEMPLATES.parents[1]
     files = [*TEMPLATES.rglob("*.md"), *(skills / "init/templates").rglob("*.md")]
     assert files

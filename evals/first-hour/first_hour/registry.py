@@ -1,14 +1,3 @@
-"""The one network read a session may make: public package-registry metadata, with ``curl``.
-
-A normal owner's session picks tools by looking up what is current: ``curl -s
-<registry>/<package>``. The harness refuses ``WebFetch`` and ``WebSearch`` (they run
-in the Claude Code process, outside the sandbox, which holds the model's token), so this is how a
-session reads a registry. A ``curl`` is allowed when every flag is on a short list that cannot
-send or sign anything, and every URL is ``https`` on a named public host: any ecosystem's
-registry, none favoured. The sandbox has no credential to send (README, "Safety"); the rule keeps
-a read a read.
-"""
-
 from __future__ import annotations
 
 import re
@@ -17,8 +6,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-# Why: forge hosts are refused here as the policy refuses them everywhere. A name ending in one of
-# these suffixes is not a public host: a session must not reach a machine on the local network.
 FORGES = (
     "github.com",
     "githubusercontent.com",
@@ -28,8 +15,6 @@ FORGES = (
     "sr.ht",
 )
 LOCAL_SUFFIXES = ("localhost", "local", "internal", "lan", "home", "corp", "arpa")
-# Why: a host is letters, digits, dots and hyphens, then a path or nothing: no userinfo, no port,
-# no `$VAR`, no bracketed address.
 _URL = re.compile(r"https://([A-Za-z0-9][A-Za-z0-9.-]*)(?:/[\w./:%?=&+,~@${}-]*)?")
 _SHORT_FLAGS = frozenset("sSfLg")
 _SHORT_VALUES = {
@@ -55,13 +40,10 @@ _LONG_VALUES = frozenset(
         "--request",
     }
 )
-# Why: a header that names the content wanted; any other (`Authorization`, `Cookie`, a token in
-# a custom one) is how a request signs itself.
 _HEADER = re.compile(r"(?:accept|accept-encoding|user-agent):", re.IGNORECASE)
 
 
 def is_registry_read(args: tuple[str, ...]) -> bool:
-    """Whether the words after ``curl`` only read from a registry host, without signing in."""
     urls = 0
     words = iter(args)
     for arg in words:
@@ -85,7 +67,6 @@ def is_registry_read(args: tuple[str, ...]) -> bool:
 
 
 def _public_url(arg: str) -> bool:
-    """An ``https`` URL on a named public host: not a forge, an address or a local name."""
     match = _URL.fullmatch(arg)
     if match is None:
         return False

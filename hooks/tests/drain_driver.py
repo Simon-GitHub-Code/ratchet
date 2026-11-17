@@ -1,19 +1,3 @@
-"""Run ``drain.py`` as a process of its own, as a session's command is, for the tests that need two.
-
-The one stand-in the test fixture also makes is kept: the repository's commit hooks count as
-installed. Optional environment:
-
-- ``DRV_LOCK_WAIT`` sets how long a command waits for the drain lock.
-- ``DRV_WAITING=<file>`` touches ``<file>`` when the command first finds the drain lock held and
-  starts to wait for it.
-- ``DRV_PAUSE=<dir>`` stops ``plan`` after it has read the repository, touching ``<dir>/paused``
-  and waiting for ``<dir>/go``: a command caught between reading and acting.
-- ``DRV_KILL_AT=drop_record`` ends this process with SIGKILL where ``update`` is about to drop
-  the verdict record the rebase outdated: a run killed after its rebase.
-- ``DRV_KILL_AT=discard`` ends it where ``close`` is about to remove the work tree: a landing
-  killed after the merge, with its note written: the note comes first.
-"""
-
 import os
 import signal
 import sys

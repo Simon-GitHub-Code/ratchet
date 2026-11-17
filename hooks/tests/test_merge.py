@@ -1,5 +1,3 @@
-"""``merge.py``: the merge with no forge lands what the judge and ``check`` both pass, only that."""
-
 import fcntl
 import json
 import os
@@ -26,7 +24,6 @@ def binding(check: str | None = "true", deep: str | None = "just check-deep") ->
 
 
 def project(root: Path, files: dict[str, str] | None = None, **bound: str | None) -> Path:
-    """A repository on ``main`` with the binding, and ``feature/4-thing`` checked out."""
     repository(root, {**BASE, "docs/process/binding.md": binding(**bound)})
     branch(root, FEATURE)
     for path, text in (files or {"b": "the branch's\n"}).items():
@@ -315,9 +312,6 @@ def test_a_binding_without_tier_2_still_says_what_comes_next(
     )
 
 
-# --- the adoption (ADR 0031) ------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(("deep", "code"), [("true", 0), ("false", 1)])
 def test_the_adoption_lands_on_its_own_tier_2_and_not_on_check(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], *, deep: str, code: int
@@ -334,13 +328,10 @@ def test_the_adoption_lands_on_its_own_tier_2_and_not_on_check(
     assert ("gates: `false` is red on the merge result" in out) is (code == 1)
 
 
-# --- records alone (ADR 0031) -----------------------------------------------------------------
-
 SPEC = ".scratch/thing/spec.md"
 
 
 def on_main(root: Path, files: dict[str, str]) -> Path:
-    """The adopted repository on ``main``, with ``files`` written and left uncommitted."""
     repository(root, {**BASE, "docs/process/binding.md": binding()})
     for path, text in files.items():
         write(root, path, text)
@@ -434,8 +425,6 @@ def test_records_land_from_the_default_branch_and_without_a_forge(
 def test_records_the_commit_hooks_do_not_take_stay_as_the_owner_left_them(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], *, hook: str, said: str
 ) -> None:
-    # Why: the owner may have staged one version of a record and kept editing another; neither
-    # is theirs to lose because a hook said no.
     root = on_main(tmp_path, {SPEC: "# Staged\n"})
     git(root, "add", SPEC)
     write(root, SPEC, "# Edited\n")
@@ -470,7 +459,6 @@ STOPPED = "records/20261113-064102"
 
 
 def stopped_on_its_branch(root: Path, *, committed: bool) -> None:
-    """What a ``--records`` run killed in the commit hooks, or after its commit, leaves."""
     git(root, "switch", "-q", "-c", STOPPED)
     git(root, "add", "--all")
     if committed:
@@ -483,8 +471,6 @@ def stopped_on_its_branch(root: Path, *, committed: bool) -> None:
 def test_a_run_stopped_on_its_records_branch_is_finished_by_the_next(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], *, committed: bool
 ) -> None:
-    # Why: a run killed while the commit hooks ran leaves HEAD on its records branch, and the
-    # same command is the one the route names again; it must pick up where the last one stopped.
     root = on_main(tmp_path, {SPEC: "# Thing\n"})
     stopped_on_its_branch(root, committed=committed)
     capsys.readouterr()
@@ -501,8 +487,6 @@ def test_a_run_stopped_on_its_records_branch_is_finished_by_the_next(
 def test_a_stopped_run_git_cannot_leave_says_what_to_type(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Why: git killed partway leaves its index lock behind, and only one who knows no git runs
-    # may delete it; the run says so and names the command after it.
     root = on_main(tmp_path, {SPEC: "# Thing\n"})
     stopped_on_its_branch(root, committed=False)
     lock = root / ".git" / "index.lock"
@@ -527,8 +511,6 @@ def test_a_stopped_run_git_cannot_leave_says_what_to_type(
 def test_a_records_branch_a_run_stopped_in_check_left_is_deleted_once_merged(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Why: a run killed while `check` ran is back on main with its branch unmerged, and the
-    # route names `merge <branch>` for it; that merge deletes it as `--records` would.
     root = on_main(tmp_path, {SPEC: "# Thing\n"})
     stopped_on_its_branch(root, committed=True)
     git(root, "switch", "-q", "main")
@@ -614,9 +596,6 @@ def test_a_records_branch_that_cannot_be_made_changes_nothing(
 def test_a_branch_or_the_records_and_never_both(argv: list[str]) -> None:
     with pytest.raises(SystemExit):
         merge.main(argv)
-
-
-# --- the merge lock and the probe of the land that started a merge ----------------------------
 
 
 def test_a_merge_holds_its_lock_and_a_second_merge_of_the_branch_merges_nothing(

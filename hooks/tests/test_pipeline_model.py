@@ -1,10 +1,3 @@
-"""One pipeline run's rules: on every run its model allows, then on the real workflow.
-
-The answers are finite and the workflow is deterministic given them, so nothing here samples: every
-sequence of abstract answers up to the fix loop's bound runs on the model and on the real
-``workflows/pipeline.js``, all of them in one node process.
-"""
-
 from __future__ import annotations
 
 import dis
@@ -63,8 +56,6 @@ PAGE = PLUGIN_ROOT / "docs/model/pipeline.md"
     ROUNDS_KEPT,
 ) = model.RULES
 
-# Why: a rule the workflow does not keep is pinned here by the shortest run from the start to a
-# step that breaks it, so the break is a recorded fact and not a red test.
 DIES_FIRST = ["the orchestrator starts a build", "preflight dies"]
 RECONCILED_OVER = [
     "the orchestrator judges a branch whose rebase conflicted again",
@@ -88,22 +79,10 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     MEASURED: None,
     LOOP_ENDS: None,
     UNPUBLISHED: None,
-    # 7a breaks on a role that published and a review that approves, for good: ADR 0060. A
-    # Workflow script cannot read a file or run a command, so it cannot see that a role committed,
-    # pushed or opened a pull request. The orchestrator's publish check, a rule of the drain model,
-    # catches the run after it returns. 7 holds on the script's own calls and its prompts' text.
     PUBLISHED_NEVER_APPROVED: PUBLISHED_APPROVED,
-    # 8 breaks on a dead agent, because the script raises and returns no result. 8a holds. It is
-    # ADR 0023 decision 2: "One run per ticket also keeps its own run to resume, so a ticket that
-    # dies is run again alone." The script's error says to resume the run.
     REPORTED: DIES_FIRST,
     RESUMABLE: None,
     JUDGED_AGAIN: None,
-    # 10 breaks on a change a reconcile, a fix round, the implementer or the spec measures over a
-    # ceiling, none of which names parts (the shortest is a reconcile's). 10a holds.
-    # pipeline.md step 3 says the stop on the spec's estimate comes "with a proposed split" and
-    # says it of no other stop, and pipeline.js tells the orchestrator "with no `proposedSplit`,
-    # divide the ticket's promises yourself".
     SPLIT: RECONCILED_OVER,
     SPLIT_UNASKED: None,
     ASSUMED: None,
@@ -121,8 +100,6 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     COUNTED: None,
     ROUNDS_KEPT: None,
 }
-# Why: a fix round over a ceiling, which the real workflow stops as too large, as it does the
-# reconcile of RECONCILED_OVER.
 FIXED_OVER = [
     "the orchestrator starts a build",
     "preflight is green for a project that is depended-on",
@@ -132,8 +109,6 @@ FIXED_OVER = [
     "critique finds a major it does not see fixed",
     "fix-1 measures product code over its ceiling",
 ]
-# Why: one fix pass for every project. Before the critic runs, the review's blocking issues take
-# the pass, and a second review decides: its approval approves, anything else parks.
 REVIEWED_YOUNG = [
     "the orchestrator starts a build",
     "preflight is green for a project nobody depends on",
@@ -149,8 +124,6 @@ YOUNG_PARKED = [
     "review-1 requests changes with a blocker of its own",
 ]
 YOUNG_FIXED_OVER = [*REVIEWED_YOUNG, "fix-1 measures product code over its ceiling"]
-# Why: the pass keys on the review's blocking issues, not its verdict. The workflow's first version
-# asked the verdict first and parked this run with no pass.
 YOUNG_APPROVED_ISSUE = [
     *REVIEWED_YOUNG[:-1],
     "review approves with a blocker of its own open",
@@ -173,7 +146,6 @@ def adjacency() -> dict[model.State, list[tuple[str, model.State]]]:
 
 
 def shortest_break(name: str) -> list[str] | None:
-    """The fewest actions from the start to a step that breaks the rule, or ``None``."""
     rule_holds = model.RULES[name]
     came: dict[model.State, tuple[model.State, str] | None] = {model.INITIAL: None}
     queue = deque([model.INITIAL])
@@ -230,10 +202,6 @@ def test_no_step_of_the_script_turns_on_whether_a_role_published() -> None:
 
 
 def runs() -> list[tuple[list[model.Action], model.State]]:
-    """Every run from the start to an end as the script reads it, with the state it ends in.
-
-    Why: no step turns on whether a role published, so the runs where one did are these runs.
-    """
     done: list[tuple[list[model.Action], model.State]] = []
     stack: list[tuple[list[model.Action], model.State]] = [([], model.INITIAL)]
     while stack:
@@ -249,7 +217,6 @@ def runs() -> list[tuple[list[model.Action], model.State]]:
 
 
 def walked(names: list[str]) -> list[model.Action]:
-    """The actions a named run takes, each checked to be open where the run takes it."""
     state, actions = model.INITIAL, []
     for name in names:
         action, state = next(move for move in model.moves(state) if move[0].name == name)
@@ -280,11 +247,6 @@ def shared_replay(tmp_path_factory: pytest.TempPathFactory) -> None:
 
 @functools.cache
 def played() -> tuple[list[Case], world.Batch]:
-    """Every run of the model with the ending it expects, and what the real workflow did on it.
-
-    Why: the replay is the longest work in the suite, so the first worker of a run to need it
-    plays it and keeps it in the folder the run's workers share, and the others wait and read it.
-    """
     if not SHARED:
         return replay()
     kept = SHARED[0] / "pipeline-replay.pickle"
@@ -302,8 +264,6 @@ def played() -> tuple[list[Case], world.Batch]:
 
 def replay() -> tuple[list[Case], world.Batch]:
     cases = [(actions, state.ending) for actions, state in runs()]
-    # Why: a local ticket file changes what the roles that read the ticket are told to run, so the
-    # longest build and the longest rejudge run once more reading one.
     local = [
         max((case for case in cases if case[0][0].answer is start), key=lambda case: len(case[0]))
         for start in (model.Start.BUILD, model.Start.REJUDGE_CONFLICT)
@@ -329,7 +289,6 @@ def test_the_real_workflow_does_what_the_model_does_on_every_sequence_of_answers
 
 
 def told(actions: list[model.Action]) -> tuple[tuple[str, int], ...]:
-    """Each fix round of a run with the rounds the model's loop has where the round runs."""
     rounds, state = [], model.INITIAL
     for action in actions:
         if action.role is None:
@@ -343,8 +302,6 @@ def told(actions: list[model.Action]) -> tuple[tuple[str, int], ...]:
 
 @REPLAYED
 def test_on_the_real_workflow_each_fix_agent_is_told_the_rounds_its_loop_has() -> None:
-    # Why: the fix agent reads its round count to know whether another round follows, so a young
-    # project's fixer told of two rounds would leave to a round that never runs what one can close.
     cases = played()[0]
     assert any(real.told for _, _, real in cases)
     for actions, _, real in cases:
@@ -352,7 +309,6 @@ def test_on_the_real_workflow_each_fix_agent_is_told_the_rounds_its_loop_has() -
 
 
 def ending_on(test: Callable[[model.Action], bool]) -> list[tuple[model.Action, world.Played]]:
-    """Each real run whose last answer passes ``test``, with that answer."""
     return [(actions[-1], real) for actions, _, real in played()[0] if test(actions[-1])]
 
 
@@ -483,8 +439,6 @@ def test_an_agent_that_dies_ends_the_run_in_an_error_and_no_result() -> None:
 
 
 def test_a_change_a_fix_round_or_a_reconcile_takes_over_the_ceiling_stops_as_too_large() -> None:
-    # Why: ADR 0055. The size was once read after the spec and the implementation only, and
-    # these two ended in an approval on an agent's green answer.
     for name, stage, calls in (
         ("fixed over", "fix round 1", ("fix-1", "Fix")),
         ("young fixed over", "fix round 1", ("fix-1", "Fix")),

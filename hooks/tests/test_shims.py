@@ -1,5 +1,3 @@
-"""The two hook shims in this process: what each does when Python or the guard cannot run."""
-
 import io
 import json
 import sys
@@ -15,7 +13,6 @@ OLD_PYTHON = (3, 10, 0)
 
 @pytest.fixture(autouse=True)
 def path_is_restored(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The shims put the hooks directory first on ``sys.path``; a test must not keep that."""
     monkeypatch.setattr(sys, "path", list(sys.path))
 
 

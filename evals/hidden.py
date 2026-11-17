@@ -1,15 +1,3 @@
-"""Score a finished `claude plugin eval --keep-temp --json` run beyond what the harness grades.
-
-Per case and arm: the harness score's mean and spread, whether the session-start hook's stance
-reached each run's context (read from the trace, so the treatment is shown, not assumed), the
-with-only indicators, and, where the case has hidden/check.py, whether that hidden acceptance
-test passes on the workspace the agent left (copied out of the kept sandbox first). Then the
-with-minus-without delta with a bootstrap interval, and Fisher's exact test per grader.
-
-Usage: python3 evals/hidden.py <aggregate.json> [--chmod]
---chmod opens each kept sandbox's sealed/ directory (mode 000) so the workspace can be read.
-"""
-
 import json
 import math
 import random
@@ -72,7 +60,6 @@ def spread(values: list[float]) -> str:
 
 
 def fisher_two_sided(a: int, n: int, b: int, m: int) -> float:
-    """Fisher's exact test on a/n passes against b/m passes."""
     total = a + b
 
     def prob(x: int) -> float:

@@ -1,5 +1,3 @@
-"""``parallel.py``: gates run at once, each one's output whole, every red named."""
-
 import argparse
 import json
 import os
@@ -27,7 +25,6 @@ PATIENCE = 60.0
 
 
 def gate(code: str, *args: object) -> str:
-    """A gate entry that runs ``code`` in this interpreter, with ``args`` as ``sys.argv``."""
     return shlex.join([sys.executable, "-c", code, *map(str, args)])
 
 
@@ -301,7 +298,6 @@ def test_a_run_with_no_gate_outside_every_group_names_no_group(
 
 
 def binding(root: Path, rows: dict[str, str]) -> Path:
-    """A binding at ``root`` whose Gates table gives each entry point its Tool cell."""
     table = "".join(
         f"| {name} question | {tool} | 1 | | `just {name}` |\n" for name, tool in rows.items()
     )
@@ -315,7 +311,6 @@ def binding(root: Path, rows: dict[str, str]) -> Path:
 
 
 def named(code: str, *args: object, name: str) -> str:
-    """A gate entry whose last word, the name of its entry point, is ``name``."""
     return gate(code, *args, name)
 
 
@@ -376,8 +371,6 @@ def test_a_gate_the_binding_leaves_for_later_or_none_is_counted_apart_from_those
 def test_one_later_line_has_not_run_whatever_the_row_and_a_none_line_ran_only_from_a_tool(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], case: tuple[str | None, str, str]
 ) -> None:
-    # Why: a gate counted ran because its later: line and its row disagreed, and a run of such
-    # gates said `parallel: green (2 ran)` with nothing judged.
     tool, output, says = case
     root = binding(tmp_path, {"waits": tool} if tool else {"other": "ruff"})
     entry = named("import sys; print(sys.argv[1])", output, name="waits")
@@ -388,7 +381,6 @@ def test_one_later_line_has_not_run_whatever_the_row_and_a_none_line_ran_only_fr
 def test_a_run_where_no_check_ran_says_so_is_not_red_and_never_says_green(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Why: a recipe left as its `later:` stub after its row was bound judges nothing either.
     root = binding(tmp_path, {"one": "ruff", "two": "none: not a service"})
     one = named(SAY, "later: code:source", "", name="one")
     two = named(SAY, "none: not a service", "", name="two")

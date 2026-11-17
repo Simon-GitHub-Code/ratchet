@@ -1,19 +1,3 @@
-"""The install a fresh checkout needs before a recipe runs a tool (ADR 0043, ADR 0039 in part).
-
-``merge.py`` runs the gates in a new work tree and every CI job is a fresh checkout. A tool that is
-on disk only after an install is missing there unless a recipe installs it. The plugin knows no
-package manager (ADR 0042): the binding's ``## Install`` section says, for the stack it bound,
-whether an install must come first::
-
-    - Install: `just install`
-    - Lockfile: `<the file the install is frozen to>`
-    - Needed by: `<recipe>`, `<recipe>`
-
-or ``- Install: none: <reason>`` when the tools arrive on demand. This module reads that section
-and answers the structural questions about the justfile: its ``install`` recipe names the lockfile
-it is frozen to, each recipe the section lists reaches ``install``, and each tier runs it first.
-"""
-
 from __future__ import annotations
 
 import re
@@ -38,8 +22,6 @@ NO_OPS = frozenset({"", "true", ":"})
 
 @dataclass(frozen=True)
 class Spec:
-    """What the binding says: whether an install comes first, and what it is frozen to."""
-
     needed: bool
     lockfile: str
     recipes: tuple[str, ...]
@@ -55,7 +37,6 @@ def _refused(problem: str) -> Spec:
 
 
 def parse(binding: str | None) -> Spec | None:
-    """The binding's Install section, or ``None`` when it has none."""
     if binding is None or not markdown_text.has_section(binding, SECTION):
         return None
     fields = markdown_text.bullets(markdown_text.section(binding, SECTION))
@@ -87,24 +68,20 @@ def parse(binding: str | None) -> Spec | None:
 
 
 def _body(justfile: str) -> str:
-    """The code of the ``install`` recipe, less its comments and its header line."""
     lines = justfile_text.definition(justfile, INSTALL)
     header = next((i for i, line in enumerate(lines) if line.startswith(INSTALL)), len(lines))
     return justfile_text.code_of("\n".join(lines[header + 1 :]))
 
 
 def installs_from_lock(justfile: str, lockfile: str) -> bool:
-    """Whether the justfile's ``install`` recipe names the lockfile it is frozen to."""
     return lockfile in WORD.findall(_body(justfile))
 
 
 def reaches_install(justfile: str, recipe: str) -> bool:
-    """Whether running ``recipe`` runs the ``install`` recipe first or on the way."""
     return INSTALL in justfile_text.reaches(justfile, recipe)
 
 
 def depends_directly(justfile: str, recipe: str) -> bool:
-    """Whether ``recipe`` names ``install`` among its own dependencies."""
     block = next((b for b in justfile_text.blocks(justfile.split("\n")) if b.name == recipe), None)
     return block is not None and block.parsed is not None and INSTALL in block.parsed.before
 
@@ -112,13 +89,6 @@ def depends_directly(justfile: str, recipe: str) -> bool:
 def derived(
     justfile: str, *, tracked: Callable[[str], bool], tiers: Collection[str]
 ) -> dict[str, str] | None:
-    """The Install bullets the project's own justfile already states, or ``None`` when it does not.
-
-    An ``install`` recipe that does nothing, and that no recipe but a tier waits on, states that
-    no install comes first. One that does something and names a tracked file states the lockfile,
-    and the recipes that list it first among their dependencies, bar the tiers, are the ones that
-    need it. Nothing here knows what the recipe runs.
-    """
     body = _body(justfile)
     lines = [line.strip().lstrip("@").strip() for line in body.splitlines()]
     waiting = [

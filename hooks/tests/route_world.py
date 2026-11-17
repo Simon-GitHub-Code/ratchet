@@ -1,41 +1,3 @@
-"""The route's reference model made real: each model action done on a git repository.
-
-``apply`` leaves a scratch repository as the documented command leaves it: ``/ratchet:init``
-commits ``AGENTS.md``, ``/ratchet:adopt`` commits the binding, the manifest and the templates'
-quality files on its own branch and merges it, the spec skills leave records uncommitted on the
-default branch, ``merge --records`` commits them on a ``records/<time>`` branch and merges it or
-leaves it parked, and the drain writes its note through ``drain.close``, parking for the safeguard
-on what the real triggers gate printed. In about half the states where records landed from the
-default branch are left parked, an agent committed them on a ``docs/tickets-<n>`` branch it named
-itself instead. An owner's edit of a ticket is committed on the default branch at once, as the
-model has it. ``classify`` reads a real ``route.Step`` back as the model's advice label.
-
-``apply`` never runs ``scripts/merge.py``. Each merge it makes, of a working branch, of a records
-branch, or the drain's, is written with git: the merge that leaves the default branch checked out,
-the one that leaves the merged branch checked out, and the merge of a branch already merged, which
-changes nothing. The sweep's binding names ``just merge``, which nothing here can run. A repository
-made by ``Repo.merging`` names ``merge.py`` and green gates instead, and the tests run the real
-entry point there, from a clean working branch and from the adoption's branch, and again on the
-branch it merged; ``merge --records`` is never run.
-
-``/ratchet:adopt`` writes the architecture decision record and the binding's ``## Architecture``
-section, as the adoption has since ADR 0049; an adoption by a plugin from before it writes
-neither. An upgrade runs the real ``upgrade.py --apply`` as a process, from a copy of the plugin
-committed as the next version, on a branch the world merges. ``/ratchet:fill`` writes the rows on
-a branch and settles the ledger by running that upgrade again, which drops each entry whose
-finding is gone. The binding keeps the sections and the Gates rows an upgrade added while the
-world rewrites its own parts. ``/ratchet:architecture`` writes the record and the parts, settles the
-ledger, and leaves its branch for the owner to merge.
-
-The upgrade that asks the ``Flag:`` line before deployment (ADR 0061) declares an application type
-the catalogue asks it of, the binding naming no life event. From then on the conjecture writes the
-owner's answer and the line on the spec, as the conjecture skill does.
-
-A spec and its tickets live under ``.scratch/f<n>/``, where ``n`` counts the specs written, and
-each ticket's title names ``n``, so the branch ``feature/<number>-<slug>`` is new for every spec
-and a branch merged for an earlier spec never matches a later ticket.
-"""
-
 from __future__ import annotations
 
 import atexit
@@ -140,8 +102,6 @@ REVIEW_ROW = (
     f"| {triggers.REVIEW_QUESTION} | `ratchet` plugin `scripts/triggers.py` | 1 | |"
     " `just triggers` |\n"
 )
-# Why each arrival takes a kind of its own: a kind reviewed once is reviewed, so the next arrival
-# that reopens the architecture is the first of another kind.
 REOPENING: Final = tuple(
     kind
     for key in application_types.load().architecture
@@ -152,11 +112,7 @@ REVIEW = (
     "- Decided: 2026-11-14\n\n## Decision\n\nThe new kind sits in the part that owns it.\n\n"
     "## Refutation criterion\n\nAn instance outside that part.\n"
 )
-# Why `cli`: the catalogue asks it the flag question and no other question an operability line
-# carries, so the line is the only one a ticket is asked once the type is declared.
 ASKED_TYPES = "- Application types: cli\n"
-# Why: once a type is declared, conformance asks a Triggers row of each kind the type needs, and
-# the fill an upgrade owes runs it. The world's project has none of them until one arrives.
 ASKED_KINDS: Final = application_types.load().kinds_required(
     set(application_types.declared(ASKED_TYPES) or [])
 )
@@ -264,7 +220,6 @@ def add_criterion(path: Path, heading: str, criterion: str) -> None:
 
 
 def share_objects(source: str, target: str) -> None:
-    """Copy one file of a repository, linking it when it is one of git's objects."""
     if f"{os.sep}.git{os.sep}objects{os.sep}" in source:
         os.link(source, target)
     else:
@@ -273,8 +228,6 @@ def share_objects(source: str, target: str) -> None:
 
 @dataclass
 class Repo:
-    """A scratch repository, and the counters that name what the actions write into it."""
-
     root: Path
     spec: int = 0
     records: int = 0
@@ -297,16 +250,10 @@ class Repo:
 
     @classmethod
     def start(cls, parent: Path) -> Repo:
-        """A repository on ``main`` holding a README, where nothing names the method."""
         return cls(repository(parent / "repo", {"README.md": "# A\n"}))
 
     @classmethod
     def merging(cls, parent: Path) -> Repo:
-        """``start``, adopted with entry points the real merge runs: ``merge.py`` and green gates.
-
-        Why the template's manifest: the merge judges the adoption by its own gates, and those
-        refuse a manifest that guards less than the template.
-        """
         return replace(
             cls.start(parent),
             entries={"check": "true", "check-deep": "true", "merge": MERGE},
@@ -314,11 +261,6 @@ class Repo:
         )
 
     def copy(self, root: Path) -> Repo:
-        """The same repository at ``root``, its counters with it.
-
-        Why the objects are linked, not copied: git never changes an object file once written,
-        and they are most of the files a copy would write.
-        """
         shutil.copytree(self.root, root, symlinks=True, copy_function=share_objects)
         return replace(
             self,
@@ -329,25 +271,16 @@ class Repo:
         )
 
     def feature(self) -> str:
-        """The directory of the current spec, relative to the root."""
         return f".scratch/f{self.spec}"
 
     def head(self) -> str:
-        """The branch HEAD is on."""
         return git(self.root, "rev-parse", "--abbrev-ref", "HEAD")
 
     def binding(self, *, pinned: bool = True) -> str:
-        """The binding: each safeguard row owed (``later:``) or bound to a tool, and the review's.
-
-        The review's row is there from the adoption, so the reviews start with it (ADR 0052). The
-        pin names the plugin of the last upgrade, and ``architecture`` is the binding's
-        ``## Architecture`` section, empty while it has none.
-        """
         gates = "".join(
             f"| {self.question(n)} | {tool or self.later(n)} | 1 | | `just q{n}` |\n"
             for n, tool in enumerate(self.tools, 1)
         )
-        # Why two globs: a ticket the drain parks adds a second file of the kind.
         rows = "".join(
             f"| {self.kind(n)} | `src/kind{n}.py`, `src/kind{n}-*.py` | |\n"
             for n, _tool in enumerate(self.tools, 1)
@@ -370,11 +303,6 @@ class Repo:
         return made + self.kept_sections(made)
 
     def kept_sections(self, made: str) -> str:
-        """The binding's ``## `` sections that ``made`` lacks: what an upgrade added, as it stands.
-
-        Why: the world writes its own parts of the binding afresh, and a real project keeps the
-        sections its upgrade added and its fill wrote while those parts change.
-        """
         text = gatelib.read_text(self.root / route.BINDING) or ""
         return "".join(
             f"\n{block.rstrip()}\n"
@@ -400,23 +328,19 @@ class Repo:
         return "".join(f"{line}\n" for row, line in rows if row[0] not in own)
 
     def version(self) -> str:
-        """The plugin version the binding pins: one more minor version for each upgrade."""
         return f"999.{self.upgrades}.0"
 
     def next_record(self, slug: str) -> str:
-        """The path of a new decision record, under the next free number in ``docs/adr/``."""
         number = len(list((self.root / "docs/adr").glob("*.md"))) + 1
         return f"docs/adr/{number:04d}-{slug}.md"
 
     def record_architecture(self) -> None:
-        """Write the architecture decision record and the binding's section that names it."""
         record = self.next_record("the-architecture")
         write(self.root, record, ARCHITECTURE_RECORD)
         self.architecture = ARCHITECTURE_SECTION.format(record=record)
         write(self.root, "docs/process/binding.md", self.binding())
 
     def settle(self, done: Callable[[owed.Entry], bool]) -> None:
-        """Delete the ledger's entries ``done`` picks, as the step that settles them does."""
         left = [entry for entry in owed.read(self.root).entries if not done(entry)]
         write(self.root, str(owed.LEDGER), owed.render(left))
 
@@ -424,15 +348,12 @@ class Repo:
         return f"{self.feature()}/spec.md"
 
     def ticket_path(self, slot: int) -> str:
-        """The local ticket in ``slot``: ``.scratch/f<n>/issues/NN-<letter><n>.md``."""
         return f"{self.feature()}/issues/{slot + 1:02d}-{LETTERS[slot]}{self.spec}.md"
 
     def ticket_branch(self, slot: int) -> str:
-        """The branch the feature skill builds the ticket in ``slot`` on."""
         return f"feature/{slot + 1}-{LETTERS[slot]}{self.spec}"
 
     def ticket_text(self, slot: int, ticket: Ticket, *, inherits: bool) -> str:
-        """The ticket file: title, blocker, status, criteria and, if it has one, its conjecture."""
         blocker = "Blocked by: 01\n\n" if slot == 1 else ""
         name = f"{LETTERS[slot].upper()}{self.spec}"
         head = f"# {slot + 1:02d}: {name}\n\n{blocker}"
@@ -447,18 +368,15 @@ class Repo:
         return text
 
     def write_ticket(self, slot: int, ticket: Ticket, *, inherits: bool) -> None:
-        """Write the ticket in ``slot`` in its new state, leaving it uncommitted."""
         write(self.root, self.ticket_path(slot), self.ticket_text(slot, ticket, inherits=inherits))
 
     def add_to_ticket(self, slot: int, text: str) -> None:
-        """Append ``text`` to the ticket in ``slot`` and commit it: its digest changes."""
         self.edits += 1
         path = self.root / self.ticket_path(slot)
         path.write_text(f"{path.read_text(encoding='utf-8')}\n{text} ({self.edits})\n", "utf-8")
         snapshot(self.root, f"docs(tracker): {text.lower()}")
 
     def next_records_branch(self, *, named: bool = False) -> str:
-        """A fresh ``records/<time>`` name, a counter for the time; ``named``, an agent's own."""
         self.records += 1
         if named:
             return f"{TICKETS_BRANCH}{self.records}"
@@ -467,25 +385,16 @@ class Repo:
 
 @dataclass(frozen=True)
 class Change:
-    """The two worlds an action takes the repository between."""
-
     before: World
     after: World
 
     @property
     def slot(self) -> int:
-        """The ticket the action moved."""
         pairs = zip(self.before.tickets, self.after.tickets, strict=True)
         return next(slot for slot, (old, new) in enumerate(pairs) if old != new)
 
 
 def named_by_an_agent(change: Change) -> bool:
-    """Whether a landing from the default branch leaves its records on a branch an agent named.
-
-    Why a hash of the state it leaves: the route finds a waiting branch by what it holds, not by
-    its name, so about half the states where one waits name it otherwise, whatever else they
-    hold. A run that stopped on its ``records/<time>`` branch keeps that name.
-    """
     return (
         change.before.head is Head.MAIN
         and change.after.parked
@@ -498,8 +407,6 @@ DO: Final[dict[ActionName, Handler]] = {}
 
 
 def does(name: ActionName) -> Callable[[Handler], Handler]:
-    """Register the function that performs action ``name`` on a repository."""
-
     def register(handler: Handler) -> Handler:
         DO[name] = handler
         return handler
@@ -508,7 +415,6 @@ def does(name: ActionName) -> Callable[[Handler], Handler]:
 
 
 def apply(repo: Repo, name: ActionName, change: Change) -> None:
-    """Perform ``name`` on ``repo``, as the model says it takes ``change.before`` to ``.after``."""
     DO[name](repo, change)
 
 
@@ -533,16 +439,11 @@ def _owner_sets_up_tracker(repo: Repo, _change: Change) -> None:
 
 
 def on_adoption_branch(repo: Repo) -> None:
-    """Check out the adoption's branch, made off the default branch if it is new."""
     if repo.head() != ADOPTION:
         branch(repo.root, ADOPTION)
 
 
 def adoption(repo: Repo, change: Change, *, pinned: bool) -> None:
-    """The binding, the manifest, the glossary's template and the quality files the templates hold.
-
-    The architecture is written where it was asked.
-    """
     write(repo.root, "docs/process/binding.md", repo.binding(pinned=pinned))
     write(repo.root, "guards/manifest.toml", repo.manifest)
     write(repo.root, "GLOSSARY.md", PLACEHOLDER)
@@ -553,10 +454,6 @@ def adoption(repo: Repo, change: Change, *, pinned: bool) -> None:
 
 
 def adopt(repo: Repo, change: Change) -> None:
-    """A whole adoption, committed on its branch and merged.
-
-    Resumed after the pin once its branch is merged, it is the proof alone, which writes nothing.
-    """
     if change.before.setup is Setup.PINNED and repo.merged:
         return
     on_adoption_branch(repo)
@@ -610,7 +507,6 @@ def _owner_states_spec_conjecture(repo: Repo, change: Change) -> None:
 
 
 def answers_the_flag_on_the_spec(repo: Repo) -> None:
-    """The conjecture's answer and ``Flag:`` line, on the spec its tickets read, once."""
     path = repo.root / repo.feature() / "spec.md"
     text = gatelib.read_text(path)
     if text is not None and FLAG_ANSWER not in text:
@@ -619,11 +515,6 @@ def answers_the_flag_on_the_spec(repo: Repo) -> None:
 
 @does(ActionName.OWNER_STATES_CONJECTURE)
 def _owner_states_conjecture(repo: Repo, change: Change) -> None:
-    """The ticket's conjecture where it has none, and the line on its spec where it is asked.
-
-    Why the spec: the conjecture writes the answer on the spec when the ticket has one, and each
-    ticket of the spec reads it there (ADR 0061).
-    """
     moved = list(enumerate(zip(change.before.tickets, change.after.tickets, strict=True)))
     for slot, pair in moved:
         if pair == (Ticket.READY, Ticket.STATED):
@@ -661,7 +552,6 @@ def _owner_splits_spec(repo: Repo, _change: Change) -> None:
 
 
 def rewrites_ticket(repo: Repo, change: Change) -> None:
-    """The owner edits the ticket's file; committed when the model has the tree clean after."""
     repo.write_ticket(
         change.slot, change.after.tickets[change.slot], inherits=change.after.inherits
     )
@@ -705,7 +595,6 @@ DO[ActionName.OWNER_RESOLVES_TICKET] = resolves_ticket
 
 
 def build_on_branch(repo: Repo, slot: int, files: dict[str, str] | None = None) -> str:
-    """Switch to the ticket's feature branch, off the default branch, with one commit of code."""
     name = repo.ticket_branch(slot)
     git(repo.root, "switch", "-q", "-C", name)
     for path, text in (files or {f"src/{name.split('/')[1]}.py": "x = 1\n"}).items():
@@ -721,10 +610,6 @@ def _agent_builds_ticket(repo: Repo, change: Change) -> None:
 
 @does(ActionName.BUILD_STOPS)
 def _build_stops(repo: Repo, change: Change) -> None:
-    """The build stops with its code uncommitted, or just after ``/ratchet:feature`` cut the branch.
-
-    Why the first ticket that can start: a stop before anything is written changes no ticket.
-    """
     if change.after.head is Head.MERGED:
         before = change.before
         slot = next(s for s in runnable_slots(before) if before.tickets[s] in STATED)
@@ -758,7 +643,6 @@ def _drain_merges_ticket(repo: Repo, change: Change) -> None:
 
 
 def park(repo: Repo, slot: int, result: dict[str, object]) -> None:
-    """The drain's close of a ticket it parked, as ``drain.py close --result`` writes it."""
     ref = repo.ticket_path(slot)
     ticket = preflight.local_ticket(ref, (repo.root / ref).read_text(encoding="utf-8"))
     drain.close(
@@ -785,8 +669,6 @@ def _drain_parks_ticket(repo: Repo, change: Change) -> None:
         return
     park(repo, change.slot, {"verdict": "blocked", **BLOCKS[kind]})
     if kind is Ticket.PARKED:
-        # Why: a note an older drain wrote names the guard hold and its cause but no base commit,
-        # so landing the edits cannot release it.
         path = queue_notes.note_path(repo.root, repo.ticket_branch(change.slot))
         note = queue_notes.read_note(repo.root, repo.ticket_branch(change.slot))
         queue_notes.write_note(path, {k: v for k, v in note.items() if k not in NEWER})
@@ -808,12 +690,6 @@ TRIGGERS: Final = Path(triggers.__file__)
 
 
 def second_instance_judged(repo: Repo, kind: str) -> str:
-    """What the real triggers gate prints for the second ticket, which adds another ``kind``.
-
-    Why a work tree of its own: the drain builds the ticket in a queue work tree, and its park
-    leaves nothing on the default branch's checkout. Why a process: the drain reads the lines a
-    gate printed, and the gate's own caches never see another repository at the same path.
-    """
     tree = repo.root.parent / f"{repo.root.name}.queue"
     git(repo.root, "worktree", "add", "-q", "--detach", str(tree), "main")
     try:
@@ -879,11 +755,6 @@ PLUGIN_PARTS: Final = (".claude-plugin", "scripts", "skills", "hooks/ratchet_gua
 
 @functools.cache
 def plugin_at(version: str) -> Path:
-    """This plugin, copied and committed as ``version``: the plugin an upgrade to it runs from.
-
-    Why a copy: the real upgrade moves the pin only to a plugin newer than the pin, and each of
-    the world's upgrades moves it on by one version.
-    """
     root = Path(tempfile.mkdtemp(prefix="ratchet-plugin-"))
     atexit.register(shutil.rmtree, root, ignore_errors=True)
     for part in PLUGIN_PARTS:
@@ -898,10 +769,6 @@ def plugin_at(version: str) -> Path:
 
 
 def run_upgrade(repo: Repo) -> str:
-    """What ``upgrade.py --apply`` prints, run as a process from the plugin the pin names.
-
-    Anything but exit 0 fails the step: a refusal, a plan that does not settle, or a red item.
-    """
     plugin = plugin_at(repo.version())
     ran = subprocess.run(  # noqa: S603 # -- the plugin's own upgrade, no shell
         [sys.executable, str(plugin / "scripts/upgrade.py"), "--root", str(repo.root), "--apply"],
@@ -914,7 +781,6 @@ def run_upgrade(repo: Repo) -> str:
 
 
 def landed(repo: Repo, name: str, subject: str) -> None:
-    """Commit the work on branch ``name`` and merge it, the default branch left checked out."""
     snapshot(repo.root, subject)
     git(repo.root, "switch", "-q", "main")
     git(repo.root, "merge", "-q", "--no-ff", "--no-edit", name)
@@ -922,10 +788,6 @@ def landed(repo: Repo, name: str, subject: str) -> None:
 
 @does(ActionName.UPGRADE_LEAVES_ROWS_TO_FILL)
 def _upgrade_leaves_rows_to_fill(repo: Repo, _change: Change) -> None:
-    """The real ``upgrade.py --apply`` to the next version, made on a branch and merged.
-
-    The world keeps the architecture section the upgrade wrote, as it keeps its own parts.
-    """
     repo.upgrades += 1
     name = f"chore/upgrade-{repo.version()}"
     git(repo.root, "switch", "-q", "-C", name)
@@ -937,8 +799,6 @@ def _upgrade_leaves_rows_to_fill(repo: Repo, _change: Change) -> None:
     landed(repo, name, f"chore(method): upgrade the plugin to {repo.version()}")
 
 
-# Why: the rows ``/ratchet:fill`` writes for a project whose tree shows none of these things, in
-# the forms the template allows for that.
 FILLED: Final = {
     application_types.SIGNS_SECTION: (
         "| Event | Paths |\n| --- | --- |\n| deployed | none: it runs nowhere yet |\n"
@@ -964,7 +824,6 @@ FILLED: Final = {
 
 
 def with_body(text: str, heading: str, body: str) -> str:
-    """``text`` with the section under ``heading`` holding ``body``; as it was without one."""
     lines = text.split("\n")
     if heading not in lines:
         return text
@@ -974,7 +833,6 @@ def with_body(text: str, heading: str, body: str) -> str:
 
 
 def with_changed_tests(repo: Repo, text: str) -> str:
-    """``text`` with the suites table and the Gates row, and the justfile's tier 1 list to match."""
     table = (
         "| Suite | Gate | Files | Run files |\n| --- | --- | --- | --- |\n"
         f"{conformance.SELF_TEST_SUITES}\n"
@@ -994,15 +852,6 @@ def with_changed_tests(repo: Repo, text: str) -> str:
 
 @does(ActionName.UPGRADE_ASKS_THE_FLAG_LINE)
 def _upgrade_asks_the_flag_line(repo: Repo, _change: Change) -> None:
-    """The project becomes one the ``Flag:`` line is asked of, not deployed: a type that asks it.
-
-    Why a type, not an upgrade to a copy of the plugin: the scripts under test are this checkout's,
-    so the plugin that ships ADR 0061 is the one the tests run. Before this step the binding
-    declares no type, which no plugin asks the line of; after it, the line is asked. It touches no
-    ticket and no spec, and lands on the default branch, from a work tree of its own while the
-    build's branch is checked out. It keeps the pin as the last real upgrade wrote it, so the fill
-    that upgrade owes still runs from the plugin it names.
-    """
     repo.asked = True
     tree = repo.root
     if repo.head() != "main":
@@ -1019,7 +868,6 @@ def _upgrade_asks_the_flag_line(repo: Repo, _change: Change) -> None:
 
 @does(ActionName.AGENT_FILLS_ROWS)
 def _agent_fills_rows(repo: Repo, _change: Change) -> None:
-    """``/ratchet:fill``: the rows written on its branch, the ledger settled by the real upgrade."""
     name = "chore/fill-owed"
     git(repo.root, "switch", "-q", "-C", name)
     text = gatelib.read_text(repo.root / route.BINDING) or ""
@@ -1032,7 +880,6 @@ def _agent_fills_rows(repo: Repo, _change: Change) -> None:
 
 @does(ActionName.OWNER_RECORDS_ARCHITECTURE)
 def _owner_records_architecture(repo: Repo, _change: Change) -> None:
-    """What ``/ratchet:architecture`` leaves with no forge: its branch, which the owner merges."""
     git(repo.root, "switch", "-q", "-C", ARCHITECTURE_BRANCH)
     repo.record_architecture()
     repo.settle(lambda entry: entry.rule == route.ARCHITECTURE_RULE)
@@ -1237,7 +1084,6 @@ def _agent_commits_on_a_branch(repo: Repo, change: Change) -> None:
 
 
 def merge_branch(repo: Repo) -> str:
-    """Merge the branch checked out into the default branch, which is left checked out."""
     name = repo.head()
     git(repo.root, "switch", "-q", "main")
     git(repo.root, "merge", "-q", "--no-ff", "--no-edit", name)
@@ -1247,11 +1093,6 @@ def merge_branch(repo: Repo) -> str:
 
 @does(ActionName.BRANCH_MERGES)
 def _branch_merges(repo: Repo, change: Change) -> None:
-    """The merge, as the entry point leaves it: merged, and the default branch checked out.
-
-    On a branch already merged it does nothing: the entry point's judge refuses that branch, and
-    the tests that run the real entry point show it changes nothing.
-    """
     if change.before.head is Head.WORK:
         merge_branch(repo)
 
@@ -1301,13 +1142,11 @@ def _owner_merges_records(repo: Repo, _change: Change) -> None:
 
 
 def remove_hooks(repo: Repo) -> None:
-    """Delete the repository's commit hooks, as a clone or a reset of ``.git`` leaves it."""
     for name in ("pre-commit", "commit-msg"):
         (repo.root / ".git/hooks" / name).unlink()
 
 
 def reinstall_hooks(repo: Repo) -> None:
-    """Install the commit hooks again."""
     install_hooks(repo.root)
 
 
@@ -1348,14 +1187,6 @@ PRUNES: Final = {
 
 
 def classify(step: route.Step) -> Advice | None:
-    """The model's advice label for a real step, or ``None`` when the model has none for it.
-
-    One stage names several labels: ``records`` for the glossary, a stopped run, records to land
-    and a branch to merge; ``specify`` for the spec, its conjecture and its split; ``blocked-run``
-    for a feature run's stash and each kind of hold the drain's note records. The command tells
-    them apart, and the why where two labels share one (``merge --records``) or where the command
-    names a branch whatever its name: a waiting branch is one whose change holds only records.
-    """
     if step.stage == "records":
         return _records(step)
     if step.stage == "specify":
@@ -1386,5 +1217,4 @@ def _specify(step: route.Step) -> Advice | None:
 
 
 def read(repo: Repo) -> route.Step:
-    """What the real route says for ``repo``, offline."""
     return route.decide(repo.root, None)

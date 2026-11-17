@@ -1,39 +1,4 @@
 #!/usr/bin/env python3
-"""The plugin pin: a tier runs from the plugin version the binding names, or it is red.
-
-CI checks the plugin out at one commit. A local run takes it from wherever the harness keeps
-it, and that copy moves whenever the harness updates the plugin, so the two could run different
-gates with nothing saying so. The version is therefore one fact with one home, a line of
-``docs/process/binding.md``::
-
-    - Ratchet plugin: 0.9.0 at <the 40-character commit> tree <the 40-character tree id>
-
-The tree id is the commit's ``<commit>^{tree}``. The conformance gate holds every workflow's plugin
-checkout to the commit. CI holds the pin's tree id to the release's: the pin's side cannot be
-forged, since the checkout there comes from the forge (ADR 0068). The template justfile, before any
-recipe runs anything from the plugin, computes the tree id of the copy's files in memory, as
-``git write-tree`` would, less the release file, ``.git``, ``__pycache__``, and the harness's
-``.in_use`` and ``.orphaned_at``, and runs the copy only when it is the pin's. This script holds
-the same hash again.
-
-Usage: ``plugin_pin.py [--root DIR] [--plugin DIR]``. The plugin is the one this script runs
-from unless ``--plugin`` names another. A ``--plugin`` that is empty or names nothing is red with
-one line: no plugin is recorded for the repository (the session hook records it, ADR 0068), and
-``RATCHET_PLUGIN`` names one instead.
-
-* A plugin whose files hash to the pin's tree id is green. Its commit and version are printed
-  from the release file and the manifest, and no git command runs in it when a tier's ``just``
-  has hashed it (``RATCHET_PLUGIN_CHECKED``).
-* A plugin whose files hash to another tree is red, and the red names the way out:
-  ``python3 <plugin>/scripts/upgrade.py --apply`` when the plugin is newer than the pin, which
-  moves the pin, every workflow ``ref`` and the permission rules to it in one change, or a
-  checkout of the pinned release, by setting ``RATCHET_PLUGIN`` to it. The binding and the
-  workflows are guard paths, so the owner sees an upgrade.
-* A plugin older than the pin, or whose order against the pin cannot be told, is red too.
-
-Exit status: 0 green, 1 red.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -58,8 +23,6 @@ COMMIT = re.compile(r"[0-9a-f]{40}")
 PIN = re.compile(
     r"^- Ratchet plugin: (\S+) at ([0-9a-f]{40})(?: tree ([0-9a-f]{40}))?$", re.MULTILINE
 )
-# Why: a line that only starts like the pin, such as a note on where the plugin comes from, is
-# the project's own; only a line of the pin's shape, real or placeholder, is the pin.
 PIN_LINE = re.compile(r"^- Ratchet plugin: \S+ at \S+(?: tree \S+)?[ \t]*(?=\r?$)", re.MULTILINE)
 PLUGIN_REF = re.compile(r'repository:\s*\S*ratchet\S*?[,\s]+ref:\s*"?([^",\s}]+)')
 CHECKED = "RATCHET_PLUGIN_CHECKED"
@@ -75,8 +38,6 @@ NONE_RECORDED = (
 
 
 class Relation(Enum):
-    """Where the plugin in use stands against the pin."""
-
     UNPINNED = "unpinned"
     PINNED = "pinned"
     NEWER = "newer"
@@ -86,21 +47,17 @@ class Relation(Enum):
 
 @dataclass(frozen=True)
 class Pin:
-    """The plugin version a repository's gates run at."""
-
     version: str
     commit: str
     tree: str | None = None
 
 
 def pinned(binding: str | None) -> Pin | None:
-    """The pin a binding carries, or ``None`` while the line is absent or a placeholder."""
     match = PIN.search(binding or "")
     return Pin(*match.groups()) if match else None
 
 
 def version_of(plugin: Path) -> str | None:
-    """The version in the plugin's manifest, or ``None`` when there is none to read."""
     try:
         data = json.loads(gatelib.read_text(plugin / MANIFEST) or "")
     except ValueError:
@@ -110,7 +67,6 @@ def version_of(plugin: Path) -> str | None:
 
 
 def release_commit(recorded: str | None) -> str | None:
-    """The commit a release file holds: ``None`` for no file, ``UNREADABLE`` for another content."""
     if recorded is None:
         return None
     text = recorded.removesuffix("\n")
@@ -118,7 +74,6 @@ def release_commit(recorded: str | None) -> str | None:
 
 
 def git_output(plugin: Path, *args: str) -> str | None:
-    # Why: git exports GIT_DIR to a hook, and `git -C` obeys it over the directory it is given.
     env = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
     result = subprocess.run(
         ["git", "-C", str(plugin), *args],
@@ -131,24 +86,11 @@ def git_output(plugin: Path, *args: str) -> str | None:
 
 
 def checked_folder(plugin: Path) -> bool:
-    """Whether a tier's ``just`` hashed ``plugin`` and found the tree the binding pins."""
     folder = os.environ.get(CHECKED, "")[42:]
     return bool(folder) and os.path.realpath(folder) == os.path.realpath(plugin)
 
 
 def commit_of(plugin: Path) -> str | None:
-    """The commit a plugin is at.
-
-    A copy with ``.claude-plugin/commit`` is a release (ADR 0068), and the commit is the one that
-    file names. A clone is a release only while ``HEAD`` is the release commit itself, a single
-    commit on the one the file names, and nothing in the work tree differs from it. Otherwise the
-    checkout's ``HEAD``, or ``None`` for a copy with no file. ``UNREADABLE`` when the file holds
-    anything but a commit. The commit says where a plugin came from, never what it holds: only
-    ``copy_tree_id`` does.
-
-    Why: a folder a tier's ``just`` has hashed runs no git command, since its ``.git`` is left out
-    of the hash and its config can name a command that ``git status`` runs.
-    """
     if checked_folder(plugin) or not (plugin / ".git").exists():
         return release_commit(gatelib.read_text(plugin / COMMIT_FILE))
     head = git_output(plugin, "rev-parse", "HEAD")
@@ -169,7 +111,6 @@ def object_id(kind: bytes, body: bytes) -> bytes:
 
 
 def tree_of(folder: Path, relative: str) -> bytes | None:
-    """The id of the git tree of ``folder``, built in memory; ``None`` when nothing is in it."""
     entries = []
     for entry in folder.iterdir():
         name = entry.name
@@ -198,12 +139,6 @@ def tree_of(folder: Path, relative: str) -> bytes | None:
 
 
 def copy_tree_id(plugin: Path) -> str | None:
-    """The tree id of a copy's files, as the template justfile computes it, or ``None``.
-
-    Why: hashed in memory as git hashes a tree, with the conversions off, so the id is the same on
-    every machine, equals ``git write-tree`` of the same files, and nothing is stored anywhere.
-    The release file, ``.git``, ``.in_use``, ``.orphaned_at`` and each ``__pycache__`` are left out.
-    """
     if not plugin.is_dir():
         return None
     try:
@@ -214,7 +149,6 @@ def copy_tree_id(plugin: Path) -> str | None:
 
 
 def release_tree(plugin: Path) -> str | None:
-    """The tree id the pin of the commit ``plugin`` is at holds, or of a copy's files."""
     if checked_folder(plugin) or not (plugin / ".git").exists():
         return copy_tree_id(plugin)
     commit = commit_of(plugin)
@@ -225,7 +159,6 @@ def release_tree(plugin: Path) -> str | None:
 
 
 def line_for(plugin: Path) -> str:
-    """The binding's pin line naming ``plugin``, with a stand-in for what the copy cannot say."""
     version = version_of(plugin) or "<version>"
     commit, tree = commit_of(plugin), release_tree(plugin)
     if commit in (None, UNREADABLE):
@@ -234,13 +167,10 @@ def line_for(plugin: Path) -> str:
 
 
 def refs(text: str) -> set[str]:
-    """The values of the plugin-checkout ``ref:`` in a workflow, placeholders included."""
     return set(PLUGIN_REF.findall(text))
 
 
 def with_refs(commit: str) -> gatelib.Want:
-    """The want that sets every plugin-checkout ``ref:`` to ``commit`` and changes nothing else."""
-
     def set_ref(match: re.Match[str]) -> str:
         whole, start = match.group(0), match.start()
         return whole[: match.start(1) - start] + commit + whole[match.end(1) - start :]
@@ -249,8 +179,6 @@ def with_refs(commit: str) -> gatelib.Want:
 
 
 def with_pin(line: str) -> gatelib.Want:
-    """The want that makes ``line`` the binding's pin line: replaced where it stands, else added."""
-
     def pin(text: str | None) -> str:
         text = text or ""
         if PIN_LINE.search(text):
@@ -272,7 +200,6 @@ def with_pin(line: str) -> gatelib.Want:
 
 
 def ci_commits(root: Path) -> set[str]:
-    """The commits CI checks the plugin out at: the pin's and each full ``ref`` of a workflow."""
     commits = {pin.commit} if (pin := pinned(gatelib.read_text(root / gatelib.BINDING))) else set()
     for workflow in sorted((root / WORKFLOWS).glob("*.yml")):
         commits.update(
@@ -282,7 +209,6 @@ def ci_commits(root: Path) -> set[str]:
 
 
 def write_refusal(root: Path, plugin: Path) -> str | None:
-    """Why ``plugin`` must not write a file CI reads, or ``None`` when it may."""
     commits = ci_commits(root)
     if not commits:
         return None
@@ -310,18 +236,15 @@ def write_refusal(root: Path, plugin: Path) -> str | None:
 
 
 def upgrade_command(plugin: Path) -> str:
-    """The command that moves a repository to ``plugin``: the pin, the workflow refs, the rules."""
     return f"python3 {shlex.quote(str(plugin / 'scripts/upgrade.py'))} --apply"
 
 
 def in_use(plugin: Path) -> str:
-    """``plugin`` as a line names it: its version, and its commit when it has one."""
     version, commit = version_of(plugin), commit_of(plugin)
     return (version or "an unknown version") + (f" at {commit}" if commit else "")
 
 
 def newer(used: str | None, pinned: str) -> bool | None:
-    """Whether version ``used`` is newer than ``pinned``; ``None`` when that cannot be told."""
     if used is None or not DOTTED.fullmatch(used) or not DOTTED.fullmatch(pinned):
         return None
     left, right = (tuple(int(part) for part in v.split(".")) for v in (used, pinned))
@@ -329,7 +252,6 @@ def newer(used: str | None, pinned: str) -> bool | None:
 
 
 def relation(pin: Pin | None, plugin: Path) -> Relation:
-    """Where ``plugin`` stands against ``pin``."""
     if pin is None:
         return Relation.UNPINNED
     version, commit = version_of(plugin), commit_of(plugin)
@@ -342,7 +264,6 @@ def relation(pin: Pin | None, plugin: Path) -> Relation:
 
 
 def tree_problem(pin: Pin, plugin: Path) -> str | None:
-    """Why ``plugin`` is not the release the pin's tree id names, or ``None`` when it is."""
     home, apply = gatelib.BINDING, upgrade_command(plugin)
     if pin.tree is None:
         return (
@@ -367,7 +288,6 @@ def tree_problem(pin: Pin, plugin: Path) -> str | None:
 
 
 def judged(pin: Pin | None, plugin: Path) -> tuple[str, bool]:
-    """The line to print about ``plugin`` against ``pin``, and whether it is a problem."""
     version, commit = version_of(plugin), commit_of(plugin)
     used = in_use(plugin)
     home = gatelib.BINDING

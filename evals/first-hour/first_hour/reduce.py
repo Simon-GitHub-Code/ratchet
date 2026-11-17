@@ -1,12 +1,3 @@
-"""Fold a run's event log into its measurements, and print them as a short table.
-
-Each event is one JSON object with ``s`` (seconds since the run started), ``step`` and ``kind``.
-The reducer reads nothing else, so a run reduced twice gives the same numbers, and a run recorded
-by another driver (the one-off run, through ``oneoff.py``) reduces the same way. ``reread`` puts
-the gate runs of a run's pasted commands right from the output the driver saved, for a run whose
-driver parsed them with a parser older than the runner's lines.
-"""
-
 from __future__ import annotations
 
 import dataclasses
@@ -25,7 +16,6 @@ Event = dict[str, object]
 
 
 def read(path: Path) -> Iterator[Event]:
-    """The events of a log, one JSON object per line."""
     with path.open(encoding="utf-8") as lines:
         for line in lines:
             if line.strip():
@@ -33,14 +23,6 @@ def read(path: Path) -> Iterator[Event]:
 
 
 def reread(events: Iterable[Event], logs: Path) -> Iterator[Event]:
-    """``events``, each paste's first gate run parsed again from the output saved in ``logs``.
-
-    The driver saves the ``n``-th paste's output as ``<step>-paste-<n>.txt`` under a ``$ <command>``
-    line and logs the paste's gate run, when it has one, as the next event. A fresh run takes the
-    recorded one's place and number; a paste the recorded parser found no gates in gets one. A
-    paste with no saved output, and a rerun of a red gate, whose output is not saved, keep what was
-    recorded.
-    """
     pastes = 0
     fresh: Event | None = None
     for event in events:
@@ -162,7 +144,6 @@ class _Fold:
             self.models.append(model)
 
     def on_result(self, event: Event) -> None:
-        # Why: the CLI reports a session's cost so far, not the turn's, so the last one counts.
         session = str(event.get("session"))
         self.session_cost[session] = max(
             self.session_cost.get(session, 0.0), _num(event.get("cost_usd"))
@@ -236,11 +217,6 @@ class _Fold:
 
 
 def _took(question: Event) -> bool:
-    """Whether the answer was the recommended option, by the flag or by the answer's text.
-
-    Why: a run recorded before ``owner.names`` matched a label followed by its description
-    flagged such an answer as declined; reading the text keeps that run comparable.
-    """
     recommended = question.get("recommended")
     options = question.get("options")
     labels = [str(o) for o in options] if isinstance(options, list) else []
@@ -252,8 +228,6 @@ def _took(question: Event) -> bool:
 
 def _questions(questions: list[Event]) -> dict[str, object]:
     classes = Counter(str(q.get("class")) for q in questions)
-    # Why: only a dialog or an also: line has options to mark recommended; a prose question's
-    # recommendation is whatever the turn said, so it is counted by its class alone.
     offered = [q for q in questions if q.get("channel") != "prose"]
     return {
         "total": len(questions),
@@ -281,7 +255,6 @@ def _questions(questions: list[Event]) -> dict[str, object]:
 
 
 def _red_gates(gates: list[Event]) -> list[dict[str, object]]:
-    """Each red gate of a driver-run gate command, and whether the rerun was red too."""
     reruns: dict[tuple[object, object], set[str]] = {}
     for run in gates:
         if run.get("attempt") == 2:  # noqa: PLR2004
@@ -313,7 +286,6 @@ def _names(run: Event, status: str) -> set[str]:
 
 
 def _gate_coverage(gates: list[Event]) -> dict[str, object]:
-    """Of the widest gate run the driver saw, the gates that judged and the ones that waited."""
     runs = [g for g in gates if g.get("attempt") == 1 and isinstance(g.get("gates"), list)]
     if not runs:
         return {"ran": [], "later": {}, "none": [], "command": None}
@@ -329,15 +301,6 @@ def _gate_coverage(gates: list[Event]) -> dict[str, object]:
 
 
 def _origin(prompt: Event) -> str:
-    """Who asked: the Ratchet guard (its hook, or the ask rules adopt writes), or Claude Code.
-
-    A driver logs the reason Claude Code gave and the reducer decides; a log recorded before
-    that (or by the one-off run's converter) carries ``origin`` and it is read as recorded. Why
-    the empty reason counts for the guard: an Edit or Write inside the project is on the
-    session's allow-list, so the only thing that asks for one is the project's own ``ask`` rule
-    for a guard path, which Claude Code reports with no reason at all. The hook's asks begin
-    ``Ratchet: ``; before 3c2d41b they began ``Ratchet guard``, as its denials still do.
-    """
     reason = str(prompt.get("reason") or "")
     origin = prompt.get("origin")
     if origin is None:
@@ -371,7 +334,6 @@ FEATURE_BRANCH = "feature/"
 
 
 def _first_feature_merge(merges: list[dict[str, object]]) -> object:
-    """The minute of the first merge of a branch the feature step builds, by its prefix."""
     return next(
         (m["minute"] for m in merges if str(m["branch"]).startswith(FEATURE_BRANCH)),
         None,
@@ -379,7 +341,6 @@ def _first_feature_merge(merges: list[dict[str, object]]) -> object:
 
 
 def _architecture(questions: list[Event], repo: Event) -> dict[str, object]:
-    """What was asked of the owner about the architecture, and what the repository holds."""
     reviews = repo.get("reviews")
     binding = repo.get("binding")
     parts = binding.get("parts") if isinstance(binding, dict) else None
@@ -395,7 +356,6 @@ def _architecture(questions: list[Event], repo: Event) -> dict[str, object]:
 
 
 def reduce(events: Iterable[Event]) -> dict[str, object]:
-    """The run's measurements."""
     fold = _Fold()
     for event in events:
         fold.take(event)
@@ -535,8 +495,6 @@ def _leaks(metrics: dict[str, object]) -> str:
 
 
 def table(metrics: dict[str, object]) -> str:
-    """The measurements a person reads first, as a Markdown table."""
-
     def at(path: str) -> str:
         return _cell(_at(metrics, path))
 

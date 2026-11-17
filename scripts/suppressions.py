@@ -1,25 +1,4 @@
 #!/usr/bin/env python3
-"""The suppressions gate: no kind of suppression rises, and no focus marker exists.
-
-The plugin names no directive of any tool (ADR 0042). The binding's ``## Suppressions`` section
-lists, one row per kind, the directives of the tools this project bound, each as an extended
-regular expression written by whoever bound the tool::
-
-    | Kind | Pattern | Rule |
-    | --- | --- | --- |
-    | <kind> | `<regex>` | rises |
-
-``rises`` fails when the kind's count (lines matched, at the merge base and at head) rose;
-``never`` fails on any match at head, as a marker that narrows a suite to the part somebody was
-looking at does. The merge base's table judges the change, so a change cannot loosen its own
-judge; a ``never`` row of either side is held at head. The binding itself is not searched, since
-it quotes every pattern. A second table says which kinds silence each
-Gates question that a directive can silence, or ``none: <reason>``; conformance holds that table
-to the Gates rows.
-
-Usage: ``suppressions.py [--root DIR] [--base REF]``.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -48,8 +27,6 @@ COLUMNS = {KIND: (KIND, "Pattern", "Rule"), QUESTION: (QUESTION, "Kinds")}
 
 @dataclass(frozen=True)
 class Kind:
-    """One row of the kinds table: a name, the regex that finds one, and what a match means."""
-
     name: str
     pattern: str
     rule: str
@@ -57,15 +34,12 @@ class Kind:
 
 @dataclass(frozen=True)
 class Spec:
-    """A binding's suppressions: its kinds, the kinds that silence each question, its problems."""
-
     kinds: tuple[Kind, ...]
     silenced: dict[str, tuple[str, ...]]
     problems: tuple[str, ...]
 
 
 def valid(pattern: str) -> bool:
-    """Whether ``git grep -E`` takes the pattern: a pattern git rejects counts nothing, silently."""
     with tempfile.TemporaryDirectory(prefix="ratchet-pattern-") as scratch:
         (Path(scratch) / "empty").touch()
         done = subprocess.run(
@@ -126,7 +100,6 @@ def _silenced(
 
 
 def parse(binding: str | None) -> Spec | None:
-    """The binding's Suppressions section, or ``None`` when it has none."""
     if binding is None or not markdown_text.has_section(binding, SECTION):
         return None
     problems: list[str] = []
@@ -157,7 +130,6 @@ def risen(before: dict[str, int], after: dict[str, int]) -> list[str]:
 
 
 def focused(root: Path, kinds: tuple[Kind, ...]) -> list[str]:
-    """Each match of a ``never`` kind in the work tree, as ``path:line: text``."""
     found: list[str] = []
     for kind in kinds:
         if kind.rule == NEVER:

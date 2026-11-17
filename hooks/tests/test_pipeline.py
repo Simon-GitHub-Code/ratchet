@@ -1,5 +1,3 @@
-"""The pipeline script's verdict helpers, run in node over the agents' reports."""
-
 import json
 import re
 import shutil
@@ -29,10 +27,6 @@ NOTHING_CHECKED = json.dumps({"found": [], "not_found": []})
 
 
 def _quoted(answer: dict[str, Any], key: str = "findings") -> dict[str, Any]:
-    """``answer`` with each blocker or major of ``key`` quoting what it breaks.
-
-    ``quoteOutput`` is what the quote check prints over them.
-    """
     listed = [
         {**finding, "breaks": finding.get("breaks", BREAKS)}
         if finding.get("severity") in {"blocker", "major"}
@@ -44,7 +38,6 @@ def _quoted(answer: dict[str, Any], key: str = "findings") -> dict[str, Any]:
 
 
 def _paths(call: str, *arguments: object) -> list[str]:
-    """The sorted paths one of the script's helpers returns for ``arguments``."""
     source = PIPELINE.read_text(encoding="utf-8")
     helpers = source[source.index("function packageName") : source.index("function must(")]
     program = (
@@ -110,7 +103,6 @@ def test_a_record_note_without_a_path_or_a_list_covers_nothing() -> None:
 
 
 def _record(**fields: object) -> dict[str, object]:
-    """The verdict record the script's helper builds from ``fields``."""
     source = PIPELINE.read_text(encoding="utf-8")
     helper = source[source.index("function verdictRecord") : source.index("function must(")]
     program = f"{helper}\nconsole.log(JSON.stringify(verdictRecord(JSON.parse(process.argv[1]))))"
@@ -174,8 +166,6 @@ def test_the_judge_passes_the_record_the_script_builds(tmp_path: Path) -> None:
     assert merge_ready.judge(root, "main", "HEAD") == []
 
 
-# --- the whole script, run with agents that answer from a table ------------------------------
-
 HARNESS = """
 const text = require('fs').readFileSync(process.argv[1], 'utf8')
 const source = text.replace('export const meta', 'const meta')
@@ -199,8 +189,6 @@ run(args, agent, () => {}, line => logs.push(line)).then(
 """
 
 
-# The promises of the dogfood's ticket 01 (a read-later list), as a reviewer reads them against a
-# faithful spec: each one carried by a criterion, each case of the one field decided.
 def _covered(promise: str, *criteria: str) -> dict[str, object]:
     return {"promise": promise, "reading": "covered", "criteria": list(criteria)}
 
@@ -300,10 +288,6 @@ ASKED = {
 
 
 def _run(args: object, **answers: object) -> dict[str, Any]:
-    """What the script returns for ``args`` when each agent answers ``answers[its label]``.
-
-    The ticket check reads the faithful spec unless a test answers for it.
-    """
     answers = {"ticket-check": CHECKED, **answers}
     node = shutil.which("node")
     assert node, "node runs the workflow script"
@@ -400,8 +384,6 @@ def test_a_product_question_stops_the_run_with_its_options() -> None:
     assert (result["verdict"], result["openQuestions"]) == ("blocked", [ASKED])
     told = result["requiredByOrchestrator"][0]
     assert "under `## Answers`" in told
-    # Why: the skills put every open question of a step in one message, and the list a blocked
-    # run hands the orchestrator still said "one at a time".
     assert "every open question to the owner in one message" in told
     assert "each with your recommended answer first and why" in told
     assert "one at a time" not in told
@@ -434,8 +416,6 @@ def test_a_clean_run_spawns_six_agents_and_records_no_question() -> None:
 
 
 def test_a_test_the_critic_kept_failing_is_fixed_before_the_review() -> None:
-    # Why: a minor finding with a failing test left `check` red, skipped the fix loop and so
-    # failed every review.
     finding = {"severity": "minor", "title": "records a HEAD as a GET", "testFails": True}
     kept = {**CRITIQUED, "findings": [finding], "testsAdded": ["tests/test_method.py"]}
     answers = {"implement": IMPLEMENTED, "critique": kept, "review": REVIEW}
@@ -461,9 +441,6 @@ def test_a_test_the_critic_kept_failing_is_fixed_before_the_review() -> None:
 
 
 def test_a_change_with_no_room_under_the_ceilings_stops_before_the_next_stage() -> None:
-    # Why: a ticket whose spec tests and code already filled the ceiling ran nine agents and
-    # ended red on change-size alone once the critic's tests were added. ADR 0045: product lines
-    # and test lines have a ceiling each, and only the tests keep a margin for the critic's.
     answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
     heavy = {
         **SPECIFIED,
@@ -511,8 +488,6 @@ OVER = {"lines": 1001, "ceiling": 1000, "testLines": 2500, "testCeiling": 3000}
 
 
 def test_a_fix_round_that_takes_the_product_code_over_its_ceiling_stops_the_run() -> None:
-    # Why: ADR 0055. The size was read after the spec and the implementation only, so a fix
-    # round ran on to a red check and a refused review instead of the drain's split.
     finding = {"severity": "major", "title": "no expiry", "testFails": True}
     kept = _quoted({**CRITIQUED, "findings": [finding], "testsAdded": ["tests/test_method.py"]})
     answers = {"implement": IMPLEMENTED, "critique": kept, "review": REVIEW}
@@ -547,8 +522,6 @@ def test_a_reconcile_that_takes_the_product_code_over_its_ceiling_stops_before_t
 
 
 def test_a_finding_whose_kept_test_passes_starts_no_fix_round() -> None:
-    # Why: a major finding the critic's passing test showed the code holds still started a fix
-    # round, and the fix agent had nothing to change.
     held = {
         "severity": "major",
         "title": "rejects a past expiry",
@@ -588,8 +561,6 @@ def test_a_held_finding_is_not_offered_to_the_fix_agent_as_a_minor() -> None:
 
 
 def test_roles_with_a_red_tree_run_tier_zero_and_their_own_tests_only() -> None:
-    # Why: one `check` took 70 to 95 seconds and every role ran it several times, the spec and
-    # the critic on a tree that is red on purpose.
     answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
     prompts = ran["prompts"]
@@ -618,8 +589,6 @@ def test_the_review_must_see_check_green_on_the_final_tree() -> None:
 
 
 def test_the_critic_is_pointed_at_the_binding_s_critique_directory() -> None:
-    # Why: "next to the spec's tests" put critique files in the source tree, one per feature
-    # per layer, beside modules they are not unit tests of.
     answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
     prompt = ran["prompts"]["critique"]
@@ -629,8 +598,6 @@ def test_the_critic_is_pointed_at_the_binding_s_critique_directory() -> None:
 
 
 def test_the_critic_and_the_review_grade_from_the_one_severity_list() -> None:
-    # Why: the critic graded from the general list alone, so a secret in a span or a behaviour
-    # shipped with no flag could be minor for it and a blocker or major for the review.
     answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
     for role in ("critique", "review"):
@@ -683,8 +650,6 @@ def test_a_criterion_the_change_does_not_meet_is_major_and_forces_changes() -> N
 
 
 def test_a_ticket_whose_whole_change_cannot_fit_is_split_by_the_spec_stage() -> None:
-    # Why: the spec, the critic's tests and the dispute records were 1,300 lines before any
-    # implementation, and the run ended over the ceiling after nine agents.
     answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
     split = [{"title": "first", "criteria": ["a"]}, {"title": "second", "criteria": ["b"]}]
     fits = {"implementationLines": 400, "criticLines": 300, "recordLines": 50, "proposedSplit": []}
@@ -717,8 +682,6 @@ def test_a_ticket_whose_whole_change_cannot_fit_is_split_by_the_spec_stage() -> 
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=unmeasured, **answers)
     assert ran["result"]["verdict"] == "approve", "no change-size gate, no estimate to hold"
 
-
-# --- the critic waits for a project that is depended-on (ADR 0028) ------------------------------
 
 YOUNG = {
     **PREFLIGHT,
@@ -902,8 +865,6 @@ def test_what_the_review_opens_is_open_without_a_critic() -> None:
 
 
 def test_without_the_critic_a_change_may_fill_the_whole_ceiling() -> None:
-    # Why: an eval run's first ticket came back blocked at 1,067 lines of a 1,500 ceiling, "with
-    # the review still to come", though no critic ran and the review's records are not counted.
     answers = {"implement": IMPLEMENTED, "review": REVIEW}
     spec = {
         **SPECIFIED,
@@ -954,8 +915,6 @@ OWED_LINE = (
 
 
 def test_a_red_triggers_gate_is_left_to_the_safeguard_and_the_drain_reads_it() -> None:
-    # Why: ADR 0028. Quieting the gate is the owner's to decide through /ratchet:safeguard, and
-    # the drain recognises the parked run by the gate's own line in checkOutput.
     red = {**IMPLEMENTED, "checkPasses": False, "checkOutput": OWED_LINE, "notes": "outbound-call"}
     answers = {
         "implement": red,
@@ -980,8 +939,6 @@ def test_the_fix_agent_is_told_the_same_about_a_red_triggers_gate() -> None:
     assert "red on the `triggers` gate" in ran["prompts"]["fix-1"]
 
 
-# --- the ticket is read against the spec before the build and against the change after it ------
-
 KINDS: dict[str, type] = {
     "object": dict,
     "array": list,
@@ -993,7 +950,6 @@ KINDS: dict[str, type] = {
 
 
 def _valid(value: object, schema: dict[str, Any]) -> bool:
-    """Whether ``value`` meets ``schema``, in the subset of JSON Schema the workflow uses."""
     if "anyOf" in schema:
         return any(_valid(value, option) for option in schema["anyOf"])
     kinds = schema.get("type", [])
@@ -1026,12 +982,10 @@ def _schema(label: str) -> dict[str, Any]:
 
 
 def _said(prompt: str) -> str:
-    """``prompt`` with its line breaks and indents folded, as a reader takes the sentences."""
     return " ".join(prompt.split())
 
 
 def _reread(promise: str, reading: dict[str, str]) -> list[dict[str, object]]:
-    """The faithful promises, with ``promise`` read as ``reading`` instead."""
     return [p if p["promise"] != promise else {"promise": promise, **reading} for p in PROMISES]
 
 
@@ -1047,8 +1001,6 @@ HEADER_IS_NO_INPUT = (
 
 
 def test_every_role_that_reads_a_local_ticket_reads_it_as_the_base_holds_it() -> None:
-    # Why: an agent of the run can edit the ticket file in the working tree, and the check and the
-    # review would then read the ticket it wrote instead of the one the owner agreed.
     answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
     based = {**PREFLIGHT, "base": "main"}
     ran = _run({"ref": TICKET_FILE}, preflight=based, spec=SPECIFIED, **answers)
@@ -1095,8 +1047,6 @@ def test_the_check_and_the_review_answer_the_same_two_axes() -> None:
     for role in ("ticket-check", "review"):
         assert "- `dropped`: no criterion carries it;" in prompts[role], role
         assert "an assumption decides no case." in prompts[role], role
-        # Why: one of two checks counted a header the plan checked for its own cross-site
-        # refusal as an input, and its undecided cases as gaps.
         assert HEADER_IS_NO_INPUT in _said(prompts[role]), role
 
 
@@ -1143,8 +1093,6 @@ def test_each_reading_of_a_promise_carries_what_shows_it() -> None:
 
 
 def test_a_gap_the_check_finds_is_amended_once_and_the_run_goes_on() -> None:
-    # Why: a gap found by the review after the build blocked a change nothing could repair: no
-    # role after the review fixes the spec, and the stash went to an owner who cannot read code.
     tests = ["tests/test_expiry.py", "tests/test_no_script.py"]
     failures = [{"testFile": f, "content": "AssertionError"} for f in tests]
     amended = {**SPECIFIED, "testFiles": tests, "failures": failures}
@@ -1173,9 +1121,6 @@ def test_a_gap_the_check_finds_is_amended_once_and_the_run_goes_on() -> None:
 
 
 def test_a_promise_the_amend_still_leaves_out_is_kept_from_the_ticket_and_asks_nothing() -> None:
-    # Why: the script asked the owner to confirm what his ticket already says, with "build it as
-    # the ticket says" as the answer he had to pick, and stopped him once on a promise the plan
-    # kept. A promise still left out is built as the ticket says it, and listed for him to overrule.
     left_out = {"promise": NO_SCRIPT, **OUT_OF_SCOPE}
     promises = [left_out if p["promise"] == NO_SCRIPT else p for p in PROMISES]
     gap = {"ticketPromises": promises, "acceptedInputs": [LINK_FIELD]}
@@ -1229,14 +1174,10 @@ def test_a_promise_the_spec_role_will_not_build_is_its_question_never_a_silent_d
 
 
 def test_the_spec_role_designs_the_placement_and_the_review_judges_it_on_axis_f() -> None:
-    # Why: no role used a design skill, so a change could pass every axis and the gates while
-    # bypassing a seam or placing logic in the wrong layer, with nothing the owner reads to show it.
     ran = _built(REVIEW)
     spec = _said(ran["prompts"]["spec"])
     assert "mattpocock-skills:codebase-design" in spec
     assert "Design: how the feature fits the project's architecture" in spec
-    # Why: ADR 0049 put the architecture in the binding's `## Architecture` section, which names
-    # the decision record and declares the parts.
     assert "the `## Architecture` table of docs/process/binding.md declares" in spec
     assert "architecture decision record that section" in spec
     assert "AGENTS.md declares" not in spec
@@ -1254,8 +1195,6 @@ def test_the_spec_role_designs_the_placement_and_the_review_judges_it_on_axis_f(
     assert "design" in issue["properties"]["axis"]["enum"]
 
 
-# What the owner reads in the pull request for a case the run assumed: the case in his words, the
-# safe answer that was built, and what would show it wrong.
 ASSUMED_CASES = {
     "empty": (
         "left empty",
@@ -1280,8 +1219,6 @@ ASSUMED_CASES = {
 
 @pytest.mark.parametrize("case", list(ASSUMED_CASES))
 def test_an_input_case_the_amend_leaves_undecided_is_built_safe_and_asks_nothing(case: str) -> None:
-    # Why: the spec prompt makes a limit with one plainly safe value the agent's to assume, and
-    # never asks the owner to confirm a choice; the script asked him anyway.
     words, safe, refuter = ASSUMED_CASES[case]
     gap = {**CHECKED, "acceptedInputs": [{**LINK_FIELD, case: None}]}
     answers = {"ticket-check": gap, "spec-amend": SPECIFIED, "ticket-recheck": gap}
@@ -1313,8 +1250,6 @@ def test_an_input_case_the_amend_leaves_undecided_is_built_safe_and_asks_nothing
 
 
 def test_an_input_case_that_is_a_product_choice_is_the_spec_roles_question() -> None:
-    # Why: the script asks the owner nothing about an input, so a case whose safe answer takes
-    # something from the user reaches him only as the spec role's direction question.
     choice = (
         "An input case where the safe answer takes something from the user (refusing an empty"
         " value when an empty one clears a note, or a limit that loses what they typed) is a real"
@@ -1327,8 +1262,6 @@ def test_an_input_case_that_is_a_product_choice_is_the_spec_roles_question() -> 
 
 
 def test_the_amend_closes_each_gap_with_the_smallest_safe_change() -> None:
-    # Why: in all eight sampled amends the plan brought a later ticket's rule forward to close
-    # a gap, and an amend that rewrites the rest of the plan is a new plan nobody checked.
     ran = _built(REVIEW, **{"ticket-check": GAP, "spec-amend": SPECIFIED, "ticket-recheck": GAP})
     amend = _said(ran["prompts"]["spec-amend"])
     for rule in (
@@ -1375,8 +1308,6 @@ def test_an_amend_that_asks_the_owner_stops_the_run_there() -> None:
 
 
 def test_a_reading_the_check_and_the_spec_role_do_not_share_is_an_assumption() -> None:
-    # Why: one of three readings of a faithful spec took a sentence about what a gate charges for
-    # a promise of the product the spec bent.
     charge = "Each is the first of its kind and free"
     bent = {
         "promise": charge,
@@ -1426,8 +1357,6 @@ def test_the_review_starts_from_the_readings_the_check_settled() -> None:
 
 
 def test_a_change_that_drops_a_ticket_promise_is_refused(tmp_path: Path) -> None:
-    # Why: the spec is what the implementer builds and what the review judged the build against,
-    # so a promise of the ticket the build lost was approved and merged.
     lost = {"reading": "dropped", "specLine": "Acceptance criteria: no criterion names a tab"}
     result = _built({**REVIEW, "ticketPromises": _reread(NEW_TAB, lost)})["result"]
     assert result["verdict"] == "request_changes"
@@ -1473,7 +1402,6 @@ def test_an_input_case_the_change_leaves_undecided_blocks(case: str) -> None:
 
 
 def test_a_run_after_a_lost_promise_hands_the_spec_role_what_was_lost() -> None:
-    # Why: a rerun's spec role never saw why the last run was refused, so it wrote the same spec.
     lost = {"reading": "dropped", "specLine": "15: the page holds no script element"}
     first = _built({**REVIEW, "ticketPromises": _reread(NO_SCRIPT, lost)})["result"]
     assert first["verdict"] == "request_changes"
@@ -1487,8 +1415,6 @@ def test_a_run_after_a_lost_promise_hands_the_spec_role_what_was_lost() -> None:
 
 
 def test_the_second_review_reads_the_ticket_by_the_same_rules() -> None:
-    # Why: on a rejudge the skill passes back the first run's assumptions, the ones the first
-    # review surfaced among them, so the second review's readings must not list one twice.
     first = {"question": NEW_TAB, "assumed": "7: a new tab", "refuter": "a blank item"}
     given = [{"question": "q", "assumed": "a", "refuter": "r"}, first]
     seen = {"reading": "assumed", "specLine": "Assumptions: any text", "ownerSees": "an empty item"}
@@ -1511,9 +1437,6 @@ def test_the_second_review_reads_the_ticket_by_the_same_rules() -> None:
 
 
 def test_a_rejudge_holds_the_review_to_the_readings_the_first_run_settled() -> None:
-    # Why: the second review was told nothing of a case the first run assumed, read it as
-    # undecided and refused the change in 3 of 3 real runs, and the drain parked a ticket the
-    # owner had nothing to answer for.
     gap = {**CHECKED, "acceptedInputs": [{**LINK_FIELD, "empty": None}]}
     answers = {"ticket-check": gap, "spec-amend": SPECIFIED, "ticket-recheck": gap}
     first = _built(REVIEW, **answers)["result"]
@@ -1538,8 +1461,6 @@ def test_a_rejudge_holds_the_review_to_the_readings_the_first_run_settled() -> N
 
 
 def test_the_owner_reads_each_input_by_its_plain_name() -> None:
-    # Why: an assumption read "What the app does when The `POST /items` request body as a whole
-    # (the form post carrying `link`) is far longer than anyone would type".
     asked = (
         "Give each a `plainName`: what a person who cannot read code calls it, in a few everyday"
         " words and no code terms"
@@ -1560,7 +1481,6 @@ def test_the_owner_reads_each_input_by_its_plain_name() -> None:
 
 
 def test_the_drain_counts_every_agent_a_run_can_spawn() -> None:
-    # Why: the drain states its cost before it starts, from the number the script declares.
     worst = {"ticket-check": GAP, "spec-amend": SPECIFIED, "ticket-recheck": CHECKED}
     worst |= {"implement": IMPLEMENTED, "review": REVIEW}
     blocked = {"review": BLOCKED, "fix-1": IMPLEMENTED, "review-1": BLOCKED}
@@ -1682,8 +1602,6 @@ def test_the_skill_passes_the_named_gates_of_the_preflight_and_of_the_drain_open
     assert "`branch`, `worktree`, `base` and `named_gates`" in feature
     assert '"namedGates": <the first result\'s namedGates>' in feature
 
-
-# --- ADR 0072: a finding quotes what it breaks, a case no record states goes to the fork test ----
 
 MAJOR = {
     "severity": "major",

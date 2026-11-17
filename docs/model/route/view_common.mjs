@@ -1,5 +1,3 @@
-// The owner's words for the route's model, shared by the six charts of docs/model/route.md.
-
 export const NEXT = {
   init: "Run /ratchet:init",
   tracker: "Set up the tracker",

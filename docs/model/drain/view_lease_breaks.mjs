@@ -1,7 +1,5 @@
 import * as c from "./view_common.mjs";
 
-// Drawn from DrainLease, where the tool draws only the shortest run to each broken rule. Each run
-// begins with drain 1, as the tests give it.
 export const title = "Where two drains break a rule";
 export const state = (v) => {
   if (v.processes === "undecided") return "Not started";

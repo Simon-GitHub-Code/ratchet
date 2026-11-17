@@ -1,29 +1,3 @@
-// What this workflow assumes of the repository that adopts the Ratchet method.
-// It is shipped by the ratchet plugin and the /ratchet:feature skill runs it in any repository,
-// so it knows nothing about the project's domain, runner or forge. It relies on the method's
-// entry points and file layout only. The repository must provide: docs/process/binding.md,
-// whose Entry points table names the command for `check` (tier 0 plus tier 1, non-zero on
-// any failure) and `guard-diff` (prints every guard path the branch changed, one per line);
-// the guard manifest at guards/manifest.toml; a docs/features/ directory for the spec;
-// a docs/disputes/ directory; AGENTS.md at the root stating the non-negotiables; and
-// GLOSSARY.md (or GLOSSARY-MAP.md) stating the vocabulary. The feature's input is a tracker
-// ticket (/mattpocock-skills:to-spec, /mattpocock-skills:to-tickets or
-// /mattpocock-skills:triage wrote it) carrying a `## Conjecture`
-// section and the owner's agent-ready label: the plugin's scripts/feature_preflight.py says
-// whether it does, and nothing else runs until it says so. Every agent loads the
-// ratchet:method skill first and takes every project-specific rule from those files, never
-// from this script. Each role works with the skill pipeline.md names for it.
-//
-// A Workflow script cannot read a file or run a command itself, so the preflight runs twice:
-// once in the /ratchet:feature skill, deterministically, before this workflow is invoked, and
-// once here as the first stage, through one low-effort agent, so the pipeline cannot be
-// entered around the skill.
-//
-// The critic and its fix loop run only for a project people depend on (ADR 0028): the preflight's
-// `critic` field, true when the binding declares the `depended-on` life event. Before that a
-// ticket is built by spec, the ticket check, implement and review, and the merge rule is unchanged,
-// except that a review's fixable blocker gets one fix pass and one more review (ADR 0056).
-
 export const meta = {
   name: 'pipeline',
   description: 'Build one feature from an agent-ready ticket with the Ratchet method: preflight -> spec -> ticket check (one amend of the spec when it finds a gap) -> implement -> adversarial critique -> fix loop (up to two rounds when the project is depended-on, one pass on a review blocker before that) -> independent review',
@@ -40,20 +14,8 @@ export const meta = {
   ],
 }
 
-// The most agents one run spawns. scripts/drain.py reads this line to state what a drain costs, so
-// it stays one JSON object on one line; a test runs the script with every agent at its worst and
-// counts them. young: preflight, spec, the ticket check with its one amend and second read,
-// implement and review, then one fix and a second review when the first review blocks (ADR 0056).
-// dependedOn: the first seven, the critic and MAX_FIX_ITERATIONS rounds of fix and
-// re-critique. rejudge: the reconcile agent and the second review.
 const AGENTS_AT_MOST = {"young": 9, "dependedOn": 12, "rejudge": 2}
 
-// ---------------------------------------------------------------------------
-// Arguments. Everything that could vary between runs comes in via args so the
-// script is a pure function of (args, agent results) and resumes cleanly.
-// ---------------------------------------------------------------------------
-// The slash form of a workflow passes no args, so a missing ref is answered, not thrown: the
-// result says what to run instead, and no agent has been spawned.
 const REVIEW_ROUNDS = []
 const FINDINGS_SO_FAR = { criticFindingsByRound: [], unresolvedBlockingFindings: [], reviewIssues: [], reviewIssuesByRound: REVIEW_ROUNDS }
 const PLUGIN_PY = 'python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode'
@@ -67,27 +29,16 @@ if (!REF) {
     requiredByOrchestrator: ['Run `/ratchet:feature <ticket>`; the slash form of this workflow passes no args and spawns nothing'],
   }
 }
-// With no base passed, the preflight reads the default branch and the run takes it from there.
 let BASE = typeof ARGS.base === 'string' && ARGS.base ? ARGS.base : ''
 const ROOT = typeof ARGS.root === 'string' && ARGS.root ? ARGS.root : ''
 const PREFLIGHT_SCRIPT = typeof ARGS.preflight === 'string' && ARGS.preflight ? ARGS.preflight : ''
 const MAX_FIX_ITERATIONS = 2
-// The rounds of fix a young project gets, on a blocker the review found (ADR 0056).
 const YOUNG_FIX_ROUNDS = 1
-// A branch brought up to date behind another merge is judged again, not built again (ADR 0023):
-// the skill passes what the first run returned, and only Reconcile and Review run.
 const REJUDGE = ARGS.rejudge && typeof ARGS.rejudge === 'object' ? ARGS.rejudge : null
-// The readings the first run's ticket check settled (its result's `settled`): the second review is
-// held to them as the first was, so a case the run assumed is not read as open again.
 const SETTLED = REJUDGE && REJUDGE.settled && typeof REJUDGE.settled === 'object' ? REJUDGE.settled : null
-// What the last run's review found the build lost of the ticket (its result's ticketFindings), so a
-// run after a refusal starts from them instead of writing the same spec again.
 const TICKET_FINDINGS = Array.isArray(ARGS.ticketFindings) ? ARGS.ticketFindings.filter(Boolean) : []
-// The branch is the preflight's to derive (feature/<number>-<slug>) unless the skill passed it.
 let BRANCH = typeof ARGS.branch === 'string' && ARGS.branch ? ARGS.branch : ''
 let SLUG = ''
-// Whether the critic and the fix loop run: the preflight says (ADR 0028). A preflight that does
-// not say runs them, since the older script predates the field and more scrutiny is the safe side.
 let CRITIC = true
 let CRITIC_REASON = ''
 let NAMED_GATES = namedGatesOf(REJUDGE ? REJUDGE.namedGates : ARGS.namedGates)
@@ -113,17 +64,8 @@ const ROOT_HINT = ROOT
   ? `the repository root (${ROOT}, the directory holding AGENTS.md)`
   : 'the repository root (the directory holding AGENTS.md)'
 
-// ---------------------------------------------------------------------------
-// Shared prompt fragments
-// ---------------------------------------------------------------------------
-// Every role begins here. The method and the repository's own binding files are the source
-// of every project-specific rule; this script states none of them.
 const PREAMBLE = 'Load the `ratchet:method` skill (the method this repository follows), then read AGENTS.md, docs/process/binding.md and GLOSSARY.md (or GLOSSARY-MAP.md). Obey them. The binding\'s Entry points table gives the command behind every entry point named below (`check`, `guard-diff`); "run `check`" means run that command from the repository root.'
 
-// Guards and gate disputes. The harness enforces this; the prompt says it so an agent reads a
-// block as the dispute signal the first time.
-// Why: the reviewer had no definition and filed a binary that drops an expense with exit 0 as
-// minor; critic and reviewer now grade by the same words.
 const SEVERITY = `Severity, the one list every grade you apply comes from. A finding that carries no
 axis takes every line. Where a finding carries an axis, the axis a line names is the axis of
 the issue.
@@ -186,11 +128,6 @@ Guard paths and gate disputes:
   owner decides.
 `
 
-// Why: one `check` took 70 to 95 seconds on the first service built this way and every role ran
-// it several times. A role whose tree is red on purpose (the spec's tests fail until the
-// implementation exists; the critic keeps tests that fail) cannot get a green `check` anyway, so
-// it runs tier 0 and only the tests it wrote. Implement, fix and review run the full `check`,
-// and the review's run on the final tree is the one that counts.
 const WORKING_RULE = `- While you work, run the \`tier0\` entry point and \`tests-changed all\`. Never run a suite whole
   to see whether your own tests pass.`
 const CHECK_RULE = `${WORKING_RULE}
@@ -341,16 +278,6 @@ function checkOutputField(ownTestsOnly) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Schemas
-// ---------------------------------------------------------------------------
-// Why: ADR 0045. The change-size ceiling bounds the product code a change brings, and test lines
-// have a ceiling of their own that only stops a runaway: the method asks for many tests, and they
-// were 85% of the lines counted on recent changes. Product code has no later stage that adds to
-// it (the review writes none, the fix loop a few lines), so its room is all of its ceiling. The
-// critic's tests are still to come while it runs (ADR 0028), about two fifths of the spec's own,
-// so the tests keep the margin of two thirds of their ceiling until then and all of it without
-// the critic (ADRs 0040 and 0045).
 const CHANGE_SIZE_FIELD = {
   changeSize: {
     type: 'object',
@@ -365,27 +292,15 @@ const CHANGE_SIZE_FIELD = {
   },
 }
 const CHANGE_SIZE_RULE = 'Run the binding\'s change-size entry point last and return what it prints as `changeSize`: `lines` and `ceiling` are its product lines and the ceiling beside them, `testLines` and `testCeiling` its test lines and theirs (leave the last two out when it prints no test ceiling); omit `changeSize` when the binding binds no such gate.'
-// Why: ADR 0028. A red `triggers` gate says a second instance of a kind arrived while its
-// safeguards are still owed. Quieting it in the binding, the justfile or quality/ would be the
-// implementer loosening the judge; binding the rows is /ratchet:safeguard's, run by the owner. The
-// drain parks the run on the gate's own line, so the line must survive in `checkOutput`.
 const TRIGGERS_RULE = 'If `check` is red on the `triggers` gate (a line `triggers: \'<kind>\' gained N instance(s)`: a second instance of a kind whose safeguards are owed), do not edit the binding, the justfile or quality/ to quiet it and do not write a dispute. Finish the rest, then return with `checkPasses: false`, keep that gate line verbatim in `checkOutput`, and name the kind and `/ratchet:safeguard` in `notes`.'
-// The line the `triggers` gate prints; scripts/drain.py matches the same one.
 const OWED_RED = /triggers: '[^']+' gained \d+ instance/
 const ROOM_NUMERATOR = 2
 const ROOM_DENOMINATOR = 3
 
-// The share of the test ceiling a change may fill before the stages still to come would push it
-// over, as [numerator, denominator]: two thirds while the critic's tests are to come, all of it
-// when they are not. Product code has no such margin: nothing still to come adds much of it.
 function testRoomShare(critic) {
   return critic ? [ROOM_NUMERATOR, ROOM_DENOMINATOR] : [1, 1]
 }
 
-// Why: the later stages' lines are known in advance. On one ticket the spec and its tests were
-// about 830 lines, the critic's tests about 350 and the dispute records about 140, before any
-// implementation. The spec stage adds up the whole change and splits the ticket now, instead of
-// after every later agent has run.
 const ESTIMATE_FIELD = {
   changeEstimate: {
     type: 'object',
@@ -718,12 +633,6 @@ const CRITIQUE_SCHEMA = {
   ],
 }
 
-// Why: the spec is what the implementer builds and what the review judges the build against, so a
-// spec that drops or bends a promise of the ticket passed every check after it. Two roles read the
-// ticket against what came of it, the ticket check before Implement and the review after, and both
-// return these two axes. The schema makes each answer both and gives each reading the evidence that
-// shows it; it cannot make an answer complete, since a list that leaves a promise out fits it as
-// well as an empty `acceptedInputs` does.
 function promiseReading(reading, description, evidence) {
   return {
     type: 'object',
@@ -759,10 +668,6 @@ const TICKET_PROMISES_FIELD = {
     ],
   },
 }
-// Each case of an input: how the owner reads it after the input's plain name, the safe answer the
-// run builds when no criterion decides it, and what would show that answer wrong. The empty one is
-// the narrowest: a message or a rule for an empty value is a product the ticket did not ask for,
-// and another ticket of the feature may promise it.
 const INPUT_CASES = {
   empty: {
     owner: 'left empty',
@@ -780,10 +685,7 @@ const INPUT_CASES = {
     refuter: 'a user needs the value to run or be followed as sent',
   },
 }
-// How a settled reading marks a case the run decided because no criterion did.
 const RUN_ASSUMED = 'Assumed by the run, as no criterion decides it: '
-// How a settled reading marks a promise the plan still left out, which the run keeps as the ticket
-// says it.
 const RUN_KEPT = 'Kept from the ticket by the run, as no criterion carries it: '
 const DECIDED_BY = { type: ['string', 'null'], pattern: '\\S', description: 'The spec.md criterion that says what happens, by its number and words; null when none does' }
 const ACCEPTED_INPUTS_FIELD = {
@@ -869,9 +771,6 @@ const REVIEW_SCHEMA = {
   required: ['verdict', 'ticketPromises', 'acceptedInputs', 'issues', 'adrSuggested', 'guardChanges', 'dependencyNotes', 'recordNotes', 'disputeCoverage', 'checkPasses', 'namedGatesRun', 'unstated', 'quoteOutput', 'checkOutput'],
 }
 
-// ---------------------------------------------------------------------------
-// Prompts. Each role receives only the context it is allowed to see.
-// ---------------------------------------------------------------------------
 const PREFLIGHT_SCHEMA = {
   type: 'object',
   properties: {
@@ -902,8 +801,6 @@ const PREFLIGHT_SCHEMA = {
   required: ['ok', 'number', 'title', 'slug', 'branch', 'label', 'failures', 'output'],
 }
 
-// Every role that reads the ticket reads it as the owner agreed it: a local ticket file as the base
-// branch holds it, since an agent of this run could have changed the copy in the working tree.
 function ticketHint() {
   if (/^#?\d+$/.test(REF)) {
     const number = REF.replace('#', '')
@@ -913,8 +810,6 @@ function ticketHint() {
   return `the file \`${REF}\` as \`${BASE}\` holds it (\`git show ${BASE}:${REF}\`, run from ${ROOT_HINT}), not the copy in the working tree, which an agent of this run may have changed`
 }
 
-// How the ticket check and the review read the ticket. One text, so the two roles mean the same by
-// each reading.
 const PROMISE_READINGS = `List in \`ticketPromises\` every promise the ticket makes about what the product does or
    does not do: each checklist item and acceptance criterion, and each promise in its other
    sections ("it needs no account", "the list survives a restart"), in the ticket's words,
@@ -993,9 +888,6 @@ it, return ok: false with one failure { check: "script", detail: <what happened>
 "install the ratchet plugin; the skill passes the script path as args.preflight" }.`
 }
 
-// Why: an input case or a promise is the spec role's to decide, never the owner's to confirm, and
-// the script asks him nothing; the one that is his reaches him as the role's own question. The spec
-// role and its amend read the same words.
 const SAFE_ANSWER = 'the safe answer, the narrowest that keeps the app safe (an empty value: nothing ' +
   'is saved and nothing breaks; an oversized one: the app refuses it with a message and keeps what ' +
   'the user typed; a hostile one: kept as plain text that does nothing)'
@@ -1007,8 +899,6 @@ const PROMISE_RAISED = 'A promise of the ticket you believe cannot or should not
   'is an open question under the fork test below, never one you leave out: the run builds a ' +
   'promise the plan leaves out as the ticket says it, and asks the owner nothing.'
 
-// The spec role writes spec.md, and amends it once when the ticket check finds `gaps`: the
-// promises it read as dropped or bent and the input cases no criterion decides.
 function specPrompt(gaps = []) {
   return `${PREAMBLE}
 You are the SPEC agent for one feature of this repository.
@@ -1188,9 +1078,6 @@ an assumption. Return the whole result for the spec as it now stands.
 `
 }
 
-// What the run decided after the amend: `kept` are the promises spec.md still leaves out, in the
-// ticket's words, built as the ticket says them; `assumed` are the cases of an input it still
-// leaves undecided, built with the safe answer. The owner may overrule either.
 function implementPrompt(spec, kept, assumed) {
   const promises = kept.length
     ? `
@@ -1428,8 +1315,6 @@ finding with no test kept, or with a test that proves nothing yet, leaves both f
 owed a fix if it is a blocker or major.`
 }
 
-// `settled` is what the ticket check left spec.md on before the build: the run's own for the first
-// review, and the first run's, passed back by the skill, for a second review; null when none came.
 function reviewPrompt(spec, again, settled) {
   const readings = settled
     ? `Before the build a ticket check read the ticket against spec.md, and spec.md was
@@ -1545,12 +1430,6 @@ exits 0; otherwise \`request_changes\`. The script re-derives the verdict from y
 \`disputeCoverage\`, so make them complete.`
 }
 
-// ---------------------------------------------------------------------------
-// Helpers (pure)
-// ---------------------------------------------------------------------------
-// One round of the fix agent, the same for the critic's findings and for a review's blockers: a
-// fresh implementer resolves the findings owed a fix, and the change-size gate is read after it
-// (ADR 0055). Returns the too-large result when the round took the change over a ceiling, else null.
 async function fixRound(findings, testsAdded, round, rounds) {
   log(`Fix ${round}/${rounds}: ${owed(findings).length} finding(s) owed a fix`)
   const fix = must(
@@ -1561,8 +1440,6 @@ async function fixRound(findings, testsAdded, round, rounds) {
   )
   filesChanged = union(filesChanged, fix.filesChanged)
   disputes.push(...(fix.disputes || []))
-  // Why: ADR 0055. A fix round can take the product code over its ceiling as the implementation
-  // can; the critic's tests, when there is a critic, are already in, so the tests have all of their ceiling.
   const stop = noRoom(`fix round ${round}`, fix.changeSize, false)
   lastCheckOutput = fix.checkOutput
   lastCheckPasses = fix.checkPasses === true
@@ -1586,16 +1463,10 @@ function haltAfter(after, result, entries = result.unstated || []) {
   })
 }
 
-// Whether a review's findings are ones a fix pass can answer: it lists blockers or majors in the
-// change, and none of them is the ticket's own promise lost or an input case left undecided. The
-// verdict is not asked: the script forces request_changes on such issues whatever the review said.
 function fixableByReview(review) {
   return blocking(review.issues).length > 0 && ticketIssues(review).length === 0
 }
 
-// The stop for a change with no room left under a ceiling, or null. `stage` is the role that just
-// returned. The product lines may fill their ceiling; the test lines two thirds of theirs while the
-// critic's tests are still to come.
 function noRoom(stage, size, critic = true) {
   const lines = size && size.lines
   const ceiling = size && size.ceiling
@@ -1624,9 +1495,6 @@ function noRoom(stage, size, critic = true) {
   }
 }
 
-// The stop for a ticket whose whole change cannot fit under the ceilings, or null. What was
-// already measured is the spec's own; the estimate adds what the later stages will, product code
-// against the product ceiling and tests (the critic's included) against the test ceiling.
 function cannotFit(size, estimate, critic = true) {
   if (!estimate) return null
   const lines = size && size.lines
@@ -1680,10 +1548,6 @@ function tooLarge(stop, spec, extra) {
   }
 }
 
-// What stops the run on what the spec role returned, or null: a change too large to build, an open
-// question, which is the owner's to answer and not the implementer's to guess, or a guard path the
-// criteria need changed, which is the owner's to edit. The owner answers or lands the edits, and
-// the run repeats.
 function specStop(spec) {
   const size = noRoom('the spec', spec.changeSize, CRITIC) || cannotFit(spec.changeSize, spec.changeEstimate, CRITIC)
   if (size) return tooLarge(size, spec, { checkOutput: spec.checkOutput })
@@ -1709,8 +1573,6 @@ function specStop(spec) {
   }
 }
 
-// The critic's share of the spec's size estimate, and of the reviewer's inputs it is not given
-// (ADR 0028): when the critic does not run, neither refers to findings that do not exist.
 function criticEstimate(critic) {
   return critic ? "plus the critic's tests (about two fifths of yours)," : 'and no critic tests (the critic does not run, so return criticLines: 0),'
 }
@@ -1719,8 +1581,6 @@ function outsideInputs(critic) {
   return critic ? "The implementer's notes and the critic's findings" : "The implementer's notes"
 }
 
-// Whether the critic ran and came back with nothing and no attempt: silence is not a refutation.
-// A critic that did not run is not silent; the result says it was not run, and why.
 function criticSilent(critic, critique) {
   if (!critic) return false
   const attempted = (critique.attempted || []).filter(a => a && String(a).trim())
@@ -1731,11 +1591,6 @@ function blocking(findings) {
   return (findings || []).filter(f => f && (f.severity === 'blocker' || f.severity === 'major'))
 }
 
-// What the fix loop owes the review: every blocker and major that no kept passing test resolves,
-// and every finding whose test the critic kept failing. Such a test leaves \`check\` red, and a red
-// \`check\` is never approved, so a minor finding with a failing test would otherwise skip the loop
-// and fail the review. A finding whose kept test already passes shows the code holds: a fix round
-// would have nothing to change, and the review still reads the finding.
 function carries(finding, earlier) {
   if (finding.carries === earlier.id) return true
   const was = earlier.breaks
@@ -1903,9 +1758,6 @@ function isDisputeRecord(path) {
   return /^docs\/disputes\/\d{4}-[a-z0-9-]+\.md$/.test(path)
 }
 
-// A guard path is disputed only when a dispute record names that path: either an agent that
-// wrote the record reported it in guardPathsCovered, or the reviewer read the record and
-// reported the pair in disputeCoverage. Nothing is inferred from the mere existence of a record.
 function coveredGuardPaths(disputes, disputeCoverage) {
   const covered = new Set()
   for (const d of disputes || []) {
@@ -1918,9 +1770,6 @@ function coveredGuardPaths(disputes, disputeCoverage) {
   return covered
 }
 
-// Why: a dependency the spec named is the spec's decision, not a gate change, but only when
-// guard-diff found nothing else in the file (ADR 0011). A lockfile rides on a covered manifest,
-// so upgrading a gate tool through the lockfile alone stays the owner's.
 function packageName(name) {
   return String(name || '').toLowerCase().replace(/[-_.]+/g, '-')
 }
@@ -1936,15 +1785,10 @@ function specDecidedDependencies(specDependencies, dependencyNotes) {
   return covered
 }
 
-// Why: a record the change only adds to is no gate change (ADR 0014). guard-diff decides that
-// from the merge base and the work tree; the reviewer relays its note and the script reads it.
 function additiveRecords(recordNotes) {
   return new Set((recordNotes || []).filter(n => n && n.path && Array.isArray(n.additions)).map(n => n.path))
 }
 
-// The verdict as the merge judge reads it (scripts/merge_ready.py, ADR 0021): what the script
-// decided and what is still open, as texts. The orchestrator pipes this to the `merge-ready`
-// entry point's `record` form, which stamps the tree that was reviewed.
 function verdictRecord({ slug, ticket, verdict, forcedBy, findings, openQuestions, assumptions }) {
   const titles = (findings || [])
     .filter(f => f && (f.severity === 'blocker' || f.severity === 'major'))
@@ -1960,14 +1804,6 @@ function verdictRecord({ slug, ticket, verdict, forcedBy, findings, openQuestion
   }
 }
 
-// What a reading of the ticket leaves open, by the role that read it. Before the build a dropped or
-// bent promise and an undecided input case go back to the spec role once (gaps). After that amend
-// the run decides, and asks the owner nothing: a promise still dropped is kept as the ticket says
-// it, and a case still undecided takes the safe answer (settle, keptFromTicket, assumedCases). A
-// promise still read as bent is a reading the check and the spec role do not share (withSurfaced).
-// The owner sees all three as assumptions. After the build a dropped promise and an undecided case
-// are the change losing what the spec had, and the review refuses it (ticketIssues); a bent one is
-// an assumption.
 function dropped(readings) {
   return (readings.ticketPromises || []).filter(p => p.reading === 'dropped')
 }
@@ -1978,7 +1814,6 @@ function undecided(readings) {
       .map(c => ({ input: input.input, plainName: input.plainName, case: c, named: input.named })))
 }
 
-// An input as the owner reads it: its plain name, lower case where it starts a clause mid-sentence.
 function ownerName({ plainName }) {
   const name = String(plainName).trim().replace(/[.;:,]+$/, '')
   return /^[A-Z][a-z ]/.test(name) ? name[0].toLowerCase() + name.slice(1) : name
@@ -1989,9 +1824,6 @@ function gaps(readings) {
   return [...dropped(readings), ...bent, ...undecided(readings)]
 }
 
-// The readings the build is held to: a promise the amend left out reads as kept from the ticket, in
-// its words, and a case it left undecided as the safe answer the run built, so the review judges
-// the build against that text instead of finding the promise dropped or the case open.
 function settle(readings) {
   const ticketPromises = (readings.ticketPromises || []).map(p => p.reading === 'dropped'
     ? { promise: p.promise, reading: 'covered', criteria: [`${RUN_KEPT}${p.promise}`] }
@@ -2004,8 +1836,6 @@ function settle(readings) {
   return { ticketPromises, acceptedInputs }
 }
 
-// What the run decided after the amend, as the pull request lists it for the owner to overrule: the
-// promises it kept from the ticket, then the input cases it assumed.
 function keptFromTicket(readings) {
   return dropped(readings).map(p => ({
     question: p.promise,
@@ -2022,9 +1852,6 @@ function assumedCases(readings) {
   }))
 }
 
-// A major issue for each promise of the ticket the change drops and each input case it leaves
-// undecided. They take the path of any other issue, so the verdict record lists them as unresolved
-// and the merge judge refuses; the result returns them as ticketFindings for the next run.
 function ticketIssues(review) {
   const promises = dropped(review).map(p => ({
     axis: 'ticket',
@@ -2051,9 +1878,6 @@ function reviewIssues(review) {
   return [...(review.issues || []), ...ticketIssues(review)]
 }
 
-// The assumptions the owner may overrule: the ones given, and once each, every promise a reading
-// leaves to the owner: one the spec decided part of (assumed), and one two readers read otherwise
-// (bent).
 function withSurfaced(assumptions, readings) {
   const all = [...(assumptions || [])]
   for (const p of readings.ticketPromises || []) {
@@ -2064,14 +1888,10 @@ function withSurfaced(assumptions, readings) {
   return all
 }
 
-// The judge reads an open question as a text; the spec role returns it with its options.
 function questionText(question) {
   return String(question && typeof question === 'object' ? question.question || '' : question)
 }
 
-// What a review of the branch as it now stands forces, when the branch was brought up to date
-// behind another merge (ADR 0023): the same evidence rules as the first review, less the
-// critic's, whose findings the first run already closed.
 function rejudged({ review, reconcile, dependencies }) {
   const covered = coveredGuardPaths(reconcile ? reconcile.disputes : [], review.disputeCoverage)
   for (const p of specDecidedDependencies(dependencies, review.dependencyNotes)) covered.add(p)
@@ -2091,12 +1911,6 @@ function must(result, label) {
   return result
 }
 
-// ---------------------------------------------------------------------------
-// Rejudge. The branch is built, approved and committed; the default branch moved under it and
-// the skill rebased it (scripts/drain.py update). No preflight: the ticket was checked before
-// the first run, and the branch may already resolve it. The result's verdictRecord replaces the
-// first run's, so the record names a tree a review saw.
-// ---------------------------------------------------------------------------
 if (REJUDGE) {
   SLUG = String(REJUDGE.slug || '')
   const spec = { slug: SLUG, specPath: String(REJUDGE.specPath || '') }
@@ -2112,7 +1926,6 @@ if (REJUDGE) {
       'reconcile',
     )
     log(`Reconcile: ${conflicts.length} conflicted path(s), check=${reconcile.checkPasses}`)
-    // Why: ADR 0055. Bringing in what merged meanwhile can take the product code over its ceiling.
     const reconcileStop = noRoom('the reconcile', reconcile.changeSize, false)
     if (reconcileStop) return tooLarge(reconcileStop, spec, { rejudged: true, filesChanged: reconcile.filesChanged, disputes: reconcile.disputes || [], checkOutput: reconcile.checkOutput })
   }
@@ -2172,10 +1985,6 @@ if (REJUDGE) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Phase 0: Preflight. One low-effort agent runs the plugin's script and relays its JSON;
-// the script decides, the agent types. Red stops the run before the spec agent exists.
-// ---------------------------------------------------------------------------
 phase('Preflight')
 const preflight = must(await agent(preflightPrompt(), { label: 'preflight', phase: 'Preflight', effort: 'low', schema: PREFLIGHT_SCHEMA }), 'preflight')
 if (!preflight.ok) {
@@ -2201,9 +2010,6 @@ CRITIC_REASON = String(preflight.critic_reason || '')
 if (!SLUG || !BRANCH) throw new Error(`preflight returned ok without a slug and branch: ${JSON.stringify(preflight)}`)
 log(`Preflight green: ticket ${preflight.number || REF} "${preflight.title}" on branch ${BRANCH}`)
 
-// ---------------------------------------------------------------------------
-// Phase 1: Spec
-// ---------------------------------------------------------------------------
 phase('Spec')
 log(`Spec: ${REF} on branch ${BRANCH}`)
 const written = must(await agent(specPrompt(), { label: 'spec', phase: 'Spec', schema: SPEC_SCHEMA }), 'spec')
@@ -2213,10 +2019,6 @@ log(`Spec ${written.slug}: ${written.testFiles.length} test file(s), layers ${wr
 const writtenStop = specStop(written)
 if (writtenStop) return writtenStop
 
-// ---------------------------------------------------------------------------
-// Phase 1a: Ticket check. One agent reads the ticket and spec.md, and nothing else. A gap goes back
-// to the spec role once, while no code exists to waste, and the check reads the amended spec.
-// ---------------------------------------------------------------------------
 phase('Ticket check')
 const firstCheck = must(
   await agent(ticketCheckPrompt(written), { label: 'ticket-check', phase: 'Ticket check', schema: TICKET_CHECK_SCHEMA }),
@@ -2242,9 +2044,6 @@ const assumedByRun = assumedCases(check)
 if (kept.length) log(`Ticket check: ${kept.length} promise(s) still left out of the plan, built as the ticket says`)
 if (assumedByRun.length) log(`Ticket check: ${assumedByRun.length} input case(s) still undecided, built with the safe answer`)
 
-// ---------------------------------------------------------------------------
-// Phase 2: Implement
-// ---------------------------------------------------------------------------
 phase('Implement')
 const impl = must(
   await agent(implementPrompt(spec, kept.map(k => k.question), assumedByRun), { label: 'implement', phase: 'Implement', schema: BUILD_SCHEMA }),
@@ -2258,11 +2057,6 @@ let lastCheckOutput = impl.checkOutput
 let lastCheckPasses = impl.checkPasses === true
 log(`Implement: ${impl.filesChanged.length} file(s), tests pass=${impl.allNewTestsPass}, check=${impl.checkPasses}`)
 
-// ---------------------------------------------------------------------------
-// Phase 3: Critique, and Phase 4: Fix loop (fresh implementer per round, then re-critique).
-// Both run only when the preflight says the project is depended-on (ADR 0028); otherwise the
-// critique is an empty one and the review follows the implementation.
-// ---------------------------------------------------------------------------
 let critique = {
   findings: [], testsAdded: [], attempted: [], guardFilesChanged: [],
   fitnessSabotageConfirmed: false, fitnessSabotageSummary: '',
@@ -2312,11 +2106,6 @@ const unresolved = owed(critique.findings)
 if (unresolved.length) log(`Fix loop exhausted with ${unresolved.length} unresolved blocking finding(s); review runs anyway`)
 else if (CRITIC && iterations === 0) log('No blocking findings; fix loop skipped')
 
-// ---------------------------------------------------------------------------
-// A finding still owed after the round it was owed in ends the run before the review (ADR 0072,
-// point 5). The result keeps the findings and their quotes in `unresolvedBlockingFindings`; no
-// review ran, so `reviewIssues` is empty.
-// ---------------------------------------------------------------------------
 function parkCarried() {
   const left = PENDING_MOVED.map(ownerEntry)
   PENDING_MOVED = []
@@ -2376,9 +2165,6 @@ function parkCarried() {
 
 if (carriedStillOwed.length) return parkCarried()
 
-// ---------------------------------------------------------------------------
-// Phase 5: Review (independent)
-// ---------------------------------------------------------------------------
 phase('Review')
 let review = readReview(must(await agent(reviewPrompt(spec, false, settled), { label: 'review', phase: 'Review', schema: REVIEW_SCHEMA }), 'review'))
 const reviewHalt = reviewStop('review', review)
@@ -2388,9 +2174,6 @@ function reviewStop(after, result) {
   return halted && { ...halted, reviewIssues: reviewIssues(result), checkOutput: result.checkOutput }
 }
 
-// Why: ADR 0056. A project nobody depends on has no fix loop, and a blocker the review found in a
-// young project's first feature parked a ticket one pass would have closed. The same fix round runs
-// once on the review's blockers, then the review again; what it still refuses is parked as before.
 if (!CRITIC && fixableByReview(review)) {
   iterations += 1
   REVIEW_ROUNDS.push({ round: iterations - 1, findings: blocking(review.issues) })
@@ -2402,16 +2185,12 @@ if (!CRITIC && fixableByReview(review)) {
   if (reReviewHalt) return reReviewHalt
   log(`Re-review after the one fix pass: ${review.verdict}`)
 }
-// Why: the drain reads the owed kind from this output (scripts/drain.py OWED_RED). The reviewer
-// reports its own run of check, which may not repeat the line the implementer was stopped on.
 const builderOutput = lastCheckOutput
 lastCheckOutput = review.checkOutput
 if (OWED_RED.test(builderOutput || '') && !OWED_RED.test(lastCheckOutput || '')) lastCheckOutput = `${builderOutput}\n${lastCheckOutput}`
 const issues = reviewIssues(review)
 log(`Review: ${review.verdict}, ${issues.length} issue(s)` + (review.adrSuggested ? `, ADR suggested: ${review.adrSuggested}` : ''))
 
-// The verdict is derived from the evidence the agents returned, never taken on the reviewer's
-// word alone. Pure over the agents' own reports, so it resumes deterministically.
 const guardChanges = union(review.guardChanges, critique.guardFilesChanged)
 const covered = coveredGuardPaths(disputes, review.disputeCoverage)
 const decidedDependencies = specDecidedDependencies(spec.dependencies, review.dependencyNotes)
@@ -2436,9 +2215,6 @@ const verdict = forcedReasons.length ? 'request_changes' : review.verdict
 if (verdict !== review.verdict) log(`Verdict forced to request_changes: ${forcedReasons.join('; ')}`)
 else if (forcedReasons.length) log(`Reviewer and script agree on request_changes: ${forcedReasons.join('; ')}`)
 
-// ---------------------------------------------------------------------------
-// Result. The orchestrator commits / opens the PR; this workflow never does.
-// ---------------------------------------------------------------------------
 return {
   slug: SLUG,
   ref: REF,

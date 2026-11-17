@@ -1,5 +1,3 @@
-"""``with_service``: boot, wait, run, stop, against real child processes on loopback."""
-
 import errno
 import os
 import re
@@ -166,7 +164,6 @@ def test_a_lost_port_race_is_retried_once_on_a_new_port_and_says_so(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     ports = tmp_path / "ports"
-    # Why: the first boot stands for a service that lost the race for its port.
     boot = (
         f'echo "$PORT" >> {ports}; [ "$(wc -l < {ports})" -gt 1 ] && exec {SERVING};'
         " echo first-boot-output; exit 2"
@@ -337,11 +334,6 @@ DROPPED = re.compile(r"^\d+ x GET http://127\.0\.0\.1:\d+/work: (\w+)$", re.MULT
 
 
 def smoke(*, starts_after: str = "0", reaches_late: bool = False) -> list[str]:
-    """The load smoke against ``/work``, started ``starts_after`` seconds after the command.
-
-    With ``reaches_late`` it says it is sending, and its first request reaches the service a
-    second later, after the signal was due, as on a machine too busy to run it promptly.
-    """
     late = f'touch "${gatelib.SENDING_ENV}" && sleep 1 && ' if reaches_late else ""
     return [
         *("sh", "-c", f'{late}sleep {starts_after} && exec "$@"', "late", sys.executable),
@@ -357,11 +349,6 @@ def graceful(
     command: list[str] | None = None,
     hidden: bool = False,
 ) -> tuple[int, str]:
-    """The ``command``, a ``smoke`` by default, run inside a service of ``mode`` signalled 0.5 s in.
-
-    A ``hidden`` service lets no other process look at its open files. The ``limit`` ends the
-    wait the moment the service exits, so it is only how long a busy machine may take to drain.
-    """
     boot = f"MODE={mode}{' HIDDEN=1' if hidden else ''} exec {python(STOPS)}"
     return run(
         *("--boot", boot, "--ready", READY),
@@ -382,9 +369,6 @@ def test_a_service_that_drains_and_exits_zero_is_green_under_load(
 def test_a_service_that_leaves_connections_in_its_accept_queue_is_green(
     capfd: pytest.CaptureFixture[str],
 ) -> None:
-    # Why: a correct server stops by closing its listener, and the kernel resets every connection
-    # still queued on it. The service never accepted them, so nothing it owed was dropped, though
-    # each was made before the signal and fails with no response, as a dropped request does.
     code, out = graceful("queue", capsys=capfd)
     assert out.endswith("with_service: green\n"), out
     assert " connection(s) reset after the stop signal are not counted, since the service " in out
@@ -395,8 +379,6 @@ def test_a_service_that_leaves_connections_in_its_accept_queue_is_green(
 def test_the_request_a_service_accepted_and_dropped_is_red_beside_those_it_never_accepted(
     capfd: pytest.CaptureFixture[str], *, reaches_late: bool
 ) -> None:
-    # Why: the gate excuses a reset only for a connection it took itself from a listener the
-    # service had let go of. The one request this service accepted and then abandoned counts.
     code, out = graceful("abandon", capsys=capfd, command=smoke(reaches_late=reaches_late))
     assert "load-smoke: 3 connection(s) reset after the stop signal are not counted" in out
     assert "\n1 x GET http://127.0.0.1:" in out, out
@@ -407,9 +389,6 @@ def test_the_request_a_service_accepted_and_dropped_is_red_beside_those_it_never
 def test_a_service_that_forges_the_gates_excuse_from_another_address_is_red(
     capfd: pytest.CaptureFixture[str], *, reaches_late: bool
 ) -> None:
-    # Why: the gate names each connection it took. A name of two ports matched a connection the
-    # service made to itself from another address with the client's port, so the requests it
-    # then dropped were excused. A connection is named by both of its addresses and ports.
     code, out = run(
         *("--boot", f"exec {python(FORGE)}", "--ready", READY),
         *("--graceful", "60", "--signal-after", "0.5", "--"),
@@ -425,9 +404,6 @@ def test_a_service_that_forges_the_gates_excuse_from_another_address_is_red(
 def test_a_service_that_shuts_its_listener_down_is_judged_the_older_way_and_says_why(
     capfd: pytest.CaptureFixture[str],
 ) -> None:
-    # Why: a shutdown resets the connections waiting on the listener before the gate can take
-    # them, so the gate cannot tell them from dropped requests, and the smoke judges them by when
-    # they started. It must say so although the service holds the listener for a second more.
     code, out = graceful("shut", capsys=capfd)
     assert "is judged the older, less exact way, because the service shut its listener " in out
     assert re.search(r"\n3 x GET http://127\.0\.0\.1:\d+/work: ConnectionResetError\n", out), out
@@ -437,9 +413,6 @@ def test_a_service_that_shuts_its_listener_down_is_judged_the_older_way_and_says
 def test_a_correct_drain_the_gate_cannot_look_into_is_judged_as_before_and_green(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    # Why: this service keeps listening for up to half a second after the signal and then closes
-    # its listener, which resets the requests sent meanwhile. Without a copy of the listener the
-    # gate judges those by when they started, as before it held listeners, and does not count them.
     code, out = graceful("drain", capsys=capsys, hidden=True)
     assert out.endswith("with_service: green\n"), out
     assert code == 0
@@ -448,9 +421,6 @@ def test_a_correct_drain_the_gate_cannot_look_into_is_judged_as_before_and_green
 def test_a_smoke_slow_to_start_still_has_requests_in_flight_at_the_signal(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    # Why: on a loaded runner the smoke can take longer to start than --signal-after. A signal
-    # timed from the command's start then stops the service before one request is sent, and the
-    # smoke is red under its request floor although the service drained correctly.
     code, out = graceful("drain", capsys=capsys, command=smoke(starts_after="1"))
     assert out.endswith("with_service: green\n"), out
     assert code == 0
@@ -491,8 +461,6 @@ def test_a_service_that_drops_the_requests_in_flight_is_red_for_them(
 def test_each_way_of_stopping_badly_is_red(
     mode: str, said: str, capsys: pytest.CaptureFixture[str], *, limit: str
 ) -> None:
-    # Why: only the services that do not stop in time are about the limit running out; the
-    # others must drain or exit before it does, which 1 s does not allow on a busy machine.
     code, out = graceful(mode, capsys=capsys, limit=limit)
     assert said in out, out
     assert code == 1
@@ -540,7 +508,6 @@ def test_the_marker_is_written_before_the_signal_so_a_failure_after_it_is_judged
 def test_a_command_that_never_starts_sending_is_red_and_the_service_is_not_signalled(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    # Why: --timeout bounds the boot as well, so it leaves a loaded runner time to boot.
     code, out = run(
         *("--boot", f"MODE=drain exec {python(STOPS)}", "--ready", READY, "--timeout", "2"),
         *("--graceful", "2", "--", sys.executable, "-c", "import time; time.sleep(3)"),
@@ -623,8 +590,6 @@ def test_a_service_that_names_the_missing_setting_and_exits_nonzero_refuses(
 def test_each_way_of_not_refusing_is_red_with_the_boot_output(
     mode: str, said: str, capsys: pytest.CaptureFixture[str], *, timeout: str
 ) -> None:
-    # Why: only the service that hangs is about the time running out; the others must boot or
-    # exit before it does, which 0.8 s does not allow on a busy machine.
     code, out = refuses(mode, "DATABASE_URL", capsys=capsys, timeout=timeout)
     assert said in out, out
     assert code == 1

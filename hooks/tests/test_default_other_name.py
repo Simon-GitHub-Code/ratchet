@@ -1,5 +1,3 @@
-"""The path guards and the ref-move refusals hold on a default branch of any name (ADR 0016)."""
-
 import io
 import json
 from pathlib import Path
@@ -21,7 +19,6 @@ def decide(root: Path, case: dict) -> str:
 
 
 def repo(tmp_path: Path, name: str) -> Path:
-    """A repository with no remote, the manifest committed on its default branch ``name``."""
     root = tmp_path / name
     root.mkdir(parents=True)
     bound = binding(MERGE).replace("`main`", f"`{name}`")
@@ -90,7 +87,6 @@ def test_renaming_the_default_branch_does_not_switch_the_guards_off(tmp_path: Pa
 
 
 def adopt_a_weaker_manifest(root: Path, tmp_path: Path) -> str:
-    """The manifest as ``trunk`` has it; a branch ``z`` in a linked work tree carries another."""
     owned = (root / "guards/manifest.toml").read_text(encoding="utf-8")
     linked = tmp_path / "linked"
     git(root, "worktree", "add", "-q", "-b", "z", str(linked))

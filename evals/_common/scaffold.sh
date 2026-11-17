@@ -1,7 +1,4 @@
 #!/bin/bash
-# Shared scaffold: a small repository on the Ratchet method. Called by each case's scaffold.sh
-# with the case directory; copies _common, then the case's repo/, commits it on main, then
-# commits the case's branch/ overlay (if any) on the branch named in branch/.name.
 set -euo pipefail
 case_dir="$1"
 common_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

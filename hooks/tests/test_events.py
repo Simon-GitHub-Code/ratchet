@@ -1,5 +1,3 @@
-"""The guard's event log: one line for each deny or ask, in the git common directory (ADR 0060)."""
-
 import io
 import json
 import os
@@ -27,7 +25,6 @@ STAMP = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"
 
 @pytest.fixture
 def adopted(tmp_path: Path) -> Path:
-    """A repository on ``main`` with the fixture manifest committed."""
     root = tmp_path / "adopted"
     root.mkdir()
     return repository(root, {MANIFEST_PATH: MANIFEST_TEXT})
@@ -47,7 +44,6 @@ def bash(root: Path, command: str) -> dict[str, object]:
 
 
 def answer(root: Path, case: object, project: Path | None = None) -> str:
-    """What ``hook.main`` prints for ``case`` in a session rooted at ``root``."""
     text = case if isinstance(case, str) else json.dumps(case)
     stdout = io.StringIO()
     assert hook.main(root, io.StringIO(text), stdout, project=project) == 0
@@ -55,7 +51,6 @@ def answer(root: Path, case: object, project: Path | None = None) -> str:
 
 
 def unlogged(root: Path, case: object) -> str:
-    """What the hook prints for ``case`` when no log is written at all."""
     text = case if isinstance(case, str) else json.dumps(case)
     printed = hook.run(text, lambda: hook.local_guard(root))
     return printed + "\n" if printed else ""

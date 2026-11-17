@@ -1,6 +1,3 @@
-// The owner's words for the ratchet's model, shared by the charts of docs/model/ratchet.md. They
-// read the summary module, RatchetDefault: what the default branch holds after each landing.
-
 const KEYS = { floor: "gate.floor", ceiling: "ceilings.gate.seconds" };
 
 export const state = (key, word) => (v) => {
@@ -10,14 +7,12 @@ export const state = (key, word) => (v) => {
   return `The ${word} is ${now}`;
 };
 
-// As ratchet_model.loosens: removed, a flag for a number or back, or a number the looser way.
 const loosens = (key, old, now) => {
   if (now === "absent" || (old === "true") !== (now === "true")) return true;
   if (old === "true") return false;
   return key === "ceiling" ? Number(now) > Number(old) : Number(now) < Number(old);
 };
 
-// A record the landing brought: one it added that names a loosening of this key to its new value.
 const brought = (key, from, to) =>
   to.relaxes.some((line) => {
     const named = line.split(", copy ")[0].match(/^(\S+) from (\S+) to (\S+)$/);

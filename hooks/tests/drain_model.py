@@ -1,45 +1,3 @@
-"""A pure model of the queue drain: how tickets go from agreed to merged, and the default branch.
-
-Three tickets, ``a``, ``b`` and ``c``, where ``b`` is blocked by ``a``, under a cap of one, and
-``d`` and ``e``, the parts ``split`` files for ``a``, where ``e`` is blocked by ``d``. Each
-ticket is what ``drain.classify`` reads: its queue work tree, its branch, whether that branch holds
-the tip of the default branch, whether it is merged, the drain's note on it, its text and the
-stashes that hold its uncommitted work, whether a role of a pipeline run committed on its branch,
-whether the branch moved since the start its note records, and what a killed ``merge.py`` left;
-and what the preflight asks of ``a``, the one ticket with no ``Flag:`` line, and whether ``a`` was
-split. The actions are the drain's commands in any order, what the agent and a role do in a work
-tree, the agent's split of ``a``, what the owner does, the upgrade that ships ADR 0061, a stale
-index lock that git leaves, a kill of ``update``, ``close``, ``land`` or the ``merge.py`` it runs
-between two of their effects, and the publish check of ADR 0060 that ``check`` and ``update`` run
-against the start the note records. ``graph()`` is every reachable state and step, ``RULES`` what
-a reader of ADR 0023, ADR 0046, ADR 0060, ADR 0061 and the feature skill expects to stay true
-over any history. Every rule is a predicate over a step: ``(before, action name, after)``.
-
-The transitions are the code's: a command does here what ``drain.py`` and ``merge.py`` do on a
-repository, refusals included, so a rule the code does not keep breaks here too. The publish
-check's are what ``drain.py`` must do, as ``docs/model/drain.md`` says. The merge judge
-passes a branch only when its verdict record is its last commit, certifies the tree the branch
-has, and the branch holds the default tip; the binding's ``check`` is always green; no two tickets
-touch one file, so nothing conflicts.
-
-Bounds keep the graph small: the owner edits a ticket at most once, landing its ``Flag:`` line,
-closing a split ticket or not, the agent leaves work uncommitted once, a role commits once, and
-the retry count of a ticket left waiting stops at ``RETRIES``, past which nothing reads it. A
-role commits only on a start no check passed: before its run's check, or after a check without
-``--final``, which the skill runs after a run that errored, in the resume that follows. The skill
-runs ``check`` only on a start no check passed, of a ticket its note does not hold. A check without
-``--final`` is taken only in ``a``. A check that cannot read, or that finds only a rebase left
-unfinished, is taken only in ``a``, on a branch with commits of its own.
-
-The guard refuses a commit in a queue work tree whose start no check with ``--final`` has passed,
-or whose note holds ``update``'s mark (``commit_refused``). ``graph(guarded)`` is the drain as it
-runs: a commit step only where the guard lets it through, so a role never commits and the agent
-commits only after the check.
-``graph()`` is the drain without that gate, the record of what breaks there: in ``a`` the agent
-may commit before the check, and a role before its run's check. In ``d`` and ``e`` the commits
-obey the gate in both.
-"""
-
 from __future__ import annotations
 
 import dataclasses
@@ -60,11 +18,6 @@ RETRIES = 3
 
 
 class Fact(Enum):
-    """An enum whose members hash as they compare, by identity.
-
-    Why: the search hashes a few million of them, and ``Enum`` hashes each by its name in Python.
-    """
-
     __hash__ = object.__hash__
 
 
@@ -96,8 +49,6 @@ HOLDS_WORK = frozenset({Tree.DIRTY, Tree.LOCKED})
 
 
 class Flag(Fact):
-    """What the preflight asks of ticket ``a``, the one ticket with no ``Flag:`` line (ADR 0061)."""
-
     UNASKED = "the preflight asks no Flag: line before deployment"
     MISSING = "the preflight asks the Flag: line, and a has none"
     LANDED = "the owner has landed a's Flag: line"
@@ -116,8 +67,6 @@ AHEAD = frozenset({Branch.DRAFT, *RECORDED})
 
 
 class Outcome(Fact):
-    """What a note says. ``waits`` and ``parked`` differ only in the report's heading."""
-
     OPENED = "opened"
     MERGED = "merged"
     CLOSED = "waits or parked"
@@ -125,20 +74,12 @@ class Outcome(Fact):
 
 
 class Split(Fact):
-    """Whether ``a`` was split into ``d`` and ``e``, and whether the owner has closed it since."""
-
     WHOLE = "a is not split, and d and e are not filed"
     SPLIT = "a is split into d and e, and stays open"
     CLOSED = "a is split, and the owner has closed it"
 
 
 class Note(NamedTuple):
-    """``.ratchet/queue/tickets/<branch>.json``: what the drain keeps on a ticket.
-
-    ``open`` writes one with no hold, digest or report flag, unless it keeps a close no report
-    has printed yet; a close writes all of them.
-    """
-
     outcome: Outcome
     hold: bool = False
     text: int | None = None
@@ -163,30 +104,16 @@ class Ticket(NamedTuple):
 
     @property
     def ahead(self) -> bool:
-        """Whether the branch holds a commit the default branch does not."""
         return self.branch in AHEAD and not self.merged
 
 
 def tip_matters(ticket: Ticket) -> bool:
-    """Whether anything the code does reads if the branch holds the default tip.
-
-    A branch with no commit of its own and no work tree is judged and refused the same either way,
-    and ``open`` starts it at the tip again. Nothing reads the tip of a merged one.
-    """
     if ticket.branch is Branch.NONE or ticket.merged:
         return False
     return ticket.branch is not Branch.BARE or ticket.tree is not Tree.NONE
 
 
 def normal(ticket: Ticket) -> Ticket:
-    """``ticket`` with what nothing reads set one way, so two states that differ only there are one.
-
-    ``settle``'s mark on a ticket with no tree is read only by the count of a retry. Only a branch
-    whose verdict record is last is retried, and any other gets one only in a tree, which ``open``
-    and ``update`` make and which drops the mark. No check reads a start that passed, so what moved
-    since it is read only once a new start is recorded, which ``since`` starts again; nor a branch
-    with no commit of its own and no tree, which ``open`` starts again.
-    """
     current = ticket.current or not tip_matters(ticket)
     reviewed = ticket.reviewed and ticket.branch is Branch.JUDGED and not ticket.merged
     published = ticket.published and not ticket.merged
@@ -216,7 +143,6 @@ class State:
 
     @property
     def edited(self) -> bool:
-        """Whether the owner has edited a ticket yet: they do so once in a history."""
         return any(ticket.text for ticket in self.tickets)
 
     def of(self, name: Name) -> Ticket:
@@ -230,7 +156,6 @@ class State:
         return State(tuple(tickets), self.worked, self.scratch, self.half, flag, self.split)
 
     def __hash__(self) -> int:
-        # Why: the search hashes each state it reaches many times, and a state never changes.
         cached = self.__dict__.get("hashed")
         if cached is None:
             facts = (self.tickets, self.worked, self.scratch, self.half, self.flag, self.split)
@@ -242,7 +167,6 @@ class State:
         return zip(NAMES, self.tickets, strict=True)
 
     def filed(self, name: Name) -> bool:
-        """Whether the ticket is in the tracker: a part is once its ticket was split."""
         return name not in PARTED or self.split is not Split.WHOLE
 
 
@@ -250,8 +174,6 @@ INITIAL = State(tickets=tuple(Ticket() for _ in NAMES))
 
 
 class Status(Fact):
-    """What ``drain.plan`` calls a ticket; a merged one is resolved and not in the plan."""
-
     BUILDABLE = "buildable"
     BUILDING = "building"
     BUILT = "built"
@@ -264,27 +186,17 @@ LIVE = frozenset({Status.BUILDABLE, Status.BUILDING, Status.BUILT})
 
 
 def held_by_note(ticket: Ticket) -> bool:
-    """Whether the note holds the ticket: a hold written on the text the ticket has now."""
     note = ticket.note
     return note is not None and note.hold and note.text == ticket.text
 
 
 def resolved_of(state: State) -> set[Name]:
-    """The tickets that are not open: merged, being landed, or closed by the owner."""
     resolved = {name for name, ticket in state.each() if ticket.merged or state.half is name}
     return resolved | {Name.A} if state.split is Split.CLOSED else resolved
 
 
 @functools.cache
 def classify(state: State) -> dict[Name, Status]:
-    """Each ticket in the plan, as ``drain.classify`` and then ``drain.settled`` call it.
-
-    The plan reads the tickets from the default branch's work tree. While a fast-forward is cut
-    off half-way that holds the merge's ticket file, so the ticket being landed reads as resolved.
-    A ticket waits on what ``awaited`` names, as ``preflight.blockers`` reads it: a split blocker,
-    open or closed, stands for its parts. A waiting ticket is refused unless everything it waits
-    on can still land, as ``drain.settled`` reads it.
-    """
     found: dict[Name, Status] = {}
     resolved = resolved_of(state)
     for name, ticket in state.each():
@@ -306,7 +218,6 @@ def classify(state: State) -> dict[Name, Status]:
 
 
 def settled(state: State, found: dict[Name, Status], resolved: set[Name]) -> dict[Name, Status]:
-    """``found`` with each waiting ticket refused that waits on one the drain cannot land."""
     live = {name for name, status in found.items() if status in LIVE}
     waiting = [name for name, status in found.items() if status is Status.WAITING]
     reached = True
@@ -324,15 +235,10 @@ def settled(state: State, found: dict[Name, Status], resolved: set[Name]) -> dic
 
 
 def building(state: State) -> int:
-    """The tickets in the plan that hold a queue work tree: what the cap counts."""
     return sum(ticket.tree is not Tree.NONE for ticket in state.tickets if not ticket.merged)
 
 
 def start(state: State) -> tuple[Name, ...]:
-    """The tickets ``plan`` starts: the buildable, in order, up to the cap less those in a tree.
-
-    None while a fast-forward cut off half-way leaves the checkout unfit to build on.
-    """
     if state.half is not None:
         return ()
     statuses = classify(state)
@@ -403,17 +309,12 @@ Move = tuple[Action, State]
 
 
 def moved(state: State) -> State:
-    """``state`` after the default branch moved: no branch holds its tip any longer."""
     for name, ticket in state.each():
         state = state.with_ticket(name, ticket._replace(current=False, reviewed=False))
     return state
 
 
 def discard(ticket: Ticket) -> Ticket:
-    """The ticket after ``drain.discard``: its tree gone, its uncommitted work a stash first.
-
-    A tree whose work git cannot stash stays, work and all.
-    """
     if ticket.tree is Tree.LOCKED:
         return ticket
     stashes = ticket.stashes + (ticket.tree is Tree.DIRTY)
@@ -421,12 +322,6 @@ def discard(ticket: Ticket) -> Ticket:
 
 
 def noted(ticket: Ticket, outcome: Outcome, *, retry: bool = False) -> Ticket:
-    """The ticket once ``drain.settle`` has written its note marked as being discarded.
-
-    ``retry`` says every reason is one the drain resolves itself: the ticket is retried, not
-    held, until it has waited ``RETRIES`` times in a row on one text. A refusal is not counted
-    again while the note it follows is still marked: a run of that close was cut off.
-    """
     prior = ticket.note
     same = prior is not None and prior.text == ticket.text and prior.outcome is not Outcome.OPENED
     counted = 0 if prior is not None and prior.discarding else 1
@@ -441,7 +336,6 @@ def noted(ticket: Ticket, outcome: Outcome, *, retry: bool = False) -> Ticket:
 
 
 def closed(ticket: Ticket, outcome: Outcome, *, retry: bool = False) -> Ticket:
-    """The ticket after ``drain.close``: its note written, its tree discarded, the mark dropped."""
     settled = discard(noted(ticket, outcome, retry=retry))
     note = settled.note
     return settled._replace(note=note._replace(discarding=False)) if note else settled
@@ -452,22 +346,15 @@ def says_merged(ticket: Ticket) -> bool:
 
 
 def recorded(ticket: Ticket) -> Ticket:
-    """A merge no note says, recorded: ``drain.record_merge``."""
     return closed(ticket, Outcome.MERGED)
 
 
 def unrecorded(ticket: Ticket) -> bool:
-    """``drain.recorded_merge``: merged, and no note (one the drain wrote) says so."""
     note = ticket.note
     return ticket.merged and note is not None and note.outcome is not Outcome.MERGED
 
 
 def finished(ticket: Ticket) -> Ticket:
-    """``drain.finish_close``: the discard a close was cut off before, its note kept as written.
-
-    The mark is dropped whether the tree stands or not: a close cut off after its discard is owed
-    no rerun once something else runs on the ticket.
-    """
     note = ticket.note
     if note is None or not note.discarding:
         return ticket
@@ -479,7 +366,6 @@ def _open(state: State, name: Name) -> State:
         return state
     ticket = state.of(name)
     prior = ticket.note
-    # Why: a close no report has printed is kept for the report, its hold and retries dropped.
     kept = prior is not None and prior.fresh and prior.outcome is Outcome.CLOSED
     opened = Ticket(
         tree=Tree.CLEAN,
@@ -521,37 +407,27 @@ def _record(state: State, name: Name) -> State | None:
 
 
 def unchecked(ticket: Ticket) -> bool:
-    """Whether the branch has a start no publish check has passed: ``land`` refuses it."""
     note = ticket.note
     live = ticket.branch is not Branch.NONE and not ticket.merged
     return live and not (note is not None and note.passed)
 
 
 def commit_refused(ticket: Ticket) -> bool:
-    """Whether a commit in the ticket's queue work tree is refused: the guard's ``awaiting_final``.
-
-    The note of a branch always holds a start, so a start no check passed is ``unchecked``. While
-    ``update``'s mark stands, the branch is moving, or has moved, off the start a check passed, so
-    the mark refuses a commit whatever ``passed`` says.
-    """
     mark = ticket.note is not None and ticket.note.rebasing
     return ticket.tree is not Tree.NONE and (unchecked(ticket) or mark)
 
 
 def checked(ticket: Ticket) -> Ticket:
-    """The ticket once a check passed its start: the note carries the mark."""
     note = ticket.note or Note(Outcome.OPENED)
     return ticket._replace(note=note._replace(passed=True))
 
 
 def restarted(ticket: Ticket) -> Ticket:
-    """The ticket once ``update`` recorded the head it moved the branch to as the start."""
     note = ticket.note or Note(Outcome.OPENED)
     return ticket._replace(note=note._replace(passed=False), since=False)
 
 
 def _publish(state: State, name: Name) -> State | None:
-    """A role commits before the run returns, so before its check: on a new branch, or on one ``update`` rebased."""  # noqa: E501
     ticket = state.of(name)
     runs = ticket.tree is Tree.CLEAN and ticket.branch in {Branch.BARE, Branch.DRAFT}
     if ticket.merged or ticket.published or not runs or not unchecked(ticket):
@@ -563,30 +439,15 @@ def _publish(state: State, name: Name) -> State | None:
 
 
 def asked(ticket: Ticket) -> bool:
-    """Whether the skill runs ``check`` on the ticket.
-
-    The skill runs the check after a run returns, so on a start no check has passed, of a branch
-    the note does not hold.
-    """
     return unchecked(ticket) and not held_by_note(ticket)
 
 
 def cut_off(ticket: Ticket) -> bool:
-    """Whether ``update`` was cut off after it moved the branch: ``drain.cut_off``.
-
-    The note holds ``update``'s mark, and the branch is not at the tip the mark names. While the
-    mark stands, the branch is at that tip only while the rebase is under way in its tree.
-    """
     note = ticket.note
     return note is not None and note.rebasing and ticket.tree is not Tree.REBASING
 
 
 def in_its_tree(state: State, name: Name) -> Ticket | None:
-    """The ticket as ``check`` has it once it has a tree to read; ``None`` where it reads none.
-
-    A branch with commits of its own and no work tree gets one under the cap, as ``update`` makes
-    one, which drops ``settle``'s mark. The check of an ``update`` cut off reads no tree.
-    """
     ticket = state.of(name)
     if not asked(ticket) or cut_off(ticket):
         return None
@@ -598,11 +459,6 @@ def in_its_tree(state: State, name: Name) -> Ticket | None:
 
 
 def _check(state: State, name: Name, *, final: bool = True) -> State | None:
-    """``drain.py check``: green with ``--final`` marks the start passed; a branch that moved is parked and held.
-
-    After an ``update`` cut off once it moved the branch, the check says to run ``update`` again
-    and changes nothing: it cannot tell that move from a role's commit.
-    """  # noqa: E501
     if asked(state.of(name)) and cut_off(state.of(name)):
         return state
     ticket = in_its_tree(state, name)
@@ -614,10 +470,6 @@ def _check(state: State, name: Name, *, final: bool = True) -> State | None:
 
 
 def _check_unreadable(state: State, name: Name) -> State | None:
-    """The check cannot read the present state: the ticket waits to be retried, its start unpassed.
-
-    A bound: only on a branch with commits of its own, where a role's commit can be.
-    """
     ticket = in_its_tree(state, name)
     if ticket is None or not ticket.ahead:
         return None
@@ -625,7 +477,6 @@ def _check_unreadable(state: State, name: Name) -> State | None:
 
 
 def _check_halted(state: State, name: Name, *, final: bool = True) -> State | None:
-    """A rejudge's reconcile left its rebase unfinished and nothing moved: the start passed with ``--final``, and the ticket waits to be retried."""  # noqa: E501
     ticket = in_its_tree(state, name)
     rejudged = state.of(name).tree is not Tree.NONE and state.of(name).branch in AHEAD
     if ticket is None or ticket.since or not rejudged:
@@ -635,28 +486,20 @@ def _check_halted(state: State, name: Name, *, final: bool = True) -> State | No
 
 
 def rebased(ticket: Ticket) -> Ticket:
-    """The branch rebased onto the default tip, a verdict record left last dropped."""
     branch = Branch.DRAFT if ticket.branch in RECORDED else ticket.branch
     return ticket._replace(current=True, branch=branch, reviewed=False)
 
 
 def marked(ticket: Ticket, *, rebasing: bool) -> Ticket:
-    """The note as ``update`` writes it, which drops ``settle``'s mark too."""
     note = ticket.note or Note(Outcome.OPENED)
     return ticket._replace(note=note._replace(rebasing=rebasing, discarding=False))
 
 
 def trees(state: State) -> int:
-    """Every queue work tree, a merged ticket's too: what ``update`` counts before it makes one."""
     return sum(ticket.tree is not Tree.NONE for ticket in state.tickets)
 
 
 def revived(state: State, name: Name) -> Ticket | None:
-    """The ticket as ``update`` has it once it has a clean tree to work in; ``None`` when not.
-
-    A built branch with no work tree gets one, under the cap, when it is behind or its note
-    says a rebase was under way; a rebase a killed run left is abandoned.
-    """
     ticket = state.of(name)
     if ticket.tree is Tree.NONE:
         mark = ticket.note is not None and ticket.note.rebasing
@@ -669,10 +512,6 @@ def revived(state: State, name: Name) -> Ticket | None:
 
 
 def unmarked(state: State, name: Name) -> State | None:
-    """``state`` as ``update`` has it when it turns to the rebase: ``settle``'s mark dropped.
-
-    ``None`` on a branch whose merge landed: ``update`` records that merge and does not rebase it.
-    """
     ticket = state.of(name)
     if unrecorded(ticket) or says_merged(ticket):
         return None
@@ -683,7 +522,6 @@ def unmarked(state: State, name: Name) -> State | None:
 
 
 def to_rebase(state: State, name: Name) -> Ticket | None:
-    """The ticket as ``update`` has it when its rebase starts; ``None`` when it starts none."""
     ticket = revived(state, name)
     if ticket is None or ticket.current or ticket.branch is Branch.NONE:
         return None
@@ -691,18 +529,10 @@ def to_rebase(state: State, name: Name) -> Ticket | None:
 
 
 def finishing(ticket: Ticket) -> bool:
-    """Whether ``update`` finds a rebase a killed run finished: the tip is current and marked."""
     return ticket.current and ticket.note is not None and ticket.note.rebasing
 
 
 def checked_first(state: State, name: Name) -> State | None:
-    """``state`` once ``update``'s own check passed an unchecked start; ``None`` where it parks.
-
-    ``update`` checks a branch with commits of its own once it has a tree and before it rebases,
-    and marks the start passed before the rebase begins, so a run killed in the rebase is not
-    checked against the old start again. A branch with none holds no commit a role made, and its
-    rebase records a new start.
-    """
     ticket = state.of(name)
     if not unchecked(ticket) or not ticket.ahead or revived(state, name) is None:
         return state
@@ -713,9 +543,6 @@ def _update(state: State, name: Name) -> State:
     ticket = state.of(name)
     ready = unmarked(state, name)
     if ready is None:
-        # Why: a rebase would move the branch off its merge, and the merge would no longer be
-        # seen as landed. The merge is recorded instead, or a discard its close was cut off
-        # before is finished.
         return state.with_ticket(name, recorded(ticket) if unrecorded(ticket) else finished(ticket))
     working = revived(ready, name)
     if working is None:
@@ -733,10 +560,6 @@ def _update(state: State, name: Name) -> State:
 
 
 def _update_unreadable(state: State, name: Name) -> State | None:
-    """``update``'s own check cannot read the present state: it is refused and changes nothing.
-
-    Why: a close would end the hold of a ticket its note holds, which only the owner's edit ends.
-    """
     ready = unmarked(state, name)
     if ready is None or (working := revived(ready, name)) is None:
         return None
@@ -755,12 +578,6 @@ def _kill_mid_rebase(state: State, name: Name) -> State | None:
 
 
 def _kill_after_rebase(state: State, name: Name) -> State | None:
-    """Where ``update`` is about to drop the record: after its rebase, or finishing one.
-
-    A run that finishes what a killed run left drops the record before it clears the mark, so
-    a kill there leaves the mark. The rebase moved the branch from its start, and the run had not
-    yet recorded the new one.
-    """
     ready = unmarked(state, name)
     if ready is not None:
         ready = checked_first(ready, name)
@@ -778,11 +595,6 @@ def _kill_after_rebase(state: State, name: Name) -> State | None:
 
 
 def parkable(ticket: Ticket) -> bool:
-    """Whether ``close --outcome parked`` gets as far as its own note.
-
-    A merge is refused, and one no note says yet is recorded first: the kills of ``close`` are
-    taken on a ticket that never merges, and do not follow that record or ``finish_close``.
-    """
     return not says_merged(ticket) and not unrecorded(ticket)
 
 
@@ -795,11 +607,6 @@ def _kill_after_stash(state: State, name: Name) -> State | None:
 
 
 def _kill_before_discard(state: State, name: Name) -> State | None:
-    """``close`` with its note written and its tree not yet discarded; none where that is all of it.
-
-    A kill after the discard leaves the whole close's note still marked, and only the count of a
-    retry reads the mark, which a parked close never is; so ``close`` is killed only here.
-    """
     ticket = state.of(name)
     if not parkable(ticket):
         return None
@@ -808,7 +615,6 @@ def _kill_before_discard(state: State, name: Name) -> State | None:
 
 
 def judge(ticket: Ticket) -> list[str]:
-    """The reason codes ``merge.py`` prints for the branch; none when it lands."""
     if ticket.merged:
         return ["behind", "record"]
     reasons = [] if ticket.current else ["behind"]
@@ -816,15 +622,12 @@ def judge(ticket: Ticket) -> list[str]:
 
 
 class Landing(NamedTuple):
-    """What ``land`` does before it settles the ticket, and how it settles it."""
-
     judged: State
     outcome: Outcome
     retry: bool
 
 
 def recovered(state: State) -> State:
-    """``merge.recover``: the scratch work tree swept, a fast-forward cut off half-way put back."""
     if not state.scratch and state.half is None:
         return state
     return dataclasses.replace(state, scratch=False, half=None)
@@ -832,13 +635,10 @@ def recovered(state: State) -> State:
 
 @functools.cache
 def landing(state: State, name: Name) -> Landing | None:
-    """``land`` up to its close, from what ``merge.recover`` puts back; ``None`` when it closes nothing."""  # noqa: E501
     state = recovered(state)
     ticket = state.of(name)
     if unrecorded(ticket):
         return Landing(state, Outcome.MERGED, retry=False)
-    # Why: a held ticket is refused before merge.py runs, and a merged one by the close after it;
-    # so is a start no check passed (ADR 0060).
     if ticket.branch is Branch.NONE or held_by_note(ticket) or says_merged(ticket):
         return None
     if unchecked(ticket):
@@ -854,8 +654,6 @@ def _land(state: State, name: Name) -> State:
     state = recovered(state)
     ticket = state.of(name)
     if not unrecorded(ticket) and (says_merged(ticket) or held_by_note(ticket)):
-        # Why: a merge recorded already is closed again, which finishes a cut-off discard, and a
-        # held ticket is refused once that discard is finished.
         return state.with_ticket(name, finished(ticket))
     run = landing(state, name)
     if run is None:
@@ -865,7 +663,6 @@ def _land(state: State, name: Name) -> State:
 
 
 def _kill_land_before_note(state: State, name: Name) -> State | None:
-    """The merge landed and nothing after it ran: no note says so and the tree is there."""
     run = landing(state, name)
     if run is None or run.judged == recovered(state):
         return None
@@ -873,7 +670,6 @@ def _kill_land_before_note(state: State, name: Name) -> State | None:
 
 
 def _kill_land_before_discard(state: State, name: Name) -> State | None:
-    """``land`` with its note written and its tree not yet discarded."""
     run = landing(state, name)
     if run is None:
         return None
@@ -882,7 +678,6 @@ def _kill_land_before_discard(state: State, name: Name) -> State | None:
 
 
 def _kill_land_after_discard(state: State, name: Name) -> State | None:
-    """``land`` with its tree discarded and its note still marked; none where discard does nothing."""  # noqa: E501
     run = landing(state, name)
     if run is None or discard(run.judged.of(name)) == run.judged.of(name):
         return None
@@ -891,10 +686,6 @@ def _kill_land_after_discard(state: State, name: Name) -> State | None:
 
 
 def _kill_before_fast_forward(state: State, name: Name) -> State | None:
-    """``merge.py`` killed in ``check`` on the merge result: only a passed branch gets that far.
-
-    A kill earlier in ``merge.py`` leaves the same: its scratch work tree and nothing else.
-    """
     run = landing(state, name)
     if run is None or run.judged == recovered(state):
         return None
@@ -909,7 +700,6 @@ def _kill_mid_fast_forward(state: State, name: Name) -> State | None:
 def _close(state: State, name: Name) -> State:
     ticket = state.of(name)
     if unrecorded(ticket):
-        # Why: ``close`` records a merge no note says before it reads the note, and then refuses.
         return state.with_ticket(name, recorded(ticket))
     if says_merged(ticket):
         return state.with_ticket(name, finished(ticket))
@@ -917,15 +707,6 @@ def _close(state: State, name: Name) -> State:
 
 
 def cleaned(state: State, *, everything: bool) -> State:
-    """``drain.clean``: every tree of a merged branch removed, with ``everything`` every tree.
-
-    A merge no note says is recorded first, a tree or not, and a close cut off before its discard
-    is finished before its tree goes, once ``merge.recover`` has put back what a killed
-    ``merge.py`` left. ``everything`` then clears the mark of a rebase that did not finish (it was
-    under way in the tree) or of a branch with no commit of its own, ``drain.unmark``, and the mark
-    of a close whose tree is gone, ``drain.finish_close``. One drain runs here, so ``clean`` finds
-    no other drain alive and records each merge.
-    """
     state = recovered(state)
     for name, ticket in state.each():
         settled = recorded(ticket) if unrecorded(ticket) else ticket
@@ -943,10 +724,6 @@ def cleaned(state: State, *, everything: bool) -> State:
 
 
 def _report(state: State) -> State:
-    """``drain.report``: each merge no note says recorded, then each close not yet printed, printed.
-
-    One drain runs here, so the report finds no other drain alive and records each merge.
-    """
     for name, ticket in state.each():
         settled = recorded(ticket) if unrecorded(ticket) else ticket
         if settled.note is not None and settled.note.fresh:
@@ -957,7 +734,6 @@ def _report(state: State) -> State:
 
 def _edit(state: State, name: Name) -> State | None:
     ticket = state.of(name)
-    # Why: git refuses the owner's commit while the cut-off fast-forward holds the index lock.
     if state.edited or ticket.merged or state.half is not None:
         return None
     shifted = moved(state)
@@ -965,17 +741,12 @@ def _edit(state: State, name: Name) -> State | None:
 
 
 def _line(state: State, name: Name) -> State | None:
-    """The owner's one edit of the ticket: its ``Flag:`` line, landed on the default branch."""
     if state.flag is not Flag.MISSING or (edited := _edit(state, name)) is None:
         return None
     return dataclasses.replace(edited, flag=Flag.LANDED)
 
 
 def _upgrade(state: State) -> State | None:
-    """The plugin ships ADR 0061: the preflight now asks every ticket for its ``Flag:`` line.
-
-    The upgrade is a commit of the binding on the default branch, which moves its tip.
-    """
     first = state.of(Name.A)
     unasked = state.flag is Flag.UNASKED and state.split is Split.WHOLE
     if not unasked or first.ahead or first.merged or state.half is not None:
@@ -984,12 +755,6 @@ def _upgrade(state: State) -> State | None:
 
 
 def _split(state: State, name: Name) -> State | None:
-    """``drain.split_ticket``: the parts filed, the ticket closed as ``split`` and held.
-
-    A bound: the run stops ``a`` as too large before any commit, in a clean tree. The parts are
-    local tickets, so they are committed on the default branch, which moves its tip: until then
-    the checkout is not fit to build on.
-    """
     ticket = state.of(name)
     if state.split is not Split.WHOLE or ticket.tree is not Tree.CLEAN:
         return None
@@ -1000,7 +765,6 @@ def _split(state: State, name: Name) -> State | None:
 
 
 def _resolve(state: State, name: Name) -> State | None:
-    """The owner's one edit of the history: ``a``'s status set to done on the default branch."""
     if state.split is not Split.SPLIT or (edited := _edit(state, name)) is None:
         return None
     return dataclasses.replace(edited, split=Split.CLOSED)
@@ -1021,19 +785,12 @@ def _unlock(state: State, name: Name) -> State | None:
 
 
 def recovering(act: Callable[[State, Name], State | None]) -> Callable[[State, Name], State | None]:
-    """``act`` once ``merge.recover`` has run: ``drain.main`` runs it before every command.
-
-    So no command reads a ticket's text while a fast-forward cut off half-way holds the merge's.
-    """
-
     def run(state: State, name: Name) -> State | None:
         return act(recovered(state), name)
 
     return run
 
 
-# Why: where two paths to a state are as short, the search keeps the one whose actions come
-# first here; a landing runs merge.py, the dearest step to replay, so it comes last.
 ON_TICKET: dict[Kind, Callable[[State, Name], State | None]] = {
     Kind.OPEN: recovering(_open),
     Kind.WORK: _work,
@@ -1073,15 +830,6 @@ WHOLE: dict[Kind, Callable[[State], State | None]] = {
 }
 
 
-# Why: a bound. Each ticket plays one part so the graph stays small: the agent and a role commit
-# only in a, whose branch goes the whole way to merged, and the agent leaves work uncommitted only
-# in c, the ticket the cap holds back; b, which waits on a, is only opened. A kill stops
-# ``update`` and ``land`` only in a, whose branch carries a verdict record, and ``close`` only in
-# c, whose tree holds work. The drain's other commands and the owner reach a and c, and the
-# commands of the whole queue reach every ticket. The agent splits only a, into d and e, and
-# commits in them too, so they are opened, built, judged and landed and nothing more. Once a is
-# split no command names it, and the owner's one edit of it is to close it. Without the gate the
-# agent commits before the check only in a: in d and e its commits obey the gate.
 A_AND_C = (Name.A, Name.C)
 BUILT = (Name.A, *PARTS[Name.A])
 PLAYS: dict[Kind, tuple[Name, ...]] = {
@@ -1126,12 +874,10 @@ ON_THE_QUEUE = [(Action(kind), act) for kind, act in WHOLE.items()]
 
 
 def on_a_split(state: State, kind: Kind) -> bool:
-    """Whether a bound leaves out ``kind`` on the split ticket: all but the owner's close."""
     return state.split is not Split.WHOLE and kind is not Kind.RESOLVE
 
 
 def moves(state: State) -> list[Move]:
-    """Every action open to the drain, the agent, the owner and git in ``state``."""
     found: list[Move] = []
     for action, act, name in ON_A_TICKET:
         if not state.filed(name) or (name in PARTS and on_a_split(state, action.kind)):
@@ -1151,11 +897,6 @@ Edge = tuple[State, str, State]
 def graph(
     keep: Callable[[State, Action], bool] = lambda _state, _action: True,
 ) -> tuple[frozenset[State], list[Edge]]:
-    """Every state reachable from ``INITIAL`` by the steps ``keep`` keeps, and those steps, breadth first.
-
-    The first step into each state ends a shortest path to it. Each step leads to the one copy of
-    its state the search keeps, so a search over the steps finds each state by identity.
-    """  # noqa: E501
     seen = {INITIAL: INITIAL}
     frontier = deque([INITIAL])
     edges: list[Edge] = []
@@ -1173,7 +914,6 @@ def graph(
 
 
 def ticket_of(action: str) -> Name | None:
-    """The ticket an action name ends in, if it names one."""
     last = action.rsplit(" ", 1)[-1]
     return BY_VALUE.get(last)
 
@@ -1210,7 +950,6 @@ def not_stale(before: State, _: str, after: State) -> bool:
 
 
 def merge_said(ticket: Ticket) -> tuple[bool, bool]:
-    """Whether the note says the ticket merged, and whether no report has printed that yet."""
     note = ticket.note
     if note is None or note.outcome is not Outcome.MERGED:
         return False, False
@@ -1266,7 +1005,6 @@ def stays_held(before: State, _: str, after: State) -> bool:
 
 
 def released_by_the_owner(ticket: Ticket) -> bool:
-    """Whether no note holds the ticket, or the owner has changed the text it was held on."""
     note = ticket.note
     if note is None or not note.hold:
         return True
@@ -1282,10 +1020,6 @@ def held_until_edited(before: State, _: str, after: State) -> bool:
 
 
 def awaited(state: State, name: Name) -> tuple[Name, ...]:
-    """What the ticket waits on, as ADR 0046 means it: its blocker, or a split blocker's parts.
-
-    One level: ``split.py`` refuses to split a part.
-    """
     blocker = BLOCKER.get(name)
     if blocker is None:
         return ()
@@ -1304,7 +1038,6 @@ def refused(_: State, __: str, after: State) -> bool:
 
 
 def on_a_split_blocker(state: State) -> list[Name]:
-    """The tickets that wait on a ticket the drain split."""
     return [name for name in BLOCKER if awaited(state, name) != (BLOCKER[name],)]
 
 
@@ -1319,7 +1052,6 @@ def parts_first(before: State, _: str, after: State) -> bool:
 
 
 def can_land(state: State, name: Name) -> bool:
-    """Whether the drain can still land the ticket, or has: the plan keeps it live or waiting."""
     return state.of(name).merged or classify(state).get(name) in {*LIVE, Status.WAITING}
 
 
@@ -1338,13 +1070,11 @@ def parts_awaited(_: State, __: str, after: State) -> bool:
 
 
 def behind(ticket: Ticket) -> bool:
-    """Whether ``drain.plan`` calls the ticket behind, now or once its hold ends: ``update`` it."""
     marked = ticket.note is not None and ticket.note.rebasing
     return ticket.ahead and (not ticket.current or marked)
 
 
 def next_drain(state: State, name: Name) -> State:
-    """``clean --all``, then the ``update`` the plan asks for when it calls the ticket behind."""
     swept = cleaned(state, everything=True)
     return _update(swept, name) if behind(swept.of(name)) else swept
 
@@ -1405,7 +1135,6 @@ def untouched(before: State, action: str, _: State) -> bool:
 
 
 def guarded(state: State, action: Action) -> bool:
-    """Whether the guard lets ``action`` through: a commit only where ``commit_refused`` does not hold."""  # noqa: E501
     return (
         action.kind not in COMMITS
         or action.ticket is None
@@ -1438,17 +1167,12 @@ RULES: dict[str, Callable[[State, str, State], bool]] = {
 }
 
 
-# --- the lease: one drain at a time -----------------------------------------------------------
-
-
 class Drain(Fact):
     ONE = "drain 1"
     TWO = "drain 2"
 
 
 class Merge(Fact):
-    """Where the ticket's merge is, as ``drain.recorded_merge`` and ``drain.report`` read it."""
-
     NONE = "not merged"
     UNSAID = "merged, and no note says so"
     SAID = "merged, and a note no report has printed says so"
@@ -1456,12 +1180,6 @@ class Merge(Fact):
 
 
 class Lease(NamedTuple):
-    """Two drains on one repository as ``drain.lease`` reads them, and one ticket's work tree.
-
-    ``shared`` is ``None`` until the history says how the drains run: each in a session of its
-    own, or both under one long-lived process. The pairs hold drain 1's fact, then drain 2's.
-    """
-
     shared: bool | None = None
     holder: Drain | None = None
     alive: tuple[bool, bool] = (True, True)
@@ -1480,22 +1198,18 @@ class Lease(NamedTuple):
 
 
 def seen_by(lease: Lease) -> str | None:
-    """What ``drain.landing_holder`` reads held: the landing lock of a ``land`` alive, or the merge lock of a ``merge.py`` past its probe."""  # noqa: E501
     return "landing" if lease.landing is not None else "merge" if lease.orphan is not None else None
 
 
 def landing_seen(lease: Lease) -> Drain | None:
-    """The landing ``drain.landing_running`` sees, by either lock."""
     return lease.landing if seen_by(lease) == "landing" else lease.orphan
 
 
 def landing_alive(lease: Lease) -> Drain | None:
-    """The drain whose landing is alive: its ``land`` runs, or a ``merge.py`` it started that can still land."""  # noqa: E501
     return lease.landing if lease.landing is not None else lease.orphan
 
 
 def merges_that_can_land(lease: Lease) -> list[Drain | None]:
-    """The ``land`` that owns each live merge that can still land; ``None`` for one whose ``land`` is gone."""  # noqa: E501
     owners: list[Drain | None] = []
     if lease.landing is not None and lease.merge is Merge.NONE:
         owners.append(lease.landing)
@@ -1550,25 +1264,17 @@ OWN = frozenset({Step.RESUME, Step.REPORT_OWN})
 
 
 def rival(lease: Lease, drain: Drain) -> bool:
-    """``drain.rival``: whether the lease names a drain still running, as ``drain`` sees it.
-
-    A live process of the holder's chain is evidence only when it is not above ``drain``'s
-    command too: in a session of its own. A program running from a queue tree always is, with a
-    lease or with none.
-    """
     holder = lease.holder
     chain = holder is not None and of(lease.alive, holder) and not lease.shared
     return (chain and holder is not drain) or lease.running
 
 
 def other_drain(lease: Lease, drain: Drain, step: Step) -> bool:
-    """``drain.other_drain``: whether a drain other than the one the step's token names runs."""
     ours = step in OWN and lease.holder is drain
     return not ours and rival(lease, drain)
 
 
 def without_tree(lease: Lease) -> Lease:
-    """``drain.discard`` of the ticket's tree: its draft kept as a stash, its program ended."""
     if lease.tree is None:
         return lease
     stashed = lease.stashed or lease.draft
@@ -1576,7 +1282,6 @@ def without_tree(lease: Lease) -> Lease:
 
 
 def merge_recorded(lease: Lease) -> Lease:
-    """``drain.settle`` of a merge: the note says merged, unprinted, holds nothing, and the tree is discarded."""  # noqa: E501
     return without_tree(lease)._replace(merge=Merge.SAID, held=False)
 
 
@@ -1590,17 +1295,11 @@ def _clean_all(lease: Lease, drain: Drain, step: Step) -> Lease:
         draining=put(lease.draining, drain, value=True),
     )
     if landing_seen(taken) is not None:
-        # Why: ``drain.in_flight`` keeps the tree of a live landing, ``--take-over`` or not.
         return taken
     return merge_recorded(taken) if taken.merge is Merge.UNSAID else without_tree(taken)
 
 
 def _report_and_release(lease: Lease, drain: Drain, step: Step) -> Lease:
-    """``drain.report``: a merge no note says recorded, then printed.
-
-    The merge is left alone while another drain runs, or while its landing does. ``drain.release``
-    ends the lease on the drains alone: the token is the holder's, or no rival is alive.
-    """
     busy = other_drain(lease, drain, step)
     if not busy and lease.merge is Merge.UNSAID and landing_seen(lease) is None:
         lease = merge_recorded(lease)
@@ -1612,7 +1311,6 @@ def _report_and_release(lease: Lease, drain: Drain, step: Step) -> Lease:
 
 
 def _clean(lease: Lease, drain: Drain, _: Step) -> Lease:
-    """``drain.clean``: a merge no note says recorded, its tree with it, unless another drain or its landing runs."""  # noqa: E501
     busy = landing_seen(lease) is not None or other_drain(lease, drain, Step.CLEAN)
     if lease.merge is not Merge.UNSAID or busy:
         return lease
@@ -1620,13 +1318,7 @@ def _clean(lease: Lease, drain: Drain, _: Step) -> Lease:
 
 
 def _land(lease: Lease, drain: Drain, _: Step) -> Lease | None:
-    """``land`` up to the ``merge.py`` it runs, on a tree whose work is all committed.
-
-    A bound: the agent lands only a tree with nothing uncommitted and no program running from it.
-    """
     if landing_seen(lease) is not None:
-        # Why: ``drain.land`` refuses while the merge lock is held, and ``drain.landing_lock``
-        # while the landing lock is; either changes nothing.
         return lease
     ready = lease.tree is drain and of(lease.draining, drain) and lease.merge is Merge.NONE
     if not ready or lease.draft or lease.running:
@@ -1635,12 +1327,10 @@ def _land(lease: Lease, drain: Drain, _: Step) -> Lease | None:
 
 
 def _merges(lease: Lease, _: Drain, __: Step) -> Lease | None:
-    """``merge.py`` judges, checks and lands the merge: it reads no note, so a hold does not stop it."""  # noqa: E501
     return lease._replace(merge=Merge.UNSAID) if lease.merge is Merge.NONE else None
 
 
 def _land_rest(lease: Lease, _: Drain, __: Step) -> Lease | None:
-    """``land``'s close: ``settle`` on a merge no note says; nothing on one another command recorded."""  # noqa: E501
     if lease.merge is Merge.NONE:
         return None
     done = merge_recorded(lease) if lease.merge is Merge.UNSAID else lease
@@ -1648,43 +1338,28 @@ def _land_rest(lease: Lease, _: Drain, __: Step) -> Lease | None:
 
 
 def _orphaned(lease: Lease, drain: Drain, _: Step) -> Lease | None:
-    """A kill of ``land`` alone once its ``merge.py`` probed it: the landing lock goes, the merge lock stays.
-
-    A bound: one such ``merge.py`` at a time.
-    """  # noqa: E501
     if lease.merge is not Merge.NONE or lease.orphan is not None:
         return None
     return lease._replace(landing=None, orphan=drain)
 
 
 def _killed_at_start(lease: Lease, _: Drain, __: Step) -> Lease | None:
-    """A kill of ``land`` alone before its ``merge.py`` probed it: no lock is held, and the merge is doomed.
-
-    A bound: one such ``merge.py`` at a time.
-    """  # noqa: E501
     if lease.merge is not Merge.NONE or lease.doomed:
         return None
     return lease._replace(landing=None, doomed=True)
 
 
 def _locked_out(lease: Lease, _: Drain, __: Step) -> Lease | None:
-    """``land``'s ``merge.py`` gives up on the merge lock a doomed merge holds past its tries.
-
-    It merges nothing and exits 2, so ``land`` closes nothing; the doomed merge then probes and
-    stops. The instant it holds the lock is folded into this step.
-    """
     if not lease.doomed or lease.merge is not Merge.NONE:
         return None
     return lease._replace(landing=None, doomed=False)
 
 
 def _orphan_merges(lease: Lease) -> Lease | None:
-    """The ``merge.py`` of a killed ``land`` lands the merge and exits: it reads no note, and no ``land`` closes it."""  # noqa: E501
     return lease._replace(merge=Merge.UNSAID, orphan=None) if lease.merge is Merge.NONE else None
 
 
 def _orphan_ends(lease: Lease) -> Lease:
-    """The ``merge.py`` of a killed ``land`` is killed before it lands, and its lock with it."""
     return lease._replace(orphan=None)
 
 
@@ -1695,44 +1370,31 @@ ORPHAN_STEPS: dict[Step, Callable[[Lease], Lease | None]] = {
 
 
 def _doomed_stops(lease: Lease) -> Lease | None:
-    """The doomed ``merge.py`` takes the merge lock, finds its ``land``'s private lock free, and stops."""  # noqa: E501
     return lease._replace(doomed=False) if lease.doomed else None
 
 
 def _land_killed(lease: Lease, _: Drain, __: Step) -> Lease | None:
-    """A kill of ``land`` once its merge has landed: the merge stays, and no note says it."""
     return lease._replace(landing=None) if lease.merge is not Merge.NONE else None
 
 
 def _merge_killed(lease: Lease, _: Drain, __: Step) -> Lease | None:
-    """A kill of ``land`` and its ``merge.py`` together before the merge, as a timeout ends both."""
     return lease._replace(landing=None) if lease.merge is Merge.NONE else None
 
 
 def _open_tree(lease: Lease, drain: Drain, _: Step) -> Lease | None:
     if landing_seen(lease) is not None:
-        # Why: the plan calls the ticket of a live landing built, held or resolved, and ``open``
-        # starts only a buildable one.
         return lease
     ready = lease.holder is drain and of(lease.draining, drain) and lease.tree is None
     if not ready or lease.merge is not Merge.NONE:
         return None
-    # Why: the plan calls a branch with commits and no tree built, and ``open`` refuses it.
     return lease if lease.built else lease._replace(tree=drain)
 
 
 def in_flight(lease: Lease) -> bool:
-    """Whether a landing is alive, or a doomed merge still starting: where ``update`` and ``close`` are taken."""  # noqa: E501
     return landing_alive(lease) is not None or lease.doomed
 
 
 def _update_in_flight(lease: Lease, _: Drain, __: Step) -> Lease | None:
-    """``update`` while a landing of the ticket is alive: it changes nothing.
-
-    ``drain.act_on`` refuses it while it sees the landing. Unseen, it finds a branch that holds the
-    default tip, which only a merge moves here, and rebases nothing; a merge landed is recorded.
-    A bound: the step is taken only while a landing is alive or a doomed merge starts.
-    """
     if not in_flight(lease):
         return None
     if landing_seen(lease) is None and lease.merge is Merge.UNSAID:
@@ -1741,12 +1403,6 @@ def _update_in_flight(lease: Lease, _: Drain, __: Step) -> Lease | None:
 
 
 def _park_in_flight(lease: Lease, _: Drain, __: Step) -> Lease | None:
-    """``close --outcome parked`` while a landing of the ticket is alive.
-
-    ``drain.act_on`` refuses it while it sees the landing. Unseen, ``close`` records a merge no
-    note says and refuses, refuses one a note says, and otherwise holds the ticket and discards
-    its tree. A bound: the step is taken only while a landing is alive or a doomed merge starts.
-    """
     if not in_flight(lease):
         return None
     if landing_seen(lease) is not None:
@@ -1800,8 +1456,6 @@ BY_A_DRAIN: dict[Step, DrainAct] = {
     Step.STOP: _stop,
     Step.DIE: _die,
 }
-# Why: a drain inside ``land`` takes the land's own steps, a kill of it, or its death; and the
-# ticket's commands, which its agent types when its shell gave up waiting on the land.
 INSIDE_LAND: dict[Step, DrainAct] = {
     Step.OPEN: _open_tree,
     Step.UPDATE: _update_in_flight,
@@ -1848,7 +1502,6 @@ LeaseEdge = tuple[Lease, str, Lease]
 
 
 def lease_moves(lease: Lease) -> list[tuple[str, Lease]]:
-    """Every step open to the two drains, their agents and the program in ``lease``."""
     if lease.shared is None:
         return [
             (Step.SEPARATE.value, lease._replace(shared=False)),
@@ -1874,10 +1527,8 @@ def lease_moves(lease: Lease) -> list[tuple[str, Lease]]:
 LEASE_STEPS = {f"{drain.value}: {step.value}": (drain, step) for drain in Drain for step in Step}
 
 
-# Why: the rule search, the tour and the exports each read it; a process builds it once.
 @functools.cache
 def lease_graph() -> tuple[frozenset[Lease], list[LeaseEdge]]:
-    """Every lease state reachable from ``LEASE_INITIAL`` and every step, breadth first."""
     seen = {LEASE_INITIAL}
     frontier = deque([LEASE_INITIAL])
     edges: list[LeaseEdge] = []
@@ -1892,7 +1543,6 @@ def lease_graph() -> tuple[frozenset[Lease], list[LeaseEdge]]:
 
 
 def taken_from(before: Lease, said: str, after: Lease) -> Drain | None:
-    """The live, draining drain whose tree another drain's ``clean --all`` took in this step."""
     drain, step = LEASE_STEPS.get(said, (None, None))
     owner = before.tree
     if step not in {Step.CLEAN_ALL, Step.RESUME} or owner is None or owner is drain:
@@ -1915,7 +1565,6 @@ def spares_the_told(before: Lease, said: str, after: Lease) -> bool:
 
 
 def refused_by(before: Lease, said: str, after: Lease) -> Drain | None:
-    """The lease's holder, when this step is a ``clean --all`` the lease refused."""
     drain, step = LEASE_STEPS.get(said, (None, None))
     if step not in {Step.CLEAN_ALL, Step.RESUME} or after.holder is drain:
         return None
@@ -1951,12 +1600,6 @@ def printed_once(before: Lease, said: str, after: Lease) -> bool:
     return after.merge is not Merge.PRINTED or step in REPORTS
 
 
-# Why: in 9f and 9h a landing is alive while its `land` runs or a `merge.py` it started can still
-# land, as `landing_alive` says, and not only while `drain.landing_running` sees it. What a
-# command does to the ticket while such a merge runs is done under a merge in flight. A merge
-# whose `land` died before its probe can land nothing, so it keeps no landing alive.
-
-
 def spares_the_landing(before: Lease, said: str, after: Lease) -> bool:
     """No drain discards the work tree of a landing another live drain is still running, not even on ``--take-over``."""  # noqa: E501
     drain, _ = LEASE_STEPS.get(said, (None, None))
@@ -1975,7 +1618,6 @@ def keeps_the_record(before: Lease, said: str, after: Lease) -> bool:
 
 
 def note_of(lease: Lease) -> tuple[Merge | None, bool]:
-    """What the ticket's note says: the merge it records, printed or not, and whether it holds."""
     return (lease.merge if lease.merge in {Merge.SAID, Merge.PRINTED} else None), lease.held
 
 
@@ -2033,7 +1675,6 @@ LEASE_RULES: dict[str, Callable[[Lease, str, Lease], bool]] = {
         leaves_the_landing_alone
     ),
     "9i. a ticket whose note holds it is not merged by the drain": hold_not_merged,
-    # Why: 9j and 9k are one rule read both ways: a landing is seen exactly while it is alive.
     "9j. a landing is seen until its land and every merge of it that can still land have ended": (
         seen_while_alive
     ),
@@ -2047,9 +1688,6 @@ LEASE_RULES: dict[str, Callable[[Lease, str, Lease], bool]] = {
         one_merge_can_land
     ),
 }
-
-
-# --- the expiry of a unit: ADR 0064 --------------------------------------------------------------
 
 
 SIBLINGS = (Name.A, Name.C)
@@ -2371,12 +2009,7 @@ EXPIRY_RULES: dict[str, Callable[[Expiry, str, Expiry], bool]] = {
 }
 
 
-# --- the export: the graphs as TLA+ modules, for a model checker and the charts ------------------
-
-
 class Run(NamedTuple):
-    """States from a start, the start first, and the steps between them, as ``model_tla`` reads."""
-
     states: tuple[object, ...]
     edges: list[tuple[object, str, object]]
 
@@ -2385,12 +2018,6 @@ def run(
     taken: Callable[[Action], bool],
     keep: Callable[[State, Action], bool] = lambda _state, _action: True,
 ) -> Run:
-    """The part of ``graph()`` its start reaches by the actions ``taken`` keeps, breadth first.
-
-    Only the steps ``keep`` keeps where they start, as the guard's gate with ``guarded``. Each
-    of its states and steps is one of ``graph()``, so a rule breaks on a step of it exactly where
-    it breaks on that step of the graph.
-    """
     seen = {INITIAL: INITIAL}
     frontier = deque([INITIAL])
     edges: list[tuple[object, str, object]] = []
@@ -2408,7 +2035,6 @@ def run(
 
 
 def landing_run() -> Run:
-    """Every step but those on ``c``, a role's commit, a check without ``--final`` or that cannot read, the ``Flag:`` line and the steps no run takes, each commit through the guard: ``a`` built, checked, judged, landed or parked, ``b`` waiting on it."""  # noqa: E501
     return run(
         lambda action: action.ticket is not Name.C and action.kind not in TICKET_LIFE | UNRUN,
         guarded,
@@ -2431,15 +2057,6 @@ UNSPLIT = (Name.A, Name.B, Name.C)
 
 
 def life_run(*, gate: bool) -> Run:
-    """Every step but those on ``c``, the kills and a split: a ticket's life as the drain's commands, the publish check, the agent, a role, an upgrade and the owner lead it.
-
-    With ``gate`` each commit goes through the guard, so a role never commits; without it the
-    agent may commit before the check, and a role before its run's check.
-
-    Why the upgrade only where no branch's tip matters: an upgrade under ``a``'s open tree leaves
-    its branch behind, and the run would pass the 500 states the statechart tool draws whole. Only
-    the search in the tests takes the upgrade there.
-    """  # noqa: E501
     return run(
         lambda action: action.ticket is not Name.C and action.kind not in KILLS.keys() | UNRUN,
         lambda state, action: (
@@ -2450,7 +2067,6 @@ def life_run(*, gate: bool) -> Run:
 
 
 def work_run() -> Run:
-    """The steps on ``c`` and on the queue, and ``a`` parked, which lets the cap start ``c``."""
     return run(
         lambda action: (
             (action.ticket in {Name.C, None} and action.kind is not Kind.UPGRADE)
@@ -2460,7 +2076,6 @@ def work_run() -> Run:
 
 
 def plan_word(state: State, name: Name) -> str:
-    """What ``drain.plan`` calls the ticket; ``resolved`` when it is not in the plan."""
     status = classify(state).get(name)
     return "resolved" if status is None else status.value
 
@@ -2489,7 +2104,6 @@ TICKET_FACTS: dict[str, Callable[[Ticket], object]] = {
 
 
 def state_facts(names: tuple[Name, ...]) -> dict[str, Callable[[State], object]]:
-    """The variables of a module of the main graph: the plan's word and the facts of each ticket."""
     facts: dict[str, Callable[[State], object]] = {}
     for name in names:
         letter = name.value.upper()
@@ -2505,7 +2119,6 @@ def state_facts(names: tuple[Name, ...]) -> dict[str, Callable[[State], object]]
 
 
 def rule_name(name: str) -> str:
-    """A rule's name in a module, by its number: ``Rule6a``."""
     return model_tla.identifier(f"Rule {name.partition('.')[0]}")
 
 
@@ -2554,7 +2167,6 @@ SHOWN_LANDING = ("statusA", *(f"{fact}A" for fact in TICKET_FACTS))
 
 
 def holder_is(lease: Lease) -> str:
-    """Whether the lease's holder drains, has stopped with its session open, or is gone."""
     if lease.holder is None:
         return "none"
     if of(lease.draining, lease.holder):
@@ -2562,9 +2174,6 @@ def holder_is(lease: Lease) -> str:
     return "stopped" if of(lease.alive, lease.holder) else "gone"
 
 
-# Why: the statechart tool draws a whole chart only of a module of at most 500 states. No chart
-# reads the tree, the program, the agent's commits or the hold, and the chart of the lease reads
-# only its holder's session, so the other drain's session and whether it drains are dropped.
 SHOWN_LEASE: dict[str, Callable[[Lease], object]] = {
     "processes": LEASE_FACTS["processes"],
     "holder": LEASE_FACTS["holder"],
@@ -2636,7 +2245,6 @@ def spoken(rules: Mapping[str, Callable[[Any, str, Any], bool]]) -> dict[str, mo
 def seen_through(
     name: str, graph: Run, shown: Mapping[str, Callable[[Any], object]], *, deadlock: bool = True
 ) -> model_tla.Export:
-    """The summary of ``graph`` whose states are the values of the facts ``shown``."""
     summary = model_tla.summary(
         graph, lambda state: tuple(fact(state) for fact in shown.values()), model_tla.identifier
     )
@@ -2651,13 +2259,6 @@ def seen_through(
 
 
 def exports() -> tuple[model_tla.Export, ...]:
-    """The modules ``docs/model/drain.md`` was checked and drawn from.
-
-    TLC checks the rules on the landing run, the work run, the life run with the guard's gate and
-    without it, the whole lease graph and the whole expiry graph; the search in the tests proves
-    them on the whole main graph, gated and not. The charts are drawn from those six, and from
-    summaries of the gated life run, the lease graph and the expiry graph.
-    """
     landing, life, lease = landing_run(), life_run(gate=False), lease_run()
     gated, expiry = life_run(gate=True), expiry_run()
     facts = state_facts(UNSPLIT)

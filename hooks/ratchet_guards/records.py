@@ -1,32 +1,3 @@
-"""What a change adds to a record, when adding is all it does (ADR 0014).
-
-A guard group marked ``edit = "append"`` holds records an agent may add to and only the owner
-changes: the glossary and the decision records. ``additions`` is the one judge of "is this
-change an addition". The hook calls it on an Edit, Write or MultiEdit, with the file the call
-would leave; ``guard-diff`` calls it on the work tree. Both compare against the merge base with
-the default branch, read by ``before``, so they cannot disagree.
-
-A glossary (``GLOSSARY.md``, in domain-modeling's format) changes additively when everything the
-merge base holds is still there, in the same order and under the same heading: every term with
-the lines that define it, every item of its ``_Avoid_`` list, every heading and every line
-outside the entries. What may come in is a term, an ``_Avoid_`` item, and a heading of level
-three or deeper. A decision record (``docs/adr/NNNN-<slug>.md``) is an addition when the file is
-new, its number is above every number the merge base holds, it has a title, it carries no
-``Relaxes:`` line (``scripts/lowered.py`` would read one as leave to loosen a ratchet) and it
-does not speak of superseding.
-
-Anything else raises ``NotAdditiveError`` with the reason, and so does anything this module
-cannot read: a path that is neither kind of record, a line break other than a newline, an
-indented term, ``_Avoid_`` line or heading, a term defined twice. The check reads shape, never
-meaning: a new term can restate an old concept and a new record can contradict an old one. The
-listing shows both to the owner; no gate catches either.
-
-New glossary text is also refused when a reader of the rendered page would take it for
-something the listing does not show (ADR 0024): a term that mixes Latin, Cyrillic and Greek
-letters or whose ``skeleton`` is another term's, a line inside a new entry that renders as a
-term of its own or as the underline of a heading, and raw HTML.
-"""
-
 import re
 import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -46,47 +17,31 @@ _HEADING = re.compile(r"^(#{1,6})\s+\S")
 _TERM = re.compile(r"^\*\*([^*]+?)(?::\*\*|\*\*\s*:)\s*(.*)$")
 _AVOID = re.compile(r"^_Avoid_:(.*)$")
 _CLUSTER_LEVEL = 3
-# Why: a fence or a comment opened in one new entry and closed in another hides the entries
-# between them from a reader of the rendered page, while every line parser still reads them.
 _HIDES = ("```", "~~~", "<!--", "-->")
-# Why: `<style>`, `<details>` and `<textarea>` hide or restyle every entry up to their closing
-# tag, and a tag need not close on the line that opens it. `a < b` is not one.
 _TAG = re.compile(r"<[A-Za-z/!?]")
-# Why: a line under a paragraph made only of `=` or `-` turns that paragraph into a heading.
 _UNDERLINE = re.compile(r"^\s*(?:=+|-+)\s*$")
-# Why: `***Order***:`, `__Order__:` and `*Order*:` render as a term line and are none to `_TERM`.
 _TERMLIKE = re.compile(r"^\s*[*_]{1,3}[^*_]+?(?:[*_]{1,3}\s*:|:\s*[*_]{1,3})")
 _SCRIPTS = ("LATIN", "CYRILLIC", "GREEK")
-# Why: NFKC merges the compatibility forms of one letter and leaves apart two letters of
-# different scripts that are drawn alike, so `fold` reads the Cyrillic capital O and the Latin
-# one as two terms.
 _LOOKALIKES = str.maketrans(
     "АВЕЅІЈКМНОРСТУХԚԜаеѕіјкорсухԁԛԝһӏΑΒΕΖΗΙΚΜΝΟΡΤΥΧαικνορυϲϳ",
     "ABESIJKMHOPCTYXQWaesijkopcyxdqwhlABEZHIKMNOPTYXaikvopucj",
 )
-# Why: `scripts/lowered.py` matches `Relaxes:` at the start of a line; refusing it anywhere,
-# in any case, is a superset that no line-splitting rule can get around.
 _RELAXES = "relaxes:"
 _SUPERSEDES = ("supersed", "superced")
 
 Git = Callable[[Sequence[str]], str | None]
 
 
-class NotAdditiveError(ValueError):
-    """The change does more than add to a record, or cannot be read; the message says what."""
+class NotAdditiveError(ValueError): ...
 
 
 @dataclass(frozen=True, slots=True)
 class Before:
-    """A record as the merge base has it: its text, and the file names in its directory."""
-
     text: str | None
     siblings: tuple[str, ...] = ()
 
 
 class Kind(Enum):
-    """What one outline item of a glossary is."""
-
     HEADING = "heading"
     LOOSE = "text outside the entries"
     ENTRY = "term"
@@ -94,8 +49,6 @@ class Kind(Enum):
 
 @dataclass(frozen=True, slots=True)
 class Item:
-    """One heading, loose line or entry, with the heading it sits under."""
-
     kind: Kind
     text: str
     under: str
@@ -103,8 +56,6 @@ class Item:
 
 @dataclass(frozen=True, slots=True)
 class Entry:
-    """A term: the lines that define it (its own line first) and its ``_Avoid_`` items."""
-
     term: str
     lines: tuple[str, ...]
     avoid: tuple[str, ...]
@@ -112,16 +63,12 @@ class Entry:
 
 @dataclass(frozen=True, slots=True)
 class Glossary:
-    """A glossary as an outline in file order, and its entries by term."""
-
     outline: tuple[Item, ...]
     entries: Mapping[str, Entry]
 
 
 @dataclass(slots=True)
 class _Reader:
-    """Builds a ``Glossary`` one line at a time."""
-
     outline: list[Item] = field(default_factory=list)
     entries: dict[str, Entry] = field(default_factory=dict)
     folded: set[str] = field(default_factory=set)
@@ -131,7 +78,6 @@ class _Reader:
     avoid: list[str] = field(default_factory=list)
 
     def close(self) -> None:
-        """End the open entry, if there is one."""
         if self.term is None:
             return
         while self.lines[-1] == "":
@@ -141,13 +87,11 @@ class _Reader:
         self.term = None
 
     def heading(self, line: str) -> None:
-        """A heading ends the open entry and is what later items sit under."""
         self.close()
         self.outline.append(Item(Kind.HEADING, line, ""))
         self.under = line
 
     def open(self, term: str, line: str) -> None:
-        """A term line ends the open entry and starts the next."""
         self.close()
         key = fold(term)
         if key in self.folded:
@@ -157,7 +101,6 @@ class _Reader:
         self.term, self.lines, self.avoid = term, [line], []
 
     def body(self, line: str) -> None:
-        """A line that is neither heading nor term: part of the open entry, or loose."""
         avoid = _AVOID.match(line)
         if self.term is None:
             if line:
@@ -169,31 +112,22 @@ class _Reader:
 
 
 def fold(name: str) -> str:
-    """A term or ``_Avoid_`` item as a reader takes it: case, spacing and format marks aside."""
     visible = "".join(c for c in name if unicodedata.category(c) != "Cf")
     return " ".join(unicodedata.normalize("NFKC", visible).casefold().strip("`*_ ").split())
 
 
 def skeleton(name: str) -> str:
-    """``fold``, with accents dropped and a look-alike of another script read as the Latin letter.
-
-    It covers the Cyrillic and Greek letters drawn like a Latin letter in most typefaces, and
-    combining marks. It does not cover look-alikes within one script (``l``, ``I`` and ``1``;
-    ``O`` and ``0``; ``rn`` and ``m``), other scripts, or letters only some typefaces draw alike.
-    """
     apart = unicodedata.normalize("NFKD", name)
     bare = "".join(c for c in apart if not unicodedata.combining(c))
     return fold(bare.translate(_LOOKALIKES))
 
 
 def _scripts(name: str) -> list[str]:
-    """Which of Latin, Cyrillic and Greek the letters of ``name`` come from."""
     letters = [unicodedata.name(c, "") for c in unicodedata.normalize("NFKC", name) if c.isalpha()]
     return [script for script in _SCRIPTS if any(script in letter.split() for letter in letters)]
 
 
 def glossary(text: str) -> Glossary:
-    """Parse a glossary; raise ``NotAdditiveError`` on what cannot be read without guessing."""
     reader = _Reader()
     for number, raw in enumerate(text.split("\n"), start=1):
         line = raw.rstrip()
@@ -216,7 +150,6 @@ def glossary(text: str) -> Glossary:
 
 
 def _added(before: Sequence[Item], after: Sequence[Item]) -> list[Item]:
-    """What ``after`` holds beyond ``before``; raise unless ``before`` runs through it in order."""
     added: list[Item] = []
     kept = 0
     for item in after:
@@ -232,7 +165,6 @@ def _added(before: Sequence[Item], after: Sequence[Item]) -> list[Item]:
 
 
 def _hidden(lines: Iterable[str]) -> str | None:
-    """What in new ``lines`` a reader of the rendered page would not see as written, if anything."""
     for line in lines:
         if any(mark in line for mark in _HIDES):
             return "a code fence or an HTML comment"
@@ -242,7 +174,6 @@ def _hidden(lines: Iterable[str]) -> str | None:
 
 
 def _misread(lines: Iterable[str]) -> str | None:
-    """What the lines under a new term's own would render as beyond its definition, if anything."""
     for line in lines:
         if _UNDERLINE.match(line):
             return f"the underline of a heading: {line!r}"
@@ -252,7 +183,6 @@ def _misread(lines: Iterable[str]) -> str | None:
 
 
 def _new_term(entry: Entry, new: Glossary) -> None:
-    """Raise when a new term reads as something other than the term the listing will show."""
     scripts = _scripts(entry.term)
     if len(scripts) > 1:
         mixed = " and ".join(script.title() for script in scripts)
@@ -272,7 +202,6 @@ def _new_term(entry: Entry, new: Glossary) -> None:
 
 
 def _new_item(item: Item, new: Glossary) -> str | None:
-    """What an added item adds, ``None`` for a cluster heading; raise if it may not come in."""
     if item.kind is Kind.LOOSE:
         msg = f"it adds text outside any term's entry: {item.text!r}"
         raise NotAdditiveError(msg)
@@ -292,7 +221,6 @@ def _new_item(item: Item, new: Glossary) -> str | None:
 
 
 def _no_term_avoided(term: str, items: Iterable[str], new: Glossary) -> None:
-    """Raise when a new ``_Avoid_`` item bans a term the glossary defines."""
     terms = {skeleton(name): name for name in new.entries}
     for item in items:
         if skeleton(item) in terms:
@@ -301,7 +229,6 @@ def _no_term_avoided(term: str, items: Iterable[str], new: Glossary) -> None:
 
 
 def _kept_entry(was: Entry, new: Glossary) -> str | None:
-    """The ``_Avoid_`` items an existing term gained; raise if its lines or its list changed."""
     now = new.entries[was.term]
     if now.lines != was.lines:
         msg = f"it changes the definition of {was.term}"
@@ -362,11 +289,6 @@ def _adr_additions(name: str, before: Before, after: str) -> list[str]:
 
 
 def additions(path: str, before: Before, after: str | None) -> list[str]:
-    """What the change of ``path`` adds, when adding is all it does.
-
-    ``before`` is the merge base's copy and ``after`` the text the change leaves (``None`` for a
-    deleted file). Raises ``NotAdditiveError`` with the reason otherwise.
-    """
     record = PurePosixPath(path)
     if after is None:
         msg = "it is deleted"
@@ -380,7 +302,6 @@ def additions(path: str, before: Before, after: str | None) -> list[str]:
 
 
 def note(path: str, before: Before | None, after: str | None) -> str:
-    """The line ``guard-diff`` prints under a record: ``additions:`` or ``not additive:``."""
     if before is None:
         return f"{NOT_ADDITIVE} the merge base cannot be read"
     try:
@@ -391,10 +312,6 @@ def note(path: str, before: Before | None, after: str | None) -> str:
 
 
 def before(git: Git, merge_base: str, path: str) -> Before | None:
-    """``path`` as ``merge_base`` has it, or ``None`` when git cannot read that commit.
-
-    ``git`` runs one git command in the checkout and returns its stdout unstripped.
-    """
     directory = PurePosixPath(path).parent.as_posix()
     where = [] if directory == "." else [f"{directory}/"]
     listing = git(["ls-tree", "--full-tree", "-z", "--name-only", merge_base, *where])
@@ -408,7 +325,6 @@ def before(git: Git, merge_base: str, path: str) -> Before | None:
 
 
 def _replaced(text: str, edit: object) -> str | None:
-    """``text`` after one Edit as Claude Code applies it, or ``None`` when it would not apply."""
     if not isinstance(edit, Mapping):
         return None
     old, new, every = edit.get("old_string"), edit.get("new_string"), edit.get("replace_all", False)
@@ -422,11 +338,6 @@ def _replaced(text: str, edit: object) -> str | None:
 
 
 def written(tool: str, tool_input: Mapping[str, object], existing: str | None) -> str | None:
-    """The text the file holds once the call has run, or ``None`` when that cannot be told.
-
-    Only Claude Code's Edit, Write and MultiEdit are simulated, and only from an input of the
-    documented shape: any other tool, key or type is unknown, and unknown asks.
-    """
     if tool not in SIMULATED_TOOLS:
         return None
     if tool == "Write":

@@ -1,5 +1,3 @@
-"""The agent-ready status on a local ticket: an agent that writes it asks the owner."""
-
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -309,7 +307,6 @@ TEE = "echo 'Status: agent:ready' | tee"
         (f"{READY} /tmp/t/issues/01.md; cp -r /tmp/t .scratch/g", "g/ gets"),
         (f"{READY} /tmp/s/g/issues/01.md; mv /tmp/s .scratch", ".scratch/, s/ get"),
         (f"cd .scratch/f && {READY}> issues/04-d.md", "04-d.md gets"),
-        # Why: brace expansion, a variable or a substitution may spell any part of the path.
         (f"{TEE} .scratch/f/{{issues,none}}/04-d.md", "04-d.md gets"),
         (f"{TEE} .scratch/f/issues/04-d.{{md,txt}}", "04-d.{md,txt} gets"),
         (f"{TEE} .scratch/f/$D/04-d.md", "04-d.md gets"),
@@ -324,8 +321,6 @@ def test_every_other_way_to_write_a_ticket_with_the_status_asks(command: str, na
 
 @dataclass
 class LinkedFilesystem(FakeFilesystem):
-    """``/repo/t`` is a link to the tickets of feature ``f``."""
-
     def canonical(self, path: Path) -> Path:
         here = super().canonical(path)
         link = Path("/repo/t")

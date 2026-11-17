@@ -1,5 +1,3 @@
-"""The conformance gate: green on the pristine templates, and one red line for each fault."""
-
 import atexit
 import functools
 import os
@@ -35,7 +33,6 @@ DISPUTE = (
 
 @functools.cache
 def pristine() -> Path:
-    """What adopt leaves: the init and adopt templates with every placeholder filled, once."""
     scratch = Path(tempfile.mkdtemp(prefix="ratchet-conformance-"))
     atexit.register(shutil.rmtree, scratch, ignore_errors=True)
     directory = scratch / "pristine"
@@ -91,7 +88,6 @@ def red(root: Path) -> list[str]:
 
 
 def start(finding: conformance.Finding) -> tuple[str, ...]:
-    """The template text an agent starts from, for a finding an agent fixes."""
     assert isinstance(finding.fix, conformance.Agent), finding
     return finding.fix.start
 
@@ -472,7 +468,7 @@ def test_the_template_caps_the_gates_by_the_environment_then_git_then_every_core
     (tmp_path / JUSTFILE).write_text(TEMPLATE_JUSTFILE, encoding="utf-8")
     shell = {k: v for k, v in os.environ.items() if k != "RATCHET_JOBS"}
     shell |= {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull, **environment}
-    result = subprocess.run(  # -- a fixed argv, no shell
+    result = subprocess.run(
         ["just", "--evaluate", "jobs"],  # noqa: S607 # -- just is resolved from PATH on purpose
         cwd=tmp_path,
         env=shell,
@@ -622,8 +618,6 @@ def without_variable(repo: Path, name: str) -> None:
 def test_a_tier_list_a_workflow_reads_and_the_justfile_lacks_is_named_with_the_template_s(
     repo: Path, name: str, workflow: str
 ) -> None:
-    # Why: observed on a forge, 2026-11-12: an 0.9 adoption's `shape` job failed with "does not
-    # contain variable", and nothing in the upgrade had named the list.
     without_variable(repo, name)
     found = conformance.findings(repo)
     assert len(found) == 1, found
@@ -674,7 +668,6 @@ GATES = "## Gates"
 
 
 def waiting(root: Path, question: str, trigger: str) -> None:
-    """Rebind a Gates row to ``later: <trigger>``, whatever its Tool cell said."""
     path = root / BINDING
     text = path.read_text(encoding="utf-8")
     cell = rf"^(\| {re.escape(question)} \|)[^|]*\|"
@@ -684,8 +677,6 @@ def waiting(root: Path, question: str, trigger: str) -> None:
 
 
 def test_a_row_may_wait_for_its_trigger_and_needs_no_bite_until_it_is_bound(repo: Path) -> None:
-    # Why: ADR 0028. The pristine binding bound `rolls back safely` to `later:` and planted no
-    # bite for it; binding it to a tool without one is red.
     assert LATER in (repo / BINDING).read_text(encoding="utf-8")
     assert red(repo) == []
     replace(BINDING, LATER, "| rolls back safely | a tool |")(repo)
@@ -790,8 +781,6 @@ def test_the_triggers_table_needs_a_row_per_kind_a_question_of_the_types_names(
 ) -> None:
     assert "| scheduled-work |" in (repo / BINDING).read_text(encoding="utf-8")
     assert red(repo) == []
-    # Why: ADR 0052. A command line tool is asked no question about listeners, yet its first
-    # listener reopens the architecture, so its table still has to find one.
     listener = "| listener | none: the self-test has none | |\n"
     replace(BINDING, listener, "")(repo)
     [line] = red(repo)
@@ -1583,6 +1572,16 @@ def test_a_file_the_methods_own_kinds_match_needs_no_row(repo: Path) -> None:
     write("docs/features/slug/spec.md", "# Spec\n")(repo)
     assert not any(".scratch/slug/spec.md" in line for line in red(repo))
     assert not any("docs/features/slug/spec.md" in line for line in red(repo))
+
+
+def test_a_no_forge_change_description_is_a_markdown_file_of_a_kind(repo: Path) -> None:
+    git(repo, "init", "-q")
+    replace(BINDING, DOCUMENTS_ROW, "| pages | `docs/pages/*.md` | `never` |")(repo)
+    write(".scratch/changes/feature-4-thing.md", "# Thing\n\n## Why\n\nA reason.\n")(repo)
+    write(".scratch/stray.md", "# Stray\n")(repo)
+    lines = red(repo)
+    assert no_kind(".scratch/stray.md") in lines
+    assert no_kind(".scratch/changes/feature-4-thing.md") not in lines
 
 
 def test_a_pass_row_keeping_a_heading_its_files_lack_is_not_a_finding(repo: Path) -> None:

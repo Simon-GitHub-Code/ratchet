@@ -1,5 +1,3 @@
-"""The debugging-pipe driver, against a stand-in browser on a real pipe; see ``browsers.py``."""
-
 import re
 import tempfile
 from pathlib import Path
@@ -46,19 +44,20 @@ def test_a_script_that_throws_is_the_pages_error_not_the_browsers(
         page.evaluate(expression)
 
 
+ONLY_THE_STUCK_PAGE_WAITS_SHORT = 0.5
+
+
 @pytest.mark.parametrize(
     ("url", "said", "answer"),
     [
         ("http://unreachable/", "did not open: net::ERR_NAME_NOT_RESOLVED", cdp.ANSWER),
-        ("http://stuck/", "did not finish loading within 0.5s", 0.5),
+        ("http://stuck/", "did not finish loading within 0.5s", ONLY_THE_STUCK_PAGE_WAITS_SHORT),
         ("http://crash/", "the browser closed while it was asked Page.loadEventFired", cdp.ANSWER),
     ],
 )
 def test_a_page_that_does_not_open_is_a_browser_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, url: str, said: str, answer: float
 ) -> None:
-    # Why: only the page that never loads is about the wait running out; the others must be seen
-    # before it does, which a short wait does not allow on a busy machine.
     browsers.fake(tmp_path, monkeypatch)
     with tab(tmp_path) as page:  # type: ignore[attr-defined]
         monkeypatch.setattr(cdp, "ANSWER", answer)
@@ -129,8 +128,6 @@ def test_the_browser_keeps_its_temporary_files_in_a_short_directory_that_is_remo
     long = tmp_path / ("a-long-name" * 12)
     long.mkdir()
     monkeypatch.setenv("TMPDIR", str(long))
-    # Why: Python reads TMPDIR once and keeps it; this makes it read the long one, as a process
-    # started under it would.
     monkeypatch.setattr(tempfile, "tempdir", None)
     with tab(tmp_path):
         used = Path((tmp_path / "profile" / "tmpdir").read_text(encoding="utf-8"))
@@ -165,3 +162,9 @@ def test_the_browser_is_the_one_named_or_the_first_usual_name_on_the_path(
 
 def test_the_pipe_ends_the_browser_is_given_are_above_the_descriptors_it_maps_them_to() -> None:
     assert cdp.HIGH_FD > 4
+
+
+def test_a_browser_without_its_sandbox_reaches_no_host_but_the_loopback() -> None:
+    assert "--no-sandbox" not in cdp.FLAGS or (
+        "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1" in cdp.FLAGS
+    ), "a browser run with --no-sandbox must resolve no host but the loopback"
