@@ -1366,3 +1366,46 @@ def test_a_switch_past_its_removal_date_is_named_beside_the_step(
     also = [x for x in capsys.readouterr().out.splitlines() if x.startswith("also:")]
     assert len(also) == 1
     assert "old-checkout" in also[0]
+
+
+def test_a_spec_whose_tickets_exist_is_not_split_again(tmp_path: Path) -> None:
+    spec = ".scratch/settle/spec.md"
+    waiting = ".scratch/settle/issues/01-a.md"
+    files = {**ADOPTED, spec: "# Settle\n", waiting: "# 01: A\n\nStatus: needs-info\n"}
+    root = repository(tmp_path, files)
+    step = route.decide(root, None)
+    assert spec not in step.command
+    assert step.command == route.SPEC
+
+
+def test_a_ticket_text_the_note_recorded_after_the_run_forked_does_not_release_it(
+    tmp_path: Path,
+) -> None:
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST, HELD: HELD_TEXT})
+    blocked(root)
+    edited = HELD_TEXT + "\nThe owner's wording.\n"
+    write(root, HELD, edited)
+    commit(root, "docs(ticket): reword the ticket")
+    queue_notes.write_note(
+        queue_notes.note_path(root, "feature/2-b"),
+        {
+            "digest": queue_notes.digest(route.preflight.local_ticket(HELD, edited)),
+            "base": queue_notes.tip(root),
+        },
+    )
+    assert route.decide(root, None).stage == "blocked-run"
+
+
+def test_a_blocked_run_of_one_feature_does_not_hold_the_same_number_in_another(
+    tmp_path: Path,
+) -> None:
+    beta = ".scratch/f2/issues/01-beta.md"
+    files = {
+        **ADOPTED,
+        "guards/manifest.toml": MANIFEST,
+        ".scratch/f1/issues/01-alpha.md": "# 01: Alpha\n\nStatus: ready-for-agent" + CONJECTURE,
+        beta: "# 01: Beta\n\nStatus: ready-for-agent" + CONJECTURE,
+    }
+    root = repository(tmp_path, files)
+    blocked(root, "feature/1-alpha")
+    assert route.decide(root, None).command == f"{route.FEATURE} {beta}"

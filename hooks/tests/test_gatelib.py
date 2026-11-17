@@ -3,6 +3,7 @@
 import contextlib
 import errno
 import http.server
+import json
 import os
 import signal
 import socket
@@ -547,3 +548,126 @@ def test_a_child_keeps_the_options_its_parent_was_started_with(
     options = ["-E", "-s", "-B", "-X", "pycache_prefix=/private/cache"]
     assert gatelib.interpreter()[1:] == options
     assert gatelib.interpreter(inline=True)[1:] == [*options, "-P"]
+
+
+def test_a_listing_held_open_reads_a_tree_once_and_one_not_held_reads_each_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = repository(tmp_path)
+    listed: list[Path] = []
+    real = gatelib.git
+
+    def counting(where: Path, *args: str) -> str | None:
+        if args[0] == "ls-files":
+            listed.append(where)
+        return real(where, *args)
+
+    monkeypatch.setattr(gatelib, "git", counting)
+    held = gatelib.listings.set({})
+    try:
+        first = gatelib.tracked_paths(root)
+        write(root, "late.txt", "x\n")
+        assert gatelib.tracked_paths(root) == first
+        assert "late.txt" not in gatelib.tracked_paths(root)
+        assert len(listed) == 1
+    finally:
+        gatelib.listings.reset(held)
+    assert "late.txt" in gatelib.tracked_paths(root)
+    assert len(listed) == 2
+
+
+def test_an_export_holds_what_git_holds_at_the_ref_and_none_of_what_the_work_tree_says(
+    tmp_path: Path,
+) -> None:
+    root = repository(tmp_path / "repo", {"a.txt": "committed\n", "run.sh": "#!/bin/sh\n"})
+    git(root, "update-index", "--chmod=+x", "run.sh")
+    git(
+        root, "update-index", "--add", "--cacheinfo", f"160000,{git(root, 'rev-parse', 'HEAD')},sub"
+    )
+    git(root, "commit", "-q", "-m", "feat(core): an executable and a submodule")
+    ref = git(root, "rev-parse", "HEAD")
+    write(root, "a.txt", "edited and not committed\n")
+    write(root, "untracked.txt", "x\n")
+    target = tmp_path / "copy"
+    before = git(root, "status", "--porcelain")
+    gatelib.export(root, ref, target)
+    assert git(root, "status", "--porcelain") == before
+    assert git(root, "rev-parse", "HEAD") == ref
+    assert (target / "a.txt").read_text(encoding="utf-8") == "committed\n"
+    assert os.access(target / "run.sh", os.X_OK)
+    assert not (target / "sub").exists()
+    assert not (target / "untracked.txt").exists()
+    assert git(target, "ls-files").splitlines() == ["a.txt", "run.sh"]
+
+
+def test_what_a_leader_left_in_its_group_is_ended_after_the_leader_is_reaped(
+    tmp_path: Path,
+) -> None:
+    leader = start(
+        "import subprocess, sys\n"
+        "from pathlib import Path\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        "Path(sys.argv[1], 'child').write_text(str(child.pid))\n",
+        tmp_path,
+    )
+    child = wait_for(tmp_path / "child")
+    leader.wait(timeout=30)
+
+    def running() -> bool:
+        try:
+            return Path(f"/proc/{child}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+        except OSError:
+            return False
+
+    assert running()
+    assert gatelib.end_group(leader.pid)
+    deadline = time.monotonic() + 10
+    while running() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert not running()
+    assert not gatelib.end_group(leader.pid)
+
+
+def test_a_process_whose_program_is_outside_the_tree_is_left_whatever_else_the_listing_holds(
+    tmp_path: Path,
+) -> None:
+    tree, proc = tmp_path / "tree", tmp_path / "proc"
+    inside = start("import time\ntime.sleep(60)\n", tmp_path)
+    outside = start("import time\ntime.sleep(60)\n", tmp_path)
+    try:
+        for process, program in (
+            (inside, tree / "bin" / "service"),
+            (outside, tmp_path / "elsewhere" / "service"),
+        ):
+            entry = proc / str(process.pid)
+            entry.mkdir(parents=True)
+            (entry / "exe").symlink_to(program)
+        assert gatelib.end_running_from(tree, proc) == [inside.pid]
+        assert inside.wait(timeout=5) == -signal.SIGKILL
+        assert outside.poll() is None
+    finally:
+        for process in (inside, outside):
+            process.kill()
+            process.wait()
+
+
+def test_a_stop_marker_is_replaced_whole_so_a_reader_never_sees_half_of_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = tmp_path / "stopping"
+    before = gatelib.Stopping({80: None}, "none", frozenset())
+    after = gatelib.Stopping({80: "shut", 81: None}, "no Linux", frozenset(), answered=True)
+    gatelib.write_stopping(marker, before)
+    write_text = Path.write_text
+    reads: list[str] = []
+
+    def halfway(self: Path, data: str, encoding: str | None = None) -> int:
+        write_text(self, data[: len(data) // 2], encoding=encoding)
+        reads.append(marker.read_text(encoding="utf-8"))
+        return write_text(self, data, encoding=encoding)
+
+    monkeypatch.setattr(Path, "write_text", halfway)
+    gatelib.write_stopping(marker, after)
+    monkeypatch.undo()
+    assert [json.loads(read)["ports"] for read in reads] == [{"80": None}]
+    assert gatelib.read_stopping(marker) == after

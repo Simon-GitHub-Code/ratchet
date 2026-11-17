@@ -5,6 +5,7 @@ drain that cleaned the first, a cap that stopped counting, and runs killed part-
 a real repository, and a kill is a real SIGKILL or the state one leaves.
 """
 
+import contextlib
 import fcntl
 import json
 import os
@@ -460,6 +461,9 @@ def test_a_merged_branch_whose_tree_cannot_be_saved_is_recorded_and_kept(
     assert f"left: {tree}: its branch is merged, and" in out
     assert note(root, BRANCH_A)["outcome"] == "merged"
     assert (tree / "src/draft.py").is_file()
+    reasons = note(root, BRANCH_A)["reasons"]
+    assert isinstance(reasons, list)
+    assert reasons[-1].startswith(f"the work tree stays at {tree}")
 
 
 # --- S3: the cap counts a ticket until its tree is gone ---------------------------------------
@@ -1010,6 +1014,7 @@ def test_a_landing_killed_between_its_note_and_its_discard_is_finished_by_land_a
     killed.communicate(timeout=60)
     assert killed.returncode == -signal.SIGKILL
     assert tree.exists(), "the note comes before the discard, so the tree stands"
+    assert note(root, BRANCH_A)["outcome"] == "merged", "the merge is recorded before the discard"
     capsys.readouterr()
     assert run(root, "land", ALPHA) == 0
     out = capsys.readouterr().out
@@ -1124,6 +1129,9 @@ def test_land_again_finishes_the_discard_of_a_held_landing_and_still_refuses(
     assert not tree.exists(), "the discard is finished before the refusal"
     assert note(root, BRANCH_A)["hold"] is True
     assert "discarding" not in note(root, BRANCH_A)
+    assert note(root, BRANCH_A)["reported"] is False, (
+        "the finished close is still owed to the report"
+    )
 
 
 def test_a_mark_of_a_discard_that_finished_does_not_uncount_the_next_runs_retry(
@@ -1469,7 +1477,9 @@ def test_a_second_land_of_a_ticket_is_refused_while_a_landing_holds_its_lock(
     assert note(root, BRANCH_A).get("outcome") is None
 
 
-def test_a_land_waits_out_a_probe_of_its_landing_lock(tmp_path: Path, capsys: Out) -> None:
+def test_a_land_waits_out_a_probe_of_its_landing_lock(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
     root = project(tmp_path)
     judged(root)
     held, release = threading.Event(), threading.Event()
@@ -1483,7 +1493,15 @@ def test_a_land_waits_out_a_probe_of_its_landing_lock(tmp_path: Path, capsys: Ou
     prober = threading.Thread(target=probe)
     prober.start()
     assert held.wait(timeout=30)
-    threading.Timer(0.1, release.set).start()
+    retrying = drain.merge.locked_retrying
+
+    def retrying_then_release(
+        path: Path, tries: int, poll: float
+    ) -> contextlib.AbstractContextManager[int | None]:
+        threading.Timer(0.1, release.set).start()
+        return retrying(path, tries, poll)
+
+    monkeypatch.setattr(drain.merge, "locked_retrying", retrying_then_release)
     try:
         capsys.readouterr()
         assert run(root, "land", ALPHA) == 0
@@ -2108,3 +2126,120 @@ def test_clean_removes_a_private_lock_nobody_holds_and_never_one_that_is_held(
         drain.landing_path(root, BRANCH_A).name,
         merge.merge_lock_path(root, BRANCH_A).name,
     } <= names
+
+
+def test_a_process_that_is_gone_has_no_row() -> None:
+    done = subprocess.Popen(["true"])  # noqa: S607 # -- a fixed program, no shell
+    done.wait()
+    assert drain.process_row(done.pid) is None
+
+
+def test_two_live_processes_started_apart_have_different_starts() -> None:
+    first = subprocess.Popen(["sleep", "60"])  # noqa: S607 # -- a sleep, no shell
+    try:
+        time.sleep(0.05)
+        second = subprocess.Popen(["sleep", "60"])  # noqa: S607 # -- a sleep, no shell
+        try:
+            rows = [drain.process_row(first.pid), drain.process_row(second.pid)]
+        finally:
+            second.kill()
+            second.wait()
+    finally:
+        first.kill()
+        first.wait()
+    assert rows[0] is not None
+    assert rows[1] is not None
+    assert rows[0][0] == os.getpid()
+    assert rows[0][1] != rows[1][1]
+
+
+def test_the_ancestry_names_each_process_by_its_id_and_start() -> None:
+    chain = drain.ancestry()
+    row = drain.process_row(os.getpid())
+    assert row is not None
+    assert chain[0] == f"{os.getpid()}:{row[1]}"
+    assert all(entry.partition(":")[2].isdigit() for entry in chain)
+
+
+def test_a_command_is_refused_while_another_holds_the_drain_lock(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    monkeypatch.setattr(drain, "LOCK_WAIT", 0.2)
+    with drain.exclusive(root):
+        capsys.readouterr()
+        assert run(root, "clean") == 2
+        assert "another drain command is running on this repository" in capsys.readouterr().out
+    assert run(root, "clean") == 0
+
+
+def test_a_second_drains_report_leaves_the_first_drains_lease_standing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    first = other_session(monkeypatch)
+    try:
+        assert run(root, "clean", "--all") == 0
+        own_session(monkeypatch)
+        assert run(root, "report") == 0
+        assert run(root, "clean", "--all") == 2, "the lease is still the first drain's"
+    finally:
+        first.kill()
+        first.wait()
+
+
+def test_what_a_program_wrote_until_it_was_ended_is_stashed_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    tree = drain.tree_of(root, BRANCH_A)
+    service = servers.sleeper(tree)
+    ending = gatelib.end_running_from
+
+    def end_after_a_last_write(path: Path) -> list[int]:
+        write(path, "src/late.py", "written until the end\n")
+        return ending(path)
+
+    monkeypatch.setattr(gatelib, "end_running_from", end_after_a_last_write)
+    try:
+        assert run(root, "clean", "--all", "--take-over") == 0
+    finally:
+        service.kill()
+        service.wait()
+    assert not tree.exists()
+    assert git(root, "show", "stash@{0}^3:src/late.py") == "written until the end"
+
+
+def test_a_merge_the_note_says_is_not_recorded_again(tmp_path: Path, capsys: Out) -> None:
+    root = project(tmp_path)
+    judged(root)
+    assert run(root, "land", ALPHA) == 0
+    capsys.readouterr()
+    assert run(root, "report") == 0
+    assert "recorded:" not in capsys.readouterr().out
+    assert note(root, BRANCH_A)["reported"] is True
+
+
+def test_a_close_cut_off_after_its_discard_leaves_no_mark_once_the_landing_is_seen(
+    tmp_path: Path,
+) -> None:
+    root = project(tmp_path)
+    tree = judged(root)
+    killed = start(root, "land", ALPHA, DRV_KILL_AT="discard")
+    killed.communicate(timeout=60)
+    assert note(root, BRANCH_A)["discarding"] is True
+    git(root, "worktree", "remove", "--force", str(tree))
+    assert run(root, "land", ALPHA) == 0
+    assert "discarding" not in note(root, BRANCH_A)
+
+
+def test_clean_all_clears_the_mark_of_a_branch_that_holds_nothing_of_its_own(
+    tmp_path: Path,
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    path = drain.queue_notes.note_path(root, BRANCH_A)
+    drain.queue_notes.write_note(path, {**note(root, BRANCH_A), "rebasing": "0" * 40})
+    assert run(root, "clean", "--all") == 0
+    assert "rebasing" not in note(root, BRANCH_A)

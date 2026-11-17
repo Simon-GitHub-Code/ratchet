@@ -206,6 +206,20 @@ def test_a_second_upgrade_changes_nothing(name: str, tmp_path: Path) -> None:
     assert files(root) == settled
 
 
+@pytest.mark.parametrize("name", FIXTURES)
+def test_every_edit_an_upgrade_makes_changes_nothing_when_made_again(
+    name: str, tmp_path: Path
+) -> None:
+    root = fixture(name, tmp_path)
+    made = 0
+    for found in conformance.findings(root):
+        if isinstance(found.fix, conformance.Auto):
+            once = found.fix.want(gatelib.read_text(root / found.path))
+            assert found.fix.want(once) == once, found.problem
+            made += 1
+    assert made
+
+
 STOP_CHUNKS = 6
 
 

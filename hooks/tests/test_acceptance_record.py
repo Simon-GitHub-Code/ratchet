@@ -570,6 +570,16 @@ def test_a_seal_covers_the_session_files_and_says_down_ended_it_in_time() -> Non
         assert ar.parse_seal(broken) is None
 
 
+def test_a_seal_keeps_how_many_answers_reached_the_tester_with_no_line() -> None:
+    assert ar.parse_seal({**SEALED, "unlogged": 3}).unlogged == 3  # type: ignore[union-attr]
+    assert ar.parse_seal({**SEALED, "unlogged": "some"}) is None
+
+
+def test_the_same_checks_hash_alike_however_their_keys_were_ordered() -> None:
+    assert ar.digest({"id": "K1", "steps": [1, 2]}) == ar.digest({"steps": [1, 2], "id": "K1"})
+    assert ar.digest({"id": "K1"}) != ar.digest({"id": "K2"})
+
+
 def test_the_harness_record_for_a_product_that_cannot_start_is_accepted_and_blocks() -> None:
     said = "It was started with `node src/server.js` and did not answer: Error: no dist"
     raw = ar.cannot_start(SESSION, TREE, ticket=list(PROMISES), said=said)

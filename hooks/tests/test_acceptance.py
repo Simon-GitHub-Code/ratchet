@@ -126,6 +126,25 @@ def test_up_puts_the_proxy_before_the_head_and_down_stops_all_of_it(
     assert down(product, capsys) == (0, ["acceptance down: nothing was running"])
 
 
+def test_the_supervisor_is_started_in_the_background_of_a_shell_that_prints_its_pid() -> None:
+    started = subprocess.run(  # noqa: S603 # -- bash and the harness's own launch line
+        ["bash", "-c", acceptance.BACKGROUND, "supervise", "sleep", "15"],  # noqa: S607 # -- bash on PATH
+        stdout=subprocess.PIPE,
+        text=True,
+        check=True,
+        timeout=10,
+    )
+    pid = int(started.stdout)
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        assert int(stat.rpartition(")")[2].split()[1]) != os.getpid(), "it is this process's child"
+        os.kill(pid, 0)
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGTERM)
+    assert gone(pid)
+
+
 def commit_all(root: Path, message: str) -> str:
     """Commit everything the work tree holds, as the orchestrator does; the commit's tree."""
     products.repos.git(root, "add", "-A")
@@ -327,6 +346,23 @@ def test_two_ups_at_once_share_one_session(product: Path) -> None:
     assert [process.returncode for process in started] == [0, 0]
     assert said[0] == said[1]
     assert len(acceptance.sessions(acceptance.store(product) / SLUG, 2)) == 1
+
+
+def test_an_up_waits_while_another_up_or_down_of_the_slug_holds_the_lock(product: Path) -> None:
+    place = acceptance.store(product)
+    place.mkdir(parents=True, exist_ok=True)
+    argv = [sys.executable, str(SCRIPT), "up", "--slug", SLUG, "--ticket", "ticket.md"]
+    with (place / f"{SLUG}.lock").open("w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        waiting = subprocess.Popen(argv, cwd=product, stdout=subprocess.PIPE, text=True)  # noqa: S603 # -- this interpreter and the harness
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            assert waiting.poll() is None, "an up ran while the slug was locked"
+            assert acceptance.sessions(place / SLUG, 2) == [], "a session began while locked"
+            time.sleep(0.05)
+    out, _ = waiting.communicate(timeout=120)
+    assert waiting.returncode == 0
+    assert len(out.splitlines()) == 2
 
 
 def test_the_flags_due_for_removal_are_on_in_the_boot(

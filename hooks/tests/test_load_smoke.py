@@ -349,6 +349,27 @@ def test_a_failure_after_the_signal_is_closed_when_refused_and_cut_otherwise(
     assert load_smoke.attempt(goal, 1, marker) == (None, "GET https://127.0.0.1/: OSError")
 
 
+def test_a_timeout_after_the_signal_counts_even_for_a_connection_the_gate_named(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = tmp_path / "stopping"
+    goal = load_smoke.Target("GET", "https://127.0.0.1/", None, None)
+    named = gatelib.Stopping({443: None}, listeners.ELSEWHERE, frozenset({tried(40000)}))
+
+    def http_status(
+        *_: object, connecting: Callable[[gatelib.Connection], None], **__: object
+    ) -> int:
+        connecting(tried(40000))
+        gatelib.write_stopping(marker, named)
+        raise TimeoutError
+
+    monkeypatch.setattr(gatelib, "http_status", http_status)
+    assert load_smoke.attempt(goal, 1, marker) == (
+        None,
+        "GET https://127.0.0.1/: timed out after 1s",
+    )
+
+
 def test_a_name_the_gate_writes_only_after_the_client_saw_the_reset_is_not_the_gates_reset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
