@@ -77,7 +77,7 @@ DENIED_TOOLS = (
     "ArtifactData",
 )
 SYSTEM = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/etc", "/opt", "/proc/self")
-SINKS = ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/fd", "/dev/zero")
+SINKS = ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/fd", "/dev/zero", "/nonexistent")
 SECRET = re.compile(
     r"\.credentials\.json|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|/proc/\S*environ"
 )
@@ -93,12 +93,17 @@ FORBIDDEN = (
     (rf"{GIT}(?:send-email|credential)\b", "reaches a remote"),
     (rf"{_RUN}(?:gh|glab)(?!\s+(?:auth\s+status|--version)\b){_END}", "calls a forge"),
     (rf"{_RUN}hub{_END}", "calls a forge"),
-    (r"\b(?:github|gitlab|bitbucket)\.(?:com|org|io)\b", "names a forge"),
+    (rf"(?:://|@|[\w-]\.)(?:github|gitlab|bitbucket)\.(?:com|org|io)\b", "names a forge"),
     (
         (
-            rf"{_RUN}(?:wget|ssh|scp|sftp|rsync|nc|ncat|netcat|socat|telnet|ftp|lftp|aria2c"
+            rf"{_RUN}(?:wget|ssh|scp|sftp|nc|ncat|netcat|socat|telnet|ftp|lftp|aria2c"
             rf"|cloudflared|ntfy){_END}"
         ),
+        "opens a network connection",
+    ),
+    (
+        rf"{_RUN}rsync(?:[^\S\n]+[^;&|\n\s]+)*?[^\S\n]+"
+        r"(?:rsync://|[\w.-]+@[\w.-]+:|[A-Za-z0-9][\w.-]*:)",
         "opens a network connection",
     ),
     (rf"{_RUN}twine{_END}", "publishes to a registry"),
@@ -209,10 +214,11 @@ def _writable(path: str, scope: Scope) -> bool:
 
 
 def shell(command: str, scope: Scope) -> Decision:
+    text = shellpaths.without_inert_bodies(command)
     for pattern, why in _FORBIDDEN:
-        if pattern.search(command):
+        if pattern.search(text):
             return Decision(allowed=False, why=why)
-    refused = _refused_by_what_runs(command)
+    refused = _refused_by_what_runs(command, text)
     if refused is not None:
         return Decision(allowed=False, why=refused)
     here = scope
@@ -225,9 +231,9 @@ def shell(command: str, scope: Scope) -> Decision:
     return ALLOW
 
 
-def _refused_by_what_runs(command: str) -> str | None:
+def _refused_by_what_runs(command: str, text: str) -> str | None:
     scanned = shellpaths.scan(command)
-    mentions = len(_CURL.findall(command))
+    mentions = len(_CURL.findall(text))
     if scanned is None:
         return _refused_as_text(command, mentions=mentions)
     curls = [call for call in scanned.calls if call.name == "curl"]
