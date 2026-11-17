@@ -37,6 +37,10 @@ Out = pytest.CaptureFixture[str]
 SPEC = ".scratch/f/spec.md"
 BRIEF = documents.BRIEF
 WORDS = "## In the owner's words"
+PROBLEM = (
+    "update: docs/design-brief.md has no `## In the owner's words` section, so nothing expired was"
+    " deleted: add the heading, then run `documents.py expire` again"
+)
 BRIEF_TEXT = f"# Brief\n\n{WORDS}\n\n<The owner's questions.>\n\n## Purpose\n\nA purpose.\n"
 THRESHOLDS = "quality/thresholds.toml"
 OWNERS = "- the owner's later line"
@@ -326,7 +330,10 @@ def test_the_final_check_is_green_after_an_update_that_committed_through_expire(
     before = git(tree, "rev-parse", "HEAD")
     assert run(root, "update", GAMMA) == 0
     assert git(tree, "rev-list", "--count", f"{before}..HEAD") != "0"
-    assert "docs: delete what has expired" in git(tree, "log", "-1", "--format=%s")
+    assert (
+        git(tree, "log", "-1", "--format=%s")
+        == "docs(documents): delete expired plans and keep their answers"
+    )
     capsys.readouterr()
     assert run(root, "check", GAMMA, "--final") == 0
     assert "a role" not in capsys.readouterr().out
@@ -362,8 +369,14 @@ def test_an_update_whose_brief_has_no_place_for_the_lines_says_so_and_goes_on(
     commit(root, "docs: a brief with no place")
     capsys.readouterr()
     assert run(root, "update", GAMMA) == 0
-    assert "has no `## In the owner's words` section to carry" in capsys.readouterr().err
+    assert PROBLEM in capsys.readouterr().err
     assert (tree / ".scratch/f").is_dir()
+    assert note(root, BRANCH_C)["unexpired"] == [PROBLEM]
+    assert run(root, "close", GAMMA, "--outcome", "waits", "--reason", "the owner's merge") == 0
+    capsys.readouterr()
+    assert run(root, "report") == 0
+    waits = capsys.readouterr().out.split("## Waits for you")[1].split("\n## ")[0]
+    assert f"  - {PROBLEM}" in waits
 
 
 def brief_with(*rows: str) -> str:

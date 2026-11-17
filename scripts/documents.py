@@ -304,7 +304,10 @@ def expire(root: Path, today: dt.date) -> Expiry:
     new = fresh(files, tree, brief or "", today=today)
     if new and (brief is None or not markdown_text.has_section(brief, OWNERS_WORDS)):
         return Expiry(
-            (), (), f"{BRIEF} has no `{OWNERS_WORDS}` section to carry {len(new)} line(s) to"
+            (),
+            (),
+            f"{BRIEF} has no `{OWNERS_WORDS}` section, so nothing expired was deleted: add the"
+            " heading, then run `documents.py expire` again",
         )
     if new and brief is not None:
         (root / BRIEF).write_text(with_lines(brief, new), encoding="utf-8")
@@ -380,7 +383,7 @@ def main(argv: list[str]) -> int:
     for path in done.deleted:
         print(f"expire: deleted {path}")
     for line in done.carried:
-        print(f"expire: carried {line}")
+        print(f"expire: carried {line} to {BRIEF}")
     if not done.deleted:
         print("expire: nothing has expired")
     return 0

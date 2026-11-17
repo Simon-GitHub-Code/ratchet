@@ -1121,11 +1121,14 @@ def deletion(change: Change, path: str) -> str | None:
         return "deletes a record"
     if all(spent(change, ticket) for ticket in agreed(change, path)):
         return None
-    return "is a ticket the owner agreed to build, whose build left no record: only they delete it"
+    return (
+        "is a ticket the owner agreed to build, and no verdict record of its build is at the merge"
+        " base: deleting it is the owner's merge (ADR 0061)"
+    )
 
 
 def only_deleted(_change: Change, _path: str) -> str | None:
-    return "is a feature spec, which a records change only deletes"
+    return "is a feature spec: a records change may delete it but not edit it"
 
 
 def carried_words(change: Change, path: str) -> str | None:
@@ -1139,8 +1142,8 @@ def carried_words(change: Change, path: str) -> str | None:
     if documents.carried(change.before(path), change.after(path), answers):
         return None
     return (
-        f"adds or drops more than the dated `## Answers` lines of the files the change deletes,"
-        f" under {documents.OWNERS_WORDS}"
+        f": a records change may only append, under `{documents.OWNERS_WORDS}`, the dated"
+        " `## Answers` lines of the files it deletes; this one changes more"
     )
 
 
@@ -1269,7 +1272,9 @@ def records_alone(change: Change, manifest: Manifest) -> list[Reason]:
         return [Reason("record", text)]
     if not refused:
         return decided
-    lines = [f"{path} {why}" for path, why in refused.items()]
+    lines = [
+        f"{path}{why}" if why.startswith(":") else f"{path} {why}" for path, why in refused.items()
+    ]
     rest = f"; and {len(lines) - SHOWN} more" if len(lines) > SHOWN else ""
     return [
         Reason("record", f"{text}; its paths are records, but {'; '.join(lines[:SHOWN])}{rest}"),

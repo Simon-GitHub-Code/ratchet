@@ -228,7 +228,7 @@ def dropped_answers(root: Path, base: str) -> list[str]:
         for row in markdown_text.section(brief, documents.OWNERS_WORDS).split("\n")
     }
     return [
-        f"{path}: its answer `{line}` is not in {documents.BRIEF} under {documents.OWNERS_WORDS}"
+        f"{path}: its answer `{line}` is not in {documents.BRIEF} under `{documents.OWNERS_WORDS}`"
         for path in gone.split("\n")
         if documents.is_steering(path)
         for line in documents.answers_of(gatelib.show(root, base, path) or "")
