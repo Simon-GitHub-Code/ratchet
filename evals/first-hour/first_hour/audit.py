@@ -17,11 +17,11 @@ WANTED = re.compile(
 )
 
 
-class Show(Protocol):
+class SandboxedGit(Protocol):
     def __call__(self, *args: str) -> str | None: ...
 
 
-def files_of(show: Show, branch: str) -> dict[str, str]:
+def files_of(show: SandboxedGit, branch: str) -> dict[str, str]:
     listed = show("ls-tree", "-r", "--name-only", branch) or ""
     return {
         path: text

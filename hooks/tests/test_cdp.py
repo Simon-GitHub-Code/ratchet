@@ -44,11 +44,14 @@ def test_a_script_that_throws_is_the_pages_error_not_the_browsers(
         page.evaluate(expression)
 
 
+ONLY_THE_STUCK_PAGE_WAITS_SHORT = 0.5
+
+
 @pytest.mark.parametrize(
     ("url", "said", "answer"),
     [
         ("http://unreachable/", "did not open: net::ERR_NAME_NOT_RESOLVED", cdp.ANSWER),
-        ("http://stuck/", "did not finish loading within 0.5s", 0.5),
+        ("http://stuck/", "did not finish loading within 0.5s", ONLY_THE_STUCK_PAGE_WAITS_SHORT),
         ("http://crash/", "the browser closed while it was asked Page.loadEventFired", cdp.ANSWER),
     ],
 )

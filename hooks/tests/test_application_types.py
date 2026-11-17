@@ -31,6 +31,12 @@ def bound(question: str, tool: str) -> list[tuple[str, str]]:
     return [(name, tool if name == question else cell) for name, cell in ROWS]
 
 
+DEPENDED_ON_SIGNS = (
+    "every repository has a README, so it would propose depended-on everywhere;"
+    " with no sign ADR 0028's refuter cannot run"
+)
+
+
 def test_the_shipped_catalogue_names_six_types_and_only_rows_of_the_binding_template() -> None:
     rows = set(QUESTION.findall(TEMPLATE_BINDING))
     assert list(SHIPPED.types) == ["service", "web-ui", "app", "cli", "job", "library"]
@@ -262,8 +268,8 @@ def test_the_shipped_catalogue_gives_every_question_a_trigger_it_can_fire() -> N
     assert "outbound-call" in SHIPPED.kinds
     assert SHIPPED.events["irreplaceable-data"].signs == ()
     assert SHIPPED.events["deployed"].in_binding
-    assert "CONTRIBUTING.md" in SHIPPED.events["depended-on"].signs
-    assert "README.md" not in SHIPPED.events["depended-on"].signs
+    assert "CONTRIBUTING.md" in SHIPPED.events["depended-on"].signs, DEPENDED_ON_SIGNS
+    assert "README.md" not in SHIPPED.events["depended-on"].signs, DEPENDED_ON_SIGNS
 
 
 def test_a_trigger_the_catalogue_cannot_fire_is_named() -> None:

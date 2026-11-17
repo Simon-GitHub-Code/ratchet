@@ -700,6 +700,15 @@ def watching() -> type[Opened]:
     return Opened
 
 
+UNSTEERED_BY_THE_TRACKER = (".ratchet", "quality/owed.toml")
+
+
+def unsteered(relative: str) -> bool:
+    return any(
+        relative == part or relative.startswith(f"{part}/") for part in UNSTEERED_BY_THE_TRACKER
+    )
+
+
 def opened_by(root: Path, read: Callable[[], object]) -> set[str]:
     watch = watching()
     watch.paths = []
@@ -708,13 +717,12 @@ def opened_by(root: Path, read: Callable[[], object]) -> set[str]:
         seen = watch.paths
     finally:
         watch.paths = None
-    return {
+    inside = (
         posixpath.normpath(os.path.relpath(path, root))
         for path in seen
         if os.path.normpath(path).startswith(f"{root}{os.sep}")
-        and not os.path.relpath(path, root).startswith(".ratchet")
-        and os.path.relpath(path, root) != "quality/owed.toml"
-    }
+    )
+    return {relative for relative in inside if not unsteered(relative)}
 
 
 TRACKER = {

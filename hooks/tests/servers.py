@@ -12,11 +12,11 @@ from pathlib import Path
 PYTHON = f"{shlex.quote(sys.executable)} -S"
 SERVE = (
     "import os, http.server as h\n"
-    "class Server(h.ThreadingHTTPServer):\n"
+    "class SilentWhenAClientHangsUp(h.ThreadingHTTPServer):\n"
     "    def handle_error(self, request, client_address): pass\n"
     "class Handler(h.SimpleHTTPRequestHandler):\n"
     "    def log_message(self, *args): pass\n"
-    "Server(('127.0.0.1', int(os.environ['PORT'])), Handler).serve_forever()"
+    "SilentWhenAClientHangsUp(('127.0.0.1', int(os.environ['PORT'])), Handler).serve_forever()"
 )
 
 
@@ -63,12 +63,12 @@ def server(
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002 # -- the override
             pass
 
-    class Quiet(http.server.ThreadingHTTPServer):
+    class SilentWhenAClientHangsUp(http.server.ThreadingHTTPServer):
         daemon_threads = False
 
         def handle_error(self, request: object, client_address: object) -> None: ...
 
-    httpd = Quiet(("127.0.0.1", 0), Handler)
+    httpd = SilentWhenAClientHangsUp(("127.0.0.1", 0), Handler)
     thread = threading.Thread(
         target=httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
     )
@@ -117,7 +117,7 @@ STOPS = (
     "def waiting():\n"
     "    info = server.socket.getsockopt(socket.IPPROTO_TCP, socket.TCP_INFO, 32)\n"
     "    return struct.unpack_from('I', info, 24)[0]\n"
-    "def stop():\n"
+    "def stop_off_the_signal_handler():\n"
     "    signalled.wait()\n"
     "    held.wait()\n"
     "    while QUEUES and waiting() < 3: time.sleep(0.01)\n"
@@ -127,7 +127,7 @@ STOPS = (
     "    stopping.set()\n"
     "    server.shutdown()\n"
     "if MODE == 'die': threading.Timer(0.3, os._exit, [5]).start()\n"
-    "threading.Thread(target=stop, daemon=True).start()\n"
+    "threading.Thread(target=stop_off_the_signal_handler, daemon=True).start()\n"
     "signal.signal(signal.SIGTERM, lambda *_: signalled.set())\n"
     "if MODE == 'ignore': signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
     "server.serve_forever()\n"

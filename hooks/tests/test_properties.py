@@ -1,7 +1,7 @@
 import shlex
 from collections.abc import Callable
 
-from hypothesis import assume, given
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 from ratchet_guards import bash
@@ -280,3 +280,10 @@ def test_any_text_is_judged_without_raising(text: str) -> None:
 @given(text=st.text(alphabet=st.sampled_from(list("ab $()`'\"\\;&|<>\n#{}-=~*")), max_size=60))
 def test_shell_shaped_noise_is_judged_without_raising(text: str) -> None:
     rules(text)
+
+
+def test_no_hypothesis_profile_fails_a_test_for_the_hosts_load() -> None:
+    profiles = settings._profiles  # noqa: SLF001 # -- hypothesis names its profiles nowhere public
+    late = {name: profile.deadline for name, profile in profiles.items() if profile.deadline}
+    assert {"default", "ci"} <= profiles.keys()
+    assert late == {}, "a wall-clock deadline fails a deterministic test when the host is busy"

@@ -24,6 +24,9 @@ SCRIPT = hooks_installed.PLUGIN_ROOT / "scripts/hooks_install.py"
 ANSWERING_JUSTFILE = "pre-commit:\n    @echo $RATCHET_HOOK_PROBE\n"
 
 
+LONGER_THAN_A_LOADED_MACHINE_TAKES = 600.0
+
+
 def project(tmp_path: Path) -> Path:
     (tmp_path / "project").mkdir()
     return repository(tmp_path / "project")
@@ -198,9 +201,9 @@ def test_a_hooks_path_from_the_environment_is_named_by_its_scope(
 def test_a_hook_that_never_answers_is_killed_at_the_timeout(
     root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    nap = f"31.{os.getpid()}"
-    hook_script(root / ".git/hooks", "pre-commit", f"exec sleep {nap}")
-    hook_script(root / ".git/hooks", "commit-msg", f"exec sleep {nap}")
+    sleep_unique_to_this_process = f"31.{os.getpid()}"
+    hook_script(root / ".git/hooks", "pre-commit", f"exec sleep {sleep_unique_to_this_process}")
+    hook_script(root / ".git/hooks", "commit-msg", f"exec sleep {sleep_unique_to_this_process}")
     monkeypatch.setattr(hooks_installed, "TIMEOUT", 0.5)
     found = problem(root)
     assert "had not finished after 0.5 seconds" in found.detail
@@ -208,7 +211,7 @@ def test_a_hook_that_never_answers_is_killed_at_the_timeout(
     assert found.fix.startswith("run this again when the machine is quieter")
     assert not found.owner
     left = subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
-        ["pgrep", "-f", f"sleep {nap}"],  # noqa: S607 # -- pgrep is resolved from PATH
+        ["pgrep", "-f", f"sleep {sleep_unique_to_this_process}"],  # noqa: S607 # -- pgrep is resolved from PATH
         capture_output=True,
         check=False,
     )
@@ -327,7 +330,7 @@ def test_the_entry_point_installs_the_real_hooks_that_a_global_path_still_runs(
     pre_commit, just = shutil.which("pre-commit"), shutil.which("just")
     if pre_commit is None or just is None:
         pytest.skip("pre-commit and just are not installed")
-    monkeypatch.setattr(hooks_installed, "TIMEOUT", 600.0)
+    monkeypatch.setattr(hooks_installed, "TIMEOUT", LONGER_THAN_A_LOADED_MACHINE_TAKES)
     monkeypatch.setenv("PRE_COMMIT_HOME", str(tmp_path / "cache"))
     monkeypatch.setenv("PATH", f"{Path(just).parent}:{Path(pre_commit).parent}:/usr/bin:/bin")
     chaining_hooks(tmp_path / "global-hooks")
