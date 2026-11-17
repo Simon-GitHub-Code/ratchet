@@ -121,13 +121,17 @@ def safeguarded(root: Path, note: dict[str, object]) -> bool:
 def holds_of(result: dict[str, object]) -> list[str]:
     found = [SIZE] if result.get("tooLarge") else []
     found += [QUESTIONS] if result.get("openQuestions") else []
-    return found + ([GUARD] if result.get("guardEdits") else [])
+    guarded = result.get("guardEdits") or result.get("disputes")
+    return found + ([GUARD] if guarded else [])
 
 
 def causes_of(result: dict[str, object]) -> list[str]:
     edits = [edit.get("path") for edit in tables(result.get("guardEdits"))]
-    filed = [dispute.get("path") for dispute in tables(result.get("disputes"))]
-    return list(dict.fromkeys(path for path in [*edits, *filed] if isinstance(path, str) and path))
+    disputes = tables(result.get("disputes"))
+    filed = [dispute.get("path") for dispute in disputes]
+    covered = [path for dispute in disputes for path in texts(dispute.get("guardPathsCovered"))]
+    paths = [*edits, *filed, *covered]
+    return list(dict.fromkeys(path for path in paths if isinstance(path, str) and path))
 
 
 @dataclass(frozen=True)
@@ -146,18 +150,27 @@ def split_into(root: Path, branch: str, ticket: preflight.Ticket) -> list[str] |
     return texts(note.get("children"))
 
 
-def released(root: Path, note: dict[str, object], ticket: preflight.Ticket) -> bool:
-    return edited(note, ticket) or caused(root, note) or safeguarded(root, note)
+def met(root: Path, note: dict[str, object], ticket: preflight.Ticket, *, kind: str) -> bool:
+    if kind == GUARD and isinstance(note.get("base"), str):
+        return caused(root, note)
+    return edited(note, ticket)
 
 
 def held(root: Path, branch: str, ticket: preflight.Ticket) -> Hold | None:
     note = read_note(root, branch)
-    if note.get("hold") is not True or released(root, note, ticket):
+    if note.get("hold") is not True:
+        return None
+    kinds = texts(note.get("holds"))
+    owes, reviews = texts(note.get("owes")), texts(note.get("reviews"))
+    unmet = [kind for kind in kinds if not met(root, note, ticket, kind=kind)]
+    owing = bool(owes or reviews) and not (edited(note, ticket) or safeguarded(root, note))
+    other = not (kinds or owes or reviews) and not (edited(note, ticket) or caused(root, note))
+    if not (unmet or owing or other):
         return None
     return Hold(
         texts(note.get("reasons")),
-        texts(note.get("holds")),
-        texts(note.get("owes")),
-        texts(note.get("reviews")),
+        unmet,
+        owes if owing else [],
+        reviews if owing else [],
         based=isinstance(note.get("base"), str),
     )

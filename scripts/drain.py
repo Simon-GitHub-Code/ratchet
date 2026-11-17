@@ -1479,7 +1479,7 @@ def act_on(drain: Drain, ticket: preflight.Ticket, options: argparse.Namespace) 
         return check(drain, ticket, final=options.final)
     if options.action == "split":
         return split_ticket(drain, ticket, options)
-    result = queue_notes.loaded(gatelib.read_text(options.result) if options.result else None)
+    result = result_of(options.result)
     reasons = [*options.reason, *reasons_of(result)]
     close(
         drain.root,
@@ -1491,12 +1491,28 @@ def act_on(drain: Drain, ticket: preflight.Ticket, options: argparse.Namespace) 
     return 0
 
 
+def result_of(path: Path | None) -> dict[str, object]:
+    if path is None:
+        return {}
+    try:
+        data: object = json.loads(gatelib.read_text(path) or "")
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        message = (
+            f"{path} holds no JSON object, so nothing was closed: write the pipeline's `result`"
+            " object to it as JSON, then run this again"
+        )
+        raise RefusedError(message)
+    return data
+
+
 def split_ticket(drain: Drain, ticket: preflight.Ticket, options: argparse.Namespace) -> int:
     try:
         plan_text = json.loads(gatelib.read_text(options.plan) or "") if options.plan else None
     except ValueError:
         plan_text = None
-    result = queue_notes.loaded(gatelib.read_text(options.result) if options.result else None)
+    result = result_of(options.result)
     made, refused = split.apply(drain.root, ticket.ref, plan_text, gh=drain.tracker)
     if refused:
         reasons = [f"too large, and the split was refused: {line}" for line in refused]
