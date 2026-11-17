@@ -483,6 +483,30 @@ def test_the_marker_exists_only_from_the_signal_and_a_command_that_ends_first_is
     assert code == 1
 
 
+def test_the_marker_is_written_before_the_signal_so_a_failure_after_it_is_judged_by_it(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    written: list[Path] = []
+    at_signal: list[bool] = []
+    write_stopping = gatelib.write_stopping
+    send_signal = subprocess.Popen.send_signal
+
+    def writes(path: Path, stopping: gatelib.Stopping) -> None:
+        written.append(path)
+        write_stopping(path, stopping)
+
+    def sends(process: subprocess.Popen[bytes], sig: int) -> None:
+        if sig == signal.SIGTERM:
+            at_signal.append(bool(written) and written[0].exists())
+        send_signal(process, sig)
+
+    monkeypatch.setattr(gatelib, "write_stopping", writes)
+    monkeypatch.setattr(subprocess.Popen, "send_signal", sends)
+    code, out = graceful("drain", capsys=capsys)
+    assert at_signal == [True], out
+    assert code == 0
+
+
 def test_a_command_that_never_starts_sending_is_red_and_the_service_is_not_signalled(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

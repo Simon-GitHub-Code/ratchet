@@ -279,6 +279,14 @@ def test_with_pin_replaces_the_line_where_it_stands() -> None:
     )
 
 
+def test_with_pin_leaves_a_line_that_only_starts_like_the_pin_as_the_projects_own() -> None:
+    note = "- Ratchet plugin: installed from the marketplace, see the readme\n"
+    held = BINDING.replace("`just`.\n", f"`just`.\n\n{note}")
+    pinned = plugin_pin.with_pin(PIN_LINE)(held)
+    assert note in pinned
+    assert PIN_LINE in pinned
+
+
 def test_with_pin_adds_the_line_after_the_runner_paragraph_as_the_template_does() -> None:
     assert plugin_pin.with_pin(PIN_LINE)(BINDING) == BINDING.replace(
         "`just`.\n", f"`just`.\n\n{PIN_LINE}\n"
