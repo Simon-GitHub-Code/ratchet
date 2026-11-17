@@ -252,11 +252,11 @@ One row per kind of file. `Files` are globs over tracked files, each in backtick
 
 ## Formal verification
 
-A formal model an agent writes and checks against the code, kept true to it by the project-local verification skill (ADR 0062). The lines are filled once a model exists.
+The formal model of this project's concurrent code, parsers or state machines, and the code it describes (ADR 0062 in the `ratchet` plugin). `/ratchet:safeguard` writes these lines when it binds the first model, and each round of its upkeep moves `- Synced:`. Until a `formal verification` row is bound they keep the placeholders. The route reads the model as behind when a commit on the default branch that `- Synced:` cannot reach touches a `- Mirrors:` path. Every `- Model:` path belongs in the `formal` group of `guards/manifest.toml`, so a change to the model is the owner's merge.
 
-- Model: <`globs` of the models, the harness and the skill>
-- Mirrors: <`globs` of the code the model describes>
-- Synced: <the default branch commit the last round checked>
+- Model: <globs of the models, their harness and the project-local skill, each in backticks>
+- Mirrors: <globs of the code the models describe, each in backticks>
+- Synced: <the default-branch commit the last round checked the model against>
 
 ## Documents
 
