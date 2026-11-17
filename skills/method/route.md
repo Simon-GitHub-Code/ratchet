@@ -48,7 +48,7 @@ Debugging enters at stage 7: `diagnosing-bugs`, which an agent may call, or `/ps
 4. **Any other uncommitted change:** commit it.
 5. **A working branch the default branch already holds:** `git switch <default>`.
 6. **Any other working branch:** merge it, or with a forge, its pull request.
-7. **A `records/<time>` branch waiting for its merge:** what the merge judge says.
+7. **A branch waiting for its merge:** a `records/<time>` branch, what the merge judge says; else a branch whose merge the judge leaves to the owner, with its change description and no run attached, the owner's merge of the oldest.
 8. **Rows an upgrade left owed that an agent writes from the repository alone:** `/ratchet:fill`.
 9. **An owed architecture review:** `/ratchet:architecture`.
 10. **An owed safeguard:** `/ratchet:safeguard`.
@@ -97,6 +97,8 @@ The `records/<time>` branch of such a change waits unmerged, and at step 7 the r
 - **The judge leaves it to the owner:** the route names the owner's merge command with the judge's first reason.
 - **The judge passes it,** as it does the branch of a run that stopped while `check` ran: the route names `just merge <branch>`, which an agent runs.
 
+A branch that holds more than records waits for the owner too when the judge leaves its merge to them, such as the guard edits a parked run named, left on a branch of their own. The route names the owner's merge of the oldest such branch that carries its change description (`.scratch/changes/<branch>.md`), that no run owns and no work tree has checked out, with the judge's first reason. A `formal/` branch is the formal model's upkeep (step 12), and a branch with no change description is left for the owner to merge or delete.
+
 A `records/<time>` branch checked out (step 2) is a run that stopped before it switched back. The route names `just merge --records` again, which finishes it.
 
 **A branch already merged (step 5).** A working branch whose every commit the default branch already holds is left, never merged again: the route names `git switch <default>`, then `/ratchet:next`. `just merge` leaves a clean checkout on the default branch itself once it has merged the branch it was on. So this state follows a merge cut off before that switch, or a merge by hand. With no forge, it also follows a branch cut and never built on.
@@ -143,17 +145,17 @@ With none of these, or when the tickets are a forge's issues, the route names `/
 - What counts is the ticket's own text, the spec it inherits, and the paths the drain's note recorded as the cause (a guard path the run needed, a dispute it filed). Any other change, such as another ticket agreed or an unrelated binding edit, leaves it held.
 - The owner answering the ticket or landing the edits on the default branch releases it. An answer that moves no commit, such as an issue comment on a forge, releases it once the owner drops the stash.
 
-**A ticket the drain parked.** Its note in `.ratchet/queue/` holds it until one of these:
+**A ticket the drain parked.** Its note in `.ratchet/queue/` records each kind of hold, and holds the ticket until each is met by its own cause:
 
-- the ticket's text changes;
-- a path its run named as the cause (a guard edit, a dispute file) changes on the default branch since the note was written;
-- the safeguard or review it waited on is bound or landed.
+- open questions, or a ticket too large: the ticket's text changes;
+- guard edits, a dispute among them: a path the run named as the cause (a guard edit, a dispute file, a guard path the dispute covers) changes on the default branch since the note was written;
+- an owed safeguard or review: it is bound or landed, or the ticket's text changes.
 
-The drain's plan and the route share that one rule (`queue_notes.released`). The route reads that note, not only the stash, and names the step that releases the hold for each kind the note records:
+A change to the ticket never releases guard edits, and landing them never releases questions. The drain's plan and the route share that one rule (`queue_notes.held`). The route reads that note, not only the stash, and names the step for each kind still unmet, the questions before the guard edits:
 
 - **Too large for one change:** the agent splits the ticket itself (`drain.py split`), so the route names a split only when that split was refused, as a change to the ticket's criteria.
 - **Open questions:** the answers on the ticket.
-- **Guard edits:** landing them on the default branch. When the note was written before the drain recorded the default branch's commit, landing frees nothing, so the route names a change to the ticket instead.
+- **Guard edits:** landing them on the default branch, or the owner's merge of the branch that holds them (step 7). When the note was written before the drain recorded the default branch's commit, landing frees nothing, so the route names a change to the ticket instead.
 - **An owed safeguard:** `/ratchet:safeguard`.
 - **Another instance of a kind that reopens the architecture, added while that kind's review was owed (step 9):** `/ratchet:architecture`.
 - **Any other park:** a change to the ticket.
