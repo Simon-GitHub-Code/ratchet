@@ -43,14 +43,14 @@ exclude_also = ['if __name__ == "__main__":']
 [tool.pytest.ini_options]
 addopts = "-q --strict-markers --strict-config"
 testpaths = ["hooks/tests", "evals/first-hour/tests"]
-pythonpath = ["hooks", "scripts", "evals/first-hour"]
+pythonpath = [".", "hooks", "scripts", "evals/first-hour"]
 xfail_strict = true
 filterwarnings = ["error"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-src = ["hooks", "scripts", "evals/first-hour"]
+src = [".", "hooks", "scripts", "evals/first-hour"]
 
 [tool.ruff.lint]
 select = ["ALL"]

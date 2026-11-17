@@ -14,8 +14,11 @@ from __future__ import annotations
 
 import hashlib
 import os
+from pathlib import Path
 
 import pytest
+
+import coverage_settle
 
 
 def shard_of(nodeid: str, shards: int) -> int:
@@ -62,3 +65,15 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     kept_ids = {id(item) for item in kept}
     config.hook.pytest_deselected(items=[item for item in items if id(item) not in kept_ids])
     items[:] = kept
+
+
+SETTLE_SECONDS = 30.0
+
+
+@pytest.hookimpl(wrapper=True, trylast=True)
+def pytest_runtestloop(session: pytest.Session) -> object:
+    """Let every process still writing coverage data finish before the run combines it."""
+    result = yield
+    if not hasattr(session.config, "workerinput"):
+        coverage_settle.settle(Path.cwd(), SETTLE_SECONDS)
+    return result
