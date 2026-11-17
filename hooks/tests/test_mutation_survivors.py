@@ -319,6 +319,14 @@ def test_a_real_tools_records_feed_the_gate(tmp_path: Path, capsys: Out) -> None
     assert "8 live, 8 registered in scope" in capsys.readouterr().out
 
 
+def test_a_real_tools_records_keep_no_text_that_names_the_machine_they_ran_on() -> None:
+    lines = (CARGO / "mutants.jsonl").read_text(encoding="utf-8").splitlines()
+    records = [json.loads(line) for line in lines]
+    neutral = {"file", "mutator", "replacement", "status", "start", "end", "unit"}
+    assert {key for record in records for key in record} <= neutral
+    assert {record["file"] for record in records} == {RUST}
+
+
 def test_a_survivor_of_any_tool_keeps_its_identity_when_code_above_its_unit_changes(
     tmp_path: Path, capsys: Out
 ) -> None:
