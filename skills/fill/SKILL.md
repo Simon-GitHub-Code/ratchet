@@ -13,8 +13,8 @@ An upgrade adds sections to the binding whose rows state what this project's own
 ## Steps
 
 1. **List it.**
-   - Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/owed.py" --fill-first`. Each line is the check, the file and what is missing.
-   - Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/conformance.py"` for the same findings with the fix each one names.
+   - Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/owed.py" --fill-first`. Each line is the check, the file and what is missing.
+   - Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/conformance.py"` for the same findings with the fix each one names.
 
    Done when you hold every owed line and the fix conformance names for it.
 
@@ -41,7 +41,7 @@ An upgrade adds sections to the binding whose rows state what this project's own
 
    Done when `conformance.py` prints none of the findings you filled, and each gate you ran finds what the tree has.
 
-5. **Settle the ledger.** Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/upgrade.py" --apply`. It drops the entries whose findings are gone and writes nothing else owed.
+5. **Settle the ledger.** Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/upgrade.py" --apply`. It drops the entries whose findings are gone and writes nothing else owed.
 
    Done when `owed.py --fill-first` prints nothing.
 

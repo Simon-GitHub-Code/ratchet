@@ -762,6 +762,7 @@ def preflight(ref: str, root: Path, *, base: str, branch: str | None, gh: Runner
 def record_start(report: Report, root: Path, *, branch: str, gh: Runner) -> None:
     try:
         report.start = publish_check.start_of(root, branch, gh)
+        queue_notes.record_feature_start(root, branch, asdict(report.start))
     except publish_check.UnreadableError as error:
         report.fail("start", str(error), "the forge reachable again, or the branch made again")
         return

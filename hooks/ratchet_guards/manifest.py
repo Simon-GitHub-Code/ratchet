@@ -40,7 +40,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path, PurePosixPath
 
-from ratchet_guards.events import LOG_NAME, PLUGIN_RECORD
+from ratchet_guards.events import FEATURE_STARTS, LOG_NAME, PLUGIN_RECORD
 from ratchet_guards.globs import matches
 
 MANIFEST_PATH = "guards/manifest.toml"
@@ -248,6 +248,12 @@ PLUGIN_RECORD_REASON = (
     "The record of the plugin folder a session runs from. Gate recipes run the scripts it names, "
     "so only the session hook writes it."
 )
+FEATURE_STARTS_GROUP = "feature-starts"
+FEATURE_STARTS_REASON = (
+    "The start a one-ticket feature run records and its publish check marks passed. The guard "
+    "refuses a commit on the run's branch until the check has passed it, so only the plugin's "
+    "scripts write it."
+)
 # Why: the log has a group of its own, not a line in GIT_STATE_PATTERNS, which the template's
 # `local-git` group and `just settings` keep in step with; the hook guards it by itself.
 GIT_STATE = Manifest(
@@ -258,6 +264,13 @@ GIT_STATE = Manifest(
             PLUGIN_RECORD_GROUP,
             PLUGIN_RECORD_REASON,
             (f".git/{PLUGIN_RECORD}",),
+            EditRule.DENY,
+            source="",
+        ),
+        Group(
+            FEATURE_STARTS_GROUP,
+            FEATURE_STARTS_REASON,
+            (f".git/{FEATURE_STARTS}", f".git/{FEATURE_STARTS}/**"),
             EditRule.DENY,
             source="",
         ),

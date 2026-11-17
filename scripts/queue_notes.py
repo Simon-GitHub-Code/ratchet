@@ -11,16 +11,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import gatelib
 import triggers
 
-if TYPE_CHECKING:
-    from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
+from ratchet_guards.events import FEATURE_STARTS
 
+if TYPE_CHECKING:
     import feature_preflight as preflight
 
 QUEUE = "queue"
@@ -109,13 +113,34 @@ def note_path(root: Path, branch: str) -> Path:
     return gatelib.state_dir(root) / QUEUE / "tickets" / f"{branch.replace('/', '-')}.json"
 
 
+def feature_start_path(root: Path, branch: str) -> Path | None:
+    common = gatelib.git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if not common:
+        return None
+    return Path(common) / FEATURE_STARTS / f"{branch.replace('/', '-')}.json"
+
+
+def record_feature_start(root: Path, branch: str, start: dict[str, object]) -> None:
+    path = feature_start_path(root, branch)
+    if path is not None:
+        write_note(path, {"branch": branch, "worktree": str(root), "start": start})
+
+
+def pass_feature_start(root: Path, branch: str) -> None:
+    path = feature_start_path(root, branch)
+    if path is not None and path.is_file():
+        write_note(path, {**loaded(gatelib.read_text(path)), "passed": True})
+
+
 def read_note(root: Path, branch: str) -> dict[str, object]:
     return loaded(gatelib.read_text(note_path(root, branch)))
 
 
 def write_note(path: Path, note: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(note, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    staged = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    staged.write_text(json.dumps(note, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    staged.replace(path)
 
 
 def safeguarded(root: Path, note: dict[str, object]) -> bool:

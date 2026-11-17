@@ -104,7 +104,8 @@ def test_the_rule_catalogue_is_pinned() -> None:
         "queue-final-check": (
             "DENY",
             (
-                "commits in a queue work tree before its start has passed its final check, which "
+                "a commit in a queue work tree before `drain.py check <ticket> --final` has "
+                "passed, or on a one-ticket run's branch before `publish_check.py` has passed, "
                 "leaves nothing to tell the orchestrator's commit from a role's"
             ),
         ),

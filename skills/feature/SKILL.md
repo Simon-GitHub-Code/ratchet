@@ -22,7 +22,7 @@ Pick the mode from what the owner typed:
 ## One ticket
 
 1. **Preflight, before any agent exists.**
-   - Run, in one Bash call: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" "<ticket>" --root .`.
+   - Run, in one Bash call: `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" "<ticket>" --root .`.
    - It prints JSON (`ok`, `failures`, `number`, `title`, `slug`, `branch`, `base`, `label`, `critic`, `critic_reason`, `named_gates`) and exits 1 when red. `base` is the default branch, read from the checkout and the binding.
    - **Red on `size` alone** (the ticket's own `## Size` passes a product ceiling): split it as [Too large](#too-large-the-agent-splits-it) says, then build the first part that is free.
    - **A `hooks` failure whose `produce` does not start `the owner:`** is yours to repair. Run the command it names in one Bash call, then the preflight again.
@@ -47,7 +47,7 @@ Pick the mode from what the owner typed:
 
    The run is the one [pipeline.md](../method/pipeline.md) describes. It never commits, pushes or opens a pull request. The critic runs only when `critic` is true (the binding declares the `depended-on` life event).
 
-   **The publish check, each time the run returns or errors,** before anything is committed and before a resume: write the run's result, as JSON, to `<the report file of step 2>.result.json`, then run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/publish_check.py" <the report file of step 2> --root .` in one Bash call. A run that errored has no result: write none and add `--before-resume`.
+   **The publish check, each time the run returns or errors,** before anything is committed and before a resume: write the run's result, as JSON, to `<the report file of step 2>.result.json`, then run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/publish_check.py" <the report file of step 2> --root .` in one Bash call. A run that errored has no result: write none and add `--before-resume`.
    - **Exit 0:** nothing moved. Go on.
    - **Exit 1:** a role committed, pushed or opened a pull request, or you committed before this check, or a finding the run treated as owed quotes what its record does not hold. Run `git stash push -u -m "<branch>: blocked run"`, then `git switch <base>`. Tell the owner what the check printed, and stop. Never commit on that branch.
    - **Exit 2 or 3:** the start, the result or the present state cannot be read, and none of them is a pass. Report what it printed and stop.
@@ -88,7 +88,7 @@ Pick the mode from what the owner typed:
    - Say what the merge judge says (`just merge-ready`: `merge: agent`, or `merge: owner` with its reasons). The judge decides the merge: never merge by hand.
    - When the merge is the owner's, name the passes the change warrants before they merge, from [route.md](../method/route.md) stage 8.
    - When the change built a surface and the repository has `PRODUCT.md` but no `DESIGN.md`, say that an agent runs `impeccable document` on a branch once this merges, and that the owner merges that change, since `DESIGN.md` is a guard path.
-   - The last lines are the route: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines.
+   - The last lines are the route: run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines.
 
    Done when the hand-over holds each line above that applies and ends with the route's lines.
 
@@ -99,7 +99,7 @@ Pick the mode from what the owner typed:
 - `scripts/drain.py` decides the order, the cap, each ticket's state and the report.
 - The merge judge merges and `D update` rebases: never merge by hand and never rebase by hand. Open questions go to the owner at step 7: never answer a question for the owner.
 
-Run every command below from the repository's own checkout, on the default branch. `D` stands for `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py"`.
+Run every command below from the repository's own checkout, on the default branch. `D` stands for `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py"`.
 
 1. **Clear what an interrupted drain left.**
    - Run `D clean --all --root .`. It removes every queue work tree, keeps what one held uncommitted as the stash `<branch>: interrupted run`, and prints a line for each.
@@ -198,7 +198,7 @@ Run every command below from the repository's own checkout, on the default branc
 7. **The questions, then the route.**
    - After the report, ask every parked ticket's open questions as `feature.open-question`, all in one message, as [Questions for the owner](#questions-for-the-owner) says. An answer written to a ticket releases it.
    - **An answer released a ticket:** say so and run the drain again from step 1 in the same turn.
-   - **Otherwise:** the last lines are the route. Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines as they are.
+   - **Otherwise:** the last lines are the route. Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines as they are.
 
    Done when the drain runs again for what was released, or the route's lines are the last lines you print.
 
@@ -249,15 +249,15 @@ A ticket that passes the product ceilings (the preflight's `size` failure, the s
 
    Done when every `- [ ]` line of the ticket is in exactly one part, word for word.
 
-2. **Check the plan.** In the repository's own checkout, run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/split.py" check <ticket> --plan <file> --root .`. It judges the plan as `split` will and files nothing.
+2. **Check the plan.** In the repository's own checkout, run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/split.py" check <ticket> --plan <file> --root .`. It judges the plan as `split` will and files nothing.
    - **Exit 0:** go to step 3.
    - **Exit 1 or 2:** it prints `split: refused: <line>` for each line it refuses, or `split: the plan does not read: <why>`. Fix the plan once and check it again.
-   - **Refused a second time:** do not run the plan. Park the ticket as too large, which is the owner's. Write the pipeline's result to a file made with `mktemp`, or `{"tooLarge": true}` when the preflight's `size` failure sent you here, and run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py" close <ticket> --outcome parked --result <file> --root .` with one `--reason "too large, and the split was refused: <line>"` per line the second check refused.
+   - **Refused a second time:** do not run the plan. Park the ticket as too large, which is the owner's. Write the pipeline's result to a file made with `mktemp`, or `{"tooLarge": true}` when the preflight's `size` failure sent you here, and run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py" close <ticket> --outcome parked --result <file> --root .` with one `--reason "too large, and the split was refused: <line>"` per line the second check refused.
    - **The refusal says the ticket is itself a part:** a part is not split again, and the check refuses every plan for it. Park it as too large at once, as the bullet above says, with that line as the reason. The report names it, which is the owner's.
 
    Done when the check has passed the plan, or the ticket is parked as too large: after a second refusal, or at once for a part.
 
-3. **File it.** In the repository's own checkout, run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py" split <ticket> --plan <file> --root .`, only with a plan the check passed.
+3. **File it.** In the repository's own checkout, run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py" split <ticket> --plan <file> --root .`, only with a plan the check passed.
    - It checks the plan again, files the parts with the agent-ready label the parent holds now, closes the parent as `split` with its text unedited, and prints the parts.
    - **Exit 1:** it refused the plan and has already parked the ticket as too large: it prints `closed: <ref>: parked`, and the report gives the reason. The ticket is the owner's. Do not run it again.
 
@@ -276,6 +276,6 @@ A question reaches the owner only when it is a product question: its answer shap
    - **A local ticket:** write them at the end of the file and land it from the default branch. With no forge, `just merge --records` (the `merge` entry point) commits it on a branch of its own. With a forge it goes on a branch of its own and through a pull request. Never commit on the default branch itself.
      - **A ticket that already carries the agent-ready label, or the spec such a ticket inherits from,** changes only by the owner's merge, with a forge or without (only a ticket's link paths may change alone). With no forge, the run prints `merge: owner` and the owner's command: relay both as they are. With a forge, the merge job leaves the pull request to the owner and comments why: relay that comment as it is.
    - **A tracker ticket:** `gh issue edit <n> --body-file <file>` with the full body, no label flag.
-3. **Record how the owner answered,** one Bash call per answer: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/questions.py" record --skill feature --key "feature.<slug>.<n>" --kind <direction|irreversible> --recommended <yes|no> --root .`, where `<n>` is the question's place in the result. The log is `.ratchet/questions.tsv`, which no commit carries.
+3. **Record how the owner answered,** one Bash call per answer: `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/questions.py" record --skill feature --key "feature.<slug>.<n>" --kind <direction|irreversible> --recommended <yes|no> --root .`, where `<n>` is the question's place in the result. The log is `.ratchet/questions.tsv`, which no commit carries.
 
    Done when every answer is on its ticket and has its line in the log.
