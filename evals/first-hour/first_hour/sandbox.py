@@ -64,6 +64,7 @@ class Layout:
     """Where one run keeps everything. The sessions write to ``writable`` and nowhere else."""
 
     root: Path
+    toolchains: tuple[Path, ...] = ()
 
     @property
     def app(self) -> Path:
@@ -162,7 +163,9 @@ def environment(layout: Layout, inherited: Mapping[str, str]) -> dict[str, str]:
     env = {k: v for k in KEEP if (v := inherited.get(k))}
     env.update(
         {
-            "PATH": f"{layout.bin}:{SYSTEM_PATH}",
+            "PATH": ":".join(
+                [str(layout.bin), *map(str, map(_on_path, layout.toolchains)), SYSTEM_PATH]
+            ),
             "HOME": str(layout.home),
             "SHELL": "/bin/sh",
             "TMPDIR": str(layout.tmp),
@@ -207,6 +210,10 @@ def session_env(layout: Layout) -> dict[str, str]:
     }
 
 
+def _on_path(tree: Path) -> Path:
+    return tree / "bin" if (tree / "bin").is_dir() else tree
+
+
 def toolchain(found: Mapping[str, str | None]) -> dict[str, Path]:
     """Each toolchain program found on the operator's ``PATH``, by its real file."""
     return {name: Path(path).resolve() for name, path in found.items() if path}
@@ -233,7 +240,7 @@ def argv(
     for tree in trees:
         args += ["--bind", str(tree), str(tree)]
     args += ["--ro-bind", str(layout.plugins), str(layout.plugins)]
-    for tool in sorted(set(tools)):
+    for tool in sorted({*tools, *layout.toolchains}):
         args += ["--ro-bind", str(tool), str(tool)]
     args += ["--remount-ro", "/home"]
     args += ["--unshare-pid", "--unshare-ipc", "--die-with-parent", "--new-session"]

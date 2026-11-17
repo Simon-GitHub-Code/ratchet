@@ -23,6 +23,11 @@ output in ``logs/``. ``table`` prints the matrix table of runs already reduced, 
 the order given, from each ``metrics.json`` as it is, and with ``--dir`` writes ``matrix.md`` and
 ``matrix.json`` there as a matrix does. ``oneoff`` turns the logs of the hand-driven dogfood run
 into an event log and reduces it, as a cross-check of the reducer.
+
+``--toolchain DIR`` on ``run``, ``probe`` and ``matrix``, once per directory, gives the run a
+toolchain installed outside it: ``DIR`` is bound read-only at its own path and ``DIR/bin``, or
+``DIR`` when it has no ``bin``, goes on the sandbox's ``PATH`` ahead of the system's. It may not be
+or hold the home, the temp location, or a directory directly in the home.
 """
 
 from __future__ import annotations
@@ -77,6 +82,7 @@ def _prepare(options: argparse.Namespace) -> tuple[harness.Run, harness.Operator
         budget=steps.Budget(minutes=options.minutes, usd=options.usd, steps=options.max_steps),
         model=options.model,
         owner_model=options.owner_model,
+        toolchains=tuple(options.toolchains),
     )
     run = harness.setup(config, operator, os.environ)
     # Why: the Agent SDK starts Claude Code with this process's environment under its own; the
@@ -98,6 +104,7 @@ def _matrix(options: argparse.Namespace) -> int:
         usd=options.usd,
         model=options.model,
         owner_model=options.owner_model,
+        toolchains=tuple(options.toolchains),
     )
     here = Path(__file__).resolve()
     rows = matrix.run_all(
@@ -153,6 +160,29 @@ def _table(options: argparse.Namespace) -> int:
     return 0
 
 
+def _toolchain(text: str) -> Path:
+    tree = Path(text).resolve()
+    home, temp = Path.home().resolve(), Path(tempfile.gettempdir()).resolve()
+    if not tree.is_dir():
+        msg = f"{tree} is not a directory"
+        raise argparse.ArgumentTypeError(msg)
+    if tree.parent == home or any(tree in (o, *o.parents) for o in (home, temp)):
+        msg = f"{tree} is or holds the home or the temp location, or sits directly in the home"
+        raise argparse.ArgumentTypeError(msg)
+    return tree
+
+
+def _given_toolchains(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--toolchain",
+        dest="toolchains",
+        type=_toolchain,
+        action="append",
+        default=[],
+        help="a toolchain directory to bind read-only and put on PATH; repeatable",
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     """The command line: one subcommand each for a run, a probe, a matrix and the readers."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -167,6 +197,7 @@ def _parser() -> argparse.ArgumentParser:
         one.add_argument("--max-steps", type=int, default=None, help="stop after this many steps")
         one.add_argument("--model", default="opus", help="the product session's model")
         one.add_argument("--owner-model", default="haiku", help="the scripted owner's model")
+        _given_toolchains(one)
     many = sub.add_parser("matrix", help="run the personas that state a stack, one after another")
     many.add_argument("--plugin", type=Path, required=True, help="the plugin checkout")
     many.add_argument("--dir", type=Path, required=True, help="a new directory under temp")
@@ -177,6 +208,7 @@ def _parser() -> argparse.ArgumentParser:
     many.add_argument("--usd", type=float, default=40.0, help="cost budget of each run")
     many.add_argument("--model", default="opus", help="the product session's model")
     many.add_argument("--owner-model", default="haiku", help="the scripted owner's model")
+    _given_toolchains(many)
     sub.add_parser("personas", help="list the personas and the stack each insists on")
     again = sub.add_parser("reduce", help="rewrite a run's measurements from its event log")
     again.add_argument("dir", type=Path)
