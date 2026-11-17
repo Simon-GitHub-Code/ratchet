@@ -229,5 +229,5 @@ The orchestrator is the `/ratchet:feature` skill's session. It runs the prefligh
 - **A ticket that cannot go on is parked.** An open question, a guard edit, a dispute, a verdict that is not an approval or a `merge: owner` closes the ticket with the reasons as given, and the others go on. A too-large result is not parked, though its verdict is `blocked`: the agent splits it, as [Too large](../feature/SKILL.md#too-large-the-agent-splits-it) says, unless the ticket is itself a part.
   - A `triggers` red, another instance of a kind whose safeguard or architecture review is owed, parks it with a reason naming `/ratchet:safeguard` or `/ratchet:architecture`.
   - No role writes the review: it is the owner's next command, and a decision record written in the same change as the instance would not count.
-- **One report.** The owner's questions come after it.
+- **One report.** `drain.py report` writes `.ratchet/queue/<date>-<time>.md`. The owner's questions come after it.
 - **An interrupted drain.** The next one starts with `drain.py clean --all`.

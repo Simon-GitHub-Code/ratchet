@@ -118,7 +118,7 @@ Every comparison against history uses the merge base with the default branch (`H
 | Does the running system resist a dynamic scan? | a passive scan of the running deliverable, fed the routes of the published contract: headers, cookies, transport, disclosure |
 | Can an attacker's toolkit break in? | an active scan with a signed-in session, and requests generated from the published contract that try each route's authentication, authorisation and input handling; a finding fails |
 | Does it hold its latency and throughput under the load the binding names? | a load test against the end-to-end environment with the thresholds the binding's Limits hold: the arrival rate, the percentile latency, the error rate; the owner's `/pstack:benchmark-checklist` before a number is trusted |
-| Does the telemetry arrive? | the method's `scripts/telemetry_sink.py`; a project with a collector reads them back from it instead |
+| Does the telemetry arrive? | the method's `scripts/telemetry_sink.py`; a project with a collector reads the traces, metrics and logs back from it instead |
 | Is any flag past its removal date? | the method's flags gate with `--expired`; it goes red by the calendar, so it is asked here and never on a pull request |
 | Is the interface usable by everyone? | accessibility checks over the components and pages, for user interfaces, inside the end-to-end suite once there is one; `impeccable audit` is the agent-side pass, the gate is the deterministic one |
 | Does the model still hold, and does the code still mirror it? | a formal model an agent writes with `pstack:create-formal-verification-skill` where a bug costs most and tests reach least, and keeps true to the code with `pstack:maintain-formal-verification-skill`. `just formal` runs it whole on the default branch, and a time-out is red. Its proof is a break planted in the code the model mirrors, with the model unchanged, which the check catches. A broken property is red on the next tier 2 run, and the route then names a round of upkeep. The model, its harness and the skill are guard paths |
@@ -126,7 +126,7 @@ Every comparison against history uses the merge base with the default branch (`H
 
 ## Weekly and advisory
 
-`audit-all` audits every dependency, dev tooling included. `licenses` checks the shipped dependencies' licences are compatible. `drift` lists outdated dependencies and writes the software bill of materials. `load-soak` holds the load for an hour and then raises it until the system breaks, and reports where: a leak and a breaking point are findings, each with its own pull request. Two more join it once their events are declared, both bound by the repository:
+`audit-all` audits every dependency, dev tooling included. `licenses` checks the shipped dependencies' licences are compatible. `drift` lists outdated dependencies and writes the software bill of materials. `load-soak` holds the load for an hour and then raises it until the system breaks, and reports where: a leak and a breaking point are findings, each with its own pull request. The `weekly` entry point runs the four one after another. Two more join it once their events are declared, both bound by the repository:
 
 | Question | Trigger | What commonly answers it |
 | --- | --- | --- |
@@ -153,8 +153,7 @@ Gates that accumulate become gates that get skipped. So speed is a property the 
 
 **Fail fast locally, report everything in CI.** Locally an inner-loop entry point (`check-fast`) runs the same gates and stops at the first red; `check` runs them all and names every red. In CI a matrix never stops early (`fail-fast: false`), so one run shows every red, and a pushed fix cancels the run it replaces.
 
-**Measured, not hoped.** `quality/thresholds.toml` holds `[ceilings.seconds]` with one key per tier, and one per gate where a gate has its own runner. A ceiling only falls: raising one is a loosening with an ADR behind it, whose `Relaxes:` line ([ratchet.md](ratchet.md)) the gate reads. Adopt sets the first ceilings from the first measured run with headroom (`budget --set`), never under the tier's budget in the table above, so a young project's few seconds do not become the next feature's ceiling; from then on every change that pushes a tier over must pay for itself in the same pull request. Runners vary, so the ceiling blocks on the default branch and nightly, in the tier 2 sense, and reports on pull requests. On the default branch a red tier 1 holds merges as a red tier 2 does: the merge judge leaves every merge to the owner until it is green (ADR 0069, with its code to come).
-
+**Measured, not hoped.** `quality/thresholds.toml` holds `[ceilings.seconds]` with one key per tier, and one per gate where a gate has its own runner. A ceiling only falls: raising one is a loosening with an ADR behind it, whose `Relaxes:` line ([ratchet.md](ratchet.md)) `ratchet-lowered` reads. Adopt sets the first ceilings from the first measured run with headroom (`budget --set`), never under the tier's budget in the table above, so a young project's few seconds do not become the next feature's ceiling; from then on every change that pushes a tier over must pay for itself in the same pull request. Runners vary, so the ceiling blocks on the default branch and nightly, in the tier 2 sense, and reports on pull requests.
 What speed never buys: a quarantined test (a failure here is a bug, never "flaky"), a tier 2 gate moved to on-demand to hide its cost, or a `timeout-minutes` so generous it never fires.
 
 ## Choosing a tier for a new question

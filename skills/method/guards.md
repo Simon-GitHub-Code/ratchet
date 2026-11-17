@@ -121,7 +121,10 @@ The command rules are on from the first session, before `/ratchet:adopt` has wri
 
 The permission rules in the project's `.claude/settings.json` are a second, independent layer, the same in every repository and never written by hand. `just settings` writes them, and `just settings-check` (tier 1) fails on a rule missing from or foreign to the lists. `just settings`:
 
+- keeps a rule no version of the plugin writes, which the check still reports
 - writes nothing under a plugin other than the one CI checks out, whose check would reject what it wrote
+
+Of the fixed command rules in `deny`:
 
 - `git symbolic-ref` has no rule because it also reads, and the hook is the one layer on its other spellings.
 - `gh label create` is not in the deny list, because the hook lets a recorded label through and a settings deny would refuse that one too.
