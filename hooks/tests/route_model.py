@@ -131,6 +131,7 @@ class Flag(StrEnum):
 class Answers(StrEnum):
     NONE = "none"
     ON_THE_UNIT = "on-the-unit"
+    CARRIED = "carried"
     DROPPED = "dropped"
 
 
@@ -479,6 +480,17 @@ def as_its_criteria_unread(world: World) -> World:
     return replace(world, tickets=(first, second))
 
 
+def as_its_carried_answers_unread(world: World) -> World:
+    if world.parked:
+        return replace(
+            world,
+            parked=False,
+            tickets=(Ticket.MERGED, Ticket.RESOLVED),
+            answers=Answers.ON_THE_UNIT,
+        )
+    return replace(world, tree=Tree.CODE)
+
+
 DIVERGENCES: Final[tuple[Divergence, ...]] = (
     Divergence(
         name="adoption-proved-by-its-pin",
@@ -541,6 +553,27 @@ DIVERGENCES: Final[tuple[Divergence, ...]] = (
             left=True,
         ),
     ),
+    Divergence(
+        name="carried-answers-read-as-code",
+        holds=lambda world: world.answers is Answers.CARRIED,
+        reads=as_its_carried_answers_unread,
+        contradicts=(
+            "Such a change may also append to the brief's `## In the owner's words` the lines"
+            " `expire` carries, and nothing else: each added line is a dated `## Answers` line of"
+            " a file the same change deletes."
+        ),
+        source="docs/adr/0064-a-document-has-a-kind-and-a-steering-document-leaves-with-its-feature.md",
+        breaks=frozenset({"RealAdviceCanBeFollowed"}),
+        example=World(
+            setup=Setup.BOUND,
+            hooks=True,
+            tree=Tree.RECORDS,
+            foundation=True,
+            tickets=(Ticket.RESOLVED, Ticket.RESOLVED),
+            architecture=Architecture.RECORDED,
+            answers=Answers.CARRIED,
+        ),
+    ),
 )
 
 
@@ -570,7 +603,7 @@ def deletes(before: World, after: World) -> World:
     if not expires(before, after):
         return after
     carried = after.answers is Answers.ON_THE_UNIT and after.tree is Tree.RECORDS
-    return replace(after, answers=Answers.NONE, tree=Tree.CODE if carried else after.tree)
+    return replace(after, answers=Answers.CARRIED if carried else Answers.NONE)
 
 
 def leaves(before: World, after: World) -> World:
@@ -1025,8 +1058,8 @@ def _agent_deletes_the_expired_unit(world: World) -> Iterator[World]:
         yield replace(
             world,
             left=False,
-            answers=Answers.NONE,
-            tree=Tree.CODE if carried else Tree.RECORDS,
+            answers=Answers.CARRIED if carried else Answers.NONE,
+            tree=Tree.RECORDS,
         )
 
 
@@ -1096,12 +1129,16 @@ def _agent_switches_to_the_default_branch(world: World) -> Iterator[World]:
         yield replace(world, head=Head.MAIN)
 
 
+def landed(world: World) -> World:
+    return replace(world, answers=Answers.NONE) if world.answers is Answers.CARRIED else world
+
+
 @action(ActionName.AGENT_LANDS_RECORDS, Advice.LAND_RECORDS, Advice.FINISH_RECORDS)
 def _agent_lands_records(world: World) -> Iterator[World]:
     if adopted(world) and (
         (world.head, world.tree) == (Head.MAIN, Tree.RECORDS) or world.head is Head.RECORDS
     ):
-        yield replace(world, head=Head.MAIN, tree=Tree.CLEAN)
+        yield landed(replace(world, head=Head.MAIN, tree=Tree.CLEAN))
         yield replace(world, head=Head.MAIN, tree=Tree.CLEAN, parked=True)
 
 
@@ -1114,7 +1151,7 @@ def _records_run_stops(world: World) -> Iterator[World]:
 @action(ActionName.OWNER_MERGES_RECORDS, Advice.MERGE_RECORDS)
 def _owner_merges_records(world: World) -> Iterator[World]:
     if adopted(world) and world.parked and (world.head, world.tree) == (Head.MAIN, Tree.CLEAN):
-        yield replace(world, parked=False)
+        yield landed(replace(world, parked=False))
 
 
 class Edge(NamedTuple):
