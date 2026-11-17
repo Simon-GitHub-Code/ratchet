@@ -311,6 +311,31 @@ def pages_before_comments(label: Label, graph: model.Graph) -> set[World]:
     return {s for s in graph.states if s.comments and label(s) is Advice.PRUNE_PAGES}
 
 
+def waiting_branch_unnamed(label: Label, graph: model.Graph) -> set[World]:
+    return {
+        s
+        for s in graph.states
+        if s.waits and model.finished_checkout(s) and label(s) is not Advice.OWNER_MERGE
+    }
+
+
+def released_by_another(graph: model.Graph) -> set[World]:
+    return {
+        source
+        for source, act, target in graph.edges
+        for held, by in (
+            (model.ASKING, model.QUESTIONS_RELEASED_BY),
+            (model.GUARDING, model.GUARD_RELEASED_BY),
+        )
+        for before, after in zip(source.tickets, target.tickets, strict=True)
+        if before in held and after not in held and act not in by
+    }
+
+
+def builds_while_a_cause_is_unmet(label: Label, graph: model.Graph) -> set[World]:
+    return {s for s in graph.states if not model.no_build_while_a_cause_is_unmet(label)(s)}
+
+
 def unfollowable(label: Label, graph: model.Graph) -> set[World]:
     taken = defaultdict(set)
     for edge in graph.edges:
@@ -388,6 +413,26 @@ CHECKS: dict[str, tuple[Callable[[Label], set[World]], Label]] = {
     "CommentsBeforePages": (
         lambda label: pages_before_comments(label, model.graph()),
         model.advice,
+    ),
+    "WaitingBranchNamed": (
+        lambda label: waiting_branch_unnamed(label, model.graph()),
+        model.advice,
+    ),
+    "RealWaitingBranchNamed": (
+        lambda label: waiting_branch_unnamed(label, model.graph()),
+        model.real_advice,
+    ),
+    "EachHoldReleasesByItsOwnCause": (
+        lambda _label: released_by_another(model.graph()),
+        model.advice,
+    ),
+    "NoBuildWhileAHoldsCauseIsUnmet": (
+        lambda label: builds_while_a_cause_is_unmet(label, model.graph()),
+        model.advice,
+    ),
+    "RealNoBuildWhileAHoldsCauseIsUnmet": (
+        lambda label: builds_while_a_cause_is_unmet(label, model.graph()),
+        model.real_advice,
     ),
 }
 
@@ -511,6 +556,15 @@ WITH_COMMENTS_OWED = [
     ActionName.OWNER_ADOPTS,
     ActionName.AGENT_INSTALLS_HOOKS,
 ]
+TO_A_PARK = [
+    *TO_TWO_TICKETS_IN_TRIAGE,
+    ActionName.OWNER_AGREES_TICKET,
+    ActionName.OWNER_STATES_CONJECTURE,
+    ActionName.DRAIN_PARKS_TICKET,
+]
+BLIND_TO_THE_WAITING_BRANCH = tuple(
+    rule for rule in model.CHAIN if rule is not model.WAITING_BRANCH
+)
 WITHOUT_THE_STEP: dict[str, tuple[model.Variant, str, frozenset[str], list[ActionName]]] = {
     "the safeguard's filter of the defect's row": (
         model.Variant(
@@ -628,6 +682,35 @@ WITHOUT_THE_STEP: dict[str, tuple[model.Variant, str, frozenset[str], list[Actio
             ActionName.MERGES_LEAVE_A_PAGE_STALE,
         ],
     ),
+    "the route's look at a branch that waits for the owner's merge": (
+        model.Variant(chain=BLIND_TO_THE_WAITING_BRANCH),
+        "WaitingBranchNamed",
+        frozenset({"AdviceCanBeFollowed", "AdviceReachesRest"}),
+        [*TO_A_PARK, ActionName.OWNER_LANDS_GUARD_EDITS],
+    ),
+    "the release of each part of a park by its own cause": (
+        model.Variant(release=model.by_any_cause),
+        "EachHoldReleasesByItsOwnCause",
+        frozenset(),
+        TO_A_PARK,
+    ),
+    "both, as the route of 0.13.0 has it": (
+        model.Variant(chain=BLIND_TO_THE_WAITING_BRANCH, release=model.by_any_cause),
+        "NoBuildWhileAHoldsCauseIsUnmet",
+        frozenset(
+            {
+                "AdviceCanBeFollowed",
+                "AdviceReachesRest",
+                "WaitingBranchNamed",
+                "EachHoldReleasesByItsOwnCause",
+            }
+        ),
+        [
+            *TO_A_PARK,
+            ActionName.OWNER_LANDS_GUARD_EDITS,
+            ActionName.OWNER_ANSWERS_ON_THE_TICKET,
+        ],
+    ),
 }
 
 
@@ -646,6 +729,9 @@ def broken_by(graph: model.Graph) -> dict[str, set[World]]:
         },
         "PruneNeverHidesTheWork": prune_hides_the_work(label, graph),
         "CommentsBeforePages": pages_before_comments(label, graph),
+        "WaitingBranchNamed": waiting_branch_unnamed(label, graph),
+        "EachHoldReleasesByItsOwnCause": released_by_another(graph),
+        "NoBuildWhileAHoldsCauseIsUnmet": builds_while_a_cause_is_unmet(label, graph),
     }
     return {name: states for name, states in found.items() if states}
 
@@ -923,12 +1009,13 @@ def test_every_state_reaches_rest_by_some_actions() -> None:
 
 
 RELEASED_BY = {
-    Ticket.HELD: ActionName.OWNER_ANSWERS_BLOCKED_RUN,
-    Ticket.ASKED: ActionName.OWNER_ANSWERS_ON_THE_TICKET,
-    Ticket.GUARDED: ActionName.OWNER_LANDS_GUARD_EDITS,
-    Ticket.OWED: ActionName.AGENT_BINDS_SAFEGUARD,
-    Ticket.PARKED: ActionName.OWNER_CHANGES_TICKET,
-    Ticket.OWES_ITS_ROW: ActionName.OWNER_CHANGES_TICKET,
+    Ticket.HELD: {ActionName.OWNER_ANSWERS_BLOCKED_RUN},
+    Ticket.ASKED: set(model.QUESTIONS_RELEASED_BY),
+    Ticket.GUARDED: set(model.GUARD_RELEASED_BY),
+    Ticket.ASKED_GUARDED: {*model.QUESTIONS_RELEASED_BY, *model.GUARD_RELEASED_BY},
+    Ticket.OWED: {ActionName.AGENT_BINDS_SAFEGUARD},
+    Ticket.PARKED: {ActionName.OWNER_CHANGES_TICKET},
+    Ticket.OWES_ITS_ROW: {ActionName.OWNER_CHANGES_TICKET},
 }
 
 
@@ -940,7 +1027,7 @@ def test_a_hold_is_released_by_its_own_step_and_by_no_other(hold: Ticket) -> Non
         for slot, ticket in enumerate(source.tickets):
             if ticket is hold:
                 (kept if target.tickets[slot] is hold else released).add(name)
-    assert released == {RELEASED_BY[hold]}
+    assert released == RELEASED_BY[hold]
     assert bool(kept) is (hold is not Ticket.OWES_ITS_ROW)
 
 
@@ -1321,7 +1408,7 @@ def test_a_commit_the_hold_did_not_name_leaves_a_guard_hold_and_its_edits_releas
     worlds, tips = [parked], [git(repo.root, "rev-parse", "main")]
     said = [real.classify(real.read(repo))]
     for name in (ActionName.OWNER_AGREES_TICKET, ActionName.OWNER_LANDS_GUARD_EDITS):
-        (after,) = model.ACTIONS[name].successors(worlds[-1])
+        after = next(model.ACTIONS[name].successors(worlds[-1]))
         real.apply(repo, name, real.Change(worlds[-1], after))
         worlds.append(after)
         tips.append(git(repo.root, "rev-parse", "main"))
@@ -1329,6 +1416,48 @@ def test_a_commit_the_hold_did_not_name_leaves_a_guard_hold_and_its_edits_releas
     assert len(set(tips)) == len(tips), "each step commits on the default branch"
     expected = [Advice.LAND_GUARD, Advice.LAND_GUARD, Advice.BUILD]
     assert said == [model.real_advice(world) for world in worlds] == expected
+
+
+ASKED_AND_GUARDED = World(
+    setup=Setup.BOUND,
+    hooks=True,
+    foundation=True,
+    tickets=(Ticket.ASKED_GUARDED, Ticket.TRIAGE),
+    answers=Answers.ON_THE_UNIT,
+)
+LANDS, ANSWERS = ActionName.OWNER_LANDS_GUARD_EDITS, ActionName.OWNER_ANSWERS_ON_THE_TICKET
+MERGES = ActionName.OWNER_MERGES_THE_WAITING_BRANCH
+RELEASES = {
+    "the guard edits wait for the owner, then the answer": (
+        [(LANDS, True), (ANSWERS, True), (MERGES, False)],
+        [Advice.ANSWER, Advice.OWNER_MERGE, Advice.OWNER_MERGE, Advice.BUILD],
+    ),
+    "the answer, then the guard edits": (
+        [(ANSWERS, False), (LANDS, False)],
+        [Advice.ANSWER, Advice.LAND_GUARD, Advice.BUILD],
+    ),
+    "the guard edits, then the answer": (
+        [(LANDS, False), (ANSWERS, False)],
+        [Advice.ANSWER, Advice.ANSWER, Advice.BUILD],
+    ),
+}
+
+
+@pytest.mark.parametrize("order", list(RELEASES))
+def test_a_park_for_questions_and_guard_edits_is_released_part_by_part(
+    tmp_path: Path, order: str
+) -> None:
+    steps, named = RELEASES[order]
+    repo = built(tmp_path, ASKED_AND_GUARDED)
+    worlds = [ASKED_AND_GUARDED]
+    said = [real.classify(real.read(repo))]
+    for name, waits in steps:
+        after = next(w for w in model.ACTIONS[name].successors(worlds[-1]) if w.waits is waits)
+        real.apply(repo, name, real.Change(worlds[-1], after))
+        worlds.append(after)
+        said.append(real.classify(real.read(repo)))
+    assert [model.real_advice(world) for world in worlds] == named
+    assert said == named, [str(label) for label in said]
 
 
 def architecture_found(repo: real.Repo) -> list[conformance.Finding]:

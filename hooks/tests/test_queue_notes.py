@@ -79,6 +79,15 @@ def test_the_paths_a_blocked_run_names_as_its_cause_are_its_guard_edits_and_its_
     assert causes_of({}) == []
 
 
+def test_a_dispute_holds_its_ticket_as_guard_edits_until_a_path_it_covers_lands() -> None:
+    result: dict[str, object] = {
+        "openQuestions": [{"question": "which way?"}],
+        "disputes": [{"path": "docs/disputes/0002-x.md", "guardPathsCovered": ["bites.toml"]}],
+    }
+    assert holds_of(result) == ["questions", "guard"]
+    assert causes_of(result) == ["docs/disputes/0002-x.md", "bites.toml"]
+
+
 def test_a_pipeline_result_leaves_a_hold_of_each_kind_it_names() -> None:
     result: dict[str, object] = {
         "tooLarge": True,

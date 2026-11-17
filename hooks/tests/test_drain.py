@@ -668,7 +668,27 @@ def test_close_parks_a_ticket_with_the_results_reasons_and_stashes_its_draft(
     assert "it is held; first" in capsys.readouterr().out
     write(root, GAMMA, ticket(3, "Gamma") + "\n## Answers\n\nA page that says it expired.\n")
     commit(root, "docs(tracker): the owner's answer")
-    assert states(root)[BRANCH_C] == "buildable", "the ticket changed, so the hold is over"
+    assert states(root)[BRANCH_C] == "held", "the answer leaves the guard edits and the dispute"
+    write(root, "lint.toml", "allow the new rule\n")
+    commit(root, "chore(method): the guard edit the run named")
+    assert states(root)[BRANCH_C] == "buildable", "each part of the hold is met"
+
+
+@pytest.mark.parametrize("text", ["", "Traceback: no result\n", "[1, 2]\n"])
+def test_close_refuses_a_result_that_holds_no_json_object_and_writes_no_note(
+    tmp_path: Path, capsys: Out, text: str
+) -> None:
+    root = project(tmp_path)
+    result = tmp_path / "result.json"
+    result.write_text(text, encoding="utf-8")
+    capsys.readouterr()
+    code = run(root, "close", GAMMA, "--outcome", "parked", "--result", str(result))
+    assert code == 2
+    assert capsys.readouterr().out == (
+        f"drain: {result} holds no JSON object, so nothing was closed: write the pipeline's"
+        " `result` object to it as JSON, then run this again\n"
+    )
+    assert not queue_notes.note_path(root, BRANCH_C).exists()
 
 
 PARKED = {
@@ -730,7 +750,9 @@ def test_close_without_a_result_and_an_unknown_ticket(tmp_path: Path, capsys: Ou
     root = project(tmp_path)
     assert run(root, "close", "nope.md") == 2
     assert "no such ticket" in capsys.readouterr().out
-    assert run(root, "close", ALPHA, "--result", str(tmp_path / "missing.json")) == 0
+    assert run(root, "close", ALPHA, "--result", str(tmp_path / "missing.json")) == 2
+    assert not queue_notes.note_path(root, BRANCH_A).exists()
+    assert run(root, "close", ALPHA) == 0
     kept = note(root, BRANCH_A)
     assert (kept["outcome"], kept["reasons"], kept["assumptions"]) == ("waits", [], [])
     assert (kept["additions"], kept["gates"]) == ([], {}), "a branch that was never made holds none"

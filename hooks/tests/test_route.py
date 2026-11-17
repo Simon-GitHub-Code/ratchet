@@ -1081,6 +1081,86 @@ def test_a_ticket_parked_for_guard_edits_is_released_when_they_land_and_not_befo
     assert states == ["buildable"]
 
 
+ASKED_AND_GUARDED = {**GUARD_BLOCK, "openQuestions": [{"question": "which way?"}]}
+
+
+def test_the_answer_releases_the_questions_of_a_park_and_leaves_its_guard_edits_held(
+    tmp_path: Path,
+) -> None:
+    root = held_root(tmp_path)
+    parked(root, ASKED_AND_GUARDED, stash=False)
+    assert route.decide(root, None).command.startswith(
+        f"answer the open questions the run of {HELD}"
+    )
+    write(root, HELD, HELD_TEXT + "\n## Answers\n\nQ: which way? A: this one.\n")
+    commit(root, "docs(tracker): the owner's answer")
+    step = route.decide(root, None)
+    assert step.command.startswith(f"land the guard edits the run of {HELD} named")
+    assert "answer" not in step.command
+    assert [e.state for e in drain.plan(drain.Drain(root, None)).tickets] == ["held"]
+    write(root, "guards/x", "the edit\n")
+    commit(root, "chore(method): the guard edit the run named")
+    assert route.decide(root, None).command == f"{route.FEATURE} {HELD}"
+
+
+def test_landing_the_guard_edits_of_a_park_leaves_its_questions_held(tmp_path: Path) -> None:
+    root = held_root(tmp_path)
+    parked(root, ASKED_AND_GUARDED, stash=False)
+    write(root, "guards/x", "the edit\n")
+    commit(root, "chore(method): the guard edit the run named")
+    step = route.decide(root, None)
+    assert step.command == f"answer the open questions the run of {HELD} named, on the ticket"
+
+
+def owner_branch(root: Path, name: str, *, described: bool = True) -> None:
+    branch(root, name)
+    write(root, "docs/process/gate.md", "the gate, changed\n")
+    if described:
+        write(root, f"{route.CHANGES}/{name.replace('/', '-')}.md", "## Summary\n\nThe gate.\n")
+    commit(root, "fix(gates): the change the run asked for")
+    git(root, "checkout", "-q", "main")
+
+
+def test_a_branch_whose_merge_is_the_owners_is_named_from_the_default_branch(
+    tmp_path: Path,
+) -> None:
+    root = held_root(tmp_path)
+    write(root, "guards/manifest.toml", MANIFEST)
+    commit(root, "chore(method): the manifest")
+    owner_branch(root, "fix/gate")
+    step = route.decide(root, None)
+    assert step.stage == "owner-merge"
+    assert step.command == "`git switch main && git merge --no-ff fix/gate`, typed by the owner"
+    assert "the merge judge leaves branch `fix/gate` to the owner" in step.why
+    assert "`just merge fix/gate` prints every reason" in step.why
+    git(root, "remote", "add", "origin", "https://example.invalid/r.git")
+    assert route.decide(root, None) == step, "a forge reads the branch as no forge does"
+    git(root, "merge", "-q", "--no-ff", "--no-edit", "fix/gate")
+    assert route.decide(root, None).command == f"{route.FEATURE} {HELD}"
+
+
+@pytest.mark.parametrize(
+    ("name", "described", "noted"),
+    [
+        ("fix/gate", False, False),
+        ("feature/9-gate", True, False),
+        ("queue/gate", True, True),
+        ("formal/upkeep-1", True, False),
+    ],
+    ids=["no change description", "a feature branch", "a drain note", "a formal round"],
+)
+def test_a_branch_abandoned_or_owned_by_a_run_is_not_named_for_the_owners_merge(
+    tmp_path: Path, name: str, *, described: bool, noted: bool
+) -> None:
+    root = held_root(tmp_path)
+    write(root, "guards/manifest.toml", MANIFEST)
+    commit(root, "chore(method): the manifest")
+    owner_branch(root, name, described=described)
+    if noted:
+        queue_notes.write_note(queue_notes.note_path(root, name), {"outcome": "waits"})
+    assert route.owner_branch_waiting(route.observe(root)) is None
+
+
 def test_a_guard_hold_with_no_base_commit_is_released_by_the_ticket_and_not_by_landing(
     tmp_path: Path,
 ) -> None:

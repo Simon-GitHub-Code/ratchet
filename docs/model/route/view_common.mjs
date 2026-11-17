@@ -28,11 +28,13 @@ export const NEXT = {
   "formal-upkeep": "Run the formal model's round",
   "prune-comments": "Prune the owed comments",
   "prune-pages": "Prune the pages",
+  "owner-merge": "Merge the branch the merge judge left to you",
 };
 
 export const checkout = (v) => {
   if (v.head === "records") return "A landing run stopped part-way";
   if (v.parked) return "A records branch waits for your merge";
+  if (v.advice === "owner-merge") return "A branch whose merge is yours waits";
   if (v.head !== "main") {
     if (v.tree === "code") return "Code uncommitted on a branch";
     return v.head === "work" ? "A clean branch to merge" : "A merged branch still checked out";
@@ -88,6 +90,7 @@ const STEP = {
   AgentLandsRecords: "an agent lands the records",
   RecordsRunStops: "the landing run stops",
   OwnerMergesRecords: "you merge the records branch",
+  OwnerMergesTheWaitingBranch: "you merge the branch that waits for you",
   MirroredCodeLands: "code the formal model mirrors lands",
   AgentRunsARound: "an agent runs the formal model's round",
   OwnerMergesTheRound: "you merge the round",
