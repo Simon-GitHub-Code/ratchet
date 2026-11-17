@@ -94,7 +94,10 @@ The owner's words are those a record keeps as theirs:
 
 Where those words settle a choice, the spec follows them, and a criterion that contradicts them is a defect.
 
-Every product question open at a step is asked, in the user's words, in one message, each with your recommended answer first and why, so the owner can accept them all at once. [questions.toml](questions.toml) lists each question a Ratchet skill asks, with its key and its words, and each question a default now answers instead. A test holds the skills to it.
+Every product question open at a step is asked, in the user's words, in one message, each with your recommended answer first and why, so the owner can accept them all at once. [questions.toml](questions.toml) lists each question a Ratchet skill asks, with its key and its words, and each question a default now answers instead. A test holds the skills to it:
+- An `[[ask]]` has a `key`, the `skills` that ask it, a `kind` and the `text` the skill quotes word for word. Its kind is `product`, or `architecture` for a key under `architecture.`, held to the same plain words.
+- Text in angle brackets is a question the agent writes at run time, and the words in the brackets say what kind of question it may be.
+- An `[[assume]]` has a `key`, its `skills` and the question it `replaces`. Its skill states the default in the hand-over.
 
 ### What is assumed
 

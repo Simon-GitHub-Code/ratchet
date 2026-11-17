@@ -17,6 +17,25 @@ A binding declares what the repository is, on one line: `- Application types: se
 
 A type decides which questions apply. It never decides the tool. Every question applies to every type unless [application-types.toml](application-types.toml) narrows it, and that file is the single source: the conformance gate reads it, and `python3 scripts/application_types.py <type>...` in the plugin prints the rows a set of types leaves out. Contract drift, for example, is asked only of a service, accessibility only of a web interface or an app, and a library is not asked whether it starts, emits telemetry or holds under load. The weekly `load-soak` follows `load`.
 
+| Catalogue table | Holds |
+| --- | --- |
+| `[types]` | each application type and what it is |
+| `[kinds]` | each kind of code a `code:` trigger names; its text is what the binding's Triggers row matches |
+| `[architecture]` | each trigger whose first arrival reopens the architecture, with the question it reopens |
+| `[events.<event>]` | each life event: its `meaning`, and either `signs`, globs over the tree the route reads to propose it, or `in-binding = true`, where the binding's `## Life event signs` table names this stack's signs |
+| `[proofs]` | each named proof and the fault it plants |
+| `[[question]]` | one per question the catalogue narrows |
+
+A `[[question]]` holds:
+- `name`: the question, as the binding's Gates table spells it;
+- `applies-to`: the types it is asked of, all six when absent;
+- `trigger`: `always` when absent, `code:<kind>`, `life:<event>`, or parts joined by `and`;
+- `collection = true`: its gate judges a set the project writes, so it carries a `remove` bite;
+- `directives = true`: a directive in the code can tell its tool to skip a finding, so the binding's `## Suppressions` names the kinds that silence it;
+- `proofs`: the named proofs its gate's bites claim.
+
+A question the catalogue does not list is asked of every type, always, and judges no collection.
+
 A row is never dropped. One that applies names a tool or is an accepted gap, as above. One that applies to none of the declared types says `none: not a <type>`, naming a type the question is asked of, and needs no ADR: the type line is the reason. One that applies and whose trigger has not fired says `later: <trigger>`, and judges nothing until it fires. The conformance gate is red on a missing or unknown type, on an empty Tool cell, on a row that applies bound to `none` without a reason and an ADR the repository holds, and on a dropped row.
 
 ## When each tier runs
