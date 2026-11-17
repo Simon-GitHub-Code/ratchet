@@ -410,3 +410,33 @@ def test_a_descriptor_that_is_not_open_cannot_be_copied() -> None:
         with pytest.raises(OSError, match="Bad file descriptor") as caught:
             listeners.copy_of(Path(f"/proc/{running.process.pid}/fd/999"))
         assert caught.value.errno == errno.EBADF
+
+
+def test_a_child_of_the_service_stays_the_services_once_its_parent_has_exited() -> None:
+    with service("own-session") as running:
+        group = running.process.pid
+        ours = listeners.Service(group, set())
+        before, unseen = ours.scan(everyone=False)
+        assert unseen is None
+        assert before
+        os.kill(group, signal.SIGKILL)
+        until(lambda: Path(f"/proc/{group}/stat").read_text(encoding="utf-8").split()[2] == "Z")
+        after, unseen = ours.scan(everyone=False)
+    assert unseen is None
+    assert after == before
+
+
+def test_the_listening_rows_are_read_no_further_than_the_first_row_that_is_not(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    net = tmp_path / "7" / "net"
+    net.mkdir(parents=True)
+    listening = (
+        "0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 123 1 0"
+    )
+    connected = (
+        "1: 0100007F:1F91 0100007F:C350 01 00000000:00000000 00:00000000 00000000 0 0 124 1 0"
+    )
+    (net / "tcp").write_text(f"header\n{listening}\n{connected}\nnot a row\n", encoding="utf-8")
+    monkeypatch.setattr(listeners, "PROC", str(tmp_path))
+    assert listeners.tcp_listeners(7) == {"socket:[123]": 8080}
