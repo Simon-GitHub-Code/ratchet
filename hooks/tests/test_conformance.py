@@ -1215,7 +1215,11 @@ def test_the_template_row_is_red_until_its_paths_are_bound_and_still_brings_the_
 
 
 def speed_findings(repo: Path) -> list[str]:
-    return [line for line in red(repo) if "Incremental" in line]
+    return [
+        line
+        for line in red(repo)
+        if line.startswith("docs/process/binding.md") and "Incremental" in line
+    ]
 
 
 def test_a_speed_section_without_an_incremental_line_is_found(repo: Path) -> None:
@@ -1248,3 +1252,96 @@ def test_an_incremental_line_naming_a_mode_or_none_with_a_reason_is_green(
 ) -> None:
     replace(BINDING, "- Incremental: stated for this stack", f"- Incremental: {value}")(repo)
     assert speed_findings(repo) == []
+
+
+def justfile_findings(repo: Path) -> list[str]:
+    return [line for line in red(repo) if line.startswith("justfile") and "mutation" in line]
+
+
+def bound_recipe(repo: Path) -> None:
+    text = (repo / "justfile").read_text(encoding="utf-8")
+    old = text[text.index("\nmutation-changed:") :].split("\n\n", 1)[0]
+    new = "\nmutation-changed:\n    ./run-mutants {{mutation_incremental}} --shard {{shard}}"
+    (repo / "justfile").write_text(text.replace(old, new), encoding="utf-8")
+
+
+def test_a_bound_incremental_mode_the_recipe_runs_and_ci_leaves_out_is_green(repo: Path) -> None:
+    bound_recipe(repo)
+    assert justfile_findings(repo) == []
+
+
+def test_a_recipe_that_does_not_use_the_incremental_variable_is_found(repo: Path) -> None:
+    bound_recipe(repo)
+    replace("justfile", "./run-mutants {{mutation_incremental}} ", "./run-mutants ")(repo)
+    assert justfile_findings(repo) == [
+        (
+            "justfile: the recipe `mutation-changed` does not use `{{mutation_incremental}}`,"
+            " so the binding's '- Incremental:' line is not what it runs; add the variable to"
+            " the mutation tool's command"
+        )
+    ]
+
+
+def test_an_incremental_variable_that_is_not_empty_in_ci_or_the_bite_is_found(repo: Path) -> None:
+    bound_recipe(repo)
+    switch = 'if env_var_or_default("CI", "") + env_var_or_default("RATCHET_BITING", "") == ""'
+    for kept in ('if env_var_or_default("CI", "") == ""', "if true"):
+        replace("justfile", switch, kept)(repo)
+        assert justfile_findings(repo) == [
+            (
+                "justfile: `mutation_incremental` is not empty when `CI` or `RATCHET_BITING` is"
+                " set; CI and the bite proof's copy both run without the cache, so give it the"
+                " template's switch, which is empty when either is set"
+            )
+        ]
+        replace("justfile", kept, switch)(repo)
+
+
+def test_an_incremental_variable_left_as_the_placeholder_is_found(repo: Path) -> None:
+    bound_recipe(repo)
+    replace("justfile", '"stated for this stack"', '"bind: the option"')(repo)
+    assert justfile_findings(repo) == [
+        (
+            "justfile: `mutation_incremental` still holds the template's `bind:` placeholder;"
+            " bind it to the mutation tool's option that the binding's '- Incremental:' line names"
+        )
+    ]
+
+
+def test_a_justfile_without_the_incremental_variable_is_given_the_template_s(repo: Path) -> None:
+    text = (repo / "justfile").read_text(encoding="utf-8")
+    dropped = "\n".join(
+        line for line in text.splitlines() if not line.startswith("mutation_incremental :=")
+    )
+    (repo / "justfile").write_text(dropped, encoding="utf-8")
+    [found] = [f for f in conformance.findings(repo) if "mutation_incremental" in f.problem]
+    assert found.problem.startswith("has no `mutation_incremental` variable")
+    assert isinstance(found.fix, conformance.Auto)
+    assert "mutation_incremental := if env_var_or_default" in found.fix.want(dropped)
+
+
+def test_an_incremental_line_of_none_wants_the_variable_empty_or_absent(repo: Path) -> None:
+    replace(BINDING, "- Incremental: stated for this stack", "- Incremental: none: no cache")(repo)
+    assert justfile_findings(repo) == [
+        (
+            "justfile: the binding's '- Incremental:' line says `none`, and `mutation_incremental`"
+            ' names a mode; set it to "": a tool with no incremental mode has no option to add'
+        )
+    ]
+    text = (repo / "justfile").read_text(encoding="utf-8")
+    emptied = re.sub(
+        r"^mutation_incremental :=.*$", 'mutation_incremental := ""', text, flags=re.MULTILINE
+    )
+    (repo / "justfile").write_text(emptied, encoding="utf-8")
+    assert justfile_findings(repo) == []
+    text = (repo / "justfile").read_text(encoding="utf-8")
+    (repo / "justfile").write_text(
+        "\n".join(x for x in text.splitlines() if not x.startswith("mutation_incremental :=")),
+        encoding="utf-8",
+    )
+    assert justfile_findings(repo) == []
+
+
+def test_a_repository_with_no_justfile_has_no_incremental_finding(repo: Path) -> None:
+    remove("justfile")(repo)
+    assert not [f for f in conformance.findings(repo) if "mutation_incremental" in f.problem]
