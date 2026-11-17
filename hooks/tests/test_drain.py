@@ -34,6 +34,7 @@ CONJECTURE = (
 ALPHA, BETA, GAMMA = (f".scratch/f/issues/0{n}-{name}.md" for n, name in enumerate("abc", 1))
 BRANCH_A, BRANCH_B, BRANCH_C = "feature/1-alpha", "feature/2-beta", "feature/3-gamma"
 STAMP = datetime(2026, 11, 12, 9, 30, 5, tzinfo=UTC)
+UNSTAMPED = "run time: not measured, since the run has no start stamp"
 REAL_NOW = drain.now
 ASSUMED = {"question": "Which case?", "assumed": "Lower.", "refuter": "A user types upper."}
 
@@ -420,6 +421,80 @@ def test_update_makes_a_work_tree_for_a_built_branch_an_earlier_drain_left(
     assert drain.tree_of(root, BRANCH_A) in drain.worktrees(root)
 
 
+def killed(monkeypatch: pytest.MonkeyPatch, point: str) -> None:
+    def stop(*_args: object, **_kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    writing = queue_notes.write_note
+    replacing = Path.replace
+    calls: list[Path] = []
+
+    def after_write(path: Path, note: dict[str, object]) -> None:
+        writing(path, note)
+        if "start" in note and "rebasing" not in note:
+            stop()
+
+    def torn(self: Path, target: Path) -> Path:
+        calls.append(self)
+        if len(calls) == 2:
+            stop()
+        return replacing(self, target)
+
+    if point == "before_rebase":
+        monkeypatch.setattr(drain, "rebase_tree", stop)
+    elif point == "after_rebase":
+        monkeypatch.setattr(drain, "drop_record", stop)
+    elif point == "mid_note_write":
+        monkeypatch.setattr(Path, "replace", torn)
+    else:
+        monkeypatch.setattr(queue_notes, "write_note", after_write)
+
+
+@pytest.mark.parametrize(
+    "point", ["before_rebase", "after_rebase", "mid_note_write", "after_note_write"]
+)
+def test_a_check_after_an_update_killed_at_any_point_never_names_a_role(
+    tmp_path: Path, capsys: Out, point: str
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    moved(root)
+    capsys.readouterr()
+    with pytest.MonkeyPatch.context() as patch:
+        killed(patch, point)
+        with pytest.raises(KeyboardInterrupt):
+            run(root, "update", ALPHA)
+    capsys.readouterr()
+    code = run(root, "check", ALPHA)
+    said = capsys.readouterr().out
+    assert "a role published" not in said
+    assert note(root, BRANCH_A).get("outcome") != drain.PARKED
+    if point in {"after_rebase", "mid_note_write"}:
+        assert code == drain.UNREAD
+        assert "run `update` again" in said
+    else:
+        assert code == 0
+    assert run(root, "update", ALPHA) == 0
+    capsys.readouterr()
+    assert run(root, "check", ALPHA, "--final") == 0
+    assert "rebasing" not in note(root, BRANCH_A)
+
+
+def test_a_role_s_commit_after_a_completed_update_still_parks_the_ticket(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    moved(root)
+    assert run(root, "update", ALPHA) == 0
+    tree = drain.tree_of(root, BRANCH_A)
+    write(tree, "src/b.py", "B = 1\n")
+    commit(tree, "feat(core): a role's change")
+    capsys.readouterr()
+    assert run(root, "check", ALPHA) == 1
+    assert "a role published" in str(note(root, BRANCH_A)["reasons"])
+
+
 def test_a_built_branch_behind_the_default_branch_does_not_land_on_its_old_review(
     tmp_path: Path, capsys: Out
 ) -> None:
@@ -466,6 +541,7 @@ def test_land_merges_what_the_judge_passes_and_removes_the_work_tree(
     }
     tree = build(root, BRANCH_A, change, record=approval("alpha"))
     write(tree, ".ratchet/timing.jsonl", '{"key": "test", "seconds": 4.25}\nnot json\n{"key": 1}\n')
+    write(tree, ".ratchet/run-time.json", '{"start": "2026-11-17T10:00:00Z"}')
     capsys.readouterr()
     assert run(root, "land", ALPHA) == 0
     out = capsys.readouterr().out
@@ -480,6 +556,8 @@ def test_land_merges_what_the_judge_passes_and_removes_the_work_tree(
     assert kept["assumptions"] == [ASSUMED]
     assert kept["additions"] == ["GLOSSARY.md: term Order (avoid: basket)"]
     assert kept["gates"] == {"test": 4.25}
+    assert str(kept["run_time"]).startswith("run time: ")
+    assert "not measured" not in str(kept["run_time"])
     assert states(root) == {BRANCH_B: "buildable", BRANCH_C: "buildable"}, (
         "the merge resolved the ticket, so what waited on it is buildable"
     )
@@ -804,9 +882,9 @@ def test_the_report_says_what_merged_what_waits_and_every_assumption(
         "",
         "## Timings",
         "",
-        f"- `{ALPHA}`: 42 min in the queue",
-        f"- `{GAMMA}`: 42 min in the queue",
-        "- `.scratch/f/issues/05-eps.md`: 42 min in the queue",
+        f"- `{ALPHA}`: 42 min in the queue; {UNSTAMPED}",
+        f"- `{GAMMA}`: 42 min in the queue; {UNSTAMPED}",
+        f"- `.scratch/f/issues/05-eps.md`: 42 min in the queue; {UNSTAMPED}",
     ]
     assert text.endswith("\n")
     assert git(root, "status", "--porcelain") == "", "the report is no commit's"
@@ -830,6 +908,7 @@ def test_the_report_leaves_out_a_ticket_still_building_and_times_what_it_can(
         "slowest gates of its last check: b 9.0s, c 3.2s, a 1.5s"
     )
     assert drain.minutes({"opened": "yesterday"}) == "not timed"
+    assert drain.minutes({"opened": "yesterday", "run_time": "run time: 9s"}) == "run time: 9s"
 
 
 # --- the small readers -----------------------------------------------------------------------
