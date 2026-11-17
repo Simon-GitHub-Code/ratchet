@@ -1,5 +1,3 @@
-"""``just guard-diff``: changed paths, both manifests, the summary and annotations."""
-
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -24,7 +22,6 @@ def fake_git(  # noqa: PLR0913 # -- one knob for each answer the fake can give
     base: str = "origin/main",
     base_binding: str | None = None,
 ) -> diff.Git:
-    """A git that answers only the exact command lines ``ratchet_guards.diff`` should run."""
     answers: dict[tuple[str, ...], str | None] = {
         ("rev-parse", "--show-toplevel"): f"{worktree}\n",
         ("merge-base", base, "HEAD"): "abc123\n",
@@ -155,8 +152,6 @@ def test_run_git_returns_stdout_or_none(tmp_path: Path) -> None:
 
 
 def test_the_default_base_is_the_first_branch_that_exists(tmp_path: Path) -> None:
-    # Why: guard-diff and the lowered gate must mean the same "before"; both take the
-    # candidates from gatelib and this one picks the first the repository actually has.
     answers = {("rev-parse", "--verify", "--quiet", "main^{commit}"): "abc\n"}
     assert diff.default_base(lambda args: answers.get(tuple(args)), tmp_path) == "main"
     assert diff.default_base(lambda _: None, tmp_path) == "origin/main"

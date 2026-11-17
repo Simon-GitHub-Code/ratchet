@@ -1,13 +1,3 @@
-"""A made-up stack for the dependency contract: files, a binding and an entry point, no real tool.
-
-The manifest is ``app.manifest``: a ``use <table> <name> <spec>`` line is one dependency, a spec
-that starts with ``@`` is fetched some other way, an ``own-version`` line is the package's own, and
-any other line is settings. The lockfile is ``app.lock``: a ``pin`` line is one resolved version in
-the order the contract's ``locked`` record takes, any other line is settings. The entry point is a
-script that prints the contract's records for the files it is given. Nothing here names a language,
-a package manager or a format a real tool writes, so a pass shows the plugin knows none.
-"""
-
 import subprocess
 import sys
 import tempfile
@@ -62,7 +52,6 @@ MANIFEST = "own-version 1.0\nsetting strict on\nuse main alpha ^1.0\nuse dev gam
 def pin(
     name: str, version: str, *, sum_: str | None = None, source: str = REGISTRY, sides: str = "one"
 ) -> str:
-    """One lock line for a registry version; its integrity is ``sum-<name><version>`` by default."""
     parts = version.split(".")
     while len(parts) > 1 and parts[-1] == "0":
         parts.pop()
@@ -81,7 +70,6 @@ FILES = {
 
 
 def read(files: Mapping[str, str]) -> str:
-    """What the entry point prints for ``files`` written under a directory by path."""
     with tempfile.TemporaryDirectory(prefix="ratchet-reader-") as scratch:
         for path, text in files.items():
             target = Path(scratch) / path

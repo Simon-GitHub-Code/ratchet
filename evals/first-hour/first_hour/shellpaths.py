@@ -1,21 +1,3 @@
-"""The paths a shell command line names, and not the text that only looks like one.
-
-``policy.shell`` refuses a path outside the run. Reading every ``/word`` in the line as a path
-refused work a normal session does: a slash command in a commit message, the ``/p`` of a ``sed``
-script, the ``/**`` of a comment in a file a heredoc writes, the ``/items`` route in a test. This
-module reads the line the way a shell does and yields only what is used as a path: a word that
-starts like one, in a place a path can go.
-
-What is left out is text another program reads, never a path the shell opens: the body of a
-heredoc that only feeds a file, the script or pattern argument of ``sed``, ``awk`` and ``grep``,
-and text inside a quoted string. A string literal in code a command runs (``python -c``, a
-heredoc to ``node``) is read for a path it names, since that code may open it; only a literal whose
-first directory the machine's root does not have is let through, as a route or a URL path.
-Unbalanced quotes, which the shell would not run either, fall back to the earlier rule: every
-word that starts like a path counts. The sandbox is the layer that makes a read outside the run
-impossible; this one says no first and says why.
-"""
-
 from __future__ import annotations
 
 import re
@@ -30,22 +12,16 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class Word:
-    """A word used as a path; ``cd`` is set when the shell moves there, and later words follow."""
-
     raw: str
     cd: bool = False
 
 
-# Why: a path starts here, in a word; `..` alone or `../x` but not `..x`.
 _START = re.compile(r"~|\$\{?(?:HOME|TMPDIR)\}?|/|\.\.(?:/|$)")
-# Why: the earlier rule, kept for a line the shell could not read: a path after a space, a quote,
-# `=`, a bracket or a redirect.
 _ANYWHERE = re.compile(
     r"(?:^|(?<=[\s=('\"<>`]))"
     r"(~[^\s'\";|&<>()`]*|\$\{?(?:HOME|TMPDIR)\}?[^\s'\";|&<>()`]*|/[^\s'\";|&<>()`]*"
     r"|\.\.(?:/[^\s'\";|&<>()`]*)?)"
 )
-# Why: `/ratchet:safeguard` is a slash command, and no directory at the root is named that.
 _SLASH_COMMAND = re.compile(r"/[a-z][\w-]*:[\w-]+")
 _ASSIGN = re.compile(r"[\w-]*=")
 _SUBSTITUTION = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
@@ -57,15 +33,12 @@ _INTERPRETER = re.compile(r"(?:python[\d.]*|node|deno|bun|perl|ruby)$")
 _SHELL = re.compile(r"(?:ba|da|z)?sh$")
 _SCRIPTED = frozenset({"sed", "awk", "gawk", "mawk", "grep", "egrep", "fgrep", "rg"})
 _WRAPPERS = frozenset({"env", "command", "exec", "time", "nohup", "sudo", "xargs"})
-# Why: the script of `sed -e` and the pattern of `grep -e` are the next word, not the first.
 _SCRIPT_FLAGS = frozenset({"-e", "--expression", "--regexp"})
 _PUNCTUATION = ";&|()<>\n"
-# Why: `for g in a b; do sed ...` starts its command after `do`, so the program is the next word.
 _KEYWORDS = frozenset({"do", "then", "else", "elif", "if", "while", "until", "!", "{", "}"})
 
 
 def words(command: str) -> Iterator[Word]:
-    """The words of ``command`` that are used as paths, in the order the shell reads them."""
     shell_text, bodies = _split_heredocs(command)
     try:
         tokens = _tokens(shell_text)
@@ -83,28 +56,17 @@ def words(command: str) -> Iterator[Word]:
 
 @dataclass(frozen=True)
 class Call:
-    """A command a line runs: the program, and the words after it."""
-
     name: str
     args: tuple[str, ...]
 
 
 @dataclass(frozen=True)
 class Scan:
-    """What a line runs: its commands, and the code it hands to an interpreter."""
-
     calls: tuple[Call, ...]
     code: tuple[str, ...]
 
 
 def scan(command: str) -> Scan | None:
-    """The commands and inline code of ``command``, or ``None`` if a shell would not read it.
-
-    A command is found after a separator, a keyword (``do``), an assignment or a wrapper
-    (``env``, ``xargs``), in a quoted substitution, in the argument of ``sh -c`` and in the body
-    of a heredoc a shell reads. The code is a heredoc body or the argument of ``-c`` and ``-e``
-    that an interpreter reads. The body of a heredoc that only writes a file is neither.
-    """
     try:
         calls, code = _scan(command)
     except ValueError:
@@ -152,7 +114,6 @@ def _extend(calls: list[Call], code: list[str], found: tuple[list[Call], list[st
 
 
 def _after_prefix(simple: list[str]) -> list[str]:
-    """The simple command without its assignments, keywords and wrappers (with their flags)."""
     index = 0
     while index < len(simple):
         word = simple[index]
@@ -176,11 +137,6 @@ def _tokens(text: str) -> list[str]:
 
 
 def _split_heredocs(command: str) -> tuple[str, list[tuple[str, str]]]:
-    """The command line without heredoc bodies, and each body with what reads it.
-
-    A body is ``shell`` for a shell, ``code`` for an interpreter and ``data`` for anything else,
-    which only copies it to a file or a pipe.
-    """
     kept: list[str] = []
     bodies: list[tuple[str, str]] = []
     waiting: list[tuple[str, str, list[str]]] = []
@@ -197,13 +153,11 @@ def _split_heredocs(command: str) -> tuple[str, list[tuple[str, str]]]:
         for match in _HEREDOC.finditer(line):
             delimiter = next(group for group in match.groups() if group)
             waiting.append((delimiter, _reader(line[: match.start()]), []))
-    # Why: a heredoc that never ends still ran; its text is checked as the code it feeds.
     bodies.extend((kind, "\n".join(body)) for _, kind, body in waiting)
     return "\n".join(kept), bodies
 
 
 def _reader(before: str) -> str:
-    """What reads a heredoc: the last command named before ``<<`` on its line."""
     plain = (w for w in _last_simple(before) if not _ASSIGN.match(w))
     name = next((_basename(w) for w in plain if _basename(w) not in _WRAPPERS), "")
     if _SHELL.match(name):
@@ -220,11 +174,6 @@ def _last_simple(text: str) -> list[str]:
 
 
 def _simple_commands(tokens: list[str], *, targets: bool = True) -> Iterator[list[str]]:
-    """The tokens split at each separator; a redirect operator is dropped.
-
-    Its target is kept, as a path to judge, unless ``targets`` is false: the arguments of a
-    command do not include where its output goes, nor the ``2`` of ``2>``.
-    """
     current: list[str] = []
     redirected = False
     for token in tokens:
@@ -279,14 +228,11 @@ def _cd(args: list[str]) -> Iterator[Word]:
     if not operands:
         return
     target = operands[0]
-    # Why: a target that holds a variable or a substitution is not known here, so the words after
-    # it are judged from where the line began, which is the stricter reading for a `..`.
     known = _START.match(target) or not re.search(r"[$`]", target)
     yield from _word(target, cd=bool(known))
 
 
 def _program(name: str, args: list[str]) -> Iterator[Word]:
-    """A shell or an interpreter: the word after `-c` or `-e` is code, not a path."""
     previous = ""
     flag = _SHELL_FLAG if _SHELL.match(name) else _CODE_FLAG
     for arg in args:
@@ -301,7 +247,6 @@ def _program(name: str, args: list[str]) -> Iterator[Word]:
 
 
 def _scripted(args: list[str]) -> Iterator[Word]:
-    """``sed``, ``awk`` and ``grep``: the script or pattern is text, not a path."""
     flagged = any(arg in _SCRIPT_FLAGS for arg in args)
     skip_next = False
     skip_first = not flagged
@@ -319,7 +264,6 @@ def _scripted(args: list[str]) -> Iterator[Word]:
 
 
 def _word(token: str, *, cd: bool = False) -> Iterator[Word]:
-    """The path a word is, and the paths in a command substitution it holds."""
     for match in _SUBSTITUTION.finditer(token):
         yield from (Word(w.raw) for w in words(match.group(1) or match.group(2)))
     value = token.split("=", 1)[1] if _ASSIGN.match(token) else token
@@ -331,7 +275,6 @@ def _word(token: str, *, cd: bool = False) -> Iterator[Word]:
 
 
 def _literals(code: str) -> Iterator[Word]:
-    """The paths a string literal in code names, except those no directory at the root holds."""
     roots = {entry.name for entry in Path("/").iterdir()}
     for match in _LITERAL.finditer(code):
         raw = match.group(1)

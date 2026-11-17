@@ -1,13 +1,3 @@
-"""Additive records: what an agent may add to the glossary and the ADRs, and what is refused.
-
-``ADDITIVE`` and ``NOT_ADDITIVE`` are the corpus of the pure judge, one row per way a glossary
-can change; ``ADR_ROWS`` is the same for decision records. ``EDITS`` drives the hook with the tool
-calls an agent makes. Every row of the refused tables is an attempt to get a change to an
-existing record past the check. The hook judges a record only where the commit lands on the
-default branch (ADR 0033): there an addition passes and anything else is refused; on a branch it
-says nothing and ``guard-diff`` reads the change at the merge.
-"""
-
 import io
 import json
 from collections.abc import Sequence
@@ -810,8 +800,6 @@ def edit(old: str, new: str) -> dict[str, object]:
     return {"old_string": old, "new_string": new}
 
 
-# Each row: the tool, its input, and the reason the hook gives when it refuses on main (None: it
-# passes).
 EDITS: list[tuple[str, str, dict[str, object], str | None]] = [
     (
         "an Edit adds a term",
@@ -945,7 +933,6 @@ def decide(
     *,
     branch: str = "main",
 ) -> str | None:
-    """The detail of the refusal of one edit made in ``/repo``, or ``None`` when it passes."""
     payload = {"tool_name": tool, "tool_input": tool_input, "cwd": str(ROOT)}
     filesystem = filesystem or FakeFilesystem(contents=dict(ON_DISK), merged=dict(MERGED))
     verdict = hook.decide(payload, make_guard(FakeRepo(branch=branch), filesystem=filesystem))
@@ -990,8 +977,6 @@ def test_the_refusal_names_the_group_its_reason_and_what_the_edit_changes() -> N
 
 
 def test_what_the_agent_added_may_be_reworked_and_what_the_owner_merged_may_not() -> None:
-    # Why: the merge base is the standard, not the work tree. The conformance gate may send an
-    # agent back to its own new record; a record the owner merged stays the owner's.
     drafted = FakeFilesystem(
         contents={**ON_DISK, NEW_ADR: "# A draft\n", "/repo/GLOSSARY.md": GLOSSARY + CLICK},
         merged=dict(MERGED),
@@ -1088,11 +1073,6 @@ MANIFEST = (
 
 @pytest.fixture
 def adopted(tmp_path: Path) -> Path:
-    """A repository with the manifest, a glossary and three records on ``main``, on a branch.
-
-    The branch is ``change``; a test that needs the commit to land on the default branch switches
-    to ``main``.
-    """
     files = {
         MANIFEST_PATH: MANIFEST,
         "AGENTS.md": "# Agents\n",
@@ -1106,7 +1086,6 @@ def adopted(tmp_path: Path) -> Path:
 
 
 def answer(root: Path, tool: str, tool_input: dict[str, object]) -> str:
-    """The decision ``hook.main`` prints for one call in ``root``, or ``"pass"``."""
     stdout = io.StringIO()
     case = {"tool_name": tool, "tool_input": tool_input, "cwd": str(root)}
     assert hook.main(root, io.StringIO(json.dumps(case)), stdout) == 0
@@ -1116,7 +1095,6 @@ def answer(root: Path, tool: str, tool_input: dict[str, object]) -> str:
 
 
 def guard_diff(root: Path, *flags: str) -> tuple[int, str, str]:
-    """The exit code, stdout and summary of ``guard-diff`` run in ``root``."""
     stdout = io.StringIO()
     summary = root.parent / "summary.md"
     summary.unlink(missing_ok=True)
@@ -1196,8 +1174,6 @@ def test_another_guard_path_fails_the_additive_exit_and_committed_additions_pass
 
 
 def test_the_merge_base_is_the_standard_when_the_default_branch_moves_on(adopted: Path) -> None:
-    # Why: in a queue of parallel branches the default branch gains terms a branch has not seen;
-    # judged against its tip, every later addition on that branch would look like a removal.
     repos.git(adopted, "checkout", "-q", "main")
     (adopted / "GLOSSARY.md").write_text(GLOSSARY + CLICK, encoding="utf-8")
     repos.commit(adopted, "docs(glossary): add click")
@@ -1400,8 +1376,6 @@ def in_order(needles: list[str], haystack: list[str]) -> bool:
 def test_no_accepted_change_loses_a_line_or_a_banned_word(
     mutations: list[tuple[str, int, str]],
 ) -> None:
-    # Why: two oracles that share no code with the judge. The prose gate's own reader says which
-    # words are banned, and a plain line comparison says which lines are still there, in order.
     lines = LINES
     for mutation in mutations:
         lines = mutate(lines, mutation)
@@ -1436,7 +1410,6 @@ REWRITE_GLOSSARY = "python3 - <<'EOF'\nopen('GLOSSARY.md', 'w').write('x')\nEOF"
 
 
 def two_checkouts(adopted: Path, *, session_on: str, other_on: str) -> tuple[Path, Path]:
-    """The adopted checkout on ``session_on`` and a worktree of it on ``other_on``."""
     other = adopted / ".claude" / "worktrees" / "agent-1"
     if session_on == "main":
         repos.git(adopted, "checkout", "-q", "main")
@@ -1480,7 +1453,6 @@ def test_a_write_in_the_checkout_on_the_default_branch_is_refused_from_a_feature
 def test_a_cd_the_shell_may_not_have_made_leaves_the_write_judged_in_the_session_checkout(
     adopted: Path, joint: str, verdict: str
 ) -> None:
-    """Only ``&&`` proves the ``cd`` happened; after another joint the session may be home."""
     session, other = two_checkouts(adopted, session_on="main", other_on="feature")
     command = f"cd {other}{joint}{REWRITE_GLOSSARY}"
     assert answer(session, "Bash", {"command": command}) == verdict

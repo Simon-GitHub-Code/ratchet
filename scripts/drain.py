@@ -1,104 +1,4 @@
 #!/usr/bin/env python3
-"""The queue: every agent-ready ticket built at once, each in a work tree of its own. ADR 0023.
-
-``/ratchet:feature`` with no ticket drains the queue. An agent runs the pipelines; this script
-decides everything about a drain that needs no judgement, and keeps what must outlive a session.
-
-- ``plan`` prints, as JSON, what each open agent-ready ticket is to this drain, in the order
-  their ``Blocked by`` lines give: ``buildable`` (the ticket passes the preflight and nothing
-  is built; while the checkout is not fit to build on, its ``why`` says what is missing),
-  ``building`` (its work tree exists), ``built`` (its branch holds commits and is not merged, so
-  the judge is asked; when it is behind the default branch its ``why`` says it is brought up to
-  date and judged again first), ``waiting`` (blocked only by tickets this drain can still merge),
-  ``held`` (its last run parked or was not approved, and neither the ticket nor a path the run
-  named as its cause, a guard edit or a dispute, has changed since; a hold
-  outranks commits on the branch, but a wait for a reason the drain resolves itself is
-  retried; a ticket waiting on a held one is refused naming it),
-  ``merged`` (its branch is merged and the ticket is still open) and ``refused`` (the preflight
-  is red, with what produces each missing piece). ``start`` names the buildable tickets to start
-  now: at most ``--concurrency`` less those in a work tree, building or built and not yet
-  settled, and none while the checkout is not fit.
-- ``open <ticket>`` is the gate: it makes the ticket's work tree and branch only when the plan
-  starts that ticket, so the order and the cap are a script's exit code.
-- ``update <ticket>`` rebases the ticket's branch onto the default branch when that has moved,
-  first making the work tree of a built branch that has none and dropping a last commit that is
-  the verdict record, which the rebase outdated.
-  Exit 0 with ``moved``; exit 2 with the conflicted paths and the branch as it was. A run killed
-  part-way is run again: the rebase it left is abandoned, which puts the branch back, and starts
-  over; one killed after the rebase finished still answers ``moved`` and drops the record.
-- ``check <ticket>`` runs the publish check of ADR 0060 in the ticket's work tree against the
-  start ``open`` recorded in its note (``scripts/publish_check.py``). A branch with commits of its
-  own and no work tree gets one under the cap. Green exits 0 and, with ``--final``, marks the
-  start ``passed``; without it nothing is marked, and ``land`` refuses a start not passed. A
-  branch that moved is parked as a role that published, held until the ticket's text changes, and
-  exits 1; only a rebase left unfinished waits to be retried, its start passed with ``--final``,
-  and exits 3; a present state it cannot read waits to be retried with no mark and exits 3; a note
-  with no start exits 2. ``update`` runs the same check first on a branch with commits of its own
-  whose start is not passed, marks it passed before it rebases, and is refused with exit 3, closing
-  nothing, when the check cannot read. A rebase that moves the branch records the new head as the
-  start, unpassed.
-- ``land <ticket>`` runs the binding's ``merge`` entry point with no forge and closes the ticket
-  with what the merge judge printed: merged, or waiting for the owner with every reason verbatim.
-  Run again after the merge was killed, it first puts right what the merge left (``merge.py``'s
-  work tree, a fast-forward cut off half-way), and a merge that landed is recorded as merged.
-- ``close <ticket> --outcome merged|waits|parked`` removes the work tree, stashing what was left
-  uncommitted, and writes the ticket's note for the report. A work tree whose uncommitted work
-  git cannot stash (a stale lock, a merge left unfinished, a damaged index) is not removed and
-  nothing running from it is ended: the note and a ``kept:`` line say so. ``--result FILE`` is the
-  pipeline's result: its open questions, guard edits and forced verdict become the reasons. A
-  ``triggers`` red in its ``checkOutput`` (another instance of a kind whose safeguard is owed,
-  ADR 0028) adds
-  a reason naming ``/ratchet:safeguard``, and the ticket is held only until no such kind is owed.
-  One for a kind whose architecture review is owed (ADR 0052) names ``/ratchet:architecture``
-  the same way, and holds the ticket until that review has landed.
-- ``clean`` removes every queue work tree whose branch is merged or gone; ``--all`` removes the
-  rest too, their uncommitted work stashed as ``<branch>: interrupted run``. A drain starts with
-  ``clean --all``: one drain runs on a repository at a time, so every work tree found then is
-  left over. Which the script holds to: ``clean --all`` takes a lease naming the processes above
-  it, refuses while a process of another drain on this repository is alive, and the drain's
-  token is printed on stderr; ``report`` ends the lease of its own drain only (by its token, or
-  when no other drain is alive) and says so when it leaves another's; ``--take-over`` replaces
-  one whose drain is gone for good. A drain is alive while a process of its own is: one below
-  where its chain parts from the new command's, or one running a program from a queue work tree
-  or in one. A
-  process above both commands, as the service manager is, proves nothing; so a drain whose
-  processes are all gone does not block the next, and two drains under one long-lived process
-  are told apart by the first's program still running in its tree. ``clean --all --drain TOKEN``
-  resumes the drain that holds the token. An accepted limit: two drains run by one process on one
-  repository, with drain 1 between commands and nothing running from its tree, cannot be told
-  apart, so a ``clean --all`` from drain 2 without drain 1's token takes drain 1's tree (its draft
-  is kept as the stash "interrupted run"; no work is lost). Pass the token to avoid it. A
-  ``clean --all`` killed between writing the lease and printing the token loses the token; the same
-  session's rerun still takes the lease, and prints a new one. A landing is seen while its
-  ``land`` or the merge it started is alive: the ``land`` holds a lock of the kernel's on its
-  ticket, and the merge holds one of its own on the branch, so a ``land`` killed alone leaves a
-  landing that is still seen. ``report`` and ``clean``, of any drain, leave that ticket's note and
-  tree alone while it is seen, and ``update``, ``close`` and ``split`` of that ticket refuse with
-  exit 3, change nothing, and say to run ``plan`` once it ends: with a ``land`` alive, that the
-  landing records the ticket's outcome itself; with only a merge alive, that a merge is running,
-  and a ``report`` or an ``update`` records the outcome afterwards. A second ``land`` is refused
-  while either runs; one that meets an orphaned merge in its last instant is refused once, by the
-  merge, with "run land again". ``clean`` removes the private lock file of a ``land`` that is
-  gone. A ``--take-over`` of a
-  drain that is still alive is the owner's call: a landing that drain runs keeps its tree while
-  it runs, and the next ``clean --all`` takes the tree once that landing has ended, its work all
-  committed. Every
-  command that changes a work tree also runs under a lock of the kernel's, freed when its holder
-  dies however it dies, so two commands at once (two ``open`` of one ticket) are run one at a
-  time.
-- ``report`` writes ``.ratchet/queue/<date>-<time>.md`` and prints it: per ticket merged, waiting
-  for the owner or parked, with the reasons; every assumption with its refuter; every glossary
-  term and ADR added; the time each ticket took.
-
-Work trees live outside the repository, under the temporary directory, in a directory per user
-and repository that only that user can write. The script refuses one that is a link or another
-user's, and empties only what git lists as a work tree of this repository. The notes and reports
-live in ``.ratchet/``, which no commit carries.
-
-Usage: ``drain.py plan|open|update|check|land|close|clean|report [ticket] [--root DIR]
-[--concurrency N] [--offline] [--outcome O] [--reason TEXT]... [--result FILE] [--all] [--final]``.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -133,7 +33,6 @@ import route
 import run_time
 import split
 
-# Why: the additive-record check the hook and the judge share lives under hooks/.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import records
 from ratchet_guards.manifest import Manifest
@@ -142,24 +41,19 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
 
 CONCURRENCY = 3
-# Why: the workflow declares the most agents a run spawns, by role, and a test counts them in a
-# worst-case run, so a new role changes one line there and not a number here.
 _DECLARED = re.findall(
     r"^const AGENTS_AT_MOST = (\{.*\})$",
     (Path(__file__).resolve().parents[1] / "workflows/pipeline.js").read_text(encoding="utf-8"),
     re.MULTILINE,
 )
 _AGENTS: dict[str, int] = json.loads(_DECLARED[0])
-# The critic and its fix loop join once the project is depended-on (ADR 0028).
 PIPELINE_AGENTS = _AGENTS["dependedOn"]
 YOUNG_PIPELINE_AGENTS = _AGENTS["young"]
-# A branch brought up to date behind another merge: one agent to reconcile, one to review again.
 UPDATE_AGENTS = _AGENTS["rejudge"]
 BUILDABLE, BUILDING, BUILT = "buildable", "building", "built"
 WAITING, HELD, MERGED, REFUSED = "waiting", "held", "merged", "refused"
 LIVE = frozenset({BUILDABLE, BUILDING, BUILT})
 WAITS, PARKED, SPLIT = "waits", "parked", queue_notes.SPLIT
-# Why: `<branch>: blocked run` is the stash the route reads as a held ticket.
 STASHED = {MERGED: "merged", WAITS: "unapproved", PARKED: "blocked", SPLIT: "split"}
 INTERRUPTED = "interrupted"
 QUEUE = queue_notes.QUEUE
@@ -167,14 +61,12 @@ QUEUE_HOME = "ratchet-queue"
 OWNER_ONLY = 0o700
 OWNER_FILE = 0o600
 LANDING_TRIES, LANDING_POLL = 20, 0.05
-# Why: `update` uses 1 and 2 for its own answers, so a refusal for a live landing has its own code.
 LANDING_RUNNING = 3
 UNREAD = 3
 CUT_OFF = "is not checked: its update was cut off after it moved the branch; run `update` again"
 LANDING_MAY_RUN = "a landing may be in flight in another drain"
 LOCK, LEASE = "ratchet-drain.lock", "ratchet-drain.lease"
 LOCK_WAIT, LOCK_POLL = 30.0, 0.05
-# Why: the start time is the 22nd field of /proc/<pid>/stat, the 20th after the command's name.
 PROC_START = 19
 DEPTH = 64
 TOKEN_BYTES = 4
@@ -184,11 +76,9 @@ NOT_A_TREE = "it is not a work tree of this repository or an empty directory, so
 MERGE = "merge"
 SLOWEST = 3
 LOCKED = frozenset({"open", "update", "check", "close", "clean", "report", "split"})
-# Why: the triggers gate's red line; the kind it names is what the safeguard binds (ADR 0028).
 EXPIRED = "docs(documents): delete expired plans and keep their answers"
 SIDES = {frozenset({1, 2}): "--ours", frozenset({1, 3}): "--theirs"}
 OWED_RED = re.compile(r"triggers: '([^']+)' gained \d+ instance")
-# Why: ADR 0052. The red line of a kind whose architecture review is owed; the review releases it.
 REVIEW_RED = re.compile(r"triggers: architecture review owed: '([^']+)' gained \d+ instance")
 DEFAULT_WORDS = "the default branch"
 UNREADABLE_CODE = "refs"
@@ -201,8 +91,6 @@ BEHIND = (
 
 @dataclass(frozen=True)
 class Entry:
-    """One agent-ready ticket as a drain sees it."""
-
     ref: str
     title: str
     branch: str
@@ -214,8 +102,6 @@ class Entry:
 
 @dataclass(frozen=True)
 class Plan:
-    """What a drain would do now."""
-
     base: str
     forge: bool
     concurrency: int
@@ -227,8 +113,6 @@ class Plan:
 
 @dataclass(frozen=True)
 class Seen:
-    """What a plan reads once: the default branch, what merged, the work trees, the tickets."""
-
     base: str
     merged: frozenset[str]
     trees: frozenset[Path]
@@ -237,15 +121,12 @@ class Seen:
 
 @dataclass(frozen=True)
 class Drain:
-    """The repository a drain runs on, how it reaches the tracker, and its cap."""
-
     root: Path
     gh: preflight.Runner | None
     concurrency: int = CONCURRENCY
 
     @property
     def tracker(self) -> preflight.Runner:
-        """The tracker as the preflight asks it; offline, it answers nothing."""
         return self.gh or (lambda _args: None)
 
 
@@ -254,37 +135,24 @@ def now() -> datetime:
 
 
 def key(ref: str) -> str:
-    """A ticket's ref as two spellings of it compare: ``#4`` is ``4``."""
     return ref.lstrip("#")
 
 
-# --- the work trees --------------------------------------------------------------------------
-
-
 def main_tree(start: Path) -> Path | None:
-    """The repository's main work tree, from anywhere inside it or one of its work trees."""
     listing = gatelib.git(start, "worktree", "list", "--porcelain")
     return Path(listing.splitlines()[0].removeprefix("worktree ")) if listing else None
 
 
 def users_home() -> Path:
-    """This user's directory of queue work trees: under the temp directory, named for the user."""
     return Path(tempfile.gettempdir()).resolve() / f"{QUEUE_HOME}-{os.getuid()}"
 
 
 def queue_home(root: Path) -> Path:
-    """This repository's directory of queue work trees: outside it, under the user's own."""
     name = f"{root.name}-{hashlib.sha256(str(root).encode()).hexdigest()[:8]}"
     return users_home() / name
 
 
 def foreign(root: Path) -> str | None:
-    """Why the queue's directories are not this user's alone, or ``None`` when they are.
-
-    The temp directory is shared and the names are predictable, so anybody can make them first:
-    as a link to a directory of the owner's, which `clean` would then empty, or as a directory
-    of their own to read what is built there. A directory that does not exist yet is fine.
-    """
     for directory in (users_home(), queue_home(root)):
         try:
             status = directory.lstat()
@@ -304,11 +172,6 @@ def tree_of(root: Path, branch: str) -> Path:
 
 
 def worktrees(root: Path) -> frozenset[Path]:
-    """The queue work trees git has registered for this repository.
-
-    A queue work tree is a directory directly in the queue's own. A work tree one of them holds
-    inside itself (a gate's `.ratchet/base`) is that tree's, and goes when it goes.
-    """
     home = queue_home(root)
     listing = gatelib.git(root, "worktree", "list", "--porcelain") or ""
     registered = [line.removeprefix("worktree ") for line in listing.splitlines()]
@@ -316,17 +179,11 @@ def worktrees(root: Path) -> frozenset[Path]:
 
 
 def dirty(tree: Path) -> bool:
-    """Whether ``tree`` holds uncommitted work, or git cannot say: unknown is never clean."""
     status = gatelib.git(tree, "status", "--porcelain", "--untracked-files=all")
     return status is None or bool(status)
 
 
 def unsaved(tree: Path) -> bool:
-    """Whether ``tree`` holds uncommitted work a stash would keep, or git cannot say.
-
-    A work tree inside it (a gate's `.ratchet/base`) is its own, goes when ``tree`` goes, and no
-    stash holds it.
-    """
     status = gatelib.git(tree, "status", "--porcelain", "--untracked-files=all")
     if status is None:
         return True
@@ -337,7 +194,6 @@ def unsaved(tree: Path) -> bool:
 
 
 def stash_away(tree: Path, label: str) -> str | None:
-    """Why the uncommitted work of ``tree`` is not saved as a stash; ``None`` when none is left."""
     if not unsaved(tree):
         return None
     if gatelib.git(tree, "stash", "push", "--include-untracked", "--quiet", "-m", label) is None:
@@ -349,25 +205,16 @@ def stash_away(tree: Path, label: str) -> str | None:
 
 
 def discard(root: Path, tree: Path, label: str) -> str | None:
-    """Remove a queue work tree, what it held uncommitted stashed under ``label`` first.
-
-    Only a directory git lists as a work tree of this repository is emptied. A link is never
-    followed, and anything else stays unless it is an empty directory. A work tree is removed
-    only once its uncommitted work is provably a stash: when git cannot make the stash, nothing
-    is ended and nothing is removed. ``None`` when nothing is left; else why the tree stays.
-    """
     if tree.is_symlink():
         return NOT_A_TREE
     if tree in worktrees(root):
         gatelib.git(tree, "rebase", "--abort")
         if gatelib.git(tree, "rev-parse", "--verify", "--quiet", "HEAD") is None:
-            # Why: a stash needs a commit, and the tree's branch may have been deleted.
             gatelib.git(tree, "switch", "--detach", "--quiet", merge_ready.default_ref(root))
         kept = stash_away(tree, label)
         if kept is None:
             for pid in gatelib.end_running_from(tree.resolve()):
                 print(f"ended: process {pid}, which ran a program of {tree}")
-            # Why: a program that ran from the tree may have written until it was ended.
             kept = stash_away(tree, label)
         if kept is not None:
             return kept
@@ -376,32 +223,20 @@ def discard(root: Path, tree: Path, label: str) -> str | None:
     elif tree.is_dir() and not any(tree.iterdir()):
         tree.rmdir()
     gatelib.git(root, "worktree", "prune")
-    # Why: the directory above is this repository's, and nothing else is kept in it.
     if tree.parent.is_dir() and not any(tree.parent.iterdir()):
         tree.parent.rmdir()
     return None if not tree.exists() else NOT_A_TREE
 
 
-# --- one drain at a time ---------------------------------------------------------------------
-
-
-class RefusedError(Exception):
-    """A command that must not run now; its message says why."""
+class RefusedError(Exception): ...
 
 
 def state_dir(root: Path) -> Path:
-    """Git's own directory of this repository: where the drain keeps what no commit may carry."""
     return Path(gatelib.git(root, "rev-parse", "--absolute-git-dir") or root / "git-state")
 
 
 @contextlib.contextmanager
 def exclusive(root: Path) -> Iterator[None]:
-    """Hold the repository's drain lock: one command that changes a work tree runs at a time.
-
-    A lock the kernel holds for an open file, so a command killed with SIGKILL frees it, and no
-    file is left that says a dead process still holds it. A command waits ``LOCK_WAIT`` seconds
-    for the one that runs, and is refused after that.
-    """
     descriptor = os.open(state_dir(root) / LOCK, os.O_RDWR | os.O_CREAT, OWNER_FILE)
     try:
         deadline = time.monotonic() + LOCK_WAIT
@@ -420,10 +255,6 @@ def exclusive(root: Path) -> Iterator[None]:
 
 
 def process_row(pid: int) -> tuple[int, str] | None:
-    """The parent and the start of process ``pid``; ``None`` when it is gone or cannot be read.
-
-    Without ``/proc`` no process can be read, so no other drain is ever seen.
-    """
     try:
         text = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
     except OSError:
@@ -433,7 +264,6 @@ def process_row(pid: int) -> tuple[int, str] | None:
 
 
 def ancestry() -> list[str]:
-    """This process and every process above it, each as ``pid:start`` so a reused id is not it."""
     chain: list[str] = []
     pid = os.getpid()
     while pid > 1 and len(chain) < DEPTH and (row := process_row(pid)):
@@ -443,10 +273,6 @@ def ancestry() -> list[str]:
 
 
 def in_the_trees(root: Path, mine: set[str]) -> str | None:
-    """A live process that runs a program of a queue work tree, or runs in one; its id, or ``None``.
-
-    Processes above this command are never it. A system without ``/proc`` has none to find.
-    """
     home = queue_home(root)
     for entry in Path("/proc").glob("[0-9]*"):
         try:
@@ -459,16 +285,6 @@ def in_the_trees(root: Path, mine: set[str]) -> str | None:
 
 
 def rival(root: Path, held: dict[str, object]) -> str | None:
-    """Why the lease ``held`` names a drain that is still running, or ``None`` when it is gone.
-
-    A process that is above this command is no evidence: it is above the next drain's too, as the
-    user's service manager is above every session. What a drain owns is evidence. Either a live
-    process of the chain the lease holds that is below where that chain parts from this one (the
-    other session's own), or a live process running a program from a queue work tree, or in one,
-    which is what ``clean --all`` would end, whether or not a lease is held: a report ends the
-    lease, and a drain under the same long-lived process is still told by its program. With
-    neither, the drain is dead.
-    """
     chain = ancestry()
     mine = {entry.partition(":")[0] for entry in chain}
     for entry in queue_notes.texts(held.get("chain")):
@@ -481,11 +297,6 @@ def rival(root: Path, held: dict[str, object]) -> str | None:
 
 
 def lease(root: Path, *, take_over: bool, token: str = "") -> None:
-    """Start a drain: refused while another drain is running here, unless ``token`` is its own.
-
-    The token names the drain: ``clean --all`` prints one on stderr, and the commands that follow
-    may pass it back as ``--drain`` to say whose they are.
-    """
     held = queue_notes.loaded(gatelib.read_text(state_dir(root) / LEASE))
     ours = bool(token) and token == held.get("token")
     why = None if take_over or ours else rival(root, held)
@@ -502,12 +313,6 @@ def lease(root: Path, *, take_over: bool, token: str = "") -> None:
 
 
 def release(root: Path, token: str = "") -> str | None:
-    """End a drain: the report is its last command. ``None``, or whose lease it left standing.
-
-    Why: a report from a second drain must not end a live first drain's lease, or the second's
-    ``clean --all`` would end the first's programs. The lease is ended for the drain that holds
-    it, matched as ``lease`` matches it: by the token, or by no rival being alive.
-    """
     why = other_drain(root, token)
     if why is None:
         (state_dir(root) / LEASE).unlink(missing_ok=True)
@@ -515,20 +320,12 @@ def release(root: Path, token: str = "") -> str | None:
 
 
 def other_drain(root: Path, token: str = "") -> str | None:
-    """Why another drain than the one ``token`` names is running here, or ``None``.
-
-    The lease is matched as ``lease`` matches it: by the token, or by no rival being alive.
-    """
     held = queue_notes.loaded(gatelib.read_text(state_dir(root) / LEASE))
     ours = bool(token) and token == held.get("token")
     return None if ours else rival(root, held)
 
 
-# --- the notes -------------------------------------------------------------------------------
-
-
 def question(item: object) -> str:
-    """One open question of the spec role as a reason: its options, and why the first."""
     if not isinstance(item, dict):
         return f"open question: {item}"
     options = "; ".join(queue_notes.texts(item.get("options")))
@@ -539,12 +336,6 @@ def question(item: object) -> str:
 
 
 def findings_of(result: dict[str, object]) -> list[str]:
-    """The blocker and major findings a result leaves, each with the quote it breaks.
-
-    Why: ADR 0072. A run parked on a finding still owed after its fix round ran no review, so the
-    findings are in ``unresolvedBlockingFindings`` alone; a refused review's are in
-    ``reviewIssues``. A title of the verdict record that neither list holds stays as it was.
-    """
     listed = [
         finding
         for key in ("unresolvedBlockingFindings", "reviewIssues")
@@ -559,14 +350,12 @@ def findings_of(result: dict[str, object]) -> list[str]:
 
 
 def finding_line(finding: dict[str, object]) -> str:
-    """One finding as a reason: its title, and the record and the sentence it breaks."""
     breaks = gatelib.table(finding, "breaks")
     quote = f' (breaks {breaks.get("record")}: "{breaks.get("quote")}")' if breaks else ""
     return f"unresolved: {finding.get('title')}{quote}"
 
 
 def reasons_of(result: dict[str, object]) -> list[str]:
-    """Why a pipeline's result is not an approval, in the result's own words."""
     failures = queue_notes.tables(gatelib.table(result, "preflight").get("failures"))
     found = [f"{f.get('check')}: {f.get('detail')} -> {f.get('produce')}" for f in failures]
     asked = result.get("openQuestions")
@@ -591,20 +380,12 @@ def reasons_of(result: dict[str, object]) -> list[str]:
 
 
 def owed_kinds(result: dict[str, object], red: re.Pattern[str] = OWED_RED) -> list[str]:
-    """The kinds whose ``triggers`` red the result's last ``check`` shows (ADR 0028, ADR 0052).
-
-    ``red`` is the line of an owed safeguard, or of an owed architecture review.
-    """
     output = result.get("checkOutput")
     found = red.findall(output) if isinstance(output, str) else []
     return list(dict.fromkeys(found))
 
 
-# --- what a branch holds ---------------------------------------------------------------------
-
-
 def change_of(root: Path, base: str, branch: str) -> merge_ready.Change | None:
-    """What ``branch`` changed against the default branch, merged into it already or not."""
     tip = merge_ready.commit(root, f"refs/heads/{branch}")
     if tip is None:
         return None
@@ -616,7 +397,6 @@ def change_of(root: Path, base: str, branch: str) -> merge_ready.Change | None:
 
 
 def assumptions(change: merge_ready.Change | None) -> list[dict[str, object]]:
-    """The assumptions the branch's verdict record lists: what the merge judge read."""
     found = [path for path in (change.paths if change else ()) if merge_ready.RECORD.match(path)]
     return (
         queue_notes.tables(queue_notes.loaded(change.after(found[0])).get("assumptions"))
@@ -626,7 +406,6 @@ def assumptions(change: merge_ready.Change | None) -> list[dict[str, object]]:
 
 
 def additions(change: merge_ready.Change | None) -> list[str]:
-    """Each glossary term, ``_Avoid_`` item and ADR the branch added, as ``guard-diff`` names it."""
     manifest = merge_ready.manifest_of(change) if change else None
     if change is None or not isinstance(manifest, Manifest):
         return []
@@ -643,23 +422,17 @@ def additions(change: merge_ready.Change | None) -> list[str]:
 
 
 def timings(tree: Path) -> dict[str, object]:
-    """The seconds each gate last took in ``tree``, from the report its runner appends to."""
     lines = (gatelib.read_text(tree / gatelib.STATE / "timing.jsonl") or "").splitlines()
     rows = [queue_notes.loaded(line) for line in lines]
     return {str(row["key"]): row["seconds"] for row in rows if "key" in row and "seconds" in row}
 
 
-# --- the plan --------------------------------------------------------------------------------
-
-
 def ahead(root: Path, base: str, branch: str) -> bool:
-    """Whether ``branch`` holds a commit the default branch does not."""
     count = gatelib.git(root, "rev-list", "--count", f"{base}..refs/heads/{branch}")
     return bool(count) and count != "0"
 
 
 def pending(entry: Entry, ticket: preflight.Ticket, *, drain: Drain, seen: Seen) -> Entry:
-    """``entry`` as the preflight leaves it: refused, waiting on queued tickets, or buildable."""
     report = preflight.Report(ref=ticket.ref)
     label = preflight.ready_label(drain.root)
     preflight.check_ticket(report, ticket, label, root=drain.root, gh=drain.tracker)
@@ -684,23 +457,18 @@ def pending(entry: Entry, ticket: preflight.Ticket, *, drain: Drain, seen: Seen)
 
 
 def classify(ticket: preflight.Ticket, drain: Drain, seen: Seen) -> Entry:
-    """What ``ticket`` is to this drain, read from git, its note and the preflight."""
     branch = route.own_branch(ticket)
     tree = tree_of(drain.root, branch)
     entry = Entry(ticket.ref, ticket.title, branch, BUILDABLE, worktree=str(tree))
     if branch in seen.merged:
         why = f"`{branch}` is merged, yet the ticket is still open: mark it resolved"
         return replace(entry, state=MERGED, why=(why,))
-    # Why: a hold outranks the commits: a ticket parked or left to the owner after its branch got
-    # commits is held until its text changes, and is not landed again for nothing (ADR 0023).
     hold = queue_notes.held(drain.root, branch, ticket)
     if hold is not None:
         return replace(entry, state=HELD, why=tuple(hold.reasons))
     if ahead(drain.root, seen.base, branch):
         waited = queue_notes.read_note(drain.root, branch)
         again = queue_notes.texts(waited.get("reasons")) if waited.get("outcome") == WAITS else []
-        # Why: a mark means an `update` was killed, and what it left (an outdated record on top)
-        # is put right only by running it again, even though the branch holds the tip now.
         current = gatelib.git(
             drain.root, "merge-base", "--is-ancestor", seen.base, f"refs/heads/{branch}"
         ) == "" and not waited.get("rebasing")
@@ -712,7 +480,6 @@ def classify(ticket: preflight.Ticket, drain: Drain, seen: Seen) -> Entry:
 
 
 def settled(entries: list[Entry]) -> list[Entry]:
-    """``entries`` with each ticket refused that waits on one this drain cannot merge."""
     live = {key(entry.ref) for entry in entries if entry.state in LIVE}
     waiting = [entry for entry in entries if entry.state == WAITING]
     reached = True
@@ -744,7 +511,6 @@ def settled(entries: list[Entry]) -> list[Entry]:
 
 
 def ordered(entries: list[Entry]) -> list[Entry]:
-    """``entries`` with every ticket after the tickets it waits on, otherwise as listed."""
     placed: list[Entry] = []
     done: set[str] = set()
     rest = entries
@@ -756,14 +522,12 @@ def ordered(entries: list[Entry]) -> list[Entry]:
 
 
 def pipeline_agents(root: Path) -> int:
-    """The most agents one pipeline runs here: the critic joins once the binding is depended-on."""
     binding = gatelib.read_text(root / gatelib.BINDING) or ""
     depended_on = preflight.CRITIC_EVENT in application_types.life_events(binding)
     return PIPELINE_AGENTS if depended_on else YOUNG_PIPELINE_AGENTS
 
 
 def plan(drain: Drain) -> Plan:
-    """What each open agent-ready ticket is to a drain now, and which to start."""
     root = drain.root
     base = merge_ready.default_ref(root)
     tickets, _local = route.agent_ready(root, drain.gh)
@@ -774,19 +538,15 @@ def plan(drain: Drain) -> Plan:
     default = base.removeprefix("origin/")
     head = gatelib.git(root, "rev-parse", "--abbrev-ref", "HEAD")
     if head != default:
-        # Why: the tickets are files of the work tree, and another branch may hold other tickets.
         checkout.fail("branch", f"HEAD is `{head}`, not `{default}`", f"`git switch {default}`")
     queued = frozenset(key(ticket.ref) for ticket in tickets)
     seen = Seen(base, frozenset(route.merged_features(root, base)), worktrees(root), queued)
     entries = ordered(settled([classify(ticket, drain, seen) for ticket in tickets]))
     blocked = tuple(f"{f.check}: {f.detail} -> {f.produce}" for f in checkout.failures)
-    # Why: a row that says `buildable` beside a red preflight of the same ticket misleads.
     unfit = tuple(f"not started, the checkout is not fit: {line}" for line in blocked)
     entries = [
         replace(entry, why=unfit) if entry.state == BUILDABLE else entry for entry in entries
     ]
-    # Why: a built ticket whose work tree is still there is being settled in it (rebased, judged
-    # again), and holds its place under the cap as a building one does.
     building = sum(Path(entry.worktree) in seen.trees for entry in entries)
     buildable = [entry.ref for entry in entries if entry.state == BUILDABLE]
     to_build = sum(entry.state in {BUILDABLE, WAITING} for entry in entries)
@@ -801,11 +561,7 @@ def plan(drain: Drain) -> Plan:
     )
 
 
-# --- the actions -----------------------------------------------------------------------------
-
-
 def not_started(entry: Entry | None, drafted: Plan) -> list[str]:
-    """Why the plan does not start a ticket."""
     if entry is None:
         return ["it is not an open agent-ready ticket"]
     if entry.state != BUILDABLE:
@@ -830,7 +586,6 @@ def forge_gh(drain: Drain) -> preflight.Runner:
 
 
 def open_ticket(drain: Drain, ref: str) -> int:
-    """Make the work tree of ``ref`` when the plan starts it; say why not when it does not."""
     drafted = plan(drain)
     entry = next((e for e in drafted.tickets if key(e.ref) == key(ref)), None)
     if entry is None or entry.ref not in drafted.start:
@@ -859,8 +614,6 @@ def open_ticket(drain: Drain, ref: str) -> int:
     opened = now().isoformat(timespec="seconds")
     path = queue_notes.note_path(drain.root, entry.branch)
     prior = queue_notes.loaded(gatelib.read_text(path))
-    # Why: a close nobody has reported yet is still owed to the report; the run now starting
-    # replaces it only when it closes. The hold ends here, since the ticket was released.
     keep = prior.get("reported") is False and prior.get("outcome") not in {None, MERGED}
     kept = {k: v for k, v in prior.items() if k not in START_DROPPED} if keep else {}
     queue_notes.write_note(path, {**kept, **asdict(entry), "opened": opened, "start": start})
@@ -881,7 +634,6 @@ def open_ticket(drain: Drain, ref: str) -> int:
 
 
 def rebasing(tree: Path) -> bool:
-    """Whether a rebase of ``tree`` is under way: a run of ``update`` that stopped part-way."""
     for name in ("rebase-merge", "rebase-apply"):
         path = gatelib.git(tree, "rev-parse", "--git-path", name)
         if path and (tree / path).is_dir():
@@ -890,10 +642,6 @@ def rebasing(tree: Path) -> bool:
 
 
 def revive(drain: Drain, branch: str, tree: Path) -> str | None:
-    """Check out a built branch in its queue work tree again; why it could not be, if not.
-
-    Why: a work tree counts against the cap whoever made it, so one is made again only under it.
-    """
     root = drain.root
     if len(worktrees(root)) >= drain.concurrency:
         return f"{drain.concurrency} tickets are building: the cap"
@@ -908,7 +656,6 @@ def revive(drain: Drain, branch: str, tree: Path) -> str | None:
 
 
 def drop_record(tree: Path) -> None:
-    """Drop a last commit that is the verdict record: the rebase outdated what it certified."""
     last = gatelib.git(tree, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD") or ""
     paths = last.splitlines()
     if paths and all(merge_ready.RECORD.match(path) for path in paths):
@@ -918,11 +665,6 @@ def drop_record(tree: Path) -> None:
 def tree_for_update(
     drain: Drain, branch: str, *, base: str, marked: bool
 ) -> tuple[str | None, bool]:
-    """Why ``branch`` cannot be rebased in ``tree``, and whether it holds ``base`` already.
-
-    A built branch with no work tree gets one, unless it holds ``base`` and needs none. A branch
-    whose note says a rebase was under way needs one whatever it holds: the record may be on top.
-    """
     root = drain.root
     tree = tree_of(root, branch)
     if (
@@ -943,15 +685,10 @@ def tree_for_update(
 
 
 def update(drain: Drain, ticket: preflight.Ticket) -> int:
-    """Bring the ticket's branch up to date, unless its merge landed: that is recorded instead."""
     branch = route.own_branch(ticket)
     if merged_by_note(drain.root, branch):
-        # Why: a branch whose merge landed is not rebased: that would move it off its merge, and
-        # the merge would no longer be seen as landed.
         print(f"update: {ticket.ref} is merged and is not rebased")
         return 1
-    # Why: an update may revive a tree and then refuse without writing the note; the mark of a
-    # close that was cut off must not stand beside that tree.
     drop_mark(drain.root, branch)
     return rebase(drain, ticket)
 
@@ -966,7 +703,6 @@ def merged_by_note(root: Path, branch: str) -> bool:
 
 
 def drop_mark(root: Path, branch: str) -> None:
-    """Clear the ``discarding`` mark of a note, when it has one."""
     note = queue_notes.read_note(root, branch)
     if note.get("discarding"):
         done = {k: v for k, v in note.items() if k != "discarding"}
@@ -1111,25 +847,11 @@ def restarted(
 
 
 def rebase(drain: Drain, ticket: preflight.Ticket) -> int:
-    """Rebase the ticket's branch onto the default branch when that moved; never half-way.
-
-    A run killed mid-rebase leaves the tree detached at the default branch with the rebase
-    under way; the next run abandons that rebase, which puts the branch back as it was, and
-    starts again. A run killed after the rebase finished and before it said so is told by the
-    branch tip the note recorded before the rebase began, and still drops a verdict record the
-    rebase outdated.
-
-    A built branch an earlier drain left, with no work tree, gets one. A last commit that is the
-    verdict record is dropped after the rebase: it certified a tree that is gone, and the second
-    review writes the record that replaces it.
-    """
     branch = route.own_branch(ticket)
     tree = tree_of(drain.root, branch)
     base = merge_ready.default_ref(drain.root)
     path = queue_notes.note_path(drain.root, branch)
     held = queue_notes.read_note(drain.root, branch)
-    # Why: the mark lives in the note, which `clean --all` leaves; it is read before anything
-    # can answer "moved: false", so a tree swept after the rebase still drops the outdated record.
     refusal, current = tree_for_update(drain, branch, base=base, marked=bool(held.get("rebasing")))
     if current:
         print(json.dumps({"moved": False, "conflicts": []}))
@@ -1147,9 +869,6 @@ def rebase(drain: Drain, ticket: preflight.Ticket) -> int:
     )
     if current and before:
         if head != before:
-            # Why: the run was killed after the rebase; its record is still on top. The record is
-            # dropped before the mark is cleared: a run killed between the two is told again by
-            # the mark, and one that cleared it first would leave the outdated record to land.
             waiting = after_rebase(tree)
             queue_notes.write_note(
                 path, {**restarted(drain, tree, note, branch=branch), "unexpired": waiting}
@@ -1170,7 +889,6 @@ def rebase(drain: Drain, ticket: preflight.Ticket) -> int:
 
 
 def unmerged(tree: Path) -> dict[str, frozenset[int]]:
-    """The paths a stopped rebase leaves unmerged, each with the stages the index holds of it."""
     found: dict[str, set[int]] = {}
     for line in (gatelib.git(tree, "ls-files", "--unmerged") or "").splitlines():
         head, _, name = line.partition("\t")
@@ -1179,12 +897,6 @@ def unmerged(tree: Path) -> dict[str, frozenset[int]]:
 
 
 def settled_stop(tree: Path, stages: dict[str, frozenset[int]]) -> bool:
-    """Settle a stop whose every conflict is a file of an expired unit or the owner's words.
-
-    A file one side deleted and the other changed keeps the side that holds it, and is deleted
-    again by ``expire`` once the rebase is done, after its answers are carried. A conflict of the
-    brief confined to the owner's words keeps every line either side holds.
-    """
     deleted = [name for name, held in stages.items() if held in SIDES]
     words = [name for name, held in stages.items() if name == documents.BRIEF and held >= {2, 3}]
     if not stages or len(deleted) + len(words) != len(stages):
@@ -1203,7 +915,6 @@ def settled_stop(tree: Path, stages: dict[str, frozenset[int]]) -> bool:
 
 
 def carry_on(tree: Path) -> list[str] | None:
-    """Finish a stopped rebase stop by stop; the conflicts of the stop it cannot settle, if any."""
     while True:
         stages = unmerged(tree)
         if not settled_stop(tree, stages):
@@ -1213,10 +924,6 @@ def carry_on(tree: Path) -> list[str] | None:
 
 
 def after_rebase(tree: Path) -> list[str]:
-    """Drop the outdated verdict record, then delete what has expired in a commit of its own.
-
-    What it could not delete is returned, to wait in the note until the owner's report.
-    """
     drop_record(tree)
     done = documents.expire(tree, now().date())
     if done.problem is not None:
@@ -1254,30 +961,20 @@ def close(  # noqa: PLR0913 -- the note's parts
     result: dict[str, object] | None = None,
     children: list[str] | None = None,
 ) -> None:
-    """Remove the ticket's work tree and write its note: the outcome and what the report prints."""
     branch = route.own_branch(ticket)
     if outcome != MERGED and recorded_merge(root, branch):
-        # Why: a merge no note says yet is recorded first, so that closing it as parked or waiting
-        # is refused as it is once the note says merged.
         record_merge_aloud(root, branch)
     prior = queue_notes.read_note(root, branch)
     if prior.get("outcome") == MERGED:
-        # Why: a merge is recorded once; a later close would unsay it and the report would list
-        # a ticket that landed as parked or waiting. A tree its landing left stands is removed.
         say_kept(finish_close(root, branch))
         if outcome == MERGED:
             print(f"closed: {ticket.ref}: {MERGED}")
             return
         message = f"{ticket.ref} merged, and a merge is not unsaid by closing it as {outcome}"
         raise RefusedError(message)
-    # Why: reasons the drain resolves itself leave the ticket built to be retried, a few times in
-    # a row; after that, or for any other reason, the owner decides and the ticket is held.
     retry = outcome == WAITS and queue_notes.mechanical(reasons)
     before = prior.get("attempts")
     same = prior.get("digest") == queue_notes.digest(ticket) and isinstance(before, int)
-    # Why: a note marked as being discarded was written by a run that stopped before it finished
-    # the close, and this run is that refusal again, not a further one. What starts a new run on
-    # the ticket (`open`, `update`, `clean --all`) drops the mark.
     counted = 0 if prior.get("discarding") else 1
     attempts = (before if same and isinstance(before, int) else 0) + counted if retry else 0
     exhausted = retry and attempts >= queue_notes.RETRIES
@@ -1316,11 +1013,6 @@ def settle(
     reasons: list[str],
     result: dict[str, object] | None = None,
 ) -> list[str]:
-    """``close`` from the ticket's ref, title and digest alone: a merge is recorded without it.
-
-    A work tree that cannot be removed with its work saved stays, and the note says so; the lines
-    returned say it too.
-    """
     branch = str(who["branch"])
     tree = tree_of(root, branch)
     change = change_of(root, merge_ready.default_ref(root), branch)
@@ -1350,8 +1042,6 @@ def settle(
         "base": queue_notes.tip(root),
         "reported": False,
     }
-    # Why: the note goes first, so a run killed between the two leaves a merge that is recorded;
-    # a tree left with its work is the one thing the note learns afterwards.
     path = queue_notes.note_path(root, branch)
     queue_notes.write_note(path, {**note, "discarding": True})
     kept = discard(root, tree, f"{branch}: {STASHED[outcome]} run")
@@ -1361,11 +1051,6 @@ def settle(
 
 
 def recorded_merge(root: Path, branch: str) -> bool:
-    """Whether ``branch`` is merged and the run that landed it did not finish: a landing cut off.
-
-    No note says it merged. A note that does, with its tree still standing, is finished by
-    ``finish_close``, which keeps the note as it is.
-    """
     note = queue_notes.read_note(root, branch)
     return (
         branch in route.merged_features(root, merge_ready.default_ref(root))
@@ -1375,20 +1060,11 @@ def recorded_merge(root: Path, branch: str) -> bool:
 
 
 def finish_close(root: Path, branch: str) -> list[str]:
-    """Finish the discard of a close that was cut off before it: the note stays as it was written.
-
-    Why: ``settle`` writes the note first and marks it ``discarding`` until the tree is gone, so
-    a close killed between the two is told by the mark and the tree. Writing a fresh note here
-    would unsay what it holds, ``reported`` among it. The lines returned say what stays.
-    """
     note = queue_notes.read_note(root, branch)
     tree = tree_of(root, branch)
     if not note.get("discarding"):
         return []
     if tree not in worktrees(root):
-        # Why: the run was killed after the discard and before it cleared the mark; the mark
-        # stays only while a rerun of that close may come, and none is owed once something else
-        # runs on the ticket.
         drop_mark(root, branch)
         return []
     kept = discard(root, tree, f"{branch}: {STASHED[str(note.get('outcome'))]} run")
@@ -1407,7 +1083,6 @@ def say_kept(lines: list[str]) -> None:
 
 
 def record_merge(root: Path, branch: str) -> list[str]:
-    """Finish what a landing cut off after the default branch moved: the note, and the tree."""
     note = queue_notes.read_note(root, branch)
     who: dict[str, object] = {n: str(note.get(n) or "") for n in ("ref", "title", "digest")}
     reason = "the merge landed, and the run that landed it stopped before it said so"
@@ -1415,30 +1090,17 @@ def record_merge(root: Path, branch: str) -> list[str]:
 
 
 def landing_path(root: Path, branch: str) -> Path:
-    """The file whose lock a ``land`` of ``branch`` holds, from before its merge until it ends."""
     return state_dir(root) / f"ratchet-landing-{merge.branch_digest(branch)}"
 
 
 @contextlib.contextmanager
 def landing_lock(root: Path, branch: str) -> Iterator[int | None]:
-    """The landing lock of ``branch``, tried for about a second; ``None`` when it stays held.
-
-    Why: ``landing_running`` takes the same lock for an instant to see whether it is held, and a
-    ``land`` that tried at that moment would refuse for a landing that is not running. A probe
-    holds the lock for microseconds, a real landing for minutes.
-    """
     with merge.locked_retrying(landing_path(root, branch), LANDING_TRIES, LANDING_POLL) as held:
         yield held
 
 
 @contextlib.contextmanager
 def private_lock(root: Path) -> Iterator[Path]:
-    """A lock private to one ``land``, in a file of a fresh name; the merge it starts probes it.
-
-    Why: the landing lock is freed when ``land`` is killed, though the merge it started runs on.
-    The merge holds its own lock on the branch, and probes this one to learn that its ``land`` is
-    gone. Neither descriptor is inherited by the merge.
-    """
     path = merge.private_lock_path(root, secrets.token_hex(8))
     descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, merge.OWNER_FILE)
     try:
@@ -1450,18 +1112,12 @@ def private_lock(root: Path) -> Iterator[Path]:
 
 
 def sweep_private_locks(root: Path) -> None:
-    """Remove the private lock files whose lock is free: the ``land`` that made one is gone."""
     for path in merge.state_dir(root).glob(f"{merge.PRIVATE}*"):
         if path.is_file() and not path.is_symlink() and not merge.lock_held(path):
             path.unlink(missing_ok=True)
 
 
 def landing_holder(root: Path, branch: str) -> str | None:
-    """What holds the landing of ``branch``: ``landing`` (a ``land``), ``merge`` (only a merge).
-
-    Why: a ``land`` killed alone frees its lock while the merge it started runs on, so the merge's
-    own lock counts too, and which one is held says who records the outcome.
-    """
     for name, path in (
         ("landing", landing_path(root, branch)),
         ("merge", merge.merge_lock_path(root, branch)),
@@ -1474,12 +1130,10 @@ def landing_holder(root: Path, branch: str) -> str | None:
 
 
 def landing_running(root: Path, branch: str) -> bool:
-    """Whether a ``land`` of ``branch`` is alive, or the merge it started: either lock is held."""
     return landing_holder(root, branch) is not None
 
 
 def landing_alive(root: Path, branch: str, said: str) -> bool:
-    """``landing_running``, saying so: a live landing records the merge it made itself."""
     holder = landing_holder(root, branch)
     if holder is not None:
         what = "a landing" if holder == "landing" else "a merge"
@@ -1488,17 +1142,11 @@ def landing_alive(root: Path, branch: str, said: str) -> bool:
 
 
 def record_merge_aloud(root: Path, branch: str) -> None:
-    """``record_merge``, saying so, and saying what it kept."""
     print(f"recorded: {branch}: merged, and the run that landed it stopped before it said so")
     say_kept(record_merge(root, branch))
 
 
 def land(drain: Drain, ticket: preflight.Ticket) -> int:
-    """Run the binding's ``merge`` entry point on the ticket's branch; close it by the answer.
-
-    Run again after a stop, it finishes from what git holds: a merge that landed is recorded, and
-    what a stopped merge left in the repository is put back before the merge runs again.
-    """
     command = gatelib.entry_point(drain.root, MERGE)
     if command is None or gatelib.git(drain.root, "remote", "get-url", "origin") is not None:
         print(
@@ -1507,8 +1155,6 @@ def land(drain: Drain, ticket: preflight.Ticket) -> int:
         )
         return 2
     branch = route.own_branch(ticket)
-    # Why: `land` holds no drain lock while the merge runs, and the merge takes minutes; this lock
-    # is what tells another command, in this process or another, that the landing is alive.
     if landing_holder(drain.root, branch) == "merge":
         print(
             f"land: a merge of `{branch}` is running in another command; run land again once it"
@@ -1517,8 +1163,6 @@ def land(drain: Drain, ticket: preflight.Ticket) -> int:
         return 2
     with landing_lock(drain.root, branch) as held, private_lock(drain.root) as private:
         if held is None:
-            # Why: two landings of one ticket would run the merge at once, or one would close the
-            # ticket while the other is mid-merge.
             print(
                 f"land: a landing of `{branch}` is already running in another command; run land"
                 " again once it ends"
@@ -1530,7 +1174,6 @@ def land(drain: Drain, ticket: preflight.Ticket) -> int:
 def landed(
     drain: Drain, ticket: preflight.Ticket, branch: str, *, command: str, private: Path
 ) -> int:
-    """The body of ``land``, run under its landing lock and its private lock."""
     with exclusive(drain.root):
         if recorded_merge(drain.root, branch):
             record_merge_aloud(drain.root, branch)
@@ -1539,9 +1182,6 @@ def landed(
             return 0
         hold = queue_notes.held(drain.root, branch, ticket)
         if hold is not None:
-            # Why: `plan` never starts a held ticket, so `land` does not merge one: a parked
-            # run's commits are not a review's approval. A close of it cut off before its discard
-            # is finished first, with the hold kept.
             say_kept(finish_close(drain.root, branch))
             print(f"land: {ticket.ref} is held and is not landed: " + "; ".join(hold.reasons))
             return 2
@@ -1577,10 +1217,6 @@ def landed(
 
 
 def clean(root: Path, *, everything: bool, take_over: bool = False, token: str = "") -> int:
-    """Remove the queue work trees whose branch is merged or gone; with ``everything``, all.
-
-    ``everything`` starts a drain, so it is refused while another drain is running here.
-    """
     if everything:
         lease(root, take_over=take_over, token=token)
     sweep_private_locks(root)
@@ -1588,8 +1224,6 @@ def clean(root: Path, *, everything: bool, take_over: bool = False, token: str =
     heads = gatelib.git(root, "for-each-ref", "--format=%(refname:short)", "refs/heads/") or ""
     owners = {tree_of(root, branch): branch for branch in heads.splitlines()}
     registered = worktrees(root)
-    # Why: a merge no note says may be a landing in flight in another drain, whose run is about to
-    # write the note; recording it here would discard the tree that run still uses.
     busy = None if everything else other_drain(root, token)
     record_orphans(root, heads.splitlines(), registered, busy=busy)
     for tree in sorted(registered | set(queue_home(root).glob("*"))):
@@ -1624,11 +1258,6 @@ def clean(root: Path, *, everything: bool, take_over: bool = False, token: str =
 
 
 def end_marks(root: Path, branches: list[str]) -> None:
-    """Clear the marks of runs that stopped; a branch whose landing is alive keeps its own.
-
-    Why: a live landing's note may still carry the mark of an earlier close that was cut off, and
-    finishing that close here would discard the tree the landing is using.
-    """
     for branch in branches:
         if not landing_running(root, branch):
             unmark(root, branch)
@@ -1636,11 +1265,6 @@ def end_marks(root: Path, branches: list[str]) -> None:
 
 
 def in_flight(root: Path, branch: str | None, busy: str | None) -> str | None:
-    """Why a landing's tree is left alone: its landing is alive, or another drain runs.
-
-    Why: a live landing, or another drain's, is about to write the note that this would write, and
-    discarding its tree under it would end work it still does.
-    """
     if branch is None:
         return None
     holder = landing_holder(root, branch)
@@ -1654,12 +1278,6 @@ def in_flight(root: Path, branch: str | None, busy: str | None) -> str | None:
 def record_orphans(
     root: Path, branches: list[str], registered: frozenset[Path], *, busy: str | None
 ) -> None:
-    """Record each merge no note says whose work tree is gone: it is no tree's to sweep.
-
-    Why: a landing killed after the default branch moved, and after the tree was removed, leaves
-    only this; the next drain's report must still list the ticket as merged. While another drain
-    runs, none is recorded: its landing may be the one that has not written its note yet.
-    """
     if busy is not None:
         print(f"clean: {LANDING_MAY_RUN} ({busy}), so a merge no note says is left alone")
         return
@@ -1673,11 +1291,6 @@ def record_orphans(
 
 
 def unmark(root: Path, branch: str) -> None:
-    """Clear the ``rebasing`` mark of a branch whose rebase did not finish.
-
-    Why: a rebase killed part-way leaves the branch where the mark says it was, or with nothing
-    of its own; the mark is of a run that is over, and a branch made again must not inherit it.
-    """
     held = queue_notes.read_note(root, branch)
     tip = gatelib.git(root, "rev-parse", f"refs/heads/{branch}")
     if held.get("rebasing") and (
@@ -1688,11 +1301,7 @@ def unmark(root: Path, branch: str) -> None:
         )
 
 
-# --- the report ------------------------------------------------------------------------------
-
-
 def minutes(note: dict[str, object]) -> str:
-    """How long the ticket was in the queue and its slowest gates, as the report says it."""
     parts = []
     try:
         opened = datetime.fromisoformat(str(note.get("opened")))
@@ -1718,13 +1327,11 @@ def section(title: str, rows: list[str]) -> list[str]:
 
 
 def listed(note: dict[str, object]) -> list[str]:
-    """A ticket's line and, under it, each reason as it was given."""
     head = f"- `{note.get('ref')}` {note.get('title')} (`{note.get('branch')}`)"
     return [head, *(f"  - {reason}" for reason in queue_notes.texts(note.get("reasons")))]
 
 
 def render(notes: list[dict[str, object]], idle: list[Entry], stamp: datetime) -> str:
-    """The drain's one report: what merged, what waits and why, every assumption."""
     by = {
         outcome: [row for note in notes if note.get("outcome") == outcome for row in listed(note)]
         for outcome in (MERGED, PARKED, SPLIT)
@@ -1787,14 +1394,9 @@ def render(notes: list[dict[str, object]], idle: list[Entry], stamp: datetime) -
 
 
 def report(drain: Drain, token: str = "") -> int:
-    """Write the report of every ticket closed since the last one, and print it."""
     heads = gatelib.git(drain.root, "for-each-ref", "--format=%(refname:short)", "refs/heads/")
     busy = other_drain(drain.root, token)
-    # Why: another drain's landing may have merged and not yet written its note; recording it here
-    # would discard its tree and report the merge twice. The lease line at the end says so.
     for branch in (heads or "").splitlines() if busy is None else []:
-        # Why: a merge no note says is reported as merged, not as the close `open` kept for the
-        # ticket; recording it writes the note a landing would have.
         if recorded_merge(drain.root, branch) and not landing_alive(drain.root, branch, "report"):
             record_merge_aloud(drain.root, branch)
     directory = gatelib.state_dir(drain.root) / QUEUE
@@ -1822,11 +1424,6 @@ def report(drain: Drain, token: str = "") -> int:
 
 
 def noted(root: Path, ref: str) -> preflight.Ticket | None:
-    """The ticket ``ref`` names as the note written when it opened keeps it, its file being gone.
-
-    Why: the merge that lands a ticket's build may delete its file (ADR 0064), and a ``land`` run
-    again after a kill must still find the ticket to record that merge.
-    """
     for path in sorted((gatelib.state_dir(root) / queue_notes.QUEUE / "tickets").glob("*.json")):
         note = queue_notes.loaded(gatelib.read_text(path))
         named, title = note.get("ref"), note.get("title")
@@ -1840,7 +1437,6 @@ def noted(root: Path, ref: str) -> preflight.Ticket | None:
 
 
 def on_ticket(drain: Drain, options: argparse.Namespace) -> int:
-    """The actions on one ticket's work tree: update it, land it, close it."""
     ticket = preflight.fetch(options.ref or "", drain.root, drain.tracker) or noted(
         drain.root, options.ref or ""
     )
@@ -1862,12 +1458,8 @@ def on_ticket(drain: Drain, options: argparse.Namespace) -> int:
 
 
 def act_on(drain: Drain, ticket: preflight.Ticket, options: argparse.Namespace) -> int:
-    """The action of ``on_ticket`` on a ticket that exists."""
     if options.action == "land":
         return land(drain, ticket)
-    # Why: a landing's own closes call `close` directly, so this guard is only for the commands of
-    # another process; it is not in `close`, where `landing_running` would see the landing's own
-    # lock as held. It runs under the drain lock, before `split` files anything.
     branch = route.own_branch(ticket)
     holder = landing_holder(drain.root, branch)
     if holder is not None:
@@ -1900,14 +1492,6 @@ def act_on(drain: Drain, ticket: preflight.Ticket, options: argparse.Namespace) 
 
 
 def split_ticket(drain: Drain, ticket: preflight.Ticket, options: argparse.Namespace) -> int:
-    """Split a ticket that is too large into parts filed in the tracker, and keep draining.
-
-    Why: ADR 0046. Splitting by size is no product decision, so the agent does it: the parts are
-    filed with the label the parent holds, each waiting on the one before, and the parent is
-    closed with the outcome ``split`` and its text untouched. A plan ``split.py`` refuses (a
-    promise added, dropped, reworded or doubled, a parent that is itself a part) parks the
-    ticket as too large, and that is the owner's.
-    """
     try:
         plan_text = json.loads(gatelib.read_text(options.plan) or "") if options.plan else None
     except ValueError:
@@ -1982,20 +1566,14 @@ def main(argv: list[str]) -> int:
     if theirs is not None:
         print(f"drain: {theirs}: {NOT_OURS}")
         return 2
-    # Why: a landing cut off half-way leaves the merge's files in the default branch's work tree,
-    # the text of a ticket among them; it is put back before any command reads a ticket, or a hold
-    # would be written on the merge's text and the owner's ticket would differ from it.
     lines, finished = merge.recovery(root)
     for line in lines:
         print(line, file=sys.stderr if options.action == "plan" else sys.stdout)
     if not finished:
-        # Why: the half-written files are still in the work tree, a ticket's text among them; no
-        # command reads a ticket until a rerun has put them back.
         return 2
     drain = Drain(root, None if options.offline else preflight.run_gh, options.concurrency)
     action = WHOLE.get(options.action, on_ticket)
     try:
-        # Why: `land` holds the lock only at its two ends, since the merge it runs takes minutes.
         with exclusive(root) if options.action in LOCKED else contextlib.nullcontext():
             return action(drain, options)
     except RefusedError as refused:

@@ -1,5 +1,3 @@
-"""``questions.py``: one line per answer, and a proposal once an answer has become a habit."""
-
 from pathlib import Path
 
 import pytest

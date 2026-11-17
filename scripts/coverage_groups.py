@@ -1,41 +1,4 @@
 #!/usr/bin/env python3
-"""The grouped coverage gate: per-group line and branch coverage against the ratchet.
-
-Reads a Cobertura report or an LCOV tracefile, the two formats most coverage tools write, and
-the coverage groups in ``quality/thresholds.toml``::
-
-    [<language>.coverage.core]
-    paths = ["src/core/**"]
-    absolute = true           # held at 100% by this gate, not by a number in the file
-
-    [<language>.coverage.app]
-    paths = ["src/app/**"]
-    line = 90.0
-    branch = 80.0
-
-Every table two levels under ``<language>.coverage`` is a group; its ``paths`` are globs over
-repository-relative paths. An absolute group needs 100% lines and branches and may carry no
-coverage exclusion in its files. The plugin names no tool's directive (ADR 0042, ADR 0050): the
-exclusions are the kinds the binding's ``## Suppressions`` section lists for the question
-``coverage, absolute and ratcheted``, read at the merge base so a change cannot loosen its own
-judge. Until that section says which kinds silence the question, no exclusion is searched for, and
-the gate says so; conformance names the missing row. A measured
-file that falls in no group fails: new code cannot land outside the rules. ``--write`` raises each
-group's recorded line and branch to the measured value and never lowers one.
-
-A group whose paths match no measured file is not measured, not 100%: it is skipped, said so, and
-``--write`` leaves it alone. Several ``--report`` arguments are tallied together, so a repository
-with one suite per stack judges every group against the merged view in one run.
-
-The format is read from the report's content, never its name. An LCOV tracefile counts a
-``DA`` record as a line and a ``BRDA`` record as a branch, hit when its count is above zero,
-which is what a Cobertura ``line`` and its ``condition-coverage`` say. A file that several
-records name is tallied once. A stack whose coverage tool writes neither format converts its
-report to one of them in its coverage recipe.
-
-Usage: ``coverage_groups.py [--root DIR] [--report FILE]... [--write]``.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -57,8 +20,6 @@ EXCLUDED_FROM_SCAN = (".xml", ".toml", ".md", ".json", ".lock")
 
 @dataclass
 class Group:
-    """One ``[<language>.coverage.<group>]`` table: its paths and what it must reach."""
-
     key: str
     paths: list[str]
     absolute: bool
@@ -68,8 +29,6 @@ class Group:
 
 @dataclass
 class Tally:
-    """Lines and branches, total and hit, over one file or one group."""
-
     lines: int = 0
     lines_hit: int = 0
     branches: int = 0
@@ -78,11 +37,9 @@ class Tally:
 
     @property
     def measured(self) -> bool:
-        """Whether any file fell in this tally."""
         return bool(self.files) or self.lines > 0 or self.branches > 0
 
     def rate(self, kind: str) -> float:
-        """The percentage covered, ``100`` when nothing was measured."""
         total, hit = (
             (self.lines, self.lines_hit) if kind == "line" else (self.branches, self.branches_hit)
         )
@@ -112,8 +69,7 @@ def groups(thresholds: dict[str, object]) -> list[Group]:
     return found
 
 
-class UnreadableError(ValueError):
-    """A report in neither format this gate reads."""
+class UnreadableError(ValueError): ...
 
 
 def _number(value: object) -> float | None:
@@ -121,10 +77,6 @@ def _number(value: object) -> float | None:
 
 
 def measured(report: Path, root: Path, tallies: dict[str, Tally] | None = None) -> dict[str, Tally]:
-    """Per-file tallies, keyed by the repository-relative path the report resolves to.
-
-    Passing ``tallies`` adds this report's files to it, so several reports merge into one view.
-    """
     tallies = {} if tallies is None else tallies
     if report.read_bytes().lstrip().startswith(b"<"):
         cobertura(report, root, tallies)
@@ -135,15 +87,12 @@ def measured(report: Path, root: Path, tallies: dict[str, Tally] | None = None) 
 
 
 def cobertura(report: Path, root: Path, tallies: dict[str, Tally]) -> None:
-    """Add a Cobertura report's classes to ``tallies``: each class's lines and their branches."""
     tree = ET.parse(report)  # noqa: S314 # -- see the import
     sources = [s.text.strip() for s in tree.iter("source") if s.text and s.text.strip()]
     for cls in tree.iter("class"):
         path = relative(cls.get("filename", ""), sources, root)
         tally = tallies.setdefault(path, Tally())
         tally.files = [path]
-        # Why: some tools repeat a function's first line under <methods>; every
-        # descendant `line` would count it twice.
         for line in cls.findall("lines/line"):
             tally.lines += 1
             tally.lines_hit += int(line.get("hits", "0")) > 0
@@ -153,11 +102,6 @@ def cobertura(report: Path, root: Path, tallies: dict[str, Tally]) -> None:
 
 
 def lcov(text: str, root: Path, tallies: dict[str, Tally]) -> int:
-    """Add an LCOV tracefile's records to ``tallies``; how many source files it names.
-
-    A file that several records name, one per test, is tallied once: a line or a branch is hit
-    when any record hit it.
-    """
     files: dict[str, dict[tuple[str, str], bool]] = {}
     marks: dict[tuple[str, str], bool] = {}
     for record in text.splitlines():
@@ -183,11 +127,6 @@ def lcov(text: str, root: Path, tallies: dict[str, Tally]) -> int:
 
 
 def relative(filename: str, sources: list[str], root: Path) -> str:
-    """The report's filename as a repository-relative path, through its ``<source>`` roots.
-
-    With several roots the file names are relative to each, so the root where the file exists
-    wins; the first root inside the repository is the answer when none does.
-    """
     fallback = None
     for source in [*sources, ""]:
         candidate = Path(source) / filename if source else Path(filename)
@@ -205,7 +144,6 @@ def relative(filename: str, sources: list[str], root: Path) -> str:
 
 
 def tally_groups(found: list[Group], files: dict[str, Tally]) -> tuple[dict[str, Tally], list[str]]:
-    """Each group's tally over its files, and the measured files no group claims."""
     totals = {group.key: Tally() for group in found}
     orphans = []
     for path, tally in sorted(files.items()):
@@ -223,11 +161,6 @@ def tally_groups(found: list[Group], files: dict[str, Tally]) -> tuple[dict[str,
 
 
 def exclusion_patterns(root: Path) -> list[str] | None:
-    """The patterns of the kinds that silence the coverage question, or ``None`` when unsaid.
-
-    The merge base's Suppressions section judges when it says; the work tree's is read where the
-    base has none (the adoption, or the change that adds the section).
-    """
     base = gatelib.base_commit(root)
     for text in (
         gatelib.show(root, base, str(gatelib.BINDING)) if base else None,
@@ -241,7 +174,6 @@ def exclusion_patterns(root: Path) -> list[str] | None:
 
 
 def exclusions(root: Path, files: list[str], patterns: list[str]) -> list[str]:
-    """Each line of the files that one of the exclusion patterns matches, as ``path:line: ...``."""
     scanned = [path for path in files if not path.endswith(EXCLUDED_FROM_SCAN)]
     if not scanned or not patterns:
         return []
@@ -278,7 +210,6 @@ def judge(group: Group, tally: Tally, root: Path, *, patterns: list[str] | None)
 
 
 def raised(text: str, group: Group, tally: Tally) -> str:
-    """The thresholds text with the group's line and branch raised to the measured values."""
     block = re.compile(rf"(?m)^{re.escape(f'[{group.key}]')}\n(?P<body>(?:(?!\[)[^\n]*\n)*)")
     if not tally.measured:
         return text
@@ -339,8 +270,6 @@ def problems(root: Path, reports: list[Path], *, write_back: bool = False) -> li
         if tally.measured:
             print(f"{group.key}: {tally.rate('line')}% lines, {tally.rate('branch')}% branches")
         else:
-            # Why: an unmeasured group is not 100%; scoring it so would ratchet it to a value
-            # the next report, from another stack's suite, could never reach.
             print(f"{group.key}: not measured; no file in the report falls in it")
         faults += judge(group, tally, root, patterns=patterns)
     return faults

@@ -1,11 +1,3 @@
-"""Start the app the way its repository says to, request its page, and exercise its first slice.
-
-The start command is what the repository tells a person: a run command in the README first, then
-a justfile recipe, then a ``package.json`` script. With none, the finding is "no way to start
-it", not a crash. The app gets a free port through ``PORT``; one that ignores it is found by the
-URL it prints. Each slice kind in ``SLICES`` knows how to exercise one kind of first slice.
-"""
-
 from __future__ import annotations
 
 import contextlib
@@ -53,8 +45,6 @@ STOP_GRACE_S = 10.0
 
 
 class Verdict(StrEnum):
-    """What the slice check found: it works, it does not, or this check cannot tell."""
-
     WORKS = "works"
     FAILS = "fails"
     UNCHECKED = "unchecked"
@@ -68,16 +58,12 @@ UNCHECKED = (
 
 @dataclass(frozen=True)
 class Start:
-    """How the repository says to start the app, and where it says so."""
-
     command: str
     source: str
 
 
 @dataclass(frozen=True)
 class Result:
-    """What the app check found."""
-
     start_command: str | None
     source: str | None
     started: bool
@@ -88,11 +74,9 @@ class Result:
 
     @property
     def usable(self) -> bool:
-        """Whether a person can use the first slice: only a slice seen to work counts."""
         return self.slice is Verdict.WORKS
 
     def event(self) -> dict[str, object]:
-        """The result as one event of the run's log."""
         return {"kind": "app", **asdict(self), "slice_ok": self.usable}
 
 
@@ -140,11 +124,6 @@ def _package(root: Path) -> Start | None:
 
 
 def cli_base(command: str, verb: str) -> str:
-    """A README's example run of a command-line tool, cut back to the part before its arguments.
-
-    ``go run . add <title>`` with the slice's first word ``add`` is ``go run .``: the words from
-    the first placeholder or the slice's own verb on are the arguments the check supplies itself.
-    """
     kept: list[str] = []
     for word in command.split():
         if PLACEHOLDER.match(word) or (kept and word == verb):
@@ -154,13 +133,10 @@ def cli_base(command: str, verb: str) -> str:
 
 
 def start_command(root: Path) -> Start | None:
-    """The command the repository gives a person to start the app, or ``None``."""
     return _readme(root) or _justfile(root) or _package(root)
 
 
 class _Forms(HTMLParser):
-    """The forms of a page: action, method, the text field to fill and the hidden fields."""
-
     def __init__(self) -> None:
         super().__init__()
         self.forms: list[dict[str, object]] = []
@@ -188,11 +164,6 @@ def _get(url: str) -> tuple[int, str]:
 
 
 def html_form(base: str, page: str, piece: Slice) -> tuple[Verdict, str]:
-    """Fill the page's first text field with the slice's value, send it, look for the result.
-
-    A page with a script may do all of this in the browser, which this check does not run: when
-    the plain form does not work there, the slice is unchecked rather than failed.
-    """
     scripted = "<script" in page.lower()
     verdict, finding = _plain_form(base, page, piece)
     if verdict is Verdict.FAILS and scripted:
@@ -237,7 +208,6 @@ SLICES: dict[str, Callable[[str, str, Slice], tuple[Verdict, str]]] = {"html-for
 
 
 def free_port() -> int:
-    """A TCP port nothing listens on now."""
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         return int(probe.getsockname()[1])
@@ -264,7 +234,6 @@ def _wait(process: subprocess.Popen[bytes], log: Path, *, port: int, timeout: fl
 
 
 def stop(process: subprocess.Popen[bytes]) -> None:
-    """Stop the app's whole process group: a polite signal, then a kill."""
     with contextlib.suppress(ProcessLookupError):
         os.killpg(process.pid, signal.SIGTERM)
     try:
@@ -281,12 +250,6 @@ def _direct(command: Sequence[str]) -> list[str]:
 
 @dataclass(frozen=True)
 class Launch:
-    """How the check starts the app.
-
-    ``wrap`` turns the start command into what runs (the run's sandbox, in a run), ``env`` is its
-    environment, and ``on_start`` is told of the process so that a run that is stopped can end it.
-    """
-
     wrap: Callable[[Sequence[str]], list[str]] = _direct
     env: Mapping[str, str] | None = None
     on_start: Callable[[subprocess.Popen[bytes]], None] | None = None
@@ -297,8 +260,6 @@ DIRECT = Launch()
 
 @dataclass(frozen=True)
 class Where:
-    """Where a command-line check runs: the checkout, a command's time, and how it starts."""
-
     root: Path
     timeout: float
     launch: Launch
@@ -324,10 +285,6 @@ def _cli_once(command: str, where: Where) -> tuple[int, str]:
 
 
 def check_cli(start: Start, piece: Slice, log: Path, *, where: Where) -> Result:
-    """Run the tool the way the repository says: the slice's first command, then its second.
-
-    The slice works when the last command succeeds and its output holds what the slice expects.
-    """
     base = cli_base(start.command, (piece.value.split() or [""])[0])
     steps = [s for s in (piece.value, piece.then) if s]
     lines: list[str] = []
@@ -359,7 +316,6 @@ def check_cli(start: Start, piece: Slice, log: Path, *, where: Where) -> Result:
 def check(
     root: Path, piece: Slice, log: Path, *, timeout: float = TIMEOUT_S, launch: Launch = DIRECT
 ) -> Result:
-    """Start the app at ``root``, request its page, and exercise ``piece``; stop it again."""
     start = start_command(root)
     if start is None:
         return Result(None, None, started=False, page_ok=False, slice=Verdict.FAILS, finding=NO_WAY)

@@ -1,14 +1,3 @@
-// Syntax-check the plugin's JavaScript and TypeScript sources on any Node from 22.13.
-// Usage: node scripts/parse-js.mjs workflow <file> | adapter <file>...
-//
-// `node --check` cannot do either job on Node 24: it rejects the workflow's top-level `return`,
-// and it does not strip the types of a .ts file. So each is converted first, explicitly.
-//   workflow  The Workflow runtime runs the script as the body of an async function, where
-//             `return` and `await` are legal. Compile the file as exactly that, with the one
-//             `export` (`export const meta`) turned into a plain declaration. Nothing runs.
-//   adapter   Strip the types with node:module's stripTypeScriptTypes, then hand the
-//             JavaScript to `node --check` as an ES module on stdin. Types are replaced by
-//             spaces, so an error points at the original line and column.
 import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { stripTypeScriptTypes } from 'node:module'

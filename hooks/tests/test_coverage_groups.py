@@ -1,5 +1,3 @@
-"""The grouped coverage gate over a Cobertura report or an LCOV tracefile."""
-
 from pathlib import Path
 
 import pytest
@@ -40,7 +38,6 @@ def report(root: Path, *, core_hits: int = 1, app_hits: int = 1, extra: str = ""
 
 
 def binding(kinds: str) -> str:
-    """A binding whose Suppressions section says what silences the coverage question."""
     return (
         "# Binding\n\n## Suppressions\n\n| Kind | Pattern | Rule |\n| --- | --- | --- |\n"
         "| skip | `skip-marker\\|ignore-next` | rises |\n\n| Question | Kinds |\n| --- | --- |\n"
@@ -114,8 +111,6 @@ def test_a_report_in_neither_format_is_red_and_not_an_unmeasured_green(
 
 
 def test_real_lcov_and_cobertura_of_one_rust_crate_tally_alike(tmp_path: Path) -> None:
-    # Why: both files are one `cargo llvm-cov` run of one crate, machine path cut. Its Cobertura
-    # repeats each function's first line under <methods>, which was once counted twice.
     write(tmp_path, "src/lib.rs", (FIXTURES / "cargo-mutants/lib.rs").read_text())
     tallies = [
         coverage_groups.measured(FIXTURES / "cargo-llvm-cov" / name, tmp_path)["src/lib.rs"]
@@ -282,8 +277,6 @@ def cobertura(root: Path, path: str, filename: str, *, hits: int) -> Path:
 def test_an_unmeasured_group_is_not_scored_and_not_written(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Why: issue #1. Judging the backend report alone scored every typescript group 100% and
-    # `--write` recorded it, so the frontend report could never pass again.
     root = tmp_path
     write(root, "quality/thresholds.toml", TWO_STACKS)
     write(root, "backend/a.py", "x = 1\ny = 2\n")

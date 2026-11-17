@@ -1,13 +1,3 @@
-"""The records and pages of the plugin's own tree that a test's source names, found by reading it.
-
-A path is followed from the repository root as the source builds it: ``PLUGIN_ROOT``, a root
-taken from ``Path(__file__)`` by ``.parent`` or ``.parents[n]``, a name assigned from such a path,
-and ``/``, ``joinpath``, ``glob`` and ``rglob`` on it. A path a name does not resolve to (a function
-argument, a loop variable, another module's constant) is not followed, and neither is a read made
-by a script the test runs, a subprocess or git. ``dynamic`` lists the paths whose tail is built
-from something that is not a literal, so a reader sees what the scan cannot.
-"""
-
 import ast
 from pathlib import Path
 
@@ -120,6 +110,5 @@ class Scan:
 
 
 def reads() -> dict[str, tuple[set[tuple[int, str]], set[tuple[int, str]]]]:
-    """Per test module: the record paths its source names and the paths it builds dynamically."""
     scans = {path.name: Scan(path) for path in sorted(TESTS.glob("*.py"))}
     return {name: (scan.hits, scan.dynamic) for name, scan in scans.items() if scan.hits}

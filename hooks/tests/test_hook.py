@@ -1,5 +1,3 @@
-"""The hook: payload decisions, the JSON it prints, its real adapters and the shim script."""
-
 import io
 import json
 import os
@@ -289,10 +287,6 @@ def test_run_answers_antigravity_in_its_form() -> None:
 
 
 def checkout(tmp_path: Path, *, manifest: bool | str = True, name: str = "checkout") -> Path:
-    """A repository on ``main`` under ``tmp_path``.
-
-    The fixture manifest is committed by default; a string commits that text instead.
-    """
     root = tmp_path / name
     root.mkdir(parents=True)
     _git(root, "init", "-q", "-b", "main")
@@ -657,7 +651,6 @@ def test_the_hook_reports_no_opinion_on_unknown_tools() -> None:
 
 
 def edit_from(session: Path, file: Path, tool: str = "Edit") -> dict[str, object]:
-    """An edit of ``file`` by a session whose working directory is ``session``."""
     tool_input = {"file_path": str(file), "old_string": "a", "new_string": "b"}
     return {"tool_name": tool, "tool_input": tool_input, "cwd": str(session)}
 
@@ -667,7 +660,6 @@ def bash_from(session: Path, command: str) -> dict[str, object]:
 
 
 def answer(root: Path, case: dict[str, object]) -> dict[str, str]:
-    """The decision ``hook.main`` prints for a session rooted at ``root``, or ``{}``."""
     stdout = io.StringIO()
     assert hook.main(root, io.StringIO(json.dumps(case)), stdout) == 0
     return json.loads(stdout.getvalue())["hookSpecificOutput"] if stdout.getvalue() else {}
@@ -680,7 +672,6 @@ def adopted(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def session(tmp_path: Path) -> Path:
-    """A checkout with no committed manifest, where the agent's session is rooted."""
     return checkout(tmp_path, manifest=False, name="session")
 
 

@@ -1,12 +1,3 @@
-"""Rules for the ``git`` commands that write the refs the guard reads the default branch through.
-
-Each rule reads one subcommand's arguments the way git does: a long option is any unambiguous
-prefix of its name, flags bundle, ``-C`` and ``git -c`` come before the subcommand, and a
-refspec's destination is what follows its colon. ``ratchet_guards.refs`` says which names are
-protected. What these rules cannot see is a ref name that a variable, a file or a pipe supplies
-(ADR 0016).
-"""
-
 from collections.abc import Iterator, Sequence
 from itertools import pairwise
 
@@ -17,10 +8,6 @@ from ratchet_guards.options import Spec, expand_long, scan
 from ratchet_guards.refs import MAIN_BRANCHES, REMOTE, default_branch, protected, protects, pushed
 from ratchet_guards.verdict import Verdict
 
-# Why: a config key that decides what a fetch writes into a remote-tracking ref (`remote.*`,
-# `url.*.insteadOf`), what a command line means (`alias.*`), which file git reads more config
-# from (`include.*`), or which branch a push of another lands on (`push.default`) re-points the
-# default branch as surely as a ref write does.
 TRUSTED_KEYS = ("alias.", "remote.", "url.", "include.", "includeif.", "extensions.")
 TRUSTED_CORE_KEYS = frozenset(
     {"core.usereplacerefs", "core.alternaterefscommand", "core.alternaterefsprefixes"}
@@ -35,7 +22,6 @@ _BRANCH_FLAGS = frozenset(
     | {"--delete", "--move", "--copy", "--remotes"}
 )
 _BRANCH_LONG = _BRANCH_VALUES | _BRANCH_FLAGS
-# Why: with any of these a `git branch` call reads or sets configuration and creates nothing.
 _BRANCH_READS = _BRANCH_VALUES - {"--sort", "--format"} | {
     "-l",
     "-u",
@@ -47,8 +33,6 @@ _BRANCH_READS = _BRANCH_VALUES - {"--sort", "--format"} | {
 _BRANCH = Spec("u", _BRANCH_VALUES)
 _CREATE_FLAGS = ("-b", "-B", "-c", "-C", "--create", "--force-create", "--orphan")
 _CREATE_VALUES = frozenset({"--create", "--force-create", "--orphan"})
-# Why: `--force` is a real option of `git switch` and `git checkout`, and an exact name beats a
-# longer one it prefixes, so it must be among the names or it would read as `--force-create`.
 _CREATE_LONG = _CREATE_VALUES | {"--force", "--detach", "--merge", "--track", "--no-track"}
 _CREATE = Spec("bBcC", _CREATE_VALUES)
 _WORKTREE_ADD = Spec("bB", frozenset({"--reason"}))
@@ -82,7 +66,6 @@ _TAG_VALUES = frozenset(
 )
 _TAG = Spec("mFu", _TAG_VALUES)
 _TAG_LONG = _TAG_VALUES | {"--list", "--delete", "--verify", "--force", "--column", "--annotate"}
-# Why: with any of these a `git tag` call lists, verifies or deletes, and creates nothing.
 _TAG_READS = _TAG_VALUES - {"--message", "--file", "--local-user", "--cleanup"} | {
     "-l",
     "-n",
@@ -104,39 +87,30 @@ def _refused(call: Invocation, because: str = "") -> list[Verdict]:
 def _writes(
     call: Invocation, written: Sequence[str | None], guard: Guard, *, context: Context
 ) -> list[Verdict]:
-    """A verdict when any of ``written`` is a ref the call writes and the guard reads."""
     names = guard.defaults(context, call.cwd)
     return _refused(call) if any(protects(n, names) for n in written if n) else []
 
 
 def _unrecorded_move(context: Context, call: Invocation, guard: Guard) -> bool:
-    """Whether a move of ``HEAD`` that leaves no reflog line starts on a default branch.
-
-    Only where the reflog alone names it (``ratchet_guards.committed``).
-    """
     return guard.on_main(context, call.cwd) and anchored_on_reflog(call.cwd)
 
 
 def trusted_key(key: str) -> bool:
-    """Whether a git config key, in any case, sets something the default branch is read through."""
     lowered = key.lower()
     return lowered.startswith(TRUSTED_KEYS) or lowered in TRUSTED_CORE_KEYS
 
 
 def configured(call: Invocation) -> list[Verdict]:
-    """A ``git -c`` setting of a trusted key, which re-points what the command then does."""
     keys = [config.partition("=")[0] for config in call.configs]
     trusted = next(filter(trusted_key, keys), None)
     return _refused(call, f"git -c {trusted}") if trusted else []
 
 
 def edits_config(flags: frozenset[str]) -> bool:
-    """Whether ``git config`` opens its file in an editor: ``-e`` or a prefix of ``--edit``."""
     return "-e" in flags or any(f.startswith("--ed") and "--edit".startswith(f) for f in flags)
 
 
 def _branch_names(call: Invocation, context: Context, guard: Guard) -> list[str]:
-    """The refs a ``git branch`` call creates, deletes, renames away or copies onto."""
     options = scan(expand_long(call.args, _BRANCH_LONG), _BRANCH)
     flags, operands = options.flags, list(options.operands)
     if flags & {"-d", "-D", "--delete"}:
@@ -151,12 +125,10 @@ def _branch_names(call: Invocation, context: Context, guard: Guard) -> list[str]
 
 
 def branch(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    """``git branch`` creating, forcing, deleting, renaming or copying onto a default branch."""
     return _writes(call, _branch_names(call, context, guard), guard, context=context)
 
 
 def update_ref(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    """``git update-ref`` on a protected ref, on ``HEAD`` while on main, or with ``--stdin``."""
     options = scan(expand_long(call.args, _UPDATE_REF_LONG), _UPDATE_REF)
     ref = options.operands[0] if options.operands else ""
     if "--stdin" in options.flags:
@@ -167,11 +139,6 @@ def update_ref(call: Invocation, context: Context, guard: Guard) -> list[Verdict
 
 
 def symbolic_ref(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    """``git symbolic-ref`` setting or deleting a protected ref, or ``HEAD`` on a default branch.
-
-    Pointing ``HEAD`` elsewhere leaves no ``checkout`` line in the reflog; where that reflog is
-    what names the default branch it is refused too. Reading a ref is fine.
-    """
     options = scan(expand_long(call.args, _SYMBOLIC_REF_LONG), _SYMBOLIC_REF)
     writes = bool(options.flags & {"-d", "--delete"}) or len(options.operands) > 1
     if writes and options.operands[:1] == ("HEAD",) and _unrecorded_move(context, call, guard):
@@ -180,10 +147,6 @@ def symbolic_ref(call: Invocation, context: Context, guard: Guard) -> list[Verdi
 
 
 def creates(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    """``git switch`` and ``git checkout`` creating or resetting a branch named like a default.
-
-    ``--orphan`` is refused too where the reflog names the default branch: it leaves no line in it.
-    """
     options = scan(expand_long(call.args, _CREATE_LONG), _CREATE)
     if "--orphan" in options.values and _unrecorded_move(context, call, guard):
         return _refused(call)
@@ -193,7 +156,6 @@ def creates(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
 
 
 def worktree(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    """``git worktree add -b`` or ``-B`` naming a default branch."""
     if call.args[:1] != ("add",):
         return []
     options = scan(call.args[1:], _WORKTREE_ADD)
@@ -203,10 +165,6 @@ def worktree(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
 
 
 def fetch(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    """``git fetch`` and ``git pull`` with a refspec whose destination is a protected ref.
-
-    ``tag <name>`` is ``refs/tags/<name>`` on both sides.
-    """
     options = scan(expand_long(call.args, _FETCH_LONG), _FETCH)
     refspecs = [*options.operands[1:], options.values.get("--refmap", "")]
     tags = [f"refs/tags/{name}" for word, name in pairwise(refspecs) if word == "tag"]
@@ -215,7 +173,6 @@ def fetch(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
 
 
 def tag(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    """``git tag`` creating a tag named as a default branch; listing and deleting are fine."""
     options = scan(expand_long(call.args, _TAG_LONG), _TAG)
     reads = bool(options.flags & _TAG_READS)
     created = [f"refs/tags/{name}" for name in options.operands[:1]]
@@ -223,11 +180,6 @@ def tag(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
 
 
 def push_targets(refspecs: Sequence[str]) -> Iterator[str | None]:
-    """What each refspec of a push writes, as git would name it; ``None`` is the current branch.
-
-    The destination follows the colon. With no colon the source names it, ``tag <name>`` is
-    ``refs/tags/<name>``, and a lone ``:`` pushes every branch both sides hold.
-    """
     words = iter(refspecs)
     for word in words:
         spec = word.removeprefix("+")
@@ -244,24 +196,16 @@ def push_targets(refspecs: Sequence[str]) -> Iterator[str | None]:
 def pushes(
     call: Invocation, targets: Sequence[str], names: frozenset[str] = MAIN_BRANCHES
 ) -> list[Verdict]:
-    """A push that writes a remote-tracking ref, a replace ref or a tag named as a default branch.
-
-    ``git push .`` writes this repository's own refs, and a short destination reaches them by
-    every rule ``ratchet_guards.refs.pushed`` lists. A push to a default branch itself is
-    ``push-main``'s.
-    """
     spelled = [pushed(target) for target in targets]
     strays = [full for full in spelled if not any(default_branch(name, names) for name in full)]
     return _refused(call) if any(protected(n, names) for full in strays for n in full) else []
 
 
 def pushes_default(targets: Sequence[str], names: frozenset[str] = MAIN_BRANCHES) -> bool:
-    """Whether a push to ``targets`` writes a default branch, in any spelling git matches."""
     return any(default_branch(name, names) for target in targets for name in pushed(target))
 
 
 def rebase(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    """``git rebase`` run on a default branch, or naming one as the branch to rebase."""
     options = scan(expand_long(call.args, _REBASE_LONG), _REBASE)
     operands = options.operands
     named = operands[:1] if "--root" in options.flags else operands[1:2]
@@ -273,7 +217,6 @@ def rebase(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
 
 
 def reset(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    """``git reset`` that moves the branch it runs on, refused while that is a default branch."""
     args = expand_long(call.args, _RESET_LONG)
     cut = args.index("--") if "--" in args else len(args)
     options = scan(args[:cut], _RESET)
@@ -290,7 +233,6 @@ def reset(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
 
 
 def remote(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    """``git remote`` changes to ``origin``'s URL, name or head, or a new remote that mirrors."""
     del context, guard
     options = scan(expand_long(call.args, _REMOTE_LONG), _REMOTE)
     verb, *rest = options.operands or ("",)
@@ -300,15 +242,10 @@ def remote(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
 
 
 def reflog(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    """``git reflog expire`` and ``delete``: the main work tree's reflog names the default branch.
-
-    Showing a reflog, and the default ``show``, change nothing.
-    """
     del context, guard
     return _refused(call) if call.args[:1] in (("expire",), ("delete",)) else []
 
 
 def refused(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    """A command that writes refs or objects from input the guard cannot read."""
     del context, guard
     return _refused(call)

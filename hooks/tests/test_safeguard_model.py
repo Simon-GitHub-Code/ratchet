@@ -1,5 +1,3 @@
-"""The safeguard a project owes as it grows: the model's promises, and the real gate against it."""
-
 import shutil
 import tempfile
 from pathlib import Path
@@ -39,20 +37,14 @@ from tests.support import PLUGIN_ROOT
 
 PAGE = PLUGIN_ROOT / "docs/model/safeguard.md"
 
-# The owner's eight rules, as the model finds them. A path is the shortest run that breaks the
-# rule; ``None`` says it holds on every reachable state and landing.
 FOUND: dict[str, tuple[str, ...] | None] = {
-    # 1. The change that first brings a kind is free, however many instances it brings; a kind
-    # that went back to none and returns is not arriving (ADR 0048).
     "arrival is free": None,
     "return is not arrival": None,
-    # 2. Read as "a new instance", a move breaks it; read as "the count rises", it holds.
     "owed takes no new instance": (
         "another branch lands: add one instance",
         "another branch lands: move an instance",
     ),
     "owed count does not rise": None,
-    # 3. Bound takes instances; leaving owed by dropping the row is green, and the guard holds it.
     "bound takes instances": None,
     "binding with an instance waits only on the review": None,
     "only binding leaves owed": (
@@ -60,27 +52,18 @@ FOUND: dict[str, tuple[str, ...] | None] = {
         "another branch lands: drop the row",
     ),
     "only binding leaves owed, with the guard": None,
-    # 4. A declared event is never red.
     "event is never red": None,
-    # 8. An arrival that reopens the architecture owes a review once the binding asks for one
-    # (ADR 0052): another instance is red until its record lands, a record beside the instance
-    # counts not, a record that landed before the kind arrived counts not, and a kind the binding
-    # found when it first asked owes none. The route owes it exactly when the gate refuses.
     "review owed takes no new instance": None,
     "reviewed kind is judged by its row": None,
     "the route owes what the gate refuses": None,
     "an early record settles nothing": None,
-    # 5. Removing every instance used to make the next arrival free again; ADR 0048 closed it.
-    # The gate alone still lets a kind grow once its Triggers row points elsewhere.
     "owed never grows unbound": (
         "another branch lands: add one instance",
         "another branch lands: point the Triggers row elsewhere",
         "another branch lands: add one instance",
     ),
     "owed never grows unbound, with the guard": None,
-    # 6. The gate on the merge result catches a branch that lands late.
     "late landing adds nothing": None,
-    # 7. The gate alone lets the binding be loosened; the guard sends that change to the owner.
     "nothing blinds the gate": ("another branch lands: drop the row",),
     "nothing blinds the gate, with the guard": None,
 }
@@ -95,7 +78,6 @@ def test_the_page_was_checked_and_drawn_from_the_current_export() -> None:
 
 
 def route_owes(state: State, *, counts_the_record: bool, counts_early: bool = False) -> int | None:
-    """``reviews_owed`` with a part of it left out, as a mutation of the model."""
     main = state.main
     found = main.found(main.table)
     settled = (counts_the_record and main.reviewed) or (counts_early and main.early)
@@ -106,9 +88,6 @@ def route_owes(state: State, *, counts_the_record: bool, counts_early: bool = Fa
 def test_the_rule_the_route_and_the_gate_share_catches_a_route_that_forgets_the_record(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Why: this mutation left the rule it replaced green. That rule asked only whether a review
-    # was owed after the binding asked and the kind came after, which a route that never reads
-    # the record still answers. Here the route owes a review the gate has stopped asking for.
     def forgets_the_record(state: State) -> int | None:
         return route_owes(state, counts_the_record=False)
 
@@ -128,7 +107,6 @@ def test_the_early_record_rule_catches_a_route_that_counts_a_record_older_than_t
         return route_owes(state, counts_the_record=True, counts_early=True)
 
     monkeypatch.setattr(safeguard_model, "reviews_owed", counts_early)
-    # The record that came in the change that first brings the kind is older than the arrival too.
     assert counterexample("an early record settles nothing") == (
         "another branch lands: ask for the architecture review",
         "another branch lands: add one instance with its review",
@@ -149,7 +127,6 @@ def test_every_action_is_taken_somewhere_and_every_state_is_reached_from_the_sta
 
 
 def walk(*names: str) -> tuple[State, list[Landing]]:
-    """The state the actions lead to, taking the first outcome of each, and what each landed."""
     state, seen = INITIAL, []
     for name in names:
         state, result = next(outcomes(STEPS[name], state))
@@ -243,7 +220,6 @@ BIND_AND_ADD = "another branch lands: bind the row and add one instance"
 def test_a_change_that_binds_the_row_with_an_instance_is_red_first_where_the_review_is_owed() -> (
     None
 ):
-    """ADR 0062 point 6 says a change that binds its row is green; an owed review makes it red."""
     found = graph()
     red = [
         (*path_to(before), name)
@@ -259,7 +235,6 @@ def test_a_change_that_binds_the_row_with_an_instance_is_red_first_where_the_rev
 
 
 def replay(directory: Path, *names: str) -> tuple[World, State, list[Attempt]]:
-    """The actions taken on a real repository, each landing checked against the model's."""
     world = World.create(directory / "repo")
     state, seen = INITIAL, []
     for name in names:
@@ -280,8 +255,6 @@ def replay(directory: Path, *names: str) -> tuple[World, State, list[Attempt]]:
 def test_each_run_that_breaks_a_rule_lands_the_same_way_on_a_real_repository(
     name: str, tmp_path: Path
 ) -> None:
-    # Why: the random run below may never take a pinned run, and a break the model alone shows
-    # could be the model's mistake. Here the real gate lands every step of it as the model says.
     world, state, seen = replay(tmp_path, *(FOUND[name] or ()))
     assert all(attempt.landing.landed for attempt in seen)
     assert world.owed() == owed(state.main)
@@ -290,7 +263,6 @@ def test_each_run_that_breaks_a_rule_lands_the_same_way_on_a_real_repository(
 def test_a_kind_that_went_back_to_none_and_returns_is_red_until_its_row_is_bound(
     tmp_path: Path,
 ) -> None:
-    # Why: the run that broke rule 5 before ADR 0048, and the way out the gate names.
     world, state, seen = replay(
         tmp_path,
         "another branch lands: add one instance",
@@ -310,8 +282,6 @@ def test_a_kind_that_went_back_to_none_and_returns_is_red_until_its_row_is_bound
 
 
 def test_the_real_gate_holds_another_instance_until_the_review_lands(tmp_path: Path) -> None:
-    # Why: the review's rules hold on the model; here the real gate lands each step as it says,
-    # the red one naming the review and the free one saying the kind reopens the architecture.
     world, state, seen = replay(
         tmp_path,
         "another branch lands: ask for the architecture review",
@@ -347,10 +317,6 @@ def test_the_real_gate_owes_no_review_for_a_kind_held_when_it_was_first_asked(
 
 
 def test_a_record_that_landed_before_the_kind_arrived_settles_nothing(tmp_path: Path) -> None:
-    # Why: a review settles only the arrivals it could have seen (ADR 0052). The record here
-    # lands once the review is asked and before any instance exists, so it saw no kind; the
-    # arrival is still noted as reopening the architecture, another instance is red, and only a
-    # record landed after the arrival ends it.
     world, state, seen = replay(
         tmp_path,
         "another branch lands: ask for the architecture review",
@@ -476,8 +442,6 @@ def test_a_row_dropped_and_put_back_does_not_make_the_return_an_arrival(tmp_path
 
 
 class SafeguardMachine(RuleBasedStateMachine):
-    """Random actions taken on the model and on a real repository at once."""
-
     def __init__(self) -> None:
         super().__init__()
         self.directory = Path(tempfile.mkdtemp(prefix="ratchet-safeguard-"))
@@ -552,7 +516,6 @@ class SafeguardMachine(RuleBasedStateMachine):
 
 
 def notes(run: Run) -> tuple[bool, bool, bool]:
-    """The three notes a run of the gate printed, as a ``Verdict`` holds them."""
     return (run.arrived, run.event_owes, run.reopens)
 
 

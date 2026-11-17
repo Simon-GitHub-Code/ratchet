@@ -1,5 +1,3 @@
-"""The template justfile reads the plugin a repository's gates run from and runs nothing in it."""
-
 import json
 import os
 import shutil

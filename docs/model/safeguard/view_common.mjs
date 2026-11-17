@@ -1,6 +1,3 @@
-// The owner's words for the safeguard's model, shared by the charts of docs/model/safeguard.md.
-
-// The model's own names for its steps, which its tests use too.
 const STEP = {
   ForkAddOneInstance: "fork: add one instance",
   ForkAddSeveralInstances: "fork: add several instances",
@@ -34,7 +31,6 @@ const STEP = {
 };
 export const named = (action) => STEP[action];
 
-// The kind on the default branch, and what the gate says of a change that adds an instance.
 export const kind = (v) => {
   if (v.row === "later" && v.allowance >= 0 && v.instances > v.allowance)
     return "Owed, and grown past its arrival unbound";
@@ -52,8 +48,6 @@ const ROW = {
   "absent later": "puts the dropped row back",
 };
 
-// The architecture review on the default branch. A review that lands, and a kind held when the
-// binding first asked, are one state in the model: the gate reads neither again.
 export const review = (v) => {
   if (v.review === "absent") return "Not asked: no review is owed";
   if (v.start !== "asked before the kind") return "Settled: the rows alone judge the kind";
@@ -64,11 +58,8 @@ export const review = (v) => {
   return "Asked before the kind: its arrival is free";
 };
 
-// Whether a change landed the review's decision record: the review settled, its row unchanged.
 const recorded = (from, to) => from.review === to.review && from.start !== to.start;
 
-// What a green change did to the default branch, whichever branch it came from. A change to the
-// binding or a decision record is on a guard path, so it lands only when you merge it.
 export const change = (from, to) => {
   const bound = [];
   if (recorded(from, to))

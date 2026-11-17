@@ -1,5 +1,3 @@
-"""The guard refuses a commit on a one-ticket run's branch until its publish check has passed."""
-
 import json
 from dataclasses import asdict
 from pathlib import Path

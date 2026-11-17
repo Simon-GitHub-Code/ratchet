@@ -1,14 +1,3 @@
-"""The run's record: the lines the gates append to ``.ratchet/timing.jsonl``, and what they carry.
-
-Every line carries ``at`` (UTC, ISO 8601 to the second, when the line was written), ``run`` (the
-run id of ADR 0071, ``RATCHET_RUN``) and ``tree`` (the content id of ADR 0071). A line written
-outside a run says so in the field's value, so a reader never guesses.
-
-Three kinds of line share the file. A gate line has ``key``. A tier's whole run has ``kind``
-``tier``. A path the binding's Local caches bullet names that does not exist after a tier's run
-has ``kind`` ``cache-missing``, written after that run's tier line.
-"""
-
 from __future__ import annotations
 
 import json
@@ -30,7 +19,6 @@ LOCAL_CACHES = "Local caches"
 
 
 def tree_id(root: Path) -> str:
-    """The content id of ``root``'s tree, or the words saying it could not be read."""
     try:
         return report.content_id(root)
     except (subprocess.CalledProcessError, OSError):
@@ -38,7 +26,6 @@ def tree_id(root: Path) -> str:
 
 
 def stamp(root: Path, tree: str | None = None) -> dict[str, str]:
-    """The three fields every line carries, with ``tree`` taken as given when it was read before."""
     return {
         "at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "run": os.environ.get(report.RUN) or NO_RUN,
@@ -53,7 +40,6 @@ def append(path: Path, record: dict[str, object]) -> None:
 
 
 def cache_paths(binding: str) -> list[str]:
-    """The paths the binding's Local caches bullet declares: its code spans, none with a space."""
     line = markdown_text.bullets(markdown_text.section(binding, SPEED)).get(LOCAL_CACHES, "")
     if line.startswith("<"):
         return []
@@ -67,6 +53,5 @@ def exists(root: Path, path: str) -> bool:
 
 
 def missing_cache(root: Path) -> list[str]:
-    """The paths of the Local caches bullet that match nothing on disk, ``~`` and globs expanded."""
     binding = gatelib.read_text(root / gatelib.BINDING) or ""
     return [path for path in cache_paths(binding) if not exists(root, path)]

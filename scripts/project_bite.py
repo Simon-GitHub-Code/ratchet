@@ -1,150 +1,4 @@
 #!/usr/bin/env python3
-r"""Every gate this repository bound, against a planted fault: red with it, green without it.
-
-The method ships no tool, so nothing it ships can vouch for a repository's own gates. The
-repository does: ``quality/bites.toml`` holds one or more ``[[bite]]`` per gate the binding binds
-to a tool, each a fault to plant, and this script plants each one in a scratch copy and requires
-the gate red. A gate that judges a collection (tests, benchmarks, fuzz targets) also carries a
-bite that removes the collection, since a gate with nothing to run is red (ADR 0020). A question
-may also require a named proof, a fault only its gate can catch
-(``skills/method/application-types.toml``): a bite claims it with ``proof``. ``bite.py`` is the
-other half: the gates the plugin ships, against their synthetic violations.
-
-The registry::
-
-    setup = ["just install"]             # run once in each scratch copy
-    include = [".env.test"]              # ignored paths a gate needs that setup cannot rebuild
-
-    [[bite]]
-    gate = "lint"                        # the last word of the Gates row's Entry point
-    name = "an unused import"
-    write = { path = "src/pkg/_bite.src", content = "<an unused import>" }
-    expect = "<the rule's code>"         # what the gate prints when it is red on this fault
-
-    [[bite]]
-    gate = "perf"
-    name = "no benchmark"
-    remove = ["tests/bench/**"]          # the empty collection
-    expect = "no benchmark"
-
-    [[bite]]
-    gate = "pins"
-    name = "a floating range"
-    replace = { path = "<manifest>", old = "<an exact version>", new = "<a range>" }
-    expect = "floating range"
-
-    [[bite]]
-    gate = "telemetry"
-    name = "a route registered past the seam"
-    proof = "outside-the-seam"           # the named proof this question requires
-    patch = "quality/bites/route-past-the-seam.patch"
-    expect = "emits no span"
-
-A fault is exactly one of ``write`` (create or replace a file), ``replace`` (in a file that
-exists, the one place ``old`` stands becomes ``new``; a list of them for several places),
-``patch`` (a diff under ``quality/bites/``, applied with ``git apply``) and ``remove`` (delete
-every file a glob matches). A ``replace`` keeps applying while the lines around ``old`` change,
-where a patch's context lines break on the first unrelated edit beside them. A fault that no
-longer applies (a patch that does not apply, ``old`` standing nowhere or in two places) is
-``THE FAULT WAS NOT PLANTED``, which is red. So is a fault, of any kind, aimed where restoring
-the copy does not reach: a file git ignores, ``.git``, a path through a symbolic link, a path
-inside a submodule or another repository setup made, or a new ``.gitignore`` or
-``.gitattributes``, the rules restoring works by. A fault there would stay planted for the next
-bite. A file a fault changes is written anew, so another name for the same data (a hard link)
-keeps what it held. ``args`` are appended to the gate's command, and ``commit = true`` commits
-the fault in the copy first, for a gate that reads history or the index.
-
-Once setup has run, the copy is recorded: every file git sees or tracks (one an ignore rule
-also matches included), the index, ``HEAD`` and ``.git/info/exclude``. Restoring the copy puts
-all of that back and removes every other file git sees; what git ignores stays as the last run
-left it. The copy is restored after every run and once before the first, so every run of a gate,
-green or with a fault, starts from the copy as restoring leaves it. What restoring takes away is
-absent from every run: an empty directory setup made is gone, since git holds no directory.
-
-For each bite the script runs the gate and requires green, plants the fault, runs the gate again,
-and requires red with ``expect`` in its output more often than in that green run (a recipe's own
-text is echoed on every run). No green run serves two bites: what an earlier fault's run left
-behind would be judged as this fault. After a gate's last bite the gate runs again with no fault,
-once for each set of ``args`` among its bites that bit, and not at all when none bit. A bite
-stands only while every later run of its command with no fault is green. So ``bites`` proves
-three things of one command: green on the copy as restoring leaves it, red with ``expect`` once
-the fault is planted, and green again on every later run without it. It does not prove the red
-came from the fault in three cases. A gate whose verdict hangs on state restoring does not put
-back (what git ignores, the copy's ``.git`` beyond the index and the exclude file, anything
-outside the copy, the clock) can flip between two runs on its own, and one that alternates green
-and red bites without reading the fault. A gate that reads ``RATCHET_BITING`` can behave
-differently in the copy than anywhere else. And ``args`` that narrow the command prove the
-narrowed command, not the gate as the tier runs it. A gate with ``B`` bites runs at most ``2B``
-times, plus one closing run for each set of ``args`` among the bites that bit. Every run with no
-fault is one more chance for a gate that flips on its own to go red: one red one run in twenty
-fails the proof of five bites about twice as often as when one green run served every bite, near
-one proof in two, and those reds are named ``RED BEFORE THE FAULT`` or ``NOT PROVEN``.
-
-One line per bite: ``bites``, ``DOES NOT BITE`` (green with the fault), ``RED BEFORE THE FAULT``
-(red with no fault planted, on the copy as setup made it or as an earlier bite left it), ``RED FOR
-ANOTHER REASON`` (red, and ``expect`` no more often than when green), ``THE FAULT WAS NOT PLANTED``,
-``NOT PROVEN`` (red with ``expect``, then red again with no fault planted) or ``TIMED OUT`` (a run
-of the gate hit its time limit and was ended: red, and it takes the place of the verdict its exit
-code alone would give; a time limit inside the gate's own tool is not seen, and reads as ``NOT
-PROVEN``, ``DOES NOT BITE`` or ``RED BEFORE THE FAULT``). Every run is limited to ``--limit``, else
-the ``bite-run`` key of ``[ceilings.seconds]`` in ``quality/thresholds.toml``, else 900 seconds. No
-gate's or tier's ceiling limits a run: those are measured in the warm tree, and one run of a gate in
-a cold copy, with no cache, takes several times as long. The limit only ends a hung run; the proof's
-total is held by the tier's budget and by ``bite-all``. Each line ends with the wall time of the
-bite's runs and the lane they ran in, as ``(12.3s, lane 1)``, and a red one that took a second or
-more, and more than twice the gate's fastest green run, says so there. A red proof ends with the
-machine's load at its start and at its end. A gate's lines come once its last run ends. The run is
-red on anything but ``bites``, on a registry that does not parse, on a tool-bound gate with no bite,
-and on one whose question requires a proof no bite of it claims.
-
-A scratch copy is the work tree as git sees it (tracked and untracked files, nothing ignored), as
-a repository of its own under ``$TMPDIR`` with the same index and commit, borrowing the object
-store read-only. ``HEAD`` is detached there and the default branch's refs point at it, so a gate
-over the change sees what the tree holds beyond ``HEAD``: once the work is committed, the planted
-fault and nothing else.
-
-The real work tree is never written by the script's own writes. A fault, and everything that
-restoring puts back or removes, is read and written only through descriptors of the copy's own
-directories, opened one name at a time from the copy as it stood before setup ran, never through
-a link. A symbolic link in the snapshot that leads outside the copy, taken after setup or
-restored, is refused as unsafe (red, naming the link). So a process setup left running that swaps
-a directory of the copy for a link to the real tree makes the fault ``THE FAULT WAS NOT PLANTED``
-and cannot steer such a write out of the copy. Git only lists in restoring: what differs from the
-snapshot and what stands beside it. Each file put back or removed goes through the descriptors, a
-link at a name is unlinked and never followed, and a link where a directory belongs is replaced.
-Setup code runs as the user, and nothing here stops it writing the real tree itself.
-
-What is ignored is not copied, on purpose: a virtualenv or a build cache holds the absolute paths
-of the tree it was built in, and a gate run through one would judge the real tree. ``setup``
-rebuilds them in the copy from the lockfile, as a CI job does. So a gate must build what it runs,
-the first run in a copy is a cold one, and whatever lives outside the tree (a port, a database, a
-tool reached by an absolute path) is shared with the real one. A submodule's files are not
-copied. Gates run at once, one copy per lane, never two in one copy, at most ``--jobs`` lanes:
-``RATCHET_JOBS`` by default, else git's ``ratchet.jobs``, the number that caps the gates of a
-tier, else the CPU count, and never more than four. The first copy is set up alone and the others
-once it stands, so a cache ``setup`` fills outside the tree (a package store, a compiler cache)
-is filled once. Put the build in ``setup`` as well: a gate's own build is then incremental, where a
-cold one would spend a service gate's boot timeout. What a command started and left running in its
-process group is ended when the command exits. A process that left the group, as ``setsid`` or a
-daemon does, is not ended, and runs on, and a copy it is still writing in when the proof ends is
-left behind.
-
-Usage: ``project_bite.py [--root DIR] [--changed | --pull-request-gates] [--gate NAME]...
-[--jobs N] [--limit S]``. ``--changed`` is the pull-request form: it proves nothing unless the
-change touches a path that defines a gate (the manifest's ``tool-config``, ``gate-commands``,
-``fitness``, ``gate-tools`` and ``formal`` groups, the registry and the binding), and then proves
-the gates of tiers 0 and 1 that the change could affect (ADR 0069), one line each saying why.
-The registry names a gate by each bite added, removed or changed; a patch names the gates whose
-bites apply it; the binding names the gates of the rows that changed, a changed row of the suites
-table naming `tests-changed` and no other gate (ADR 0069, amended by ADR 0073, point 6), and every
-gate when anything else in it changed, the plugin pin line included; a change to the justfile
-affects every gate, since its recipes are code the proof cannot read. Any other path, and a path
-whose reading fails, affects every gate of tiers 0 and 1. ``--pull-request-gates`` proves every
-gate of tiers 0 and 1 with no change to read, to measure what the pull-request form costs; it
-cannot be combined with ``--changed``. The proof proves nothing on the adoption either, the change
-whose base holds no binding: every gate is new there, and the whole proof runs once in tier 2.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -176,7 +30,6 @@ import plugin_pin
 import report
 import suites
 
-# Why: the guard-diff gate lives with the guard, under hooks/, as gatelib lives here for it.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import diff as guard_paths
 from ratchet_guards.manifest import Manifest
@@ -188,36 +41,23 @@ REGISTRY = Path("quality/bites.toml")
 MISSING = "missing; every gate bound to a tool needs a [[bite]]"
 PATCHES = "quality/bites/"
 KINDS = ("write", "patch", "remove", "replace")
-# Why: a path in one of these defines what a gate runs or judges. A threshold or a register entry
-# is what a gate compares against, and `ratchet-lowered` and the snapshots judge those.
 GATE_GROUPS = ("tool-config", "gate-commands", "fitness", "gate-tools", "formal")
 GATE_PATHS = (str(REGISTRY), f"{PATCHES}**", str(gatelib.BINDING))
 PULL_REQUEST_TIERS = ("0", "1")
-# Why: a hook or an activated environment points these at the real tree, and a gate in the copy
-# must judge the copy.
 REAL_TREE = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "VIRTUAL_ENV")
 IDENTITY = ("-c", "user.name=bite", "-c", "user.email=bite@example.invalid")
 COMMIT = (*IDENTITY, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m")
-# Why: a bite of the gate that runs this script would run it inside itself, without end.
 BITING = "RATCHET_BITING"
-# Why: the copy as it stood after setup, as an index of its own: restoring from it rewrites only
-# the files a run changed, so no build tool sees a tree of new timestamps.
 SNAPSHOT = ".git/bite-index"
 FRESH = ".git/bite-fresh-index"
-# Why: a chain of links longer than this is a loop, or as good as one, and is refused.
 MAX_LINK_HOPS = 40
-# Why: a gate that adds a rule here hides from the restore what it, or a fault, left behind.
 EXCLUDE = ".git/info/exclude"
 INDEX = ".git/index"
-# Why: restoring the copy cleans by the one and writes files by the other, so a new one planted
-# would decide how the copy it planted in is put back.
 RULES = (".gitignore", ".gitattributes")
 CHECK = ".git/bite-check-index"
-# A file's mode in the index, as the mode a fault writes it with.
 FILE_MODES = {"100644": 0o644, "100755": 0o755}
 NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 DIRECTORY = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | NOFOLLOW
-# Why: without these a directory is opened only by following whatever link its name holds.
 DESCRIPTORS = (
     bool(NOFOLLOW)
     and DIRECTORY != os.O_RDONLY | NOFOLLOW
@@ -236,20 +76,16 @@ GATE_LIMIT = 900.0
 RUN_CEILING = "bite-run"
 SLOW = 2.0
 SLOW_FLOOR = 1.0
-# Seconds the main thread waits on the lanes at a time: the most a signal waits for its handler.
 WAKE = 0.1
-# Why: a Tool cell that is the plugin's script and nothing else is a gate `bite.py` proves.
 SHIPPED = re.compile(r"`ratchet` plugin `[^`]+`(?: and `[^`]+`)*")
 
 
 class Unprovable(Exception):  # noqa: N818 # -- a verdict on the run, not a fault of the code
-    """The proof could not be attempted: no copy, a failed setup, a fault that does not apply."""
+    ...
 
 
 @dataclass(frozen=True)
 class Row:
-    """One row of the binding's Gates table."""
-
     question: str
     tool: str
     tier: str
@@ -259,13 +95,10 @@ class Row:
 
     @property
     def gate(self) -> str:
-        """The entry point's name: the last word of its command."""
         return self.command.split()[-1] if self.command else ""
 
     @property
     def bound(self) -> bool:
-        """Whether the repository chose what answers it: not ``none``, ``later:`` or shipped."""
-        # Why: ADR 0028. A `later:` row answers nothing yet, so it needs no bite until it is bound.
         waiting = application_types.NONE.match(self.tool) or application_types.LATER.match(
             self.tool
         )
@@ -273,16 +106,11 @@ class Row:
 
 
 def gate_rows(binding: str) -> list[Row]:
-    """The rows of the ``## Gates`` table; a row short of its five cells is left out."""
     return list(split_gates(binding)[0])
 
 
 @functools.lru_cache(maxsize=256)
 def split_gates(binding: str) -> tuple[tuple[Row, ...], str]:
-    """The Gates table's rows, and the binding with those rows taken out.
-
-    A row has ``GATE_ROW_CELLS`` cells: Question, Tool, Tier, Threshold source, Entry point.
-    """
     before, marker, body = binding.partition("\n## Gates\n")
     section, divider, after = body.partition("\n## ")
     kept: list[str] = []
@@ -306,7 +134,6 @@ def split_gates(binding: str) -> tuple[tuple[Row, ...], str]:
 def run_git(
     root: Path, *args: str, index: Path | None = None, stdin: str | bytes | None = None
 ) -> subprocess.CompletedProcess[bytes]:
-    """``git -C root args``, judging ``root`` and no other tree, through ``index`` when given."""
     return subprocess.run(
         ["git", "-C", str(root), *args],
         capture_output=True,
@@ -317,7 +144,6 @@ def run_git(
 
 
 def git_bytes(root: Path, *args: str, index: Path | None = None, stdin: str | None = None) -> bytes:
-    """The stdout of ``run_git``; raises ``Unprovable`` when git fails."""
     result = run_git(root, *args, index=index, stdin=stdin)
     if result.returncode != 0:
         message = f"git {' '.join(args)} failed in {root}: {result.stderr.decode().strip()}"
@@ -326,7 +152,6 @@ def git_bytes(root: Path, *args: str, index: Path | None = None, stdin: str | No
 
 
 def git_in(root: Path, *args: str, index: Path | None = None, stdin: str | None = None) -> str:
-    """The stdout of ``run_git`` as text; raises ``Unprovable`` when git fails."""
     return git_bytes(root, *args, index=index, stdin=stdin).decode().strip()
 
 
@@ -337,13 +162,10 @@ def environment() -> dict[str, str]:
 
 @dataclass(frozen=True)
 class Write:
-    """Create or replace one file."""
-
     path: str
     content: str
 
     def plant(self, copy: Tree) -> None:
-        """Write the file, as a change git sees."""
         owned(copy.path, self.path)
         copy.write(self.path, self.content.encode(), create=creatable(self.path))
         git_in(copy.path, "add", "--intent-to-add", "--", self.path)
@@ -351,15 +173,9 @@ class Write:
 
 @dataclass(frozen=True)
 class Patch:
-    """Apply a unified diff kept under ``quality/bites/``."""
-
     path: str
 
     def plant(self, copy: Tree) -> None:
-        """Apply the diff; a new file in it is a change git sees."""
-        # Why: `git apply` writes any file of the work tree, ignored ones too. With `--index` it
-        # finds every file the diff reads in the copy as it stood, which holds only what git sees.
-        # It writes the work tree by path, so the diff goes to an index and the files from there.
         check = copy.path / CHECK
         copy.write(CHECK, copy.read(SNAPSHOT) or b"")
         git_in(copy.path, "update-index", "-q", "--refresh", index=check)
@@ -389,12 +205,9 @@ class Patch:
 
 @dataclass(frozen=True)
 class Remove:
-    """Delete every file a glob matches: the collection a gate judges, emptied."""
-
     patterns: tuple[str, ...]
 
     def plant(self, copy: Tree) -> None:
-        """Delete the files; ``Unprovable`` when the globs match none."""
         found = [p for p in visible(copy.path) if gatelib.matches(p, list(self.patterns))]
         files = [p for p in found if (copy.path / p).is_file()]
         if not files:
@@ -406,7 +219,6 @@ class Remove:
         owned(copy.path, *files)
         for path in files:
             copy.remove(path)
-        # Why: git holds no empty directory, so a collection with no file has no directory either.
         parents = {str(PurePosixPath(path).parent) for path in files} - {"."}
         for directory in sorted(parents, reverse=True):
             copy.prune(directory)
@@ -414,8 +226,6 @@ class Remove:
 
 @dataclass(frozen=True)
 class Swap:
-    """In one file, the one place ``old`` stands becomes ``new``."""
-
     path: str
     old: str
     new: str
@@ -423,12 +233,9 @@ class Swap:
 
 @dataclass(frozen=True)
 class Replace:
-    """Exact text replaced in files that exist: a fault that holds while the lines around change."""
-
     swaps: tuple[Swap, ...]
 
     def plant(self, copy: Tree) -> None:
-        """Replace each text; ``Unprovable`` when one stands nowhere or in more than one place."""
         for swap in self.swaps:
             owned(copy.path, swap.path)
             content, old = copy.read(swap.path), swap.old.encode()
@@ -455,14 +262,6 @@ Fault = Write | Patch | Remove | Replace
 
 
 def owned(copy: Path, *paths: str) -> None:
-    """Whether a fault may change each path in the copy: one restoring the copy puts back.
-
-    Restoring puts back what the snapshot holds and removes what git sees beside it, so a fault
-    anywhere else would stay planted for the runs after it: through a link, inside another
-    repository, or in a file git ignores. ``Unprovable`` says why the first such path is not one.
-    A link is refused here before git is asked about a path beyond one, and again where the
-    fault is written (``Tree``), which holds whatever changed in between.
-    """
     for path in paths:
         parts = PurePosixPath(path).parts
         if not inside(path) or ".git" in (part.casefold() for part in parts):
@@ -473,7 +272,6 @@ def owned(copy: Path, *paths: str) -> None:
     parents = sorted({name for path in paths for name in above(path)})
     staged = git_in(copy, "ls-files", "-z", "--stage", "--", *parents) if parents else ""
     gitlinks = {line.partition("\t")[2] for line in staged.split("\0") if line.startswith("160000")}
-    # Why: a submodule's files are not copied; a repository setup made is in the copy.
     for path in paths:
         for name in above(path):
             if name in gitlinks or (copy / name / ".git").exists():
@@ -482,8 +280,6 @@ def owned(copy: Path, *paths: str) -> None:
                     " the copy does not put back"
                 )
                 raise Unprovable(message)
-    # Why: judged by the snapshot, a file it holds is tracked even where an ignore rule matches.
-    # 1 is git's answer when it ignores none of the paths; 0 names those it ignores, more is none.
     ignored = run_git(
         copy, "check-ignore", "-z", "--stdin", index=copy / SNAPSHOT, stdin="\0".join(paths)
     )
@@ -494,20 +290,17 @@ def owned(copy: Path, *paths: str) -> None:
 
 
 def above(path: str) -> list[str]:
-    """The directories ``path`` lies in, the outermost first."""
     parts = PurePosixPath(path).parts
     return ["/".join(parts[:depth]) for depth in range(1, len(parts))]
 
 
 def staged(copy: Path, index: Path) -> dict[str, tuple[str, str]]:
-    """Each path ``index`` holds, with its mode and blob."""
     listed = git_in(copy, "ls-files", "-z", "--stage", index=index).split("\0")
     entries = [line.partition("\t") for line in listed if line]
     return {path: (entry.split()[0], entry.split()[1]) for entry, _, path in entries}
 
 
 def creatable(path: str) -> bool:
-    """Whether a fault may make ``path`` where no file stands: any file but a rules file."""
     return PurePosixPath(path).name not in RULES
 
 
@@ -517,27 +310,16 @@ def linked(path: str) -> str:
 
 @dataclass(frozen=True)
 class Tree:
-    """The scratch copy, read and written only through descriptors of its own directories.
-
-    What setup leaves running can swap a directory of the copy for a link to the real tree
-    between a check and a write. Each directory on a path is opened from the one before it,
-    starting from the copy as it was before setup ran, and never through a link: a link swapped
-    in anywhere on the way fails the open, and a directory once open stays the copy's own,
-    whatever its name comes to point at. No read or write here follows a link.
-    """
-
     path: Path
     made: tuple[int, int]
 
     @classmethod
     def pin(cls, path: Path) -> Tree:
-        """The directory at ``path``, as the one every later walk must start from."""
         found = path.lstat()
         return cls(path, (found.st_dev, found.st_ino))
 
     @contextmanager
     def at(self, path: str, *, make: bool = False) -> Iterator[tuple[int, str]]:
-        """The open directory ``path`` lies in, and its last name; ``make`` makes the way."""
         if not DESCRIPTORS:
             raise Unprovable(UNSUPPORTED)
         *way, name = PurePosixPath(path).parts
@@ -563,7 +345,6 @@ class Tree:
             os.close(here)
 
     def read(self, path: str) -> bytes | None:
-        """What the file at ``path`` holds; ``None`` when no file is there."""
         with self.at(path) as (here, name):
             try:
                 opened = os.open(name, os.O_RDONLY | os.O_NONBLOCK | NOFOLLOW, dir_fd=here)
@@ -580,12 +361,6 @@ class Tree:
     def write(
         self, path: str, content: bytes, *, mode: int | None = None, create: bool = True
     ) -> None:
-        """``content`` as a new file at ``path``, with ``mode`` or else the mode the file had.
-
-        A file written in place would change every other name for it too (a hard link setup
-        made), and restoring the copy gives back only the name git sees. With ``create`` false,
-        a path where no file stands is refused.
-        """
         with self.at(path, make=True) as (here, name):
             old = entry(here, name)
             if old is None and not create:
@@ -605,7 +380,6 @@ class Tree:
                     os.fchmod(file.fileno(), kept)
 
     def remove(self, path: str) -> None:
-        """Delete the file at ``path``."""
         with self.at(path) as (here, name):
             old = entry(here, name)
             if old is not None and stat.S_ISLNK(old.st_mode):
@@ -613,12 +387,10 @@ class Tree:
             os.unlink(name, dir_fd=here)
 
     def clear(self, path: str) -> None:
-        """Delete what stands at ``path``, a directory with all it holds; a link is not followed."""
         with self.at(path.rstrip("/")) as (here, name):
             self.empty(here, name)
 
     def put(self, path: str, mode: str, content: bytes) -> None:
-        """What the index holds at ``path``, replacing whatever stands there."""
         with self.at(path, make=True) as (here, name):
             self.empty(here, name)
             if mode == "120000":
@@ -631,7 +403,6 @@ class Tree:
 
     @staticmethod
     def empty(here: int, name: str) -> None:
-        """Delete ``name`` in the open directory ``here``, whatever it is; nothing is followed."""
         found = entry(here, name)
         if found is None:
             return
@@ -645,7 +416,6 @@ class Tree:
             raise Unprovable(message) from error
 
     def prune(self, path: str) -> None:
-        """Delete the directory at ``path`` when it holds nothing."""
         with self.at(path) as (here, name):
             opened = os.open(name, DIRECTORY, dir_fd=here)
             try:
@@ -657,7 +427,6 @@ class Tree:
 
 
 def entry(here: int, name: str) -> os.stat_result | None:
-    """``name`` in the open directory ``here``, not followed; ``None`` when nothing is there."""
     try:
         return os.stat(name, dir_fd=here, follow_symlinks=False)
     except FileNotFoundError:
@@ -665,7 +434,6 @@ def entry(here: int, name: str) -> os.stat_result | None:
 
 
 def refusal(error: OSError, path: str, *, at: tuple[int, str], where: str) -> Exception:
-    """Why ``path`` was not reached: the name ``at`` is a link, or what the system said."""
     found = entry(*at)
     if found is not None and stat.S_ISLNK(found.st_mode):
         return Unprovable(linked(path))
@@ -674,8 +442,6 @@ def refusal(error: OSError, path: str, *, at: tuple[int, str], where: str) -> Ex
 
 @dataclass(frozen=True)
 class Bite:
-    """One ``[[bite]]``: a fault, the gate that must go red on it, and the words that say why."""
-
     gate: str
     name: str
     expect: str
@@ -685,7 +451,6 @@ class Bite:
     proof: str = ""
 
     def plant(self, copy: Tree) -> None:
-        """Plant the fault in ``copy`` as a change git sees, committed when the bite says so."""
         self.fault.plant(copy)
         if self.commit:
             git_in(copy.path, "add", "-A")
@@ -694,20 +459,16 @@ class Bite:
 
 @dataclass(frozen=True)
 class Registry:
-    """``quality/bites.toml``, parsed."""
-
     setup: tuple[str, ...] = ()
     include: tuple[str, ...] = ()
     bites: tuple[Bite, ...] = ()
 
 
 def within(base: Path, path: Path) -> bool:
-    """Whether ``path``, with every symbolic link on the way followed, is still under ``base``."""
     return path.resolve().is_relative_to(base.resolve())
 
 
 def inside(path: str) -> bool:
-    """Whether a registry path stays in the repository."""
     pure = PurePosixPath(path)
     return bool(path) and not pure.is_absolute() and ".." not in pure.parts
 
@@ -729,7 +490,6 @@ def text(table: dict[str, object], key: str) -> str:
 
 
 def read_swap(swap: object) -> Swap:
-    """One ``{ path, old, new }`` of a ``replace`` fault."""
     if not isinstance(swap, dict) or set(swap) != {"path", "old", "new"}:
         message = "'replace' is { path = ..., old = ..., new = ... }, or a list of them"
         raise ValueError(message)
@@ -779,7 +539,6 @@ def read_fault(table: dict[str, object]) -> Fault:
 
 
 def read_bite(table: dict[str, object]) -> Bite:
-    """One ``[[bite]]`` table as a ``Bite``; ``ValueError`` says what is wrong with it."""
     unknown = sorted(set(table) - {"gate", "name", "expect", "args", "commit", "proof", *KINDS})
     if unknown:
         message = f"unknown key '{unknown[0]}'"
@@ -800,7 +559,6 @@ def read_bite(table: dict[str, object]) -> Bite:
 
 
 def read_registry(source: str) -> tuple[Registry, list[str]]:
-    """The registry and what is malformed in it; a malformed bite is reported and left out."""
     try:
         data: dict[str, object] = tomllib.loads(source)
     except tomllib.TOMLDecodeError as error:
@@ -825,7 +583,6 @@ def read_registry(source: str) -> tuple[Registry, list[str]]:
 
 
 def misplaced(root: Path, rows: Sequence[Row], bites: Sequence[Bite]) -> Iterator[str]:
-    """Bites that name no gate of the binding, share a name, or a patch that is not there."""
     gates = {row.gate for row in rows}
     seen: set[tuple[str, str]] = set()
     for bite in bites:
@@ -841,7 +598,6 @@ def misplaced(root: Path, rows: Sequence[Row], bites: Sequence[Bite]) -> Iterato
 def unproven(
     rows: Sequence[Row], bites: Sequence[Bite], catalogue: application_types.Catalogue
 ) -> Iterator[str]:
-    """Each tool-bound gate with no bite, no ``remove`` for its collection, or a proof unclaimed."""
     for row in rows:
         mine = [bite for bite in bites if bite.gate == row.gate]
         if not row.bound:
@@ -868,7 +624,6 @@ def unproven(
 
 
 def inspect(root: Path) -> tuple[list[Row], Registry, list[str], list[str]]:
-    """The binding's rows, the registry, what is wrong in it, and each gate it leaves unproven."""
     rows = gate_rows(gatelib.read_text(root / gatelib.BINDING) or "")
     source = gatelib.read_text(root / REGISTRY)
     registry, problems = read_registry(source) if source is not None else (Registry(), [MISSING])
@@ -878,14 +633,11 @@ def inspect(root: Path) -> tuple[list[Row], Registry, list[str], list[str]]:
 
 
 def failures(root: Path) -> list[str]:
-    """What the conformance gate reports: the registry's problems, one line each."""
     _, _, problems, gaps = inspect(root)
     return [f"{REGISTRY}: {problem}" for problem in problems + gaps]
 
 
 class Run(NamedTuple):
-    """One command's end: exit code, output, wall time, and whether the limit ended it."""
-
     code: int
     output: str
     seconds: float = 0.0
@@ -893,23 +645,12 @@ class Run(NamedTuple):
 
 
 class Shell:
-    """Runs each command in a session of its own, and can stop every one still running."""
-
     def __init__(self) -> None:
-        """Start with nothing running."""
         self.lock = threading.Lock()
         self.live: set[subprocess.Popen[bytes]] = set()
         self.stopped = False
 
     def run(self, command: Sequence[str], cwd: Path, limit: float | None = None) -> Run:
-        """The exit code and everything the command wrote; 127 when it cannot start.
-
-        A command still running after ``limit`` seconds is ended with its group and the run says so.
-
-        What the command started and left running in its process group ends with it, and the
-        output says so; a process that left the group runs on. The output goes to a file, not a
-        pipe, so a process left behind cannot hold the run open.
-        """
         with tempfile.TemporaryFile() as log:
             with self.lock:
                 if self.stopped:
@@ -947,7 +688,6 @@ class Shell:
         )
 
     def stop(self) -> None:
-        """Stop every running command and refuse the next ones."""
         with self.lock:
             self.stopped = True
             live = list(self.live)
@@ -956,20 +696,17 @@ class Shell:
 
 
 def visible(root: Path) -> list[str]:
-    """Every path git sees in the work tree: tracked or untracked, never ignored."""
     listed = git_in(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
     return [path for path in listed.split("\0") if path]
 
 
 def carry(source: Path, target: Path) -> None:
-    """Copy one file or symlink, when it is there."""
     if source.is_symlink() or source.is_file():
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target, follow_symlinks=False)
 
 
 def carry_included(root: Path, copy: Path, path: str) -> None:
-    """Copy one ``include`` path, a file or a directory git ignores, when it is there."""
     if not within(root, root / path):
         message = f"include '{path}' leaves the repository through a symbolic link"
         raise Unprovable(message)
@@ -979,8 +716,6 @@ def carry_included(root: Path, copy: Path, path: str) -> None:
 
 
 class Verdict(Enum):
-    """What a gate did with a fault."""
-
     BITES = "bites"
     GREEN = "DOES NOT BITE"
     RED_BEFORE = "RED BEFORE THE FAULT"
@@ -992,8 +727,6 @@ class Verdict(Enum):
 
 @dataclass(frozen=True)
 class Outcome:
-    """One bite's verdict, and for anything but ``bites`` the reason and the gate's last lines."""
-
     bite: Bite
     verdict: Verdict
     detail: str = ""
@@ -1003,7 +736,6 @@ class Outcome:
     slower: float = 0.0
 
     def lines(self) -> str:
-        """The verdict, its wall time and lane on one line, and the detail indented under it."""
         note = f"; {self.slower:.1f}x this gate's fastest green run" if self.slower > SLOW else ""
         head = (
             f"bite: {self.bite.gate}: {self.bite.name}: {self.verdict.value}"
@@ -1012,7 +744,6 @@ class Outcome:
         return "\n".join([head, *(f"  {line}" for line in self.detail.splitlines())])
 
     def unproven(self, later: Run) -> Outcome:
-        """This bite, not proven: a later run with no fault planted was red; timed out, say so."""
         if later.timed_out:
             return replace(self.timed_out(later.output), red_seconds=later.seconds)
         why = (
@@ -1027,7 +758,6 @@ class Outcome:
         )
 
     def timed_out(self, output: str) -> Outcome:
-        """This bite, ended by the time limit: red, whatever its exit code alone would say."""
         return replace(self, verdict=Verdict.TIMED_OUT, detail=tail(output))
 
 
@@ -1036,7 +766,6 @@ def tail(output: str) -> str:
 
 
 def judge(bite: Bite, green: str, planted: Run) -> Outcome:
-    """The verdict on a gate that printed ``green`` before the fault; ``planted`` is its run."""
     code, output = planted.code, planted.output
     if planted.timed_out:
         return Outcome(bite, Verdict.TIMED_OUT, tail(output))
@@ -1056,8 +785,6 @@ def judge(bite: Bite, green: str, planted: Run) -> Outcome:
 
 @dataclass(frozen=True)
 class Copy:
-    """One lane's scratch copy, and how it stood once its setup had run."""
-
     tree: Tree
     shell: Shell
     head: str
@@ -1068,21 +795,13 @@ class Copy:
 
     @property
     def path(self) -> Path:
-        """Where the copy is."""
         return self.tree.path
 
     def restore(self) -> None:
-        """Put back what the snapshot holds, the index, ``HEAD`` and the exclude file.
-
-        What git sees beside the snapshot is removed. What git ignores stays.
-        """
         snapshot = self.path / SNAPSHOT
         git_in(self.path, "reset", "-q", "--soft", self.head)
         self.tree.write(INDEX, self.staged)
         self.tree.write(EXCLUDE, self.exclude)
-        # Why: git only lists here; every delete and write goes through a descriptor of the copy.
-        # A fresh index holds no stat data, so the refresh compares every file's content and
-        # a gate that kept a file's size and times cannot hide its change.
         fresh = self.path / FRESH
         git_in(self.path, "read-tree", self.snapshot_tree, index=fresh)
         run_git(self.path, "update-index", "-q", "--refresh", index=fresh)
@@ -1100,30 +819,19 @@ class Copy:
             else:
                 content = git_bytes(self.path, "cat-file", "blob", blob)
             self.tree.put(path, mode, content)
-        # Why: defence in depth; the snapshot was checked, and what it now writes is checked again.
         contained(self.path, self.head)
 
     def run(self, command: Sequence[str], limit: float) -> Run:
-        """What the gate does to the copy as it now stands; then the copy as it stood."""
         result = self.shell.run(command, self.path, limit)
         self.restore()
         return result
 
     def prove(self, row: Row, bites: Sequence[Bite]) -> Iterator[Outcome]:
-        """Each bite of one gate: green without the fault, red on it, and green again after.
-
-        A bite stands only while every later run of its command with no fault planted is green:
-        the green run of each later bite with the same ``args``, and one closing run after the
-        last bite, for each set of ``args`` a bite that bit gave the gate. Once the proof is
-        stopped, nothing more runs and no verdict is given.
-        """
         outcomes: list[Outcome] = []
         greens: list[float] = []
         for bite in bites:
             if self.shell.stopped:
                 return
-            # Why: a green run taken before an earlier fault says nothing of what that fault left
-            # behind (a cache, a mark in an ignored file), so each fault gets its own green run.
             before = self.unfaulted(row, bite.args, outcomes, greens=greens)
             green = before.output
             if before.code != 0:
@@ -1140,7 +848,6 @@ class Copy:
                 continue
             try:
                 bite.plant(self.tree)
-            # Why: every way a fault fails to plant is one verdict, a file the system refuses too.
             except (Unprovable, OSError) as error:
                 self.restore()
                 why = str(error).replace(f"{self.path}/", "")
@@ -1158,7 +865,6 @@ class Copy:
                     red_seconds=planted.seconds,
                 )
             )
-        # Why: a gate red from its second run on, by state it keeps, is red on every fault.
         for args in dict.fromkeys(o.bite.args for o in outcomes if o.verdict is Verdict.BITES):
             self.unfaulted(row, args, outcomes, greens=greens)
         fastest = min(greens, default=0.0)
@@ -1173,16 +879,11 @@ class Copy:
     def outcome(
         self, bite: Bite, verdict: Verdict, *, detail: str, seconds: float, red: float = 0.0
     ) -> Outcome:
-        """A verdict of this bite, timed, in this copy's lane."""
         return Outcome(bite, verdict, detail, seconds, self.lane, red)
 
     def unfaulted(
         self, row: Row, args: tuple[str, ...], outcomes: list[Outcome], *, greens: list[float]
     ) -> Run:
-        """A run with no fault planted; red, it leaves no bite before it with ``args`` standing.
-
-        A green run's seconds join ``greens``.
-        """
         result = self.run([*shlex.split(row.command), *args], row.limit)
         if result.code == 0:
             greens.append(result.seconds)
@@ -1195,13 +896,10 @@ class Copy:
 
 
 def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell, lane: int = 0) -> Copy:
-    """``root`` as git sees it, as a repository of its own at ``copy``, with ``setup`` run."""
-
     def git_path(name: str) -> Path:
         return Path(git_in(root, "rev-parse", "--path-format=absolute", "--git-path", name))
 
     git_in(root, "init", "-q", str(copy))
-    # Why: pinned before setup runs, so nothing setup leaves running decides what the copy is.
     tree = Tree.pin(copy)
     (copy / ".git/objects/info/alternates").write_text(f"{git_path('objects')}\n", encoding="utf-8")
     git_in(copy, "fetch", "-q", "--update-head-ok", str(root), "+refs/*:refs/*")
@@ -1216,8 +914,6 @@ def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell, lane:
         carry(root / path, copy / path)
     for path in registry.include:
         carry_included(root, copy, path)
-    # Why: with the default branch at `HEAD`, the base of the change is `HEAD` in the copy, so a
-    # gate over the change judges the fault and not the whole branch again.
     for name in gatelib.default_branches(copy):
         ref = f"refs/remotes/{name}" if name.startswith("origin/") else f"refs/heads/{name}"
         if gatelib.git(copy, "rev-parse", "-q", "--verify", ref) is not None:
@@ -1238,16 +934,12 @@ def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell, lane:
         tree.read(EXCLUDE) or b"",
         lane,
     )
-    # Why: every run then starts from the copy as restoring leaves it, the first green run too;
-    # where setup left what restoring takes away (an empty directory), every run judges without it.
     made.restore()
     return made
 
 
 def snapshot(copy: Path) -> None:
-    """The copy as it now stands, as the index ``SNAPSHOT``: every file git sees or tracks."""
     git_in(copy, "add", "--all", index=copy / SNAPSHOT)
-    # Why: `add --all` leaves out a file the index tracks where an ignore rule matches it too.
     listed = git_in(copy, "ls-files", "-z", "--cached", "--ignored", "--exclude-standard")
     tracked = [path for path in listed.split("\0") if path and os.path.lexists(copy / path)]
     if tracked:
@@ -1265,11 +957,6 @@ def snapshot(copy: Path) -> None:
 
 
 def under(absolute: str, bases: tuple[str, ...]) -> list[str] | None:
-    """The parts of ``absolute`` below the first of ``bases`` holding it, or ``None``.
-
-    The target is taken as written: its ``..`` are walked with the links on the way by the
-    caller, never collapsed here, where ``L/../x`` would be ``x`` whatever ``L`` leads to.
-    """
     for base in bases:
         if absolute == base or absolute.startswith(base + os.sep):
             return absolute[len(base) :].split("/")
@@ -1277,12 +964,6 @@ def under(absolute: str, bases: tuple[str, ...]) -> list[str] | None:
 
 
 def ends_inside(path: str, targets: dict[str, str], bases: tuple[str, ...], *, copy: Path) -> bool:
-    """Whether the link ``path`` ends inside the copy, by the link texts ``targets`` hold.
-
-    Judged from the text the snapshot holds, which is what restoring writes, never from the copy
-    as it stands: setup left running can put a directory back by the time this looks, and a link
-    accepted that way is written again, live, by the next restore.
-    """
     pending: list[str] = path.split("/")
     here: list[str] = []
     hops = 0
@@ -1294,11 +975,6 @@ def ends_inside(path: str, targets: dict[str, str], bases: tuple[str, ...], *, c
             here.pop()
         elif part not in ("", "."):
             name = "/".join([*here, part])
-            # Why: a link git ignores is not in the snapshot and is not restored, but it stays in
-            # the copy, and a link to it still leads where it leads; so it is followed as it is.
-            # Such a link is not itself refused: a fault is refused through any link (``owned``),
-            # restoring replaces a link and never follows one, and what setup fills outside the
-            # tree through one (a package store) is what ``setup`` is for.
             target = targets.get(name)
             if target is None and (copy / name).is_symlink():
                 target = str((copy / name).readlink())
@@ -1316,14 +992,6 @@ def ends_inside(path: str, targets: dict[str, str], bases: tuple[str, ...], *, c
 
 
 def contained(copy: Path, head: str) -> None:
-    """Refuse a link in the snapshot that resolves outside the copy; ``Unprovable`` names it.
-
-    A link to the real tree, restored, lets a later path operation in the copy write there. A
-    link is judged by where it ends, absolute or relative, through every link on the way. A link
-    the commit already holds, unchanged, is the repository's own (faults through it are refused
-    by ``owned``); one setup made or changed is not.
-    """
-
     def links(*args: str, index: Path | None = None) -> dict[str, str]:
         listed = git_in(copy, "ls-files" if index else "ls-tree", "-z", *args, index=index)
         found = {}
@@ -1354,7 +1022,6 @@ Task = tuple[Row, list[Bite]]
 
 
 def run_limit(root: Path, override: float | None) -> tuple[float, str]:
-    """Seconds any one run may take, and the proof's first line, which says where that came from."""
     if override is not None:
         return override, f"bite: limit: {override:g}s a run"
     file = root / gatelib.THRESHOLDS
@@ -1369,7 +1036,6 @@ def run_limit(root: Path, override: float | None) -> tuple[float, str]:
 def run_lanes(
     root: Path, registry: Registry, tasks: Sequence[Task], *, lanes: int, limit: float
 ) -> list[Outcome]:
-    """Every task, ``lanes`` at once, each lane in a scratch copy of its own; then no copy."""
     pending: queue.SimpleQueue[Task] = queue.SimpleQueue()
     for row, bites in tasks:
         pending.put((replace(row, limit=limit), bites))
@@ -1391,23 +1057,16 @@ def run_lanes(
         return outcomes
 
     with (
-        # Why: a process setup left running may still be writing in a copy as it is removed.
         tempfile.TemporaryDirectory(prefix="ratchet-bite-", ignore_cleanup_errors=True) as scratch,
         ThreadPoolExecutor(max_workers=lanes, thread_name_prefix="bite-lane") as pool,
     ):
         paths = [Path(scratch) / f"copy-{n}" for n in range(lanes)]
         try:
-            # Why: the first setup fills the caches kept outside the tree; the rest then find
-            # them, where setups started together would each miss.
             first = make_copy(root, paths[0], registry=registry, shell=shell)
-            # Why: a signal between a lane's start and the pool recording it would leave a lane
-            # the pool does not wait for, writing into a copy that is being removed.
             with gatelib.signals_held():
                 futures = [
                     pool.submit(lane, n, path, None if n else first) for n, path in enumerate(paths)
                 ]
-            # Why: the kernel may hand a signal to a lane's thread, and its handler runs only when
-            # this thread runs Python, which a wait with no end would put off until the gate ends.
             while wait(futures, timeout=WAKE).not_done:
                 pass
             return [outcome for future in futures for outcome in future.result()]
@@ -1417,7 +1076,6 @@ def run_lanes(
 
 
 def load() -> str:
-    """The machine's one-minute load average and core count, or ``unknown`` where it has none."""
     average = getattr(os, "getloadavg", None)
     if average is None:
         return "unknown"
@@ -1427,7 +1085,6 @@ def load() -> str:
 def proof(
     root: Path, registry: Registry, tasks: Sequence[Task], *, lanes: int, limit: float | None
 ) -> int:
-    """Run the tasks and say what bit; the exit code."""
     started = time.monotonic()
     load_before = load()
     seconds, first = run_limit(root, limit)
@@ -1435,7 +1092,6 @@ def proof(
     try:
         with gatelib.interrupts_raise():
             outcomes = run_lanes(root, registry, tasks, lanes=lanes, limit=seconds)
-    # Why: a copy no walk can reach, or a system that refuses one, is a run that proves nothing.
     except (Unprovable, OSError) as error:
         return gatelib.report("bite", [str(error)])
     except gatelib.Interrupted as stop:
@@ -1452,15 +1108,11 @@ def proof(
 
 
 class Touched(NamedTuple):
-    """A changed path that defines a gate, and the manifest group that says so (none: ``""``)."""
-
     path: str
     group: str
 
 
 class Cause(NamedTuple):
-    """Why a gate is in the proof's set; no gate means every gate of tiers 0 and 1."""
-
     gate: str | None
     why: str
 
@@ -1475,16 +1127,11 @@ READS_BULLET = re.compile(r"^- ([^:\s]+):[ \t]*(.*)$")
 
 
 def defining_group(names: set[str]) -> str:
-    """The first gate group of ``names`` besides ``tool-config``, else ``tool-config``, else none.
-
-    A path in ``tool-config`` and in any other gate group is therefore judged by the other group.
-    """
     wide = [name for name in GATE_GROUPS if name in names and name != "tool-config"]
     return wide[0] if wide else "tool-config" if "tool-config" in names else ""
 
 
 def gate_paths_changed(root: Path, base: str | None) -> list[Touched] | None:
-    """The changed paths that define a gate; ``None`` when there is no commit to compare with."""
     if base is None:
         return None
     git = guard_paths.git_in(root)
@@ -1511,7 +1158,6 @@ def gate_paths_changed(root: Path, base: str | None) -> list[Touched] | None:
 
 
 def registries(root: Path, base: str) -> tuple[Registry | None, Registry | None]:
-    """The registry at the merge base and at head; ``None`` for one that is absent or malformed."""
     found = []
     for source in (gatelib.show(root, base, str(REGISTRY)), gatelib.read_text(root / REGISTRY)):
         registry, problems = read_registry(source) if source is not None else (None, [MISSING])
@@ -1549,10 +1195,6 @@ def patch_causes(root: Path, base: str, path: str) -> list[Cause]:
 
 
 def patch_paths(root: Path, patch: bytes | None) -> set[str]:
-    """The files a patch touches, new names and old, as git lists them; ``**`` when it cannot.
-
-    Git is asked both ways, since a rename or a mode change lists only one name going forward.
-    """
     if not patch:
         return set()
     forward = run_git(root, "apply", "--numstat", "-z", stdin=patch)
@@ -1564,17 +1206,11 @@ def patch_paths(root: Path, patch: bytes | None) -> set[str]:
 
 
 def committed_bytes(root: Path, base: str, path: str) -> bytes | None:
-    """``path`` as the merge base holds it, byte for byte; ``None`` when it holds none."""
     result = run_git(root, "show", f"{base}:{path}")
     return result.stdout if result.returncode == 0 else None
 
 
 def fault_targets(root: Path, base: str) -> Targets:
-    """Each file or glob a bite's fault changes, with the bites that change it.
-
-    A ``write`` or ``replace`` names its files, a ``remove`` its patterns, and a ``patch`` the files
-    its diff lists at the merge base and at head. Only the patterns are globs.
-    """
     targets: Targets = {}
     for registry in registries(root, base):
         for bite in registry.bites if registry else ():
@@ -1596,7 +1232,6 @@ def fault_targets(root: Path, base: str) -> Targets:
 
 
 def targeted_by(targets: Targets, path: str) -> set[tuple[str, str]]:
-    """The bites whose fault changes ``path``."""
     return {
         who
         for (pattern, name), bites in targets.items()
@@ -1606,11 +1241,6 @@ def targeted_by(targets: Targets, path: str) -> set[tuple[str, str]]:
 
 
 def binding_causes(root: Path, base: str) -> list[Cause]:
-    """The gates a change to the binding could affect.
-
-    ``gatelib.show`` strips the text it returns while the work tree's file keeps its newline, so
-    the text outside the rows is compared stripped. A changed row that names no gate falls back.
-    """
     binding = str(gatelib.BINDING)
     old = gatelib.show(root, base, binding) or ""
     new = gatelib.read_text(root / binding) or ""
@@ -1651,10 +1281,6 @@ def binding_causes(root: Path, base: str) -> list[Cause]:
 
 
 def read_reads(binding: str) -> tuple[dict[str, list[str]], list[str]]:
-    """The bullets of ``## What each gate reads``, and each line after the first that is no bullet.
-
-    An indented line continues the bullet above it.
-    """
     _, marker, body = binding.partition(f"\n{READS}\n")
     reads: dict[str, list[str]] = {}
     strays: list[str] = []
@@ -1677,21 +1303,14 @@ def read_reads(binding: str) -> tuple[dict[str, list[str]], list[str]]:
 
 
 def gate_reads(binding: str) -> dict[str, list[str]]:
-    """Each bullet of ``## What each gate reads``: the gate, and the paths it reads."""
     return read_reads(binding)[0]
 
 
 def reading(path: str, entry: str) -> bool:
-    """Whether a bullet's file, directory or glob covers a repository path."""
     return gatelib.matches(path, [entry, f"{entry.rstrip('/')}/**"])
 
 
 def unnamed_causes(root: Path, path: str, group: str) -> list[Cause]:
-    """The gates a path no gate's row names could affect.
-
-    A tool-config path goes to the gates whose bullet reads it and those with no bullet. Any other
-    path, and a tool-config path with no bullet in the binding at all, goes to every gate.
-    """
     binding = gatelib.read_text(root / gatelib.BINDING) or ""
     reads = gate_reads(binding) if group == "tool-config" else {}
     if not reads:
@@ -1711,11 +1330,6 @@ def unnamed_causes(root: Path, path: str, group: str) -> list[Cause]:
 
 
 def could_affect(root: Path, base: str | None, touched: Sequence[Touched] | None) -> list[Cause]:
-    """Every gate the change could make unable to fail, each with why; no gate is every gate.
-
-    One source per kind of path. Where nothing records which gate a path serves, the cause names
-    no gate.
-    """
     if base is None or touched is None:
         return [Cause(None, "there is no merge base to compare with")]
     causes: list[Cause] = []
@@ -1744,17 +1358,14 @@ def could_affect(root: Path, base: str | None, touched: Sequence[Touched] | None
 
 
 def pull_request_gates(rows: Sequence[Row]) -> list[Row]:
-    """Every gate of tiers 0 and 1."""
     return [row for row in rows if row.tier in PULL_REQUEST_TIERS]
 
 
 def fallback(rows: Sequence[Row]) -> list[Row]:
-    """The gates to prove when a cause names no gate: every gate of tiers 0 and 1, for now."""
     return pull_request_gates(rows)
 
 
 def targeted(rows: Sequence[Row], causes: Sequence[Cause]) -> list[Row]:
-    """The gates the causes put in the set, and the one place that falls back."""
     if any(cause.gate is None for cause in causes):
         return fallback(rows)
     named = {cause.gate for cause in causes}
@@ -1762,7 +1373,6 @@ def targeted(rows: Sequence[Row], causes: Sequence[Cause]) -> list[Row]:
 
 
 def explain(rows: Sequence[Row], causes: Sequence[Cause]) -> list[str]:
-    """One line for each gate in the set; on a fallback one line, which ``budget.py`` reads."""
     if any(cause.gate is None for cause in causes):
         whys = dict.fromkeys(cause.why for cause in causes if cause.gate is None)
         return [f"bite: fallback: {'; '.join(whys)}; proving every gate"]
@@ -1774,7 +1384,6 @@ def explain(rows: Sequence[Row], causes: Sequence[Cause]) -> list[str]:
 
 
 def changed_gates(root: Path, rows: Sequence[Row]) -> list[Row] | int:
-    """The gates a pull request proves, or the exit code of a run that proves nothing."""
     base = gatelib.base_commit(root)
     if gatelib.adoption(root, base):
         print(
@@ -1818,7 +1427,6 @@ def main(argv: list[str]) -> int:
         return gatelib.report("bite", ["a bite cannot plant a fault for the gate that runs it"])
     root = options.root.resolve()
     rows, registry, problems, gaps = inspect(root)
-    # Why: one gate at a time is how a registry is written, so `--gate` runs before it is whole.
     problems += [] if options.gate and not options.changed else gaps
     if problems:
         return gatelib.report("bite", [f"{REGISTRY}: {problem}" for problem in problems])

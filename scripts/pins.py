@@ -1,31 +1,4 @@
 #!/usr/bin/env python3
-"""The pins gate, the tool-neutral half: actions by commit, images by digest, permissions set.
-
-Every ``uses:`` in a workflow names a commit SHA with the version in a trailing comment; every
-``image:`` of a workflow and every action run from an image (a ``uses:`` with a URL scheme) names
-a digest; every workflow sets a top-level ``permissions:`` block. The stack-specific half (the
-lockfile matches the manifest, no floating range) is bound beside this script in the ``pins``
-entry point.
-
-The files of the project's own that name an image to build from or run are the stack's, not the
-plugin's (ADR 0050). The binding's ``## Image pins`` section lists them, one row each::
-
-    | Files | Reference |
-    | --- | --- |
-    | `<glob>, <glob>` | `<regex>` |
-
-``Files`` are globs over tracked files. ``Reference`` is a regular expression (Python's ``re``)
-that each line of those files is searched with: group 1 is the image reference, which must name a
-digest (``@<algorithm>:<hex>``); an optional group 2 is a name the line gives to a stage that later
-lines may build from, and a reference to one is no image. A reference that starts with ``$`` is a
-variable the gate cannot read and is left alone. A row that says ``none: <reason>`` in ``Files``
-says the project names no image in a file of its own. The merge base's section judges a change, so
-a change cannot narrow what it checks. Until the section exists no such file is read, and the gate
-says so; conformance names the missing section.
-
-Usage: ``pins.py [--root DIR]``.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -82,18 +55,11 @@ def check_images(path: str, text: str) -> list[str]:
 
 @dataclass(frozen=True)
 class Rule:
-    """One row of the image pins table: the files, and how a line of them names an image."""
-
     files: tuple[str, ...]
     reference: re.Pattern[str]
 
 
 def parse(binding: str | None) -> tuple[list[Rule] | None, list[str]]:
-    """The rules of the binding's image pins section and what is wrong with it.
-
-    The rules are ``None`` when the section is missing or has a problem, and ``[]`` when it says
-    ``none``.
-    """
     if binding is None or not markdown_text.has_section(binding, SECTION):
         return None, [f"has no '{SECTION}' section"]
     found = [t for t in markdown_text.tables(binding, SECTION) if t.header == COLUMNS]
@@ -134,7 +100,6 @@ def _rule(files_cell: str, reference_cell: str, problems: list[str]) -> Rule | N
 
 
 def rules_in_force(root: Path) -> list[Rule] | None:
-    """The rules of the merge base's binding, else the work tree's; ``None`` when unsaid."""
     base = gatelib.base_commit(root)
     for text in (
         gatelib.show(root, base, str(gatelib.BINDING)) if base else None,

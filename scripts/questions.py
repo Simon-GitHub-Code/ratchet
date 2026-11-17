@@ -1,24 +1,4 @@
 #!/usr/bin/env python3
-"""How the owner answers: one line per question asked, and the questions they need not be asked.
-
-ADR 0022. A skill asks the owner where the options lead to different products, where a wrong
-guess cannot be taken back, and where the owner said they want a say in the tooling. Each answer
-is one line of ``.ratchet/questions.tsv``: the date, the skill, the question's key, its kind and
-whether the owner took the recommended option. The file is one clone's and no commit carries it,
-so recording an answer asks nobody and dirties no work tree.
-
-- ``record --skill S --key K --kind direction|irreversible|tooling --recommended yes|no``
-  appends the line. A key is stable: the same question asked again has the same key
-  (``adopt.tools``); a question about one ticket carries the ticket (``feature.<slug>.1``).
-- ``report`` prints one line per key whose last three answers or more all took the
-  recommendation: a proposal that the owner make it a standing answer. It changes nothing. A
-  ``direction`` key is never proposed: a product question is new each time it is asked. A key
-  ``AGENTS.md`` already lists under ``## Standing answers`` is not proposed again.
-
-Usage: ``questions.py record --skill S --key K --kind KIND --recommended yes|no [--root DIR]``
-and ``questions.py report [--root DIR]``.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -47,7 +27,6 @@ def today() -> str:
 
 
 def record(root: Path, fields: tuple[str, str, str, str]) -> int:
-    """Append one answer: the skill, the key, the kind and whether the recommendation was taken."""
     skill, name, _kind, _recommended = fields
     wrong = [text for text in (skill, name) if not NAME.fullmatch(text)]
     if wrong:
@@ -63,13 +42,11 @@ def record(root: Path, fields: tuple[str, str, str, str]) -> int:
 
 
 def standing(root: Path) -> set[str]:
-    """The keys ``AGENTS.md`` lists under ``## Standing answers``: asked once, answered for good."""
     section = STANDING.search(gatelib.read_text(root / AGENTS) or "")
     return set(STANDING_KEY.findall(section.group(1))) if section else set()
 
 
 def proposals(root: Path) -> list[str]:
-    """One sentence per key the owner has answered with the recommendation three times running."""
     rows = (gatelib.read_text(root / gatelib.STATE / LOG) or "").splitlines()[1:]
     streaks: dict[str, int] = {}
     kinds: dict[str, str] = {}

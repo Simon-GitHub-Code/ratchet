@@ -1,5 +1,3 @@
-"""``scripts/parse-js.mjs``, behind ``just parse-workflow`` and ``just parse-adapters``."""
-
 import shutil
 import subprocess
 from pathlib import Path

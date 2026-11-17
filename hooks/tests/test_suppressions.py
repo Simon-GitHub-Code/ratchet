@@ -1,9 +1,3 @@
-"""Suppressions: the binding lists the directives, and the gate counts what it lists (ADR 0042).
-
-The directives here are made up. The plugin names no tool's directive, so a gate that passes on
-``SILENCE-IT`` and ``ONLY-THIS`` shows it reads the table and nothing else.
-"""
-
 import re
 import shutil
 from pathlib import Path
@@ -44,9 +38,6 @@ def parsed(text: str = BINDING) -> suppressions.Spec:
     spec = suppressions.parse(text)
     assert spec is not None
     return spec
-
-
-# --- the section -----------------------------------------------------------------------------
 
 
 def test_a_binding_without_the_section_has_no_spec() -> None:
@@ -102,9 +93,6 @@ def test_a_section_that_is_unfilled_or_malformed_says_what_is_wrong(
 def test_a_pattern_is_valid_when_the_search_command_takes_it() -> None:
     assert suppressions.valid("a|b")
     assert not suppressions.valid("(")
-
-
-# --- counting -------------------------------------------------------------------------------
 
 
 def project(tmp_path: Path, files: dict[str, str] | None = None) -> Path:
@@ -217,9 +205,6 @@ def test_the_search_the_markers_gate_shares_can_leave_a_path_out(tmp_path: Path)
     assert markers.grep_count(root, "TODO", None, outside="skip.txt") == 1
 
 
-# --- conformance -----------------------------------------------------------------------------
-
-
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
     shutil.copytree(pristine(), tmp_path / "repo", symlinks=True)
@@ -280,3 +265,14 @@ def test_a_malformed_kind_is_red(repo: Path) -> None:
         "| k | `(` | rises |",
     )
     assert any("needs one backticked extended regex" in p for p in found(repo))
+
+
+def test_a_pattern_edged_with_punctuation_counts_inside_a_word(tmp_path: Path, capsys: Out) -> None:
+    binding = BINDING.replace("`QUIET\\|HUSH`", "`HUSH\\(`")
+    assert "HUSH\\(" in binding
+    root = repository(tmp_path, {"docs/process/binding.md": binding, "a.txt": "plain\n"})
+    commit(root, "feat(core): second")
+    branch(root)
+    write(root, "a.txt", "call.HUSH(arg)\n")
+    assert run(root) == 1
+    assert "quiet: rose from 0 to 1" in capsys.readouterr().out

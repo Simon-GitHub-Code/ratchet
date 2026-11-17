@@ -1,12 +1,3 @@
-"""What the gate scripts share: git, the merge base, the changed paths, the thresholds file.
-
-Every gate that compares head with "before" means the same before: the merge base of ``HEAD``
-with the default branch, which is the remote's ``HEAD``, else the branch the binding names under
-``- Default branch:``, else ``main`` or ``master``. On the default branch itself, or when ``HEAD``
-is the merge base, before is ``HEAD~1``. ``lowered``, ``guard-diff`` and the gates here all call
-``base_commit`` so no two of them can disagree about it.
-"""
-
 from __future__ import annotations
 
 import contextlib
@@ -41,14 +32,8 @@ if TYPE_CHECKING:
 
 FALLBACK_BRANCHES = ("main", "master")
 BINDING = Path("docs/process/binding.md")
-# Why: `with_service.py` exports the URL it waited on, so a command run inside it can tell the
-# readiness route from the routes a user requests.
 READY_ENV = "RATCHET_READY"
-# Why: a path that exists only once ``with_service.py --graceful`` has sent the stop signal, and
-# holds what the gate knows of the service's listeners: a ``Stopping``.
 STOPPING_ENV = "RATCHET_STOPPING"
-# Why: a path the command creates once it is sending requests; ``with_service.py --graceful``
-# counts ``--signal-after`` from then, so a command slow to start still has requests in flight.
 SENDING_ENV = "RATCHET_SENDING"
 ANSWER_POLL = 0.002
 PORT_RANGE = Path("/proc/sys/net/ipv4/ip_local_port_range")
@@ -58,8 +43,6 @@ THRESHOLDS = Path("quality/thresholds.toml")
 STATE = Path(".ratchet")
 DEFAULT_BRANCH_LINE = re.compile(r"^- Default branch: `([^`]+)`$", re.MULTILINE)
 
-# Why: a hook exports these, and `git -C` obeys them over the directory it is given; a scratch
-# copy must be a repository of its own, not the one the hook is committing in.
 REPOSITORY_VARIABLES = frozenset(
     {
         "GIT_DIR",
@@ -72,20 +55,10 @@ REPOSITORY_VARIABLES = frozenset(
     }
 )
 
-# Why: an edit the upgrade makes to one file: the text the file holds now (``None``: absent) to
-# the text it must hold. It reads nothing else, never drops a line it did not write and, applied
-# twice, changes nothing the second time.
 Want = Callable[[str | None], str]
 
 
 def interpreter(*, inline: bool = False) -> list[str]:
-    """This interpreter and the options it runs with, for a child that must run as it does.
-
-    ``-E`` and ``-s`` keep the child from reading the interpreter's environment variables and
-    the user's site folder, and the compiled-file options follow the parent's, so a gate's
-    children never read a folder the gate did not choose. ``inline`` is for a child run with
-    ``-c``, whose first import folder is the working directory: ``-P`` takes it out.
-    """
     argv = [sys.executable]
     if sys.flags.ignore_environment:
         argv.append("-E")
@@ -101,7 +74,6 @@ def interpreter(*, inline: bool = False) -> list[str]:
 
 
 def git(root: Path, *args: str) -> str | None:
-    """``git -C root args`` stdout, or ``None`` when git fails."""
     result = subprocess.run(
         ["git", "-C", str(root), *args], capture_output=True, text=True, check=False
     )
@@ -109,7 +81,6 @@ def git(root: Path, *args: str) -> str | None:
 
 
 def default_branches(root: Path) -> list[str]:
-    """Candidate default branches, most authoritative first."""
     candidates: list[str] = []
     remote_head = git(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
     if remote_head:
@@ -125,7 +96,6 @@ def default_branches(root: Path) -> list[str]:
 
 
 def base_commit(root: Path, base: str | None = None) -> str | None:
-    """The merge base with the default branch, ``HEAD~1`` on that branch, ``None`` when neither."""
     head = git(root, "rev-parse", "--abbrev-ref", "HEAD")
     for branch in [base] if base else default_branches(root):
         merge_base = git(root, "merge-base", "HEAD", branch)
@@ -133,24 +103,15 @@ def base_commit(root: Path, base: str | None = None) -> str | None:
             continue
         if head in (branch, branch.removeprefix("origin/")):
             return git(root, "rev-parse", "HEAD~1")
-        # Why: a fresh branch with uncommitted work has HEAD as its merge base; the work tree
-        # is then compared with HEAD, not with the commit before it.
         return merge_base
     return git(root, "rev-parse", "HEAD~1")
 
 
 def adoption(root: Path, base: str | None) -> bool:
-    """Whether the change since ``base`` is the adoption: ``base`` holds no binding.
-
-    The method was not there to judge that commit, so every line is new against it. Read from
-    the commit, so no later change can claim it: once the adoption has merged, every base holds
-    a binding.
-    """
     return base is not None and show(root, base, str(BINDING)) is None
 
 
 def changed_paths(root: Path, base: str) -> list[str]:
-    """Paths changed since ``base``, committed or not, untracked files included; renames split."""
     tracked = git(root, "diff", "--name-only", "--no-renames", "-z", base) or ""
     untracked = git(root, "ls-files", "--others", "--exclude-standard", "--full-name", "-z", ":/")
     return sorted({p for p in (tracked + (untracked or "")).split("\0") if p})
@@ -177,11 +138,6 @@ listings: contextvars.ContextVar[dict[Path, list[str]] | None] = contextvars.Con
 
 
 def tracked_paths(root: Path, ref: str | None = None) -> list[str]:
-    """Every path git tracks at ``ref`` (the work tree when ``None``), untracked files included.
-
-    Why: while ``listings`` holds a dict, a tree's work-tree listing is read once. The holder
-    promises that no file of the tree appears or goes meanwhile.
-    """
     if ref is None and (kept := listings.get()) is not None:
         if root not in kept:
             kept[root] = listed_paths(root)
@@ -190,7 +146,6 @@ def tracked_paths(root: Path, ref: str | None = None) -> list[str]:
 
 
 def listed_paths(root: Path, ref: str | None = None) -> list[str]:
-    """What git lists of ``root`` at ``ref``, as ``tracked_paths`` says."""
     if ref is not None:
         listed = git(root, "ls-tree", "-r", "--name-only", "-z", ref) or ""
         return sorted(p for p in listed.split("\0") if p)
@@ -199,17 +154,10 @@ def listed_paths(root: Path, ref: str | None = None) -> list[str]:
 
 
 def show(root: Path, ref: str, path: str) -> str | None:
-    """The file's text at ``ref``, or ``None`` when it is not there."""
     return git(root, "show", f"{ref}:{path}")
 
 
 def default_jobs(root: Path | None = None) -> int:
-    """``RATCHET_JOBS``, else git's ``ratchet.jobs``, when it is a count, else every core.
-
-    Why: the gates a tier runs at once and the scratch copies a bite proof runs at once share
-    one machine, so one number caps both, the one a shared machine sets. Git's configuration
-    reaches agents that do not inherit the owner's shell, and every work tree of a clone.
-    """
     for value in (os.environ.get("RATCHET_JOBS", ""), configured_jobs(root or Path.cwd())):
         if value.isdigit() and int(value) > 0:
             return int(value)
@@ -217,7 +165,6 @@ def default_jobs(root: Path | None = None) -> int:
 
 
 def configured_jobs(root: Path) -> str:
-    """Git's ``ratchet.jobs`` in ``root``, empty when git, the repository or the key is missing."""
     try:
         return git(root, "config", "--get", "ratchet.jobs") or ""
     except OSError:
@@ -225,18 +172,12 @@ def configured_jobs(root: Path) -> str:
 
 
 def entry_point(root: Path, name: str) -> str | None:
-    """The command the binding's Entry points table gives ``name``, or ``None``."""
     text = read_text(root / BINDING) or ""
     row = re.search(rf"^\|\s*{re.escape(name)}\s*\|\s*`([^`]+)`\s*\|", text, re.MULTILINE)
     return row.group(1) if row else None
 
 
 def state_dir(root: Path) -> Path:
-    """``root``'s directory of uncommitted method state, made on first use and ignored by itself.
-
-    Why: the gates' timings, the queue's ledger and the question log belong to one clone and to no
-    commit, and a work tree they made dirty would turn the feature preflight red.
-    """
     directory = root / STATE
     directory.mkdir(parents=True, exist_ok=True)
     ignore = directory / ".gitignore"
@@ -246,13 +187,11 @@ def state_dir(root: Path) -> Path:
 
 
 def subjects(root: Path, base: str) -> list[str]:
-    """The subject line of each non-merge commit after ``base`` up to ``HEAD``."""
     listed = git(root, "log", "--no-merges", "--format=%s", f"{base}..HEAD")
     return [line for line in (listed or "").splitlines() if line]
 
 
 def read_text(path: Path) -> str | None:
-    """The file's text, decoded leniently, or ``None`` when it is missing or binary-looking."""
     try:
         data = path.read_bytes()
     except OSError:
@@ -263,12 +202,6 @@ def read_text(path: Path) -> str | None:
 
 
 def edited(want: Want, data: bytes | None) -> bytes | None:
-    """The bytes ``want`` makes of a file's, or ``None`` when it leaves the file as it is.
-
-    A file whose every line ends in CRLF is edited as LF and written back in CRLF. A file that is
-    not UTF-8 raises ``UnicodeDecodeError``: decoded leniently and written back, its other bytes
-    would be lost.
-    """
     text = None if data is None else data.decode("utf-8")
     crlf = text is not None and "\r\n" in text and text.count("\n") == text.count("\r\n")
     plain = text.replace("\r\n", "\n") if text is not None and crlf else text
@@ -279,10 +212,6 @@ def edited(want: Want, data: bytes | None) -> bytes | None:
 
 
 def seen(root: Path) -> list[str]:
-    """What git sees of ``root``: tracked files and those it does not ignore.
-
-    Where ``root`` is not a git work tree, it is every file and link below it.
-    """
     listed = git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
     if listed is not None:
         return sorted({name for name in listed.split("\0") if name})
@@ -295,12 +224,6 @@ def seen(root: Path) -> list[str]:
 
 
 def copy_seen(root: Path, target: Path) -> dict[str, str]:
-    """What git sees of ``root`` copied to ``target``, made a repository whose index holds it.
-
-    A link that stays in the tree is a link in the copy. What is not this repository's to write
-    is copied as ``root`` reads it, and returned by name with why: a link that leads out of the
-    tree, copied as what it leads to, and a submodule, copied as its files.
-    """
     home = root.resolve()
     foreign = {}
     for name in seen(root):
@@ -324,11 +247,6 @@ def copy_seen(root: Path, target: Path) -> dict[str, str]:
 
 
 def export(root: Path, ref: str, target: Path) -> None:
-    """The files git holds at ``ref``, written to ``target`` and held by a new repository's index.
-
-    Read through git's plumbing, so no filter, attribute or hook of the repository runs, and its
-    own index, work tree and refs are left as they are. A submodule is left out.
-    """
     listed = git_checked(root, "ls-tree", "-r", "-z", "--full-tree", ref).split("\0")
     entries = [(line.split("\t", 1)[0].split(), line.split("\t", 1)[1]) for line in listed if line]
     blobs = [(mode, sha, name) for (mode, _, sha), name in entries if mode != "160000"]
@@ -358,10 +276,6 @@ def export(root: Path, ref: str, target: Path) -> None:
 
 
 def git_checked(root: Path, *args: str, ok: tuple[int, ...] = (0,)) -> str:
-    """``git -C root args`` stdout, whatever repository a hook exported.
-
-    An exit status outside ``ok`` raises, so a git that failed is never read as an answer.
-    """
     environment = {k: v for k, v in os.environ.items() if k not in REPOSITORY_VARIABLES}
     result = subprocess.run(
         ["git", "-C", str(root), *args],
@@ -376,8 +290,6 @@ def git_checked(root: Path, *args: str, ok: tuple[int, ...] = (0,)) -> str:
 
 
 def chained(*wants: Want) -> Want:
-    """The want that applies each of ``wants`` to the text the one before it made."""
-
     def want(current: str | None) -> str:
         text = current
         for step in wants:
@@ -388,8 +300,6 @@ def chained(*wants: Want) -> Want:
 
 
 def created(text: str) -> Want:
-    """The want of a file the plugin supplies whole, only while it is absent."""
-
     def want(current: str | None) -> str:
         return text if current is None else current
 
@@ -397,13 +307,11 @@ def created(text: str) -> Want:
 
 
 def thresholds(root: Path) -> dict[str, object]:
-    """``quality/thresholds.toml`` parsed, or an empty table when it is missing."""
     path = root / THRESHOLDS
     return tomllib.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
 
 
 def table(data: dict[str, object], *keys: str) -> dict[str, object]:
-    """The nested table at ``keys``, or an empty one."""
     current: object = data
     for key in keys:
         current = current.get(key, {}) if isinstance(current, dict) else {}
@@ -411,14 +319,6 @@ def table(data: dict[str, object], *keys: str) -> dict[str, object]:
 
 
 def matches(path: str, patterns: list[str]) -> bool:
-    """Whether a repository-relative path matches one of the globs (``**`` spans segments).
-
-    The ``PurePosixPath.full_match`` rules, written out because that method arrived in Python
-    3.13 and the gates run on the runner's ``python3``. ``ratchet_guards.globs`` is the same
-    function for the hook; ``test_globs.py`` holds the two to the same answers.
-    """
-    # Why: the empty path (``.``) matches exactly the patterns whose regex matches the empty
-    # string, as pathlib has it: ``**`` and ``***`` do, ``*`` and ``?`` do not.
     normal = _glob_normalised(path)
     return any(glob_regex(pattern).fullmatch(normal) for pattern in patterns)
 
@@ -435,7 +335,6 @@ def _glob_segments(pattern: str) -> list[str]:
 
 @lru_cache(maxsize=4096)
 def glob_regex(pattern: str) -> re.Pattern[str]:
-    """The compiled regular expression for a glob pattern."""
     parts = _glob_segments(pattern)
     expression = ""
     separator_due = False
@@ -443,7 +342,6 @@ def glob_regex(pattern: str) -> re.Pattern[str]:
         last = index == len(parts) - 1
         if segment == "**":
             if last:
-                # Why: as pathlib has it, `a/**` needs the slash, so `a` itself is not matched.
                 expression += "/.*" if separator_due else ".*"
             else:
                 expression += ("/" if separator_due else "") + "(?:[^/]+/)*"
@@ -456,7 +354,6 @@ def glob_regex(pattern: str) -> re.Pattern[str]:
 
 def _glob_segment(segment: str) -> str:
     if segment == "*":
-        # Why: pathlib gives a lone `*` one non-empty segment, so `/*` does not match `/`.
         return "[^/]+"
     out = ""
     index = 0
@@ -487,13 +384,11 @@ def _glob_class(segment: str, start: int) -> tuple[str, int]:
         end += 1
     if end >= len(segment):
         return re.escape("["), start
-    # Why: ranges, negation and escaping inside a class follow fnmatch, as pathlib's do.
     translated = fnmatch.translate(segment[start : end + 1])
     return translated[len("(?s:") : -len(")\\Z")], end
 
 
 def report(name: str, problems: list[str], against: str | None = None) -> int:
-    """Print each problem and the verdict line; the exit code."""
     for line in problems:
         print(line)
     where = f" against {against[:12]}" if against else ""
@@ -502,23 +397,17 @@ def report(name: str, problems: list[str], against: str | None = None) -> int:
 
 
 class Interrupted(Exception):  # noqa: N818 # -- a signal, not a fault
-    """A signal the gate was asked to stop on; ``signum`` says which."""
-
     def __init__(self, signum: int) -> None:
-        """Remember the signal number."""
         super().__init__(f"interrupted by signal {signum}")
         self.signum = signum
 
 
 class _Signals:
-    """What the signal handler shares with ``signals_held``: whether it fired, is held or waits."""
-
     fired = False
     holding = False
     pending: int | None = None
 
     def reset(self, *, holding: bool) -> None:
-        """Forget any signal kept; ``holding`` says whether the next ones are to wait."""
         self.holding, self.pending = holding, None
 
 
@@ -528,11 +417,6 @@ INTERRUPTS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
 @contextlib.contextmanager
 def interrupts_raise() -> Iterator[None]:
-    """Turn SIGINT, SIGTERM and SIGHUP into ``Interrupted`` once, so ``finally`` blocks run.
-
-    The first signal raises; later ones are ignored, so a second Ctrl-C cannot cut the cleanup
-    short. The previous handlers come back on exit. SIGKILL cannot be caught by anything.
-    """
     _SIGNALS.fired = False
     _SIGNALS.reset(holding=False)
 
@@ -556,14 +440,6 @@ def interrupts_raise() -> Iterator[None]:
 
 @contextlib.contextmanager
 def signals_held() -> Iterator[None]:
-    """Start a child and record it inside this block; a signal waits for the block to end.
-
-    A handler that raises can run between the call that starts a child and the line that
-    records it, and the child is then never stopped. A signal that lands inside the block is
-    kept and raised as ``Interrupted`` when the block ends, by which time the child is recorded.
-    Put the block inside the ``try`` that stops what was recorded. Outside ``interrupts_raise``
-    it holds nothing.
-    """
     _SIGNALS.reset(holding=True)
     try:
         yield
@@ -575,15 +451,6 @@ def signals_held() -> Iterator[None]:
 
 
 def free_port() -> int:
-    """A TCP port nothing is bound to now on the loopback interface, below the ephemeral range.
-
-    The kernel gives each outgoing connection a port from its ephemeral range, so a port picked
-    there can be taken by any client between the pick and the service's bind. Below the range
-    only a bind takes one. The range starts where ``PORT_RANGE`` says, or at 49152, where RFC 6335
-    puts the dynamic ports, when that file is absent or does not read as a range. The search
-    starts at a random port so two gates rarely pick the same one, and tries every port from 1024
-    up to the range. When none is free, the kernel picks one from the range.
-    """
     try:
         ephemeral = int(PORT_RANGE.read_text(encoding="utf-8").split()[0])
     except (OSError, ValueError, IndexError):
@@ -601,7 +468,6 @@ def free_port() -> int:
 
 
 def listening(url: str) -> bool:
-    """Whether something accepts a TCP connection at the host and port of ``url``."""
     parts = urlsplit(url)
     default = 443 if parts.scheme == "https" else 80
     try:
@@ -612,12 +478,6 @@ def listening(url: str) -> bool:
 
 
 def stop_group(process: subprocess.Popen[bytes], grace: float = 5.0, settle: float = 1.0) -> None:
-    """Stop a process started with ``start_new_session=True`` and everything it forked.
-
-    SIGTERM goes to the whole process group. The leader gets ``grace`` seconds to exit, any
-    other member ``settle`` more, then SIGKILL ends what is left. Returns with the leader reaped.
-    """
-
     def signal_group(signum: int) -> bool:
         try:
             os.killpg(process.pid, signum)
@@ -642,12 +502,6 @@ LEFT_RUNNING = (
 
 
 def end_group(pid: int) -> bool:
-    """End what is left of the process group ``pid`` led; whether anything was left.
-
-    For a process started with ``start_new_session=True`` that has exited and been reaped. What
-    it forked and did not stop (a service a test booted) is still in its group, holds its ports
-    and its output, and would otherwise run until somebody found it.
-    """
     try:
         os.killpg(pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
@@ -656,13 +510,6 @@ def end_group(pid: int) -> bool:
 
 
 def end_running_from(tree: Path, proc: Path = Path("/proc")) -> list[int]:
-    """End every process whose program is a file under ``tree``; the ids of those ended.
-
-    For a work tree about to be removed. A service an agent built there and started by hand is in
-    no gate's process group, so nothing else ends it: it would hold its port and a deleted
-    program until somebody found it. ``proc`` is where the kernel lists processes; a system
-    without one ends nothing. A process of another user cannot be read and is left.
-    """
     ended = []
     for entry in sorted(proc.glob("[0-9]*")):
         try:
@@ -677,13 +524,6 @@ def end_running_from(tree: Path, proc: Path = Path("/proc")) -> list[int]:
 
 
 def run_command(command: list[str], env: dict[str, str]) -> tuple[int, list[str]]:
-    """Run ``command`` in a session of its own: its exit code, and what went wrong.
-
-    A command ended by a signal exits 128 plus the signal, as a shell reports it.
-
-    A signal that interrupts the start or the wait stops the command's whole process group
-    before it propagates.
-    """
     inner: subprocess.Popen[bytes] | None = None
     try:
         with signals_held():
@@ -700,11 +540,6 @@ def run_command(command: list[str], env: dict[str, str]) -> tuple[int, list[str]
 
 
 class Connection(NamedTuple):
-    """One TCP connection, by both its ends: the service's address and port, then the client's.
-
-    No two open connections share all four, so a name the gate writes matches one connection.
-    """
-
     host: str
     port: int
     client: str
@@ -712,15 +547,10 @@ class Connection(NamedTuple):
 
 
 def connection(service: tuple[object, ...], client: tuple[object, ...]) -> Connection:
-    """The connection between two socket addresses, written alike from either end."""
     return Connection(*end(service), *end(client))
 
 
 def end(address: tuple[object, ...]) -> tuple[str, int]:
-    """One end of a connection: its IP address as both ends write it, and its port.
-
-    An IPv4 address that a dual-stack listener sees mapped into IPv6 is written as IPv4.
-    """
     host, port = address[:2]
     ip = ipaddress.ip_address(str(host))
     mapped = ip.ipv4_mapped if isinstance(ip, ipaddress.IPv6Address) else None
@@ -729,27 +559,16 @@ def end(address: tuple[object, ...]) -> tuple[str, int]:
 
 @dataclass(frozen=True)
 class Stopping:
-    """What ``with_service.py --graceful`` tells the command, from the stop signal on.
-
-    ``ports`` are the ports the gate found the service listening on, each with ``None`` while the
-    gate holds its listener, or why it no longer can. ``elsewhere`` says why the gate held no
-    listener on any other port. ``taken`` are the connections that the gate accepted from a
-    listener the service had let go of, and then reset: the service never accepted them.
-    ``answered`` is whether the gate has looked at the listeners again since the command asked.
-    """
-
     ports: dict[int, str | None]
     elsewhere: str
     taken: frozenset[Connection]
     answered: bool = False
 
     def inexact(self, port: int) -> str | None:
-        """Why the gate cannot tell which connections to ``port`` the service accepted, if so."""
         return self.ports.get(port, self.elsewhere)
 
 
 def write_stopping(path: Path, stopping: Stopping) -> None:
-    """Replace ``path`` with ``stopping`` whole, so a reader never sees half of it."""
     data = {
         "ports": stopping.ports,
         "elsewhere": stopping.elsewhere,
@@ -762,7 +581,6 @@ def write_stopping(path: Path, stopping: Stopping) -> None:
 
 
 def read_stopping(path: Path) -> Stopping:
-    """What ``path`` holds; it exists from the stop signal on."""
     data = json.loads(path.read_text(encoding="utf-8"))
     return Stopping(
         {int(port): why for port, why in data["ports"].items()},
@@ -773,17 +591,10 @@ def read_stopping(path: Path) -> Stopping:
 
 
 def asking(path: Path) -> Path:
-    """The path the command creates beside the stop marker ``path`` to ask the gate to answer."""
     return path.with_name(f"{path.name}.asked")
 
 
 def ask(path: Path, within: float) -> Stopping:
-    """What the stop marker ``path`` says once the gate has looked at the listeners again.
-
-    Asking orders the answer after every reset the command saw before it asked, so it says so
-    when one of them came from a listener shut down rather than closed. A gate that does not
-    answer within ``within`` seconds leaves every port to be judged by when its requests started.
-    """
     asking(path).touch()
     deadline = time.monotonic() + within
     while not (told := read_stopping(path)).answered:
@@ -800,11 +611,6 @@ def reach(
     timeout: float | None,
     connecting: Callable[[Connection], None] | None,
 ) -> None:
-    """Connect ``sock`` within ``timeout``, naming the connection to ``connecting`` at once.
-
-    The connect starts without blocking, which is when the kernel picks the local address and
-    port, so ``connecting`` learns them before the connection can be made, or reset.
-    """
     sock.settimeout(0)
     code = sock.connect_ex(address)
     if connecting:
@@ -822,12 +628,9 @@ def reach(
 
 
 class Told(HTTPConnection):
-    """An ``HTTPConnection`` naming each connection it tries to ``connecting``; see ``reach``."""
-
     connecting: Callable[[Connection], None] | None = None
 
     def connect(self) -> None:
-        """Connect to each address of the host in turn, as ``socket.create_connection`` does."""
         failed: OSError = socket.gaierror(f"{self.host} has no address")
         for family, kind, proto, _, address in socket.getaddrinfo(
             self.host, self.port, type=socket.SOCK_STREAM
@@ -844,8 +647,7 @@ class Told(HTTPConnection):
         raise failed
 
 
-class ToldTLS(HTTPSConnection, Told):
-    """``Told`` for https: ``HTTPSConnection.connect`` reaches ``Told.connect`` before TLS."""
+class ToldTLS(HTTPSConnection, Told): ...
 
 
 def http_status(
@@ -856,12 +658,6 @@ def http_status(
     timeout: float = 5.0,
     connecting: Callable[[Connection], None] | None = None,
 ) -> int:
-    """The status of one request, redirects not followed; raises ``OSError`` or ``HTTPException``.
-
-    ``http`` and ``https`` only. A body is sent as JSON. ``connecting`` is given each
-    connection tried, as soon as its local end has a port: a reset that lands before the connect
-    returns still leaves the caller its name.
-    """
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
         message = f"not an http(s) URL with a host: {url}"

@@ -1,5 +1,3 @@
-"""``listeners``: the gate holds a stopping service's listeners and takes what it never accepted."""
-
 import errno
 import fcntl
 import os
@@ -20,15 +18,6 @@ import gatelib
 import listeners
 from tests.servers import gone
 
-# Why: a service of its own process group with one TCP listener it never accepts from, and a UDP
-# socket beside it; it closes, shuts down, hides or forks on a line of stdin and answers each line.
-# Its shape, the first argument, is how it starts: ``plain``; ``hidden``, made non-dumpable so no
-# other process may look at its open files; ``hidden-worker``, with a non-dumpable child holding
-# the listener, which says it has hidden before the service prints its port; ``own-session``,
-# listening from a child in a session of its own; and ``helper``, beside a double-forked helper
-# of the group that holds only a UDP socket and, reparented away from the gate, may not be copied
-# from under Yama's ptrace_scope 1; ``two`` holds a second TCP listener; ``zombie`` leaves a child
-# that exited unreaped.
 SERVICE = (
     "import ctypes, os, socket, sys, time\n"
     "shape = sys.argv[1]\n"
@@ -73,8 +62,6 @@ SERVICE = (
 
 
 class Service:
-    """The running ``SERVICE``: its process, the port it listens on, and a line to send it."""
-
     def __init__(self, process: subprocess.Popen[str]) -> None:
         self.process = process
         self.port = int(self.said())
@@ -112,7 +99,6 @@ def service(shape: str = "plain") -> Iterator[Service]:
 
 @contextmanager
 def taking(held: list[listeners.Listener], marker: Path) -> Iterator[threading.Event]:
-    """``take`` running on ``held`` until the block ends, from what the gate wrote at the signal."""
     gatelib.write_stopping(marker, listeners.told(held))
     ended = threading.Event()
     taker = threading.Thread(target=listeners.take, args=(held, marker, ended))
@@ -143,7 +129,6 @@ def child_of(pid: int) -> int:
 
 
 def zombie_of(pid: int) -> int:
-    """The child of ``pid`` once it has exited, unreaped."""
     child = child_of(pid)
     until(lambda: Path(f"/proc/{child}/stat").read_text(encoding="utf-8").split()[2] == "Z")
     return child
@@ -157,8 +142,6 @@ def until(seen: Callable[[], bool]) -> None:
 
 
 def test_a_server_in_a_session_of_its_own_under_the_boot_command_is_held() -> None:
-    # Why: a wrapper that starts its server in a session of its own, as a supervisor may, takes
-    # the server out of the boot command's process group but not out of its descendants.
     with service("own-session") as running:
         held = listeners.grab(running.process.pid)
         assert isinstance(held, list), held
@@ -167,8 +150,6 @@ def test_a_server_in_a_session_of_its_own_under_the_boot_command_is_held() -> No
 
 
 def test_a_helper_holding_no_tcp_listener_does_not_stop_the_grab() -> None:
-    # Why: only TCP listeners matter to the gate. A helper the gate may not copy from, holding a
-    # UDP socket, once ended the whole grab with "Operation not permitted".
     with service("helper") as running:
         held = listeners.grab(running.process.pid)
         assert isinstance(held, list), held
@@ -177,8 +158,6 @@ def test_a_helper_holding_no_tcp_listener_does_not_stop_the_grab() -> None:
 
 
 def test_a_child_that_exited_unreaped_hides_nothing() -> None:
-    # Why: the kernel refuses to list a zombie's open files, as it does a hidden process's, but a
-    # zombie holds none. The service itself is one between its exit and the gate reaping it.
     with service("zombie") as running:
         zombie_of(running.process.pid)
         held = listeners.grab(running.process.pid)
@@ -208,27 +187,20 @@ def test_a_process_that_exits_as_the_gate_lists_the_processes_is_left_out() -> N
 
 
 def test_a_process_that_exits_while_the_gate_looks_is_not_hiding() -> None:
-    # Why: a process can exit between the gate reading its state and listing its files, and the
-    # kernel then refuses the listing as for a hidden process, though it holds nothing.
     with service("zombie") as running:
         assert listeners.hiding(zombie_of(running.process.pid)) is None
         assert listeners.hiding(running.process.pid) == comm(running.process.pid)
     assert listeners.hiding(running.process.pid) is None
 
 
-# Why: a process that closes many sockets as it exits stays a while between letting go of its
-# memory and becoming a zombie.
 EXITS_SLOWLY = (
     "import socket, time\nheld = [socket.socket() for _ in range(2000)]\ntime.sleep(0.05)"
 )
 
 
 def test_a_process_that_is_exiting_is_not_hiding() -> None:
-    # Why: from the moment an exiting process lets go of its memory, and before it is a zombie,
-    # the kernel refuses to list its open files as it does a hidden process's. A worker of the
-    # service that exits as the gate looks once made the gate give up on the listener it held.
     refused = said = 0
-    for _ in range(20):  # until a child is caught in that moment
+    for _ in range(20):
         child = subprocess.Popen([sys.executable, "-c", EXITS_SLOWLY])  # noqa: S603 # -- no shell
         while True:
             try:
@@ -253,8 +225,6 @@ def test_a_process_that_is_exiting_is_not_hiding() -> None:
 def test_a_process_of_the_service_the_gate_may_not_look_into_leaves_it_holding_nothing(
     shape: str,
 ) -> None:
-    # Why: the gate may take connections only once no process of the service holds the listener,
-    # which it cannot know while a process of the service hides its open files.
     with service(shape) as running:
         hidden = running.process.pid if shape == "hidden" else child_of(running.process.pid)
         name = comm(hidden)
@@ -338,9 +308,6 @@ def test_a_connection_is_in_the_marker_while_the_client_has_not_yet_seen_a_reset
 
 
 def test_the_gate_leaves_the_listener_as_blocking_as_the_service_made_it(tmp_path: Path) -> None:
-    # Why: the gate's copy shares the service's open file, flags and all. A copy made
-    # non-blocking makes every holder's accept non-blocking, and a worker the gate cannot see,
-    # blocked in accept, then fails with BlockingIOError. The witness is such another holder.
     marker = tmp_path / "stopping"
     with service() as running:
         held = listeners.grab(running.process.pid)
@@ -361,9 +328,6 @@ def test_the_gate_leaves_the_listener_as_blocking_as_the_service_made_it(tmp_pat
 def test_a_listener_shut_down_is_said_to_be_so_while_the_service_still_holds_it(
     tmp_path: Path,
 ) -> None:
-    # Why: a shutdown resets the connections waiting on the listener at once, before the gate can
-    # take them, and the service may hold the listener long after. A client that saw one of those
-    # resets and then asks must be told why that port cannot be judged exactly.
     marker = tmp_path / "stopping"
     with service("two") as running:
         held = listeners.grab(running.process.pid)

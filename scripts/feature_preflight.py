@@ -1,46 +1,4 @@
 #!/usr/bin/env python3
-"""The feature preflight: what must be true before the pipeline spawns its first agent.
-
-The input of ``/ratchet:feature`` is a tracker ticket (``/mattpocock-skills:to-spec``,
-``/mattpocock-skills:to-tickets`` or ``/mattpocock-skills:triage`` wrote it): a number on GitHub
-or GitLab, or the path of a local ticket file. The preflight is a pure check over that ticket and
-the checkout, red with the exact failure and the skill that produces the missing piece:
-
-- the ticket exists and is open, and a local one is ``.scratch/<feature>/issues/<name>.md``, the
-  one file the guard asks the owner about before an agent writes the agent-ready label;
-- it carries a ``## Conjecture`` section that states something (the method's one addition to
-  the ticket: the approach, the observation that would refute it, the alternatives and the
-  criticism that kills each), on the ticket itself or on its parent spec, since ``to-tickets``
-  cuts one spec into several tickets that share one approach. The parent is the one a
-  ``Parent:`` line or a ``## Parent`` section names, else, for a local ticket under
-  ``<feature>/issues/``, the ``<feature>/spec.md`` beside that directory;
-- no ticket its ``Blocked by`` line or section names is still open;
-- it carries the owner's agent-ready label, the ``ready-for-agent`` role as
-  ``docs/agents/triage-labels.md`` maps it (a local ticket: a ``Status:`` line with that label);
-- the working tree is clean;
-- in an adopted repository the ticket, or its parent, says how the change is operated under
-  ``## Operability``: a ``Flag:``, ``Signal:``, ``Load:`` and ``Security:`` line, each asked only
-  when the binding declares an application type its question is asked of
-  (``skills/method/application-types.toml``) and its row is not bound ``later: ...``; the
-  ``Flag:`` line is asked by type alone, before deployment as after and whatever its row says
-  (ADR 0061); each a statement or ``none`` with the reason (ADR 0028);
-- with ``--branch``, ``HEAD`` is that branch and it is not the base branch;
-- in an adopted repository (``docs/process/binding.md``), a commit would run tier 0:
-  ``hooks_installed.py`` proves it by running the commit hooks, and its failure carries the
-  owner's command as the ``produce``, since the guard refuses hook installs from an agent.
-
-The output is JSON: ``ok``, ``failures`` (each with ``check``, ``detail`` and ``produce``, the
-skill or action that supplies it), the ticket's ``number``, ``title`` and ``slug``, and the
-``branch`` derived from them (``feature/<number>-<slug>``), and the ``base`` it starts from:
-``--base``, else the default branch as ``gatelib`` reads it. ``critic`` is true only when the
-binding declares the ``depended-on`` life event, and ``critic_reason`` says why either way: the
-pipeline runs its critique and fix phases only then (ADR 0028). The ``/ratchet:feature`` skill runs
-it before the workflow, so a red preflight spawns nothing; the workflow runs it again as its
-first stage, so the pipeline cannot be entered around the skill.
-
-Usage: ``feature_preflight.py <ref> [--root DIR] [--base BRANCH] [--branch NAME]``.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -63,16 +21,11 @@ import publish_check
 import queue_notes
 import run_time
 
-# Why: a local ticket is the file the guard asks about the label on; both read its shape here.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards.tickets import TICKET_SUFFIX, TICKETS_DIRECTORY, TRACKER_DIRECTORY
 
 CONJECTURE = "## Conjecture"
 OPERABILITY = "## Operability"
-# Why: ADR 0012 asks telemetry, flags, security and load of a change. A ticket's line is
-# asked when the catalogue asks its question of a type the binding declares, so a library's
-# ticket is asked none and a command's only its flag; and when its row is not bound `later:`
-# (ADR 0028), since a row that waits judges nothing yet.
 SIZE = "## Size"
 SIZE_LINE = re.compile(
     r"^\s*[-*]\s*\*{0,2}Product (lines|files):?\*{0,2}:?\s*~?(\d[\d,]*)",
@@ -153,21 +106,16 @@ PRODUCES = {
 
 @dataclass(frozen=True)
 class FormalModel:
-    """A ticket's ``Formal model:`` line (ADR 0062): a defect of one row, or a round's finding."""
-
     defect: str | None
     kept: str | None
 
     @property
     def round(self) -> bool:
-        """Whether the line is a round's, not a defect found at binding."""
         return self.defect is None
 
 
 @dataclass(frozen=True)
 class Ticket:
-    """What the preflight knows about the input."""
-
     ref: str
     number: int | None
     title: str
@@ -177,7 +125,6 @@ class Ticket:
 
     @property
     def parent(self) -> str | None:
-        """The ref of the parent spec the ticket names, if any."""
         match = PARENT_LINE.search(self.body)
         if match is not None:
             parent = match.group(1)
@@ -192,18 +139,15 @@ class Ticket:
 
     @property
     def blockers(self) -> tuple[str, ...]:
-        """The refs the ``Blocked by`` line or section names, parentheses and "none" ignored."""
         match = BLOCKED_LINE.search(self.body)
         text = match.group(1) if match else section(self.body, BLOCKED_SECTION)
         refs = BLOCKER_REF.findall(re.sub(r"\([^)]*\)", " ", text))
         if self.ref.endswith(".md"):
             return tuple(refs)
-        # Why: on a forge only `#N` names an issue; a bare number is part of a title.
         return tuple(ref for ref in refs if ref.startswith("#"))
 
     @property
     def formal_model(self) -> FormalModel | None:
-        """The ticket's ``Formal model:`` line, read as ``Status:`` is; ``None`` without one."""
         match = FORMAL_LINE.search(self.body)
         if match is None:
             return None
@@ -218,14 +162,11 @@ class Ticket:
 
     @property
     def conjecture(self) -> str | None:
-        """The body of the ticket's own ``## Conjecture`` section, or ``None`` without one."""
         return section(self.body, CONJECTURE) if CONJECTURE in self.body else None
 
 
 @dataclass(frozen=True)
 class NamedGate:
-    """A gate of the binding that one criterion of the ticket holds as a code span."""
-
     gate: str
     tier: str
     criterion: str
@@ -233,21 +174,16 @@ class NamedGate:
 
 @dataclass
 class Failure:
-    """One precondition that does not hold."""
-
     check: str
     detail: str
     produce: str = ""
 
     def __post_init__(self) -> None:
-        """Default ``produce`` from the check's name."""
         self.produce = self.produce or PRODUCES[self.check]
 
 
 @dataclass
 class Report:
-    """The preflight's result, printed as JSON."""
-
     ref: str
     ok: bool = True
     failures: list[Failure] = field(default_factory=list)
@@ -263,16 +199,11 @@ class Report:
     named_gates: list[NamedGate] = field(default_factory=list)
 
     def fail(self, check: str, detail: str, produce: str = "") -> None:
-        """Record one failed check."""
         self.ok = False
         self.failures.append(Failure(check, detail, produce))
 
 
-# --- the ticket ------------------------------------------------------------------------------
-
-
 def run_gh(args: Sequence[str]) -> str | None:
-    """``gh args`` stdout, or ``None`` when gh fails or is missing."""
     try:
         completed = subprocess.run(["gh", *args], capture_output=True, text=True, check=False)
     except OSError:
@@ -281,7 +212,6 @@ def run_gh(args: Sequence[str]) -> str | None:
 
 
 def numbered_locally(ref: str, root: Path) -> list[str]:
-    """The local ticket files whose name starts with the number ``ref`` gives (``03``, ``#3``)."""
     number = ref.lstrip("#")
     if not number.isdigit():
         return []
@@ -293,15 +223,6 @@ def numbered_locally(ref: str, root: Path) -> list[str]:
 
 
 def at_a_ticket_path(ref: str, root: Path) -> bool:
-    """Whether the local file ``ref`` is ``.scratch/<feature>/issues/<name>.md`` under ``root``.
-
-    The guard asks the owner before an agent writes the agent-ready label only on such a file,
-    so on any other file the label may be the agent's own without an ask. ``ref`` must have that
-    shape both as written, with ``..`` folded, and as the filesystem resolves it, so no link
-    leads elsewhere, and no hard link may give it a second name the label could be written
-    through. The ask is a courtesy on the honest path; catching a label the owner did not give
-    is the merge judge's job (``ratchet_guards.tickets``).
-    """
     if (root / ref).stat().st_nlink > 1:
         return False
     readings = (
@@ -323,10 +244,6 @@ def at_a_ticket_path(ref: str, root: Path) -> bool:
 
 
 def fetch(ref: str, root: Path, gh: Runner) -> Ticket | None:
-    """The ticket behind ``ref``: a local file, or an issue by number through ``gh``.
-
-    Where the tracker answers nothing, a number is the one local file whose name it starts.
-    """
     path = root / Path(ref)
     if path.is_file():
         return local_ticket(Path(ref).as_posix(), path.read_text(encoding="utf-8"))
@@ -335,8 +252,6 @@ def fetch(ref: str, root: Path, gh: Runner) -> Ticket | None:
         return None
     output = gh(["issue", "view", number, "--json", "number,title,body,labels,state"])
     if output is None:
-        # Why: with no tracker a number can only mean a local file; a second match is ambiguous
-        # and the caller names the candidates (see numbered_locally).
         found = numbered_locally(ref, root)
         return fetch(found[0], root, gh) if len(found) == 1 else None
     try:
@@ -362,7 +277,6 @@ def fetch(ref: str, root: Path, gh: Runner) -> Ticket | None:
 
 
 def local_ticket(ref: str, text: str) -> Ticket:
-    """A ticket file: the title is its first heading, its status line is its label."""
     heading = re.search(r"^#\s+(?:\d+:\s*)?(.+)$", text, re.MULTILINE)
     title = heading.group(1).strip() if heading else Path(ref).stem
     status = STATUS_LINE.search(text)
@@ -378,11 +292,7 @@ def local_ticket(ref: str, text: str) -> Ticket:
     )
 
 
-# --- the checks ------------------------------------------------------------------------------
-
-
 def section(text: str, heading: str) -> str:
-    """The body under ``heading`` up to the next heading of the same or higher level."""
     level = len(heading) - len(heading.lstrip("#"))
     pattern = rf"^{re.escape(heading)}\s*$\n(.*?)(?=^#{{1,{level}}}\s|\Z)"
     match = re.search(pattern, text, re.MULTILINE | re.DOTALL)
@@ -390,12 +300,6 @@ def section(text: str, heading: str) -> str:
 
 
 def unfilled(text: str, template: str = "") -> str | None:
-    """Why ``text`` is still a template, or ``None`` when it states something.
-
-    Why: real text quotes angle brackets (a span named ``<METHOD> <route template>``, a body
-    ``{"text": "<string>"}``), so a placeholder is a line that holds nothing else, or that repeats
-    the template's own words; a blank, a stub word or a bare "none" says nothing.
-    """
     text = text.strip()
     if text.lower().rstrip(".") in EMPTY_BODIES:
         return "nothing"
@@ -408,17 +312,14 @@ def unfilled(text: str, template: str = "") -> str | None:
 
 
 def says_something(text: str) -> bool:
-    """Whether ``text`` is a statement: not blank, not only placeholders, not a bare "none"."""
     return unfilled(text) is None
 
 
 def states_a_conjecture(body: str) -> bool:
-    """Whether the Conjecture section says something: not blank, placeholder or a stub."""
     return says_something(body) and len(body.strip()) >= MIN_BODY
 
 
 def ready_label(root: Path) -> str:
-    """The tracker's label for the ``ready-for-agent`` role, per the triage-labels record."""
     path = root / LABELS_RECORD
     if not path.is_file():
         return READY_ROLE
@@ -456,7 +357,6 @@ def branch_of(ticket: Ticket, slug: str) -> str:
 
 
 def conjecture_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
-    """Why the ticket states no conjecture, itself or through its parent; ``None`` when it does."""
     own = ticket.conjecture
     if own is not None:
         if states_a_conjecture(own):
@@ -475,13 +375,11 @@ def conjecture_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
 
 
 def binding_text(root: Path) -> str | None:
-    """The binding in the checkout, or ``None`` before adoption."""
     binding = root / gatelib.BINDING
     return binding.read_text(encoding="utf-8") if binding.is_file() else None
 
 
 def criteria(body: str) -> list[str]:
-    """The ticket's acceptance criteria, one text per list item, its continuation lines joined."""
     block = re.search(
         rf"^{re.escape(CRITERIA)}[ \t]*$\n(.*?)(?=^#{{1,2}}\s|\Z)",
         body,
@@ -498,7 +396,6 @@ def criteria(body: str) -> list[str]:
 
 
 def named_gates(body: str, binding: str | None) -> list[NamedGate]:
-    """The gates the ticket's criteria hold as a code span: a gate's name or its entry point."""
     if binding is None:
         return []
     held = {
@@ -517,18 +414,11 @@ def named_gates(body: str, binding: str | None) -> list[NamedGate]:
 
 
 def ticket_named_gates(ref: str, root: Path, gh: Runner) -> list[NamedGate]:
-    """The gates the criteria of ticket ``ref`` name, read against the binding in ``root``."""
     ticket = fetch(ref, root, gh)
     return [] if ticket is None else named_gates(ticket.body, binding_text(root))
 
 
 def operability_asked(root: Path) -> list[tuple[str, str]]:
-    """The ``## Operability`` lines asked here, each with what it says; none before adoption.
-
-    A line is asked when its question is asked of a declared type and its row is not waiting
-    (``later: ...``); the ``Flag`` line is asked of every declared type the catalogue asks it of,
-    whatever the life events and whatever its row says.
-    """
     text = binding_text(root)
     if text is None:
         return []
@@ -543,7 +433,6 @@ def operability_asked(root: Path) -> list[tuple[str, str]]:
 
 
 def operability_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
-    """Which asked lines neither the ticket nor its parent states; ``None`` when none is."""
     asked = operability_asked(root)
     if not asked:
         return None
@@ -566,12 +455,6 @@ def operability_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
 
 
 def size_failure(ticket: Ticket, root: Path) -> str | None:
-    """The ticket's own size estimate when it passes a product ceiling; ``None`` otherwise.
-
-    Why: ADR 0045. A spec run costs several agents, and the ticket's author already knows roughly
-    how much product code it brings. A ticket that states no ``## Size`` is not refused here: the
-    spec stage estimates the whole change and stops it as soon as it can.
-    """
     limits = change_size.ceilings(root)
     stated = {
         kind.lower(): int(number.replace(",", ""))
@@ -588,26 +471,16 @@ def size_failure(ticket: Ticket, root: Path) -> str | None:
 
 
 def operability_line(name: str) -> re.Pattern[str]:
-    """One line of the block, as a list item or bare, bold or plain, its value captured."""
     return re.compile(
         rf"^[-* \t]*\*{{0,2}}{name}:?\*{{0,2}}:?[ \t]*(.*)$", re.IGNORECASE | re.MULTILINE
     )
 
 
 def parent_of(ticket: Ticket, root: Path) -> str | None:
-    """The ref of the spec ``ticket`` inherits its conjecture and operability from, if any."""
     return ticket.parent or beside_spec(ticket.ref, root)
 
 
 def reads(ticket: Ticket, root: Path) -> tuple[frozenset[str], frozenset[str]]:
-    """Every local file the preflight reads to decide whether, and what, to build ``ticket``.
-
-    The first set it reads whole: the ticket and the spec it inherits from. The second it reads
-    for the ``Status:`` line alone: each ticket it is blocked by. A ref is normalised, and a
-    number is every local ticket it could name. ADR 0031 holds both still while the ticket
-    carries the label, and a test holds the preflight's readers to them.
-    """
-
     def local(ref: str | None) -> frozenset[str]:
         if ref is None or not ref.endswith(".md"):
             return frozenset(numbered_locally(ref or "", root))
@@ -619,7 +492,6 @@ def reads(ticket: Ticket, root: Path) -> tuple[frozenset[str], frozenset[str]]:
 
 
 def beside_spec(ref: str, root: Path) -> str | None:
-    """The ``spec.md`` of a local ticket filed under ``<feature>/issues/``, when it exists."""
     path = Path(ref)
     if path.parent.name != "issues":
         return None
@@ -628,7 +500,6 @@ def beside_spec(ref: str, root: Path) -> str | None:
 
 
 def blocker_ref(ticket: Ticket, ref: str, root: Path) -> str:
-    """A blocker as a ref ``fetch`` reads: a sibling file for a local ticket, else a number."""
     folder = Path(ticket.ref).parent
     if ref.endswith(".md"):
         return (folder / ref).as_posix()
@@ -640,8 +511,6 @@ def blocker_ref(ticket: Ticket, ref: str, root: Path) -> str:
 
 @dataclass(frozen=True)
 class Blocker:
-    """A ticket another waits on: as the ticket names it, as read, and the split it is part of."""
-
     named: str
     ref: str
     ticket: Ticket | None
@@ -649,7 +518,6 @@ class Blocker:
 
 
 def blockers(ticket: Ticket, root: Path, gh: Runner) -> list[Blocker]:
-    """What ``ticket`` waits on, a blocker the drain split read as its parts (ADR 0046)."""
     found: list[Blocker] = []
     for named in ticket.blockers:
         ref = blocker_ref(ticket, named, root)
@@ -665,7 +533,6 @@ def blockers(ticket: Ticket, root: Path, gh: Runner) -> list[Blocker]:
 
 
 def unmet(blocker: Blocker) -> str | None:
-    """Why ``blocker`` still holds its ticket back, or ``None`` once it is done."""
     if blocker.ticket is not None and not blocker.ticket.is_open:
         return None
     if blocker.split_from and not blocker.ref:
@@ -678,12 +545,10 @@ def unmet(blocker: Blocker) -> str | None:
 
 
 def open_blockers(ticket: Ticket, root: Path, gh: Runner) -> list[str]:
-    """Each blocker that is still open or cannot be found, as a sentence."""
     return [why for blocker in blockers(ticket, root, gh) if (why := unmet(blocker)) is not None]
 
 
 def split_parts(ticket: Ticket, root: Path) -> list[str] | None:
-    """The parts the drain split ``ticket`` into, as its note keeps them; ``None`` when none."""
     branch = branch_of(ticket, slug_of(ticket.title, ticket.number))
     return queue_notes.split_into(root, branch, ticket)
 
@@ -730,11 +595,6 @@ def check_checkout(report: Report, root: Path, *, base: str, branch: str | None)
 
 
 def check_fill_first(report: Report, root: Path) -> None:
-    """Red while an owed item an agent writes from the repository alone is not yet written.
-
-    Why: ADR 0050. An upgrade owes rows the repository's own tree and tools state; one agent step
-    writes them, and no work starts before it, so the window has no owner step in it.
-    """
     owing = owed.fill_first(root)
     if owing:
         rules = ", ".join(sorted({entry.rule for entry in owing}))
@@ -747,7 +607,6 @@ def check_fill_first(report: Report, root: Path) -> None:
 
 
 def check_critic(report: Report, root: Path) -> None:
-    """Say whether the pipeline critiques: only a project people depend on (ADR 0028)."""
     text = binding_text(root)
     report.critic = text is not None and CRITIC_EVENT in application_types.declared_or_all(text)
     report.critic_reason = (
@@ -760,7 +619,6 @@ def check_critic(report: Report, root: Path) -> None:
 
 
 def check_hooks(report: Report, root: Path) -> None:
-    """Red when the repository is adopted and a commit would skip tier 0."""
     if not (root / gatelib.BINDING).is_file():
         return
     problem = hooks_installed.check(root)

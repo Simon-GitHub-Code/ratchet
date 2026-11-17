@@ -1,10 +1,3 @@
-"""The queue drain and the merge keep work through a stopped run, a rival and a lock.
-
-Each test is a replay of a defect found by running it: work removed that no stash held, a second
-drain that cleaned the first, a cap that stopped counting, and runs killed part-way. Each runs on
-a real repository, and a kill is a real SIGKILL or the state one leaves.
-"""
-
 import contextlib
 import fcntl
 import json
@@ -62,9 +55,6 @@ def registered(root: Path) -> list[str]:
         for line in listing.splitlines()
         if line.startswith("worktree ")
     ]
-
-
-# --- S1: a work tree is removed only once its work is saved ----------------------------------
 
 
 def test_a_stale_index_lock_keeps_the_tree_and_its_work(tmp_path: Path, capsys: Out) -> None:
@@ -139,14 +129,10 @@ def test_nothing_is_ended_while_the_work_cannot_be_saved(tmp_path: Path) -> None
         service.wait()
 
 
-# --- S2, S4: one drain at a time --------------------------------------------------------------
-
-
 REAL_ANCESTRY = drain.ancestry
 
 
 def other_session(monkeypatch: pytest.MonkeyPatch) -> subprocess.Popen[bytes]:
-    """A live process standing for the session of another drain: the lease names it."""
     holder = subprocess.Popen(["sleep", "60"])  # noqa: S607 # -- a sleep, no shell
     row = drain.process_row(holder.pid)
     assert row is not None
@@ -269,7 +255,6 @@ DRIVER = Path(__file__).with_name("drain_driver.py")
 
 
 def start(root: Path, *argv: str, **env: str) -> subprocess.Popen[str]:
-    """``drain.py argv`` as a process of its own, as a session's command is."""
     return subprocess.Popen(  # noqa: S603 # -- this interpreter, no shell
         [sys.executable, str(DRIVER), *argv, "--root", str(root), "--offline"],
         stdout=subprocess.PIPE,
@@ -280,12 +265,6 @@ def start(root: Path, *argv: str, **env: str) -> subprocess.Popen[str]:
 
 
 def two_opens(tmp_path: Path, *, wait: str, outlast: bool) -> tuple[Path, list[object]]:
-    """Two ``open`` processes of one ticket: the first stops after it read the plan.
-
-    Why: no step is timed. The first goes on once the second says it waits for the lock, or,
-    with ``outlast``, once the second has given up, so a slow start on a busy machine changes
-    nothing.
-    """
     root = project(tmp_path)
     gate = tmp_path / "gate"
     gate.mkdir()
@@ -466,9 +445,6 @@ def test_a_merged_branch_whose_tree_cannot_be_saved_is_recorded_and_kept(
     assert reasons[-1].startswith(f"the work tree stays at {tree}")
 
 
-# --- S3: the cap counts a ticket until its tree is gone ---------------------------------------
-
-
 def test_a_built_ticket_still_in_its_tree_holds_its_place_under_the_cap(
     tmp_path: Path, capsys: Out
 ) -> None:
@@ -483,8 +459,6 @@ def test_a_built_ticket_still_in_its_tree_holds_its_place_under_the_cap(
     assert "1 tickets are building: the cap" in capsys.readouterr().out
     assert len(drain.worktrees(root)) == 1
 
-
-# --- S8: a merge killed after the default branch moved ----------------------------------------
 
 KILLER = """\
 import os
@@ -570,11 +544,7 @@ def test_a_live_merge_keeps_its_work_tree_from_the_sweep(tmp_path: Path) -> None
     assert registered(root) == [str(root)]
 
 
-# --- S10: a fast-forward killed half-way ------------------------------------------------------
-
-
 def half_landed(tmp_path: Path, *, adds: bool = True) -> tuple[Path, str, str]:
-    """A root whose fast-forward was killed: some files of ``new`` written, the index locked."""
     root = project(tmp_path)
     git(root, "switch", "-q", "-c", "big")
     write(root, "src/a.py", "A = 'new'\n")
@@ -607,7 +577,6 @@ def test_a_fast_forward_killed_half_way_is_put_back(tmp_path: Path) -> None:
 
 
 def owned(root: Path, *paths: str) -> None:
-    """Say the fast-forward began with ``paths`` already changed or untracked by the owner."""
     landing = gitdir(root) / merge.LANDING
     intent = json.loads(landing.read_text(encoding="utf-8"))
     landing.write_text(json.dumps({**intent, "owned": list(paths)}), encoding="utf-8")
@@ -743,9 +712,6 @@ def test_land_writes_its_intent_while_the_branch_moves_and_clears_it(tmp_path: P
     assert (gitdir(root) / merge.LANDING).read_text(encoding="utf-8") == ""
 
 
-# --- S11: an update killed mid-rebase ---------------------------------------------------------
-
-
 def update(root: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(  # noqa: S603 # -- this interpreter, no shell
         [
@@ -770,7 +736,6 @@ def test_an_update_killed_mid_rebase_is_started_again(tmp_path: Path) -> None:
     write(root, "src/m.py", "M = 1\n")
     base = commit(root, "feat(core): merged meanwhile")
     hooks = tmp_path / "killhooks"
-    # kills git rebase and the drain.py that ran it, once, at the rebase's first checkout
     hook_script(
         hooks,
         "post-checkout",
@@ -818,7 +783,7 @@ def test_an_update_killed_before_it_dropped_the_record_drops_it_on_the_rerun(
     commit(root, "feat(core): merged meanwhile")
     path = drain.queue_notes.note_path(root, BRANCH_A)
     drain.queue_notes.write_note(path, {**note(root, BRANCH_A), "rebasing": tip})
-    git(tree, "rebase", "--quiet", "main")  # the run stopped here: the record is still on top
+    git(tree, "rebase", "--quiet", "main")
     assert "verdict.json" in git(tree, "show", "--name-only", "--format=", "HEAD")
     capsys.readouterr()
     assert update(root).stdout.strip() == json.dumps({"moved": True, "conflicts": []})
@@ -866,15 +831,13 @@ BIG = "bulk/a_big.bin"
 CONTENT = b"0123456789abcdef" * 256
 
 
-class MergeKilledError(Exception):
-    """The merge run was killed."""
+class MergeKilledError(Exception): ...
 
 
 @pytest.mark.parametrize("written", [0, 100])
 def test_a_fast_forward_killed_inside_one_files_write_is_put_back(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, written: int
 ) -> None:
-    """The state a kill leaves: the intent is on disk, ``BIG`` is cut short, the index is locked."""
     root = project(tmp_path)
     git(root, "switch", "-q", "-c", "big")
     (root / BIG).parent.mkdir()
@@ -930,11 +893,7 @@ def test_an_update_killed_after_the_rebase_by_a_real_kill_drops_the_record_on_th
     assert "verdict.json" not in git(tree, "show", "--name-only", "--format=", "HEAD")
 
 
-# --- findings of the drain's model, each replayed on a real repository ------------------------
-
-
 def judged(root: Path, *, resolved: bool = True) -> Path:
-    """Open ticket A and commit its change and an approving verdict record, as a run would."""
     run(root, "open", ALPHA)
     done = {ALPHA: ticket(1, "Alpha", status="resolved")} if resolved else {}
     return build(root, BRANCH_A, {"src/b.py": "B = 1\n", **done}, record=approval("alpha"))
@@ -1171,7 +1130,6 @@ def test_land_says_when_it_records_a_merge(tmp_path: Path, capsys: Out) -> None:
 
 
 def killing_root(tmp_path: Path) -> Path:
-    """A root whose merge entry point lands the branch and is killed before the drain's note."""
     killer = tmp_path / "killing_merge.py"
     killer.write_text(KILLER.format(scripts=str(SCRIPTS)), encoding="utf-8")
     return project(tmp_path, **{"docs/process/binding.md": binding(f"{sys.executable} {killer}")})
@@ -1606,9 +1564,6 @@ def test_split_waits_for_the_drain_lock(
     assert "outcome" not in note(root, BRANCH_A)
 
 
-# --- findings of the second replay: kills around a landing and an update ----------------------
-
-
 def test_a_landing_killed_before_its_tree_is_removed_has_its_note(tmp_path: Path) -> None:
     root = project(tmp_path)
     judged(root)
@@ -1751,8 +1706,6 @@ def test_a_split_is_refused_while_a_landing_holds_its_lock_and_files_nothing(
     assert note(root, BRANCH_A)["outcome"] == "split"
 
 
-# --- a landing is seen while its land or the merge it started is alive ------------------------
-
 WAIT_FOR = """\
 import sys
 import time
@@ -1766,8 +1719,6 @@ def wait_for(path):
         assert time.monotonic() < deadline, path
         time.sleep(0.02)
 """
-# Why: the binding's `check`, which merge.py runs while it holds its lock: it says it started,
-# optionally leaves a process running, and waits for the test to say go.
 GATE_CHECK = (
     WAIT_FOR
     + """\
@@ -1787,8 +1738,6 @@ if len(sys.argv) > 2:
 wait_for(gate / "go")
 """
 )
-# Why: the binding's `merge`, which is merge.py after it waits for the test to say go-<land's pid>:
-# the instant between a land starting its merge and the merge's first act.
 WRAPPED_MERGE = (
     WAIT_FOR
     + """\
@@ -1840,7 +1789,6 @@ def wait_until(condition: Callable[[], object]) -> None:
 
 
 def kill_alone(land: subprocess.Popen[str]) -> None:
-    """End the drain process by its PID, as the model's replays do: its merge runs on."""
     os.kill(land.pid, signal.SIGKILL)
     land.communicate(timeout=60)
     assert land.returncode == -signal.SIGKILL
@@ -1860,7 +1808,6 @@ def gated(
     resolved: bool = True,
     files: dict[str, str] | None = None,
 ) -> tuple[Path, Path]:
-    """A built ticket whose merge's `check` waits for ``gate/go``; the repository and the gate."""
     gate = tmp_path / "tools" / "gate"
     gate.mkdir(parents=True)
     check = f"{sys.executable} {tool(tmp_path, 'check.py', GATE_CHECK)} {gate}"
@@ -1871,7 +1818,6 @@ def gated(
 
 
 def wrapped(tmp_path: Path) -> tuple[Path, Path, str]:
-    """A built ticket whose merge waits for ``gate/go-<land's pid>`` before it runs merge.py."""
     gate = tmp_path / "tools" / "gate"
     gate.mkdir(parents=True)
     text = WRAPPED_MERGE.replace("__SCRIPTS__", repr(str(SCRIPTS)))
@@ -1883,7 +1829,6 @@ def wrapped(tmp_path: Path) -> tuple[Path, Path, str]:
 
 
 def release(gate: Path, land: subprocess.Popen[str]) -> dict[str, object]:
-    """Let the wrapped merge of ``land`` run; what it printed and returned."""
     (gate / f"go-{land.pid}").touch()
     result = gate / f"result-{land.pid}"
     wait_until(result.exists)

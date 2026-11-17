@@ -1,18 +1,3 @@
-"""Where the plugin's own text named a language or tool the owner never stated.
-
-The plugin names no stack (ADR 0042): every concrete tool comes from the agent's knowledge and the
-owner's words. This reads a run's transcript for the plugin's text, which is what its hooks print,
-what its skills load and what a session reads from the plugin's own files, and looks in it for the
-names in ``LEXICON``. A name the owner did not say (in the persona, or in an answer) that appears
-there is evidence of a leak: the plugin put it in the session, so an agent can adopt it as if the
-owner had asked for it.
-
-The lexicon lives here, in eval data, and is allowed to name stacks; the plugin is not. A word that
-is also plain English (express, spring, react, swift) is left out or matched only in a shape that
-names the tool. ``python3`` and ``just`` are not names: the plugin's scripts run on the one and its
-contract is the other.
-"""
-
 from __future__ import annotations
 
 import json
@@ -37,14 +22,11 @@ CONTEXT = 50
 
 @dataclass(frozen=True)
 class Name:
-    """One name the lexicon looks for: its label and the pattern that finds it."""
-
     label: str
     pattern: re.Pattern[str]
     said: re.Pattern[str] | None = None
 
 
-# The owner says "Go", which the plugin's text would only mean as a command.
 SAID = {"Go": re.compile(r"\bGo\b|\bGolang\b")}
 
 
@@ -91,14 +73,11 @@ LEXICON = _names(
 
 @dataclass(frozen=True)
 class Source:
-    """A piece of the plugin's own text found in the transcript, and where it came from."""
-
     label: str
     text: str
 
 
 def _text(value: object) -> str:
-    """The text of a message's content: a string, or the text of each block of a list."""
     if isinstance(value, str):
         return value
     if isinstance(value, list):
@@ -115,7 +94,6 @@ def _blocks(msg: Mapping[str, object]) -> list[Mapping[str, object]]:
 
 
 def plugin_text(records: Iterable[Mapping[str, object]]) -> list[Source]:
-    """The plugin's text in a transcript: hook output, skill loads and reads of its files."""
     found: list[Source] = []
     watched: dict[str, str] = {}
     for record in records:
@@ -143,13 +121,11 @@ def plugin_text(records: Iterable[Mapping[str, object]]) -> list[Source]:
 
 
 def stated(*texts: str) -> frozenset[str]:
-    """The lexicon names the owner said, in the persona or in an answer."""
     joined = "\n".join(texts)
     return frozenset(n.label for n in LEXICON if (n.said or n.pattern).search(joined))
 
 
 def scan(sources: Iterable[Source], owner_said: frozenset[str]) -> dict[str, object]:
-    """Each name the plugin's text carries that the owner did not say, once per name and source."""
     items: dict[tuple[str, str], dict[str, object]] = {}
     for source in sources:
         for name in LEXICON:

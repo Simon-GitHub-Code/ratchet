@@ -1,31 +1,4 @@
 #!/usr/bin/env python3
-"""Application types: which questions the method asks of which kind of software.
-
-``skills/method/application-types.toml`` names six types (service, web-ui, app, cli, job,
-library) and, per question, the types it is asked of. A type decides which questions apply and
-never which tool answers one. A binding declares its types on one line::
-
-    - Application types: service, web-ui
-
-The conformance gate calls ``Catalogue.failures`` with the binding's Gates rows. A row that
-applies to a declared type names a tool, or ``none`` with a reason and the ADR that accepts the
-gap. A row that applies to none of them may say ``none: not a <type>``, naming a type the
-question is asked of, and needs no ADR. A row the catalogue names is never dropped, and an empty
-Tool cell is red.
-
-A question may also require named proofs (``Catalogue.proofs``): faults specific to what it asks,
-each described under ``[proofs]``. ``project_bite.py`` holds a bound row to them.
-
-Every question also carries a trigger (ADR 0028): ``always``, ``code:<kind>`` or ``life:<event>``,
-or parts of the last two joined by `` and ``, which fires when every part has. Until it fires, a
-row's Tool cell may say ``later: <trigger>``, naming exactly the question's trigger, and judges
-nothing. ``Catalogue.kinds`` and ``Catalogue.events`` describe what a trigger can name.
-
-Usage: ``application_types.py`` prints the types. ``application_types.py TYPE...`` prints every
-question the catalogue narrows with ``applies`` or the ``none: not a <type>`` cell to write, so
-adoption starts from the rows these types leave out. Exits 2 on a type the catalogue lacks.
-"""
-
 from __future__ import annotations
 
 import functools
@@ -47,37 +20,25 @@ CATALOGUE = Path(__file__).resolve().parents[1] / "skills/method/application-typ
 DECLARATION = re.compile(r"^- Application types:(.*)$", re.MULTILINE)
 EVENTS = re.compile(r"^- Life events:(.*)$", re.MULTILINE)
 NONE = re.compile(r"^none\b[\s,:;-]*(.*)$")
-# Why: ADR 0028. `later: <trigger>` is a whole cell, so the shipped trigger gate reads it as
-# data; prose after the trigger would be a second grammar. Backticks are allowed, as in any cell.
 LATER = re.compile(r"^`?later:(.*?)`?$")
 ALWAYS = "always"
 CODE = "code:"
 LIFE = "life:"
-# Why: a question some projects never meet even once deployed (a static site stores nothing) waits
-# for the event and the kind of code together, so a trigger may join parts with this.
 JOIN = " and "
 ADR = re.compile(r"\bADR[ -]?(\d{4})\b")
 MIN_REASON = 10
 
 
 def parts(trigger: str) -> list[str]:
-    """The parts of a trigger: one, or those a compound joins with `` and ``."""
     return [part.strip() for part in trigger.split(JOIN)]
 
 
 def code_kinds(trigger: str) -> list[str]:
-    """The kinds of code a trigger's ``code:`` parts name, in order."""
     return [part.removeprefix(CODE) for part in parts(trigger) if part.startswith(CODE)]
 
 
 @dataclass(frozen=True)
 class Event:
-    """A life event: what it means and the globs whose presence makes the route propose it.
-
-    ``signs`` are the shipped globs; ``in_binding`` says the stack decides the rest, in the
-    binding's ``## Life event signs`` table (ADR 0050).
-    """
-
     meaning: str
     signs: tuple[str, ...]
     in_binding: bool = False
@@ -85,14 +46,6 @@ class Event:
 
 @dataclass(frozen=True)
 class Catalogue:
-    """The shipped types, the questions narrowed to some of them, and what their gates prove.
-
-    ``proofs`` maps a question to the named proofs it requires, and ``meanings`` a proof to the
-    fault it plants. ``triggers`` maps every question to when it is asked (ADR 0028), ``kinds`` a
-    kind of code to what marks it, and ``events`` a life event to its meaning and signs.
-    ``architecture`` maps each trigger that reopens the architecture to what it reopens (ADR 0052).
-    """
-
     types: Mapping[str, str]
     narrowed: Mapping[str, frozenset[str]]
     collections: frozenset[str]
@@ -106,16 +59,13 @@ class Catalogue:
 
     @property
     def questions(self) -> frozenset[str]:
-        """Every question the catalogue says something about; its row is never dropped."""
         named = self.collections | frozenset(self.narrowed) | frozenset(self.proofs)
         return named | frozenset(self.triggers)
 
     def trigger_of(self, question: str) -> str:
-        """When a question is asked: ``always`` unless the catalogue names a trigger."""
         return self.triggers.get(question, ALWAYS)
 
     def trigger_problem(self, trigger: str) -> str | None:
-        """Why a trigger is not one the catalogue can fire, or ``None`` when it is."""
         if trigger == ALWAYS:
             return None
         if all(self.part_fires_here(part) for part in parts(trigger)):
@@ -126,13 +76,11 @@ class Catalogue:
         )
 
     def part_fires_here(self, part: str) -> bool:
-        """Whether a part of a trigger names a kind or an event of this catalogue."""
         return (part.startswith(CODE) and part.removeprefix(CODE) in self.kinds) or (
             part.startswith(LIFE) and part.removeprefix(LIFE) in self.events
         )
 
     def owed_by(self, event: str) -> tuple[str, ...]:
-        """The questions whose trigger names ``event``, in the catalogue's order (ADR 0028)."""
         return tuple(
             question
             for question, trigger in self.triggers.items()
@@ -140,7 +88,6 @@ class Catalogue:
         )
 
     def kinds_asked(self, types: AbstractSet[str]) -> frozenset[str]:
-        """The kinds of code a repository of these types must say how to find (ADR 0028)."""
         return frozenset(
             kind
             for question in self.questions
@@ -149,29 +96,21 @@ class Catalogue:
         )
 
     def kinds_required(self, types: AbstractSet[str]) -> frozenset[str]:
-        """The kinds the Triggers table must find: those asked, and each reopening the architecture.
-
-        Why: ADR 0052. A kind that reopens the architecture is counted whatever the types, or its
-        arrival could never owe the review.
-        """
         if not types:
             return frozenset()
         reopen = (code_kinds(trigger) for trigger in self.architecture)
         return self.kinds_asked(types) | frozenset(kind for kinds in reopen for kind in kinds)
 
     def asked_of(self, question: str) -> frozenset[str]:
-        """The types a question is asked of: every type unless the catalogue narrows it."""
         return self.narrowed.get(question, frozenset(self.types))
 
     def none_cell(self, question: str) -> str:
-        """The Tool cell of a row that applies to none of the declared types."""
         *head, last = [a(kind) for kind in self.types if kind in self.asked_of(question)]
         return "none: not " + (f"{', '.join(head)} or {last}" if head else last)
 
     def row_problem(
         self, row: tuple[str, str], kinds: AbstractSet[str] | None, adrs: AbstractSet[int]
     ) -> str | None:
-        """What is wrong with one Gates row for a repository of these types."""
         question, tool = row
         if not tool:
             return f"gate '{question}' names no tool: an empty Tool cell is an unfinished binding"
@@ -193,7 +132,6 @@ class Catalogue:
         return f"gate '{question}' {problem}{hint}"
 
     def later_problem(self, question: str, said: str) -> str | None:
-        """What is wrong with a ``later: <trigger>`` cell: it must be the question's own trigger."""
         trigger = self.trigger_of(question)
         if trigger == ALWAYS:
             return (
@@ -208,7 +146,6 @@ class Catalogue:
         return None
 
     def types_problem(self, binding: str) -> str | None:
-        """What is wrong with the binding's ``- Application types:`` line, or ``None``."""
         kinds = declared(binding)
         known = ", ".join(self.types)
         if kinds is None:
@@ -222,7 +159,6 @@ class Catalogue:
     def failures(
         self, binding: str, rows: Sequence[tuple[str, str]], adrs: AbstractSet[int]
     ) -> Iterator[str]:
-        """What a binding's types line and Gates rows get wrong; ``rows`` are (question, tool)."""
         problem = self.types_problem(binding)
         if problem:
             yield problem
@@ -237,7 +173,6 @@ class Catalogue:
 
 
 def dropped(question: str) -> str:
-    """The failure for a catalogue question with no row in the binding's Gates table."""
     return f"the Gates table has no '{question}' row; a row is bound or none, never dropped"
 
 
@@ -269,7 +204,6 @@ def parsed(text: str) -> Catalogue:
 
 
 def declared(binding: str) -> list[str] | None:
-    """The types a binding's ``- Application types:`` line names; ``None`` without the line."""
     match = DECLARATION.search(binding)
     if match is None:
         return None
@@ -277,10 +211,6 @@ def declared(binding: str) -> list[str] | None:
 
 
 def life_events(binding: str) -> frozenset[str]:
-    """The life events a binding's ``- Life events:`` line declares (ADR 0028).
-
-    No line, or ``none``, declares none: a project is assumed young until its owner says otherwise.
-    """
     match = EVENTS.search(binding)
     if match is None:
         return frozenset()
@@ -295,19 +225,11 @@ MIN_REASON_LENGTH = 10
 
 @dataclass(frozen=True)
 class Signs:
-    """A binding's ``## Life event signs`` table: the globs that mark each event, and its faults."""
-
     globs: Mapping[str, tuple[str, ...]]
     problems: tuple[str, ...]
 
 
 def signs_in(binding: str | None) -> Signs | None:
-    """The binding's life event signs table, or ``None`` when the section is missing.
-
-    A row is the event and its Paths: globs in backticks, or ``none: <reason>``. Every event of
-    the catalogue that ``in-binding`` names needs a row, and a row names no event that has neither
-    ``in-binding`` nor shipped signs.
-    """
     if binding is None or not markdown_text.has_section(binding, SIGNS_SECTION):
         return None
     events = load().events
@@ -344,11 +266,6 @@ def signs_in(binding: str | None) -> Signs | None:
 
 
 def signs_seen(root: Path) -> dict[str, dict[str, str]]:
-    """Per undeclared life event, each sign glob the tree matches and the first path it matched.
-
-    The signs are the catalogue's shipped ones and the binding's table (ADR 0050). A sign only
-    proposes an event to its owner, who declares it, so the work tree's table is read.
-    """
     binding = gatelib.read_text(root / gatelib.BINDING)
     if binding is None:
         return {}
@@ -367,13 +284,6 @@ def signs_seen(root: Path) -> dict[str, dict[str, str]]:
 
 
 def declared_or_all(binding: str) -> frozenset[str]:
-    """The life events a judge may rely on: every event when the binding has no events line.
-
-    Why: ``life_events`` reads a missing line as "no events", right for a trigger waiting on an
-    owner's word, wrong for a judge that switches protection off. A 0.10 adoption that upgrades
-    has the line missing while it may already be deployed, so for it a missing line fails closed;
-    an explicit ``none`` is the owner saying the project is young.
-    """
     if EVENTS.search(binding) is None:
         return frozenset(load().events)
     return life_events(binding)
@@ -384,12 +294,10 @@ def a(kind: str) -> str:
 
 
 def says_not_a(reason: str, asked_of: AbstractSet[str]) -> bool:
-    """Whether a ``none`` cell's reason names a type the question is asked of: 'not a service'."""
     return any(re.search(rf"\bnot {re.escape(a(kind))}\b", reason) for kind in asked_of)
 
 
 def unaccepted(reason: str, adrs: AbstractSet[int]) -> str | None:
-    """Why a ``none`` is not an accepted gap: no reason, no ADR, or an ADR that is not there."""
     if len(reason) < MIN_REASON:
         return f"is bound to none without a reason of {MIN_REASON}+ characters"
     cited = [int(number) for number in ADR.findall(reason)]

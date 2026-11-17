@@ -1,5 +1,3 @@
-"""Unit tests for the guard's lexer, option scanner, manifest, locator and rule catalogue."""
-
 import re
 import shlex
 from collections.abc import Callable
@@ -342,8 +340,6 @@ def test_a_quote_or_substitution_left_open_is_reported() -> None:
 
 
 def test_an_ansi_c_quote_with_an_escaped_quote_is_read_as_sh_reads_it() -> None:
-    # Why: bash reads `$'a\'; rm x #'` as one word; sh as `$`, a quote the escaped one ends, and
-    # a command. The lexer reads it as sh does and says it cannot tell.
     parsed = parse_shell("echo $'a\\'; rm x #'")
     assert not parsed.closed
     assert [command.words for command in parsed.commands] == [("echo", "$a\\"), ("rm", "x")]
@@ -380,8 +376,6 @@ def test_exclude_carves_paths_out_of_a_group() -> None:
 
 
 def test_a_group_with_no_paths_yet_matches_nothing() -> None:
-    # Why: the adopt template ships `paths = []` until adopt fills them; a manifest that failed
-    # to parse would turn every tool call into an ask meanwhile.
     unbound = parse(GOOD.replace('paths = ["a/**", "b.txt", "~/.x/*.json"]', "paths = []"))
     assert unbound.groups[0].patterns == ()
     assert unbound.group_of("a/x") is None
@@ -481,8 +475,6 @@ paths = ["d/z.md", "k/b.md"]
 @pytest.mark.parametrize(
     ("directory", "group"),
     [
-        # Why: removing a directory removes every path in it, and on a branch only a locked
-        # group is refused, so the locked one is the verdict wherever it appears (ADR 0033).
         (".", "shut"),
         ("d", "shut"),
         ("e/g", "shut"),
@@ -890,8 +882,6 @@ def test_each_nested_shell_counts_towards_the_depth_limit(wrap: Callable[[str], 
 
 @dataclass
 class Heads(FakeRepo):
-    """A fake repository where each checkout has its own branch and the default ones are chosen."""
-
     heads: dict[Path, str | None] = field(default_factory=dict)
     defaults: frozenset[str] = MAIN_BRANCHES
 

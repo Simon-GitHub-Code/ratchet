@@ -1,31 +1,3 @@
-"""A pure model of one run of the feature pipeline: what the workflow does with any answer.
-
-The workflow is a function of its arguments and of its agents' structured answers, so one run is a
-machine whose inputs are those answers. Each answer is abstracted to the few values the script
-branches on: the spec role asks the owner or not, measures its change inside the ceilings or over
-one, or estimates that the whole change cannot fit; the ticket check finds a gap or not; a builder's
-check is green or red; the critic finds nothing, owes a fix, or tries nothing; the review approves,
-refuses, or approves against its own evidence; and any agent can die. Each answer also says whether
-that role committed, pushed or opened a pull request, which the script cannot see (ADR 0060).
-
-The state is the agent the run waits on, what the answers so far established (whether the critic
-runs, the spec's last answer, a promise the run kept from the ticket, the last builder's check,
-what the last critique owes, whether the last review holds a blocking issue), the agents and fix
-rounds spent, whether some role published, and how the run ended. The fix loop runs on what the
-critic owes once the project is depended-on, and before that for one round on the review's blocking
-issues, which a second review then judges. ``graph()`` is every run the abstract answers allow:
-the fix loop's own bound keeps it finite, so it is every run, not a sample. ``RULES`` is what a
-reader of the method expects to stay true whatever the agents answer; every rule is a predicate
-over a step ``(before, action name, after)``.
-``export()`` writes the graph and the rules as a TLA+ module, and ``summary()`` the graph seen
-through the stage a run is at, for the charts of docs/model/pipeline.md.
-
-The transitions follow the documents: skills/method/pipeline.md, skills/feature/SKILL.md and the
-ADRs they cite (0023 on judging a rebased branch again, 0028 on the critic, 0036 on the ticket
-check, 0040 and 0045 on the size stops, 0046 on splitting a ticket, 0055 on the size read after a
-fix round, 0056 on a young project's one fix pass).
-"""
-
 from __future__ import annotations
 
 import functools
@@ -48,8 +20,6 @@ MOST_REJUDGE = 2
 
 
 class Role(Enum):
-    """An agent of the run, by the label the script gives its call."""
-
     PREFLIGHT = "preflight"
     SPEC = "spec"
     CHECK = "ticket-check"
@@ -64,8 +34,6 @@ class Role(Enum):
 
 
 class Phase(Enum):
-    """The documented stages, in their documented order."""
-
     PREFLIGHT = "Preflight"
     SPEC = "Spec"
     TICKET_CHECK = "Ticket check"
@@ -94,8 +62,6 @@ REVIEWS = frozenset({Role.REVIEW, Role.REVIEW_AGAIN})
 
 
 class Start(Enum):
-    """What the orchestrator passes the workflow."""
-
     BUILD = "starts a build"
     NO_TICKET = "starts with no ticket"
     REJUDGE = "judges a rebased branch again"
@@ -113,8 +79,6 @@ class Preflight(Enum):
 
 
 class Spec(Enum):
-    """The spec role's answer, written or amended."""
-
     DIES = "dies"
     ASKS = "asks the owner a question"
     GUARD_EDIT = "needs a guard path changed"
@@ -127,16 +91,12 @@ class Spec(Enum):
 
 
 class Check(Enum):
-    """The ticket check's answer, first or second."""
-
     DIES = "dies"
     NO_GAP = "finds no gap"
     GAP = "finds a gap"
 
 
 class Build(Enum):
-    """A builder's answer: the implementer, a fixer or the reconcile agent."""
-
     DIES = "dies"
     PRODUCT_OVER = "measures product code over its ceiling"
     TESTS_OVER = "measures tests over their ceiling"
@@ -179,8 +139,6 @@ class Review(Enum):
 Answer = Preflight | Spec | Check | Build | Critique | Review
 Said = Start | Answer
 
-# Why: ADR 0055. The script reads a size after the spec, the implementation, each fix round and
-# the reconcile; one answer over a ceiling shows all a fixer or a reconcile agent can bring.
 LATE_BUILD = (Build.DIES, Build.GREEN, Build.RED, Build.PRODUCT_OVER, Build.DEPARTS_CRITERION)
 ANSWERS: dict[Role, tuple[Answer, ...]] = {
     Role.PREFLIGHT: tuple(Preflight),
@@ -219,8 +177,6 @@ VERDICTS = frozenset({Outcome.APPROVE, Outcome.REQUEST_CHANGES})
 
 
 class Stop(Enum):
-    """Why a blocked run stopped."""
-
     NO_TICKET = "no ticket was passed"
     PREFLIGHT = "the preflight is red"
     QUESTION = "a question for the owner"
@@ -237,8 +193,6 @@ class Ceiling(Enum):
 
 
 class Objection(Enum):
-    """A reason the script forces ``request_changes`` whatever the review said."""
-
     SPEC_EVIDENCE = "the spec's tests do not fail for the right reason"
     BUILDER_RED = "the last implementer or fixer reported a red check"
     OWED = "a critic finding is still owed a fix"
@@ -266,17 +220,11 @@ REVIEW_OBJECTIONS: dict[Said, frozenset[Objection]] = {
 APPROVING = frozenset({Review.APPROVES, Review.CLASSIFIES_ROLE})
 ASKING = frozenset({Review.UNSTATED_OWNER, Review.ISSUE_NO_QUOTE})
 STOPPING_DEPARTURES = frozenset({Build.DEPARTS_CRITERION, Build.DEPARTS_ASSUMPTION_OWNER})
-# Why: the review's blocking issues in the change are what a fix pass can answer. A dropped promise
-# of the ticket is refused and goes to the next run (rule 15), not to a fix agent, even beside a
-# blocker, and minor issues alone are no blocking finding.
 FIXABLE = frozenset({Review.REFUSES_ISSUE, Review.APPROVES_ISSUE})
 DROPS = frozenset({Review.APPROVES_DROPPED, Review.REFUSES_DROPPED})
 REFUSALS = frozenset(
     {Review.REFUSES, Review.REFUSES_ISSUE, Review.REFUSES_MINOR, Review.REFUSES_DROPPED}
 )
-# Why: the amend returns the whole spec as it now stands, a fix round's check is "the last
-# implement or fix", the re-critique re-checks every finding by title (pipeline.md, the loop), and
-# the second review of a project nobody depends on judges the change the fix pass left.
 REPAIRS: dict[Role, frozenset[Objection]] = {
     Role.AMEND: frozenset({Objection.SPEC_EVIDENCE}),
     Role.FIX: frozenset({Objection.BUILDER_RED}),
@@ -290,9 +238,6 @@ READS = frozenset(
 )
 ON_THE_BRANCH = READS | {"git switch"}
 PUBLISHING = frozenset({"git commit", "git push", "gh pr"})
-# Why: every agent leaves its change uncommitted and the orchestrator commits and publishes
-# (pipeline.md); the run's branch is the one SKILL.md switches to or creates; the reconcile agent
-# finishes the rebase (SKILL.md, the drain, step 4.4); the preflight runs a script and no git.
 COMMANDS: dict[Role, frozenset[str]] = {
     **dict.fromkeys(Role, ON_THE_BRANCH),
     Role.PREFLIGHT: frozenset(),
@@ -304,8 +249,6 @@ COMMANDS: dict[Role, frozenset[str]] = {
 
 @dataclass(frozen=True)
 class Ending:
-    """What the orchestrator gets back from a finished run."""
-
     outcome: Outcome
     stop: Stop | None = None
     ceiling: Ceiling | None = None
@@ -347,8 +290,6 @@ class Ending:
 
 @dataclass(frozen=True)
 class State:
-    """One run between two answers; ``awaiting`` is ``None`` before the start and after the end."""
-
     started: bool = False
     awaiting: Role | None = None
     rejudge: bool = False
@@ -377,8 +318,6 @@ PUBLISHED = " and has published"
 
 @dataclass(frozen=True)
 class Action:
-    """The orchestrator's start, or the answer of the agent the run waits on."""
-
     answer: Said
     role: Role | None = None
     rounds: int = 0
@@ -432,7 +371,6 @@ OVER: dict[Said, Ceiling] = {
     Build.TESTS_OVER: Ceiling.TESTS,
 }
 MARGINS = frozenset({Spec.TESTS_MARGIN, Build.TESTS_MARGIN})
-# Why: the amend is the spec role answering again, and the script names its stop "the spec".
 MEASURED_AT = {
     Role.SPEC: Role.SPEC,
     Role.AMEND: Role.SPEC,
@@ -443,19 +381,16 @@ MEASURED_AT = {
 
 
 def fix_rounds(state: State) -> int:
-    """The rounds the fix loop may spend: two once the project is depended-on, one before."""
     return MAX_FIX_ROUNDS if state.critic else YOUNG_FIX_ROUNDS
 
 
 def stops_on(answer: Said, *, critic: bool | None) -> Ceiling | None:
-    """The ceiling a measure stops the run on: one it passes, or the critic's room (ADR 0040)."""
     if answer in MARGINS and critic:
         return Ceiling.TESTS
     return OVER.get(answer)
 
 
 def standing(state: State) -> frozenset[Objection]:
-    """The objections the answers so far raise, which would force ``request_changes`` now."""
     red = Objection.RECONCILE_RED if state.rejudge else Objection.BUILDER_RED
     raised = {
         Objection.SPEC_EVIDENCE: state.spec is Spec.WRONG_REASON,
@@ -520,7 +455,6 @@ def _asks(
     unclassified: bool = False,
     unquoted_review: bool = False,
 ) -> State:
-    """The run ends blocked on a question for the owner, after the role that returned the case."""
     ending = Ending(
         Outcome.BLOCKED,
         stop=stop,
@@ -565,10 +499,6 @@ def _critique(state: State, action: Action) -> State:
 
 
 def _parked(state: State) -> State:
-    """A finding still owed after its fix round ends the run refused, and no review starts.
-
-    Why: ADR 0072, point 5. The moved findings no role classified go to the owner as questions.
-    """
     ending = Ending(
         Outcome.REQUEST_CHANGES,
         stop=Stop.CARRIED,
@@ -589,10 +519,6 @@ def _parked(state: State) -> State:
 
 
 def _built_late(state: State, action: Action, awaiting: Role) -> State:
-    """A fix round's or a reconcile's answer: over a ceiling it stops the run too large.
-
-    Why: ADR 0055. The critic's tests are already counted, so the tests have all their ceiling.
-    """
     ceiling = stops_on(action.answer, critic=False)
     if ceiling is not None:
         return _too_large(state, ceiling, action.role, parts=False)
@@ -612,12 +538,6 @@ def _reconcile(state: State, action: Action) -> State:
 
 
 def _review(state: State, action: Action) -> State:
-    """The review's verdict, or for a project nobody depends on its blocking issues to the fix pass.
-
-    Why: before the critic runs, the review is the only finder, so its blocking issues take the
-    place the critic's owed findings take once the project is depended-on. A rebased branch has no
-    fix loop, so its review always ends the run.
-    """
     left = state.moved and action.answer is not Review.CLASSIFIES_ROLE
     if action.answer in ASKING or left:
         return _asks(
@@ -668,7 +588,6 @@ STEPS: dict[Role, Callable[[State, Action], State]] = {
 
 
 def answered(state: State, action: Action) -> State:
-    """``state`` once the agent it waits on gives ``action``'s answer."""
     assert action.role is not None
     published = state.published or action.published
     ran = replace(state, agents=state.agents + 1, phase=action.phase, published=published)
@@ -685,11 +604,6 @@ def _start(state: State) -> Iterator[Move]:
 
 
 def numbered(state: State) -> int:
-    """The round the answer of the agent ``state`` waits on is numbered by.
-
-    Why: a re-critique is numbered by the round it judges, and so is the second review of a project
-    nobody depends on; the review of a project that is depended-on runs once, after the loop.
-    """
     if state.awaiting is Role.REVIEW and state.critic:
         return 0
     return state.rounds
@@ -712,7 +626,6 @@ ACTIONS: dict[str, Callable[[State], Iterator[Move]]] = {
 
 
 def moves(state: State) -> list[Move]:
-    """Every action open in ``state``; none once the run has ended."""
     return [move for actions in ACTIONS.values() for move in actions(state)]
 
 
@@ -720,15 +633,12 @@ Edge = tuple[State, str, State]
 
 
 class Graph(NamedTuple):
-    """Every state reachable from ``INITIAL`` in breadth-first order, and every step."""
-
     states: tuple[State, ...]
     edges: tuple[Edge, ...]
 
 
 @functools.cache
 def graph() -> Graph:
-    """Every state reachable from ``INITIAL`` and every step between them."""
     seen = {INITIAL: None}
     queue = deque([INITIAL])
     edges: list[Edge] = []
@@ -747,7 +657,6 @@ ROUND = re.compile(r"-(\d+)$")
 
 @functools.cache
 def named(name: str) -> Action:
-    """The action called ``name``, in whatever round of the fix loop it is taken."""
     who, said = name.split(" ", 1)
     if who == "the":
         return Action(Start(said.removeprefix("orchestrator ")))
@@ -1170,11 +1079,6 @@ AS_STATE: dict[str, Callable[[State], object]] = {
 
 
 def export() -> model_tla.Export:
-    """Every run as a TLA+ module, with the twenty-five rules, each named after its predicate.
-
-    Every rule is about a step, so each is a ``model_tla.Step``. A run that has ended has no step
-    out, so the module tells TLC that its end is no deadlock.
-    """
     return model_tla.export(
         "Pipeline",
         graph(),
@@ -1192,8 +1096,6 @@ def export() -> model_tla.Export:
 
 
 class Stage(NamedTuple):
-    """Where a run is, as the charts show it: the agent it waits on, or how it ended and where."""
-
     rejudge: bool
     critic: str
     waits: str
@@ -1205,7 +1107,6 @@ class Stage(NamedTuple):
 
 
 def read(name: str) -> str:
-    """The step called ``name`` as the script reads it: without whether the agent published."""
     return name.removesuffix(PUBLISHED)
 
 
@@ -1214,10 +1115,5 @@ def stage(state: State) -> Stage:
 
 
 def summary() -> model_tla.Export:
-    """The graph seen through ``stage``, small enough for the statechart tool to draw whole.
-
-    Why: the script cannot see whether a role published, so each step is seen as the answer the
-    script reads.
-    """
     seen = model_tla.summary(graph(), stage, lambda name: model_tla.identifier(read(name)))
     return model_tla.export("PipelineStage", seen, {}, fields=Stage._fields, deadlock=False)

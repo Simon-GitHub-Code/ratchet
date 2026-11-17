@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""Wire the Ratchet guard into a harness that does not load the plugin's hooks by itself.
-
-Usage: ``adapter.py <claude|grok|codex|pi|opencode> [--plugin-root DIR] [--home DIR] [--apply]``.
-Without ``--apply`` it prints the steps for that harness. With it, ``codex`` merges PreToolUse
-and SessionStart entries into ``~/.codex/hooks.json`` and ``opencode`` writes
-``~/.config/opencode/plugins/ratchet-guard.ts`` from ``adapters/opencode/``; the other three
-need no file written. Those targets are locked guard paths, so the owner runs this in their own
-shell. ``docs/harness/<name>.md`` explains each harness.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -37,14 +27,12 @@ def hook_entry(command: str, matcher: str | None = None) -> dict[str, object]:
 
 
 def _commands(entry: object) -> set[object]:
-    """The command strings inside one matcher-group entry, or none when it has no shape."""
     if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
         return set()
     return {hook.get("command") for hook in entry["hooks"] if isinstance(hook, dict)}
 
 
 def codex_hooks(existing: dict[str, object], plugin_root: Path) -> dict[str, object]:
-    """``existing`` with the guard's PreToolUse and SessionStart entries added once."""
     hooks = existing.get("hooks")
     table: dict[str, object] = dict(hooks) if isinstance(hooks, dict) else {}
     wanted = {
@@ -61,7 +49,6 @@ def codex_hooks(existing: dict[str, object], plugin_root: Path) -> dict[str, obj
 
 
 def _upgraded(entries: list[object], plugin_root: Path) -> list[object]:
-    """``entries`` with this adapter's earlier bare ``python3`` command given the flags."""
     older = {}
     for script in ("guard", "session"):
         path = f'"{plugin_root}/hooks/{script}.py"'
@@ -86,12 +73,10 @@ def _same_command(candidate: object, entry: dict[str, object]) -> bool:
 
 
 def opencode_plugin(template: str, plugin_root: Path) -> str:
-    """The OpenCode plugin with the plugin root filled in."""
     return template.replace(PLACEHOLDER, plugin_root.as_posix())
 
 
 def steps(harness: str, plugin_root: Path, home: Path) -> list[str]:
-    """What wires the guard in ``harness``, as lines for the owner."""
     doc = f"docs/harness/{harness}.md"
     if harness in {"claude", "grok"}:
         return [
@@ -118,7 +103,6 @@ def steps(harness: str, plugin_root: Path, home: Path) -> list[str]:
 
 
 def apply(harness: str, plugin_root: Path, home: Path) -> list[str]:
-    """Write the wiring for ``harness``; the lines say what changed."""
     if harness == "codex":
         path = home / CODEX_HOOKS
         existing = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}

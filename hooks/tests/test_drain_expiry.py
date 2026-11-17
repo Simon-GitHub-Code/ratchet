@@ -1,9 +1,3 @@
-"""``drain.py`` and a steering document that leaves with its feature: ADR 0064's replays.
-
-Two tickets, alpha and gamma, share the unit ``.scratch/f/``. Each is built in a work tree of its
-own, ``expire`` runs after its content commit, and the one that lands last deletes the unit.
-"""
-
 import json
 import subprocess
 import tempfile
@@ -80,7 +74,6 @@ THE_TWO = {
 
 
 def committed(root: Path, ref: str, *, at: str | None = None) -> Path:
-    """Open ``ref``, and commit its content: the ticket resolved and a feature spec of its own."""
     branch, slug, number, title = THE_TWO[ref]
     run(root, "open", ref)
     resolved = answered(ticket(number, title, status="resolved"), f"{slug}'s line")

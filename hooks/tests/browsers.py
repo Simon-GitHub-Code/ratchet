@@ -1,24 +1,3 @@
-"""A stand-in browser that speaks the debugging pipe, and the real one when this machine has it.
-
-The stand-in answers on descriptor 4 what it reads on descriptor 3, as Chromium does with
-``--remote-debugging-pipe``, and runs no page. It writes the ``TMPDIR`` it was given to
-``tmpdir`` in its profile and leaves a file there, as Chromium does. Words in what it is asked
-choose what it does, so each way a browser can fail is a real process on a real pipe:
-
-* every script is ``false`` the first time it is asked and ``true`` after, so a step waits once;
-  one that says ``never`` is never ``true``;
-* a script that says ``throw`` throws, ``quietly`` throws with no exception object,
-  ``novalue`` has no value, ``late`` throws the first time and is ``true`` after;
-* a click (the script starting ``(text =>``) that is ``true`` navigates the tab, ``Elsewhere``
-  navigates another frame, ``Stall`` never finishes loading;
-* opening an address that says ``unreachable`` fails, ``stuck`` never loads, ``crash`` closes
-  the browser;
-* a window 999 pixels wide is refused;
-* ``FAKE_BROWSER=die`` exits at once, ``mute`` never answers, ``slow`` answers only after 1.5
-  seconds as a browser read cold from disk does, and ``deaf`` stops reading once it has a tab,
-  before it answers that.
-"""
-
 import os
 import shutil
 import sys
@@ -109,7 +88,6 @@ while chunk := os.read(3, 65536):
 
 
 def fake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str = "") -> Path:
-    """Make the stand-in the browser ``cdp`` drives; ``mode`` is ``die``, ``mute`` or neither."""
     program = tmp_path / "fake-browser"
     program.write_text(f"#!{sys.executable}\n{FAKE}", encoding="utf-8")
     program.chmod(0o755)
@@ -119,7 +97,6 @@ def fake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str = "") -> Pat
 
 
 def real() -> str | None:
-    """A real Chromium or Chrome, when this machine has one and the stand-in is not chosen."""
     named = os.environ.get(cdp.ENV)
     if named and Path(named).name != "fake-browser":
         return named

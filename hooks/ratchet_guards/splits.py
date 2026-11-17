@@ -1,20 +1,3 @@
-"""A ticket too large to build is split by the agent, and its parts inherit the owner's agreement.
-
-ADR 0046. The agent-ready label is the owner's agreement that a ticket is ready to build
-(ADR 0008). Splitting a ticket by size is no product decision, so a child that names the ticket it
-was split from (``Split from: <ref>``) may carry the label when that parent carries it now, as the
-default branch or the tracker shows it and never as the child's own text says. The agreement
-reaches one level only: a child of a child goes back to the owner.
-
-What makes the split no decision is the scope check, and it is deterministic. A ticket's promises
-are its acceptance criteria, the ``- [ ]`` lines (ADR 0036 reads the ticket's promises the same
-way). Every promise of a child must appear verbatim in the parent. Together the children cover
-every promise of the parent exactly once. Prose outside the criteria is free. A split that adds,
-drops, rewords or duplicates a promise is refused, and the refusal names the line.
-
-This module is read by the label guard, the merge judge and the drain, so the three agree.
-"""
-
 import re
 from collections.abc import Sequence
 
@@ -27,28 +10,20 @@ REF = re.compile(r"[^`\s,()]+\.md|#\d+")
 
 
 def promises(text: str) -> list[str]:
-    """The promises of a ticket: the text of each ``- [ ]`` line, in order."""
     return PROMISE.findall(text)
 
 
 def split_from(text: str) -> str | None:
-    """The one ref a ``Split from:`` line names (``#12`` or a ticket file), or ``None``."""
     match = SPLIT_FROM.search(text)
     found = REF.findall(match.group(1)) if match else []
     return found[0] if len(found) == 1 else None
 
 
 def carries(text: str, label: str) -> bool:
-    """Whether ``text`` gives the ticket the agent-ready status."""
     return label.casefold() in {value.strip().casefold() for value in STATUS.findall(text)}
 
 
 def scope_problems(parent: str, children: Sequence[str]) -> list[str]:
-    """What keeps ``children`` from being a split of ``parent``, each naming the line.
-
-    A promise a child adds is not the parent's. A promise of the parent no child carries is
-    dropped, and one carried twice is duplicated, whether in two children or in one.
-    """
     wanted = promises(parent)
     problems = [
         f"child {number} adds a promise the parent does not make: {line}"
@@ -75,14 +50,6 @@ def scope_problems(parent: str, children: Sequence[str]) -> list[str]:
 def refusal(
     child: str, parent: str | None, label: str, *, siblings: Sequence[str] = ()
 ) -> str | None:
-    """Why ``child`` may not carry the label as a part of ``parent``, or ``None`` when it may.
-
-    ``parent`` is the parent ticket as the default branch or the tracker shows it now. ``siblings``
-    are the other children already filed. Only what one child can show is judged here: that the
-    parent carries the label and is no child itself, that the child adds no promise, and that it
-    repeats none a sibling carries. Coverage of every promise is the whole split's, judged where
-    all the children are known (``scope_problems``).
-    """
     if split_from(child) is None:
         return "names no single ticket it was split from"
     if parent is None:

@@ -290,7 +290,9 @@ cd ratchet
 just check
 ```
 
-`just check` runs lint and strict types, the test suite under 100% line and branch coverage of the gate scripts and the guard, the suite again on Python 3.11, the conformance self-test, every shipped gate against a synthetic violation, the lowered gate on the repository's own thresholds, a parse of the workflow and the adapters, and `claude plugin validate`. The method says gates are themselves gated; this is where that applies to the method.
+`just check` runs lint and strict types, the test suite under 100% line and branch coverage of the gate scripts and the guard, the suite again on Python 3.11, the conformance self-test, every shipped gate against a synthetic violation, the lowered gate on the repository's own thresholds, a parse of the workflow and the adapters, and `claude plugin validate`. The method says gates are themselves gated; this is where that applies to the method. The gates of a tier run at once, after one environment sync, so no two `uv run` race to build it.
+
+CI splits `test` and `test-floor` into `test_shards` jobs. `conftest.py` places each test by a hash of its node id, so the slices match on every machine with no timing file or extra dependency; a long parametrised test spreads its cases with `shard_slot(n)`, and `just shard-check` proves the slices partition the suite.
 
 To try a checkout as your installed plugin, add it as a local marketplace (`claude plugin marketplace add /path/to/ratchet`). It is read in place, so an edit applies at the next session or `/reload-plugins`.
 

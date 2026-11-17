@@ -27,7 +27,7 @@ Residue narrowed, 2026-11-14: the docstrings, the `tiers.md` paragraphs, the CI 
 
 ## Refutation criterion
 
-This is wrong if a stack adopts the method and one of the three sections, filled as the template asks, makes a gate judge worse than the list it replaced did. The open attempt is a directive an agent leaves out of the table: bind a lint tool, list one kind, add a second kind of directive in the code, and if the gate stays green then a row-by-row signal does not hold the table to the tool's whole directive set, and the catalogue needs a check the agent runs against the tool's own documentation. It is also wrong if a project's agent, handed a template with no examples, writes a table that is wrong more often than the old list was, which the first ten adoptions after this one show in their `suppressions` and `guard-diff` runs.
+This is wrong if a stack adopts the method and one of the three sections, filled as the template asks, makes a gate judge worse than the list it replaced did. The open attempt is a directive an agent leaves out of the table: bind a lint tool, list one kind, add a second kind of directive in the code, and if the gate stays green then a row-by-row signal does not hold the table to the tool's whole directive set, and the catalogue needs a check the agent runs against the tool's own documentation. It is also wrong if a project's agent, handed a template with no examples, writes a table that is wrong more often than the old list was, which the first ten adoptions after this one show in their `suppressions` and `guard-diff` runs. The dependency and install tests run on a made-up stack no tool writes; a pass there is the proof that the plugin names no stack.
 
 ## Considered options
 

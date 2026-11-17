@@ -1,21 +1,3 @@
-"""Interpreters run on an inline program, and the write calls such a program can hold.
-
-``python3 -c`` or ``python3 - <<'EOF'`` changes a file with no ``cp`` or ``sed`` in the
-command line for a check to see. The program text is in the command, though, so a program
-that holds a quoted string naming a guard path and also a write call is treated as a write to
-that path. Each interpreter is a row of ``INTERPRETERS``: the name it runs under, the
-argument that introduces a program, and the table of write calls of its language. A program
-read from stdin (a heredoc, a here-string, a pipe) is the caller's to find; this module says
-only that the interpreter reads one.
-
-A program that runs ``git`` is read for the command it runs (``git_commands``), so that a
-ref-moving or hook-skipping command is refused the same way through ``subprocess`` or
-``child_process`` as at the prompt.
-
-Out of reach, left to diff detection: a script file run by path, a path built at run time,
-a program fetched or decoded before it runs.
-"""
-
 import re
 import shlex
 from collections.abc import Sequence
@@ -25,7 +7,6 @@ from ratchet_guards.writes import WRITERS
 
 ADVICE = "A read of a guard path goes in a tool call of its own, apart from an unrelated write."
 _NEVER = re.compile(r"(?!)")
-# One call argument: quoted strings and balanced parentheses (two deep) hide their commas.
 _ARG = r"""(?:'[^'\n]*'|"[^"\n]*"|[^,()'"]|\((?:[^()]|\([^()]*\))*\))*"""
 _PYTHON_MODE = r"""(?:'[rbtU]*[wax+][rbtU]*'|"[rbtU]*[wax+][rbtU]*")"""
 _NODE_MODE = r"""['"][rwaxs+]*[wax+][rwaxs+]*['"]"""
@@ -38,9 +19,6 @@ _LITERAL = re.compile(
     re.DOTALL,
 )
 _WORD = re.compile(r"""[^\s'"`<>|;&(),=]+""")
-# `'git', 'branch', '-f', name`: the quoted program name and the arguments that follow, in an
-# argument list, a call's argument list or a bare run of arguments, as every language here
-# spells an argv. A bare name or call stands for an argument the program computes.
 _ARGS_OPTION = re.compile(r"\{\s*args\s*:")
 _ARGV = re.compile(
     r"""(['"])(?:[^'"\n]*/)?git\1(?P<rest>(?:\s*,\s*(?:\{\s*args\s*:\s*)?\[?\s*"""
@@ -48,15 +26,12 @@ _ARGV = re.compile(
 )
 _ARGV_ITEM = re.compile(r"""'(?P<a>[^'\n]*)'|"(?P<b>[^"\n]*)"|(?P<c>[\w.]+(?:\([^()]*\))?)""")
 _COMMAND_STRING = re.compile(r"(?:^|[\s;&|(/])git\s")
-# A `<name>` a prose string or a comment holds in place of a value: its `>` is no redirection.
 _PLACEHOLDER = re.compile(r"<[\w./-]*>")
 UNKNOWN = "$ratchet_unknown"
 
 
 @dataclass(frozen=True, slots=True)
 class Call:
-    """A write call as it appears in program text; ``removes`` if it deletes or moves away."""
-
     pattern: re.Pattern[str]
     removes: bool = False
 
@@ -113,15 +88,6 @@ RUBY_CALLS = _calls(
 
 @dataclass(frozen=True, slots=True)
 class Interpreter:
-    """One interpreter: its names, how it is told to run an inline program, what that can do.
-
-    ``program`` matches an argument that introduces a program; its ``code`` group is a
-    program attached to it, and when empty the next operand is the program. ``value_flags``
-    are options that take the next argument as a value. ``in_place`` matches a flag that
-    rewrites the files named on the command line. ``stdin`` is whether the interpreter runs
-    a program it is fed when it is given none.
-    """
-
     name: re.Pattern[str]
     program: re.Pattern[str]
     calls: tuple[Call, ...]
@@ -177,8 +143,6 @@ INTERPRETERS = (
 
 @dataclass(frozen=True, slots=True)
 class Invocation:
-    """An interpreter command line: the inline programs it carries, or that it reads stdin."""
-
     name: str
     interpreter: Interpreter
     programs: tuple[str, ...]
@@ -186,18 +150,14 @@ class Invocation:
     in_place: bool
 
     def writes(self, program: str) -> bool:
-        """Whether ``program`` holds a write call, or the command rewrites files in place."""
         return self.in_place or any(call.pattern.search(program) for call in self.interpreter.calls)
 
     def removes(self, program: str) -> bool:
-        """Whether ``program`` holds a call that deletes or moves a path away."""
         return any(call.removes and call.pattern.search(program) for call in self.interpreter.calls)
 
 
 @dataclass(slots=True)
 class _Walk:
-    """The arguments of one interpreter command, taken in order."""
-
     interpreter: Interpreter
     programs: list[str] = field(default_factory=list)
     operands: list[str] = field(default_factory=list)
@@ -224,13 +184,11 @@ class _Walk:
             self.operands.append(arg)
 
     def reads_stdin(self) -> bool:
-        """Whether no program was given and the interpreter runs the one on its stdin."""
         bare = not self.operands or self.operands[0] == "-"
         return self.interpreter.stdin and not self.programs and not self.awaiting and bare
 
 
 def invocation(head: str, args: Sequence[str]) -> Invocation | None:
-    """What ``head args`` runs, when ``head`` names an interpreter; otherwise ``None``."""
     interpreter = next((row for row in INTERPRETERS if row.name.fullmatch(head)), None)
     if interpreter is None:
         return None
@@ -241,13 +199,6 @@ def invocation(head: str, args: Sequence[str]) -> Invocation | None:
 
 
 def named_paths(program: str) -> list[str]:
-    """The words a program's string literals could name a path with, each once.
-
-    A literal is a candidate whole, and for a command string (``"echo x > DESIGN.md"``) so is
-    each word of it, with redirection and quoting characters cut away. A word of slashes alone
-    (``a / b``, ``root // x``) is an operator in the text around it, not the root directory,
-    which a literal that is exactly ``/`` still names.
-    """
     found: list[str] = []
     for literal in _LITERAL.finditer(program):
         text = next(group for group in literal.groups() if group is not None)
@@ -256,13 +207,6 @@ def named_paths(program: str) -> list[str]:
 
 
 def written_names(program: str) -> list[str]:
-    """The words a program's literals could name a file it writes with, for the owner's question.
-
-    A literal is a candidate whole. Its words are candidates only when it reads as a command: it
-    holds a redirection, or its first word is a writer the shell rules know (``"cp t AGENTS.md"``).
-    A word of prose (``"Edit `AGENTS.md` first"``) or of a comment the program edits names no file
-    it writes, and the owner would be asked about one it does not.
-    """
     found: list[str] = []
     for literal in _LITERAL.finditer(program):
         text = next(group for group in literal.groups() if group is not None)
@@ -273,12 +217,6 @@ def written_names(program: str) -> list[str]:
 
 
 def git_commands(program: str) -> list[str]:
-    """Shell command lines in ``program`` that run ``git``, for the shell rules to judge.
-
-    A string literal holding ``git`` and a space is a command line (``os.system("git ...")``),
-    and an argv that starts with the literal ``git`` is joined into one, with ``UNKNOWN`` where
-    an argument is not a literal. Nothing is run or evaluated.
-    """
     commands = [
         text
         for literal in _LITERAL.finditer(program)
@@ -296,5 +234,4 @@ def git_commands(program: str) -> list[str]:
 
 
 def detail(name: str, path: str, group: str) -> str:
-    """The sentence a deny carries: what matched, then how to do it the owner's way."""
     return f"an inline {name} program names {path} ({group}) and writes files. {ADVICE}"

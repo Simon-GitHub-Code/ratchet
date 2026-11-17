@@ -95,8 +95,6 @@ NOT_MARKDOWN = ".toml"
 
 
 class Document(NamedTuple):
-    """A file of a record: its text, and whether it is markdown."""
-
     text: str
     markdown: bool
 
@@ -105,8 +103,6 @@ Records = dict[str, list[Document] | None]
 
 
 class Entry(TypedDict):
-    """A finding named by its place in the list, with the record and quote it carries."""
-
     index: int
     title: str
     record: str
@@ -114,29 +110,18 @@ class Entry(TypedDict):
 
 
 class Missed(Entry):
-    """A finding whose quote was not found, and why."""
-
     reason: str
 
 
 class Verdict(TypedDict):
-    """The findings whose quotes were found and those whose quotes were not."""
-
     found: list[Entry]
     not_found: list[Missed]
 
 
-class UnreadableError(ValueError):
-    """The findings, or a given record, cannot be read."""
+class UnreadableError(ValueError): ...
 
 
 def blocks(document: Document) -> tuple[list[list[str]], list[list[str]]]:
-    """The whole units of a document, and its paragraphs, each as its words.
-
-    A markdown document's units are its headings, its list items and paragraphs with their
-    lines joined, and its table cells. Its paragraphs are the list items and paragraphs. A
-    document that is not markdown has each line as a unit and no paragraphs.
-    """
     if not document.markdown:
         lines = (line.split() for line in document.text.splitlines())
         return [words for words in lines if words], []
@@ -169,7 +154,6 @@ def blocks(document: Document) -> tuple[list[list[str]], list[list[str]]]:
 
 
 def sentence(paragraph: list[str], wanted: list[str]) -> bool:
-    """Whether ``wanted`` is whole words of ``paragraph``, from a sentence start to an end."""
     size = len(wanted)
     return any(
         paragraph[start : start + size] == wanted
@@ -180,7 +164,6 @@ def sentence(paragraph: list[str], wanted: list[str]) -> bool:
 
 
 def holds(document: Document, quote: str) -> bool:
-    """Whether ``document`` holds ``quote`` as a whole unit or whole sentences of a paragraph."""
     wanted = quote.split()
     if not any(character.isalnum() for character in quote):
         return False
@@ -194,7 +177,6 @@ def document_of(path: Path) -> Document | None:
 
 
 def files_of(root: Path, relative: str) -> list[Document] | None:
-    """The documents of the file at ``relative``, or under it; ``None`` when it is absent."""
     path = root / relative
     if path.is_dir():
         entries = (document_of(entry) for entry in sorted(path.rglob("*")) if entry.is_file())
@@ -206,7 +188,6 @@ def files_of(root: Path, relative: str) -> list[Document] | None:
 
 
 def place_of(name: str) -> str | None:
-    """Where the record ``name`` is under the root, or ``None`` when it is not on the ADR's list."""
     if name in FIXED:
         return FIXED[name]
     inside = name.startswith(ADR_FILES) and ".." not in Path(name).parts
@@ -214,7 +195,6 @@ def place_of(name: str) -> str | None:
 
 
 def texts_of(name: str, root: Path, given: Records) -> list[Document] | str | None:
-    """The texts of the record ``name``; ``None`` when absent; a reason when it is no record."""
     if name in given:
         return given[name]
     place = place_of(name)
@@ -238,7 +218,6 @@ def named(index: int, finding: dict[str, object]) -> Entry:
 def reason_missed(
     entry: Entry, finding: dict[str, object], *, root: Path, given: Records
 ) -> str | None:
-    """Why the record does not hold the finding's quote; ``None`` when it does."""
     breaks = finding.get("breaks")
     if not (
         isinstance(breaks, dict)
@@ -257,11 +236,6 @@ def reason_missed(
 
 
 def check(findings: list[object], root: Path, given: Records | None = None) -> Verdict:
-    """Which checked findings the records they name hold word for word, and which they do not.
-
-    ``given`` supplies the texts of records that have no fixed place, by name, ``None`` for one
-    that is absent.
-    """
     found: list[Entry] = []
     not_found: list[Missed] = []
     for index, finding in enumerate(findings):
@@ -278,7 +252,6 @@ def check(findings: list[object], root: Path, given: Records | None = None) -> V
 
 
 def findings_in(path: Path) -> list[object]:
-    """The findings in the file at ``path``; raises ``UnreadableError`` when it holds none."""
     text = gatelib.read_text(path)
     if text is None:
         message = "there is no such file, or it is not text"
@@ -297,7 +270,6 @@ def findings_in(path: Path) -> list[object]:
 
 
 def given_records(root: Path, pairs: list[str]) -> Records:
-    """The texts of ``NAME=PATH`` pairs; a path with no file gives ``None``."""
     given: Records = {}
     for pair in pairs:
         name, separator, relative = pair.partition("=")

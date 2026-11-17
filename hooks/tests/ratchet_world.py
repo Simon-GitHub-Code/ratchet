@@ -1,11 +1,3 @@
-"""The ratchet model's actions played on a real repository and judged by the real gate.
-
-Each open branch has a work tree of its own. A landing is made the way ``merge.attempt`` makes
-one: a detached work tree at the default branch's tip, ``git merge --no-ff`` of the branch there,
-the gate run on that merge result, and the default branch moved forward to it only when it is
-green. The gate also runs on the branch first, where an agent runs it before asking to merge.
-"""
-
 from __future__ import annotations
 
 import contextlib
@@ -50,8 +42,6 @@ NUMBER = {1.0: Value.ONE, 2.0: Value.TWO, 3.0: Value.THREE}
 
 
 def thresholds(tree: Tree) -> str:
-    """The file, each key on a line of its own with unchanged lines between them."""
-
     def line(name: str, value: Cell) -> str:
         return "" if value is None else f"{name} = {value.value}\n"
 
@@ -59,7 +49,6 @@ def thresholds(tree: Tree) -> str:
 
 
 def record_path(record: Record) -> str:
-    """A record's file, numbered by its line and copy, so two branches adding one add one file."""
     number = STEPS.index(record.step) + 1 + record.copy * len(STEPS)
     return f"{ADRS}/{number:04d}-relaxes.md"
 
@@ -69,7 +58,6 @@ def record_text(record: Record) -> str:
 
 
 def record_at(path: Path) -> Record:
-    """The record ``path`` is, read from its text and checked against its number."""
     copy, index = divmod(int(path.name[:4]) - 1, len(STEPS))
     record = Record(STEPS[index], copy)
     assert path.read_text(encoding="utf-8") == record_text(record), path
@@ -82,7 +70,6 @@ def files(tree: Tree) -> dict[str, str]:
 
 
 def parsed(text: str | None, held: frozenset[Record]) -> Tree:
-    """A tree read back from the file's text (``None``: no file) and its records."""
     if text is None:
         return Tree(floor=None, ceiling=None, records=held, file=False)
     flat = lowered.flatten(tomllib.loads(text))
@@ -107,7 +94,6 @@ class Gate:
 
 
 def gate(root: Path) -> Gate:
-    """``lowered.main`` on ``root`` as the binding runs it, its printed lines kept."""
     printed = io.StringIO()
     with contextlib.redirect_stdout(printed):
         code = lowered.main(["lowered", "--root", str(root)])
@@ -116,8 +102,6 @@ def gate(root: Path) -> Gate:
 
 @dataclass(frozen=True)
 class Landing:
-    """What a landing attempt saw: the gate on the branch, then on the merge (none: conflict)."""
-
     branch: Gate
     merge: Gate | None
     landed: bool
@@ -125,11 +109,6 @@ class Landing:
 
 @dataclass(frozen=True)
 class Landed:
-    """One merge the default branch moved to, as trees read from the work trees that made it.
-
-    ``forked_after`` is how many merges the default branch had taken when the branch forked.
-    """
-
     before: Tree
     after: Tree
     fork: Tree
@@ -138,12 +117,6 @@ class Landed:
 
 
 class World:
-    """A repository whose default branch only moves by landings, with a work tree per slot.
-
-    The root work tree is detached, so the default branch is checked out nowhere and moves by
-    ``update-ref`` from the old tip, as ``merge.land`` moves it then.
-    """
-
     def __init__(self, directory: Path) -> None:
         self.directory = directory
         self.root = repository(directory / "repository", files(INITIAL.default))
@@ -161,7 +134,6 @@ class World:
         return f"slot-{slot.name.lower()}"
 
     def perform(self, action: Action) -> Landing | None:
-        """Do what ``action`` names; a landing attempt says what it saw."""
         if action.kind is Kind.OPEN:
             self.open(action.slot)
             return None

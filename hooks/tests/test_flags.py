@@ -1,5 +1,3 @@
-"""The flags gate: the registry's shape, new flags off, dead keys, and the removal date."""
-
 import datetime as dt
 from pathlib import Path
 

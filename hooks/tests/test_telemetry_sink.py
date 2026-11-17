@@ -1,5 +1,3 @@
-"""``telemetry_sink``: an OTLP/HTTP receiver judged on what a real SDK export contains."""
-
 import contextlib
 import gzip
 import http.client
@@ -61,7 +59,6 @@ def string_pair(key: bytes, value: bytes) -> bytes:
 
 
 def export(service: bytes | None, records: int, *, scalars: bytes = b"") -> bytes:
-    """An Export*ServiceRequest body: one resource block holding ``records`` records."""
     resource = field(1, string_pair(b"host.name", b"h")) + field(3, b"an entity ref")
     if service is not None:
         resource += field(1, string_pair(b"service.name", service))
@@ -279,9 +276,6 @@ def test_a_signal_stops_the_command_and_exits_with_it(
 
 
 def test_the_receiver_thread_leaves_every_interrupt_to_the_main_thread(tmp_path: Path) -> None:
-    # Why: the kernel hands a signal sent to the process to any thread that does not block it,
-    # and Python runs the handler only on the main thread, which sleeps until the command exits:
-    # an interrupt the receiver took would let the command run to its end.
     blocked: set[int] = set()
     seen = tmp_path / "seen"
 

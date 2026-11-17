@@ -1,28 +1,4 @@
 #!/usr/bin/env python3
-"""Split a ticket that is too large into parts, filed in the project's tracker (ADR 0046).
-
-A size stop (the feature preflight's ``## Size``, the spec stage's estimate, or the measured
-stop) leaves a ticket the pipeline will not build as one change. Splitting it is no product
-decision, so the agent does it, and this script is the one place that decides whether a split is
-one. ``check`` judges a plan and ``apply`` files its parts; the drain calls ``apply``, and the
-label guard and the merge judge read the same rules from ``ratchet_guards.splits``.
-
-The plan is JSON: ``{"parts": [{"title": "...", "promises": ["<a ``- [ ]`` line of the parent,
-verbatim>", ...], "summary": "...", "after": [0]}]}``. ``after`` lists the parts a part waits
-on, by index; it defaults to the part before. The first part waits on what the parent waited on.
-
-A plan is refused when the parent is not there, does not carry the agent-ready label now (read
-from the default branch for a local ticket, from the tracker for an issue), is itself a part of
-another ticket, or when its promises are not the parent's: each part's promises must appear in
-the parent verbatim and together carry every promise of the parent exactly once. Prose outside
-the criteria is free. The refusal names the line.
-
-The parent's text is never edited: it stays as the owner agreed it and stops being buildable
-because its parts name it (``Split from:``). The children carry the label the parent holds.
-
-Usage: ``split.py check|apply <ticket> --plan FILE [--root DIR] [--offline]``.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -38,17 +14,12 @@ import gatelib
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import splits
 
-# Why: not `## Size`. The parent's estimate is the whole of what was too large; copied into each
-# part, it stops every part at its preflight, and a part is never split again. A part states no
-# size, and the spec stage estimates it.
 INHERITED = ("## Parent", "## Conjecture", "## Operability")
 SLUG = re.compile(r"[^a-z0-9]+")
 
 
 @dataclass(frozen=True)
 class Part:
-    """One part of a split: its title, the promises it carries and what it waits on."""
-
     title: str
     promises: tuple[str, ...]
     summary: str
@@ -56,7 +27,6 @@ class Part:
 
 
 def parts_of(plan: object) -> list[Part]:
-    """The parts of a plan as JSON, with ``after`` defaulted to the part before."""
     raw = plan.get("parts") if isinstance(plan, dict) else None
     found = []
     for index, item in enumerate(raw if isinstance(raw, list) else []):
@@ -78,10 +48,6 @@ def parts_of(plan: object) -> list[Part]:
 
 
 def parent_now(root: Path, ref: str, gh: preflight.Runner) -> preflight.Ticket | None:
-    """The parent as the default branch (a local ticket) or the tracker (an issue) shows it.
-
-    Never the work tree's copy, which an agent of the run could have edited.
-    """
     if ref.endswith(".md"):
         for name in gatelib.default_branches(root):
             text = gatelib.show(root, name, ref)
@@ -92,7 +58,6 @@ def parent_now(root: Path, ref: str, gh: preflight.Runner) -> preflight.Ticket |
 
 
 def child_body(parent: preflight.Ticket, part: Part, *, waits: list[str], label: str) -> str:
-    """The text of one part: it names its parent, what it waits on and the promises it carries."""
     sections = [
         f"{heading}\n\n{preflight.section(parent.body, heading).strip()}\n"
         for heading in INHERITED
@@ -120,7 +85,6 @@ def child_body(parent: preflight.Ticket, part: Part, *, waits: list[str], label:
 def problems(
     parent: preflight.Ticket | None, parts: list[Part], label: str, *, holds: bool
 ) -> list[str]:
-    """Why ``parts`` are not a split of ``parent``; empty when they are."""
     if parent is None:
         return ["the ticket is not there"]
     found = []
@@ -135,7 +99,6 @@ def problems(
     if len(parts) < 2:  # noqa: PLR2004 # -- a split makes two parts at least
         found.append("a split has two parts at least")
     found += [f"part {n} has no title" for n, part in enumerate(parts, 1) if not part.title]
-    # Why: only the criteria are judged; a part's inherited sections are prose and are free.
     bodies = ["\n".join(f"- [ ] {promise}" for promise in part.promises) for part in parts]
     found += splits.scope_problems(parent.body, bodies)
     return found
@@ -149,7 +112,6 @@ def next_number(folder: Path) -> int:
 def file_locally(
     root: Path, parent: preflight.Ticket, parts: list[Part], *, label: str
 ) -> list[str]:
-    """Write each part beside the parent; the refs are the file names the others wait on."""
     folder = (root / parent.ref).parent
     number = next_number(folder)
     slugs = [
@@ -169,7 +131,6 @@ def file_locally(
 def file_on_tracker(
     parent: preflight.Ticket, parts: list[Part], *, label: str, root: Path
 ) -> list[str]:
-    """Create each part as an issue carrying the label, each waiting on the earlier ones."""
     made: list[str] = []
     for index, part in enumerate(parts):
         waits = [made[i] for i in part.after if 0 <= i < index]
@@ -211,7 +172,6 @@ def judge(
 def apply(
     root: Path, ref: str, plan: object, *, gh: preflight.Runner
 ) -> tuple[list[str], list[str]]:
-    """The refs of the parts filed, and the refusal when none were."""
     parent, parts, label, refused = judge(root, ref, plan, gh=gh)
     if refused or parent is None:
         return [], refused

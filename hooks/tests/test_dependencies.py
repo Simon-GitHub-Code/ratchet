@@ -1,9 +1,3 @@
-"""Dependency-only changes to a guard path, read through the binding's contract (ADR 0044).
-
-The stack here is made up (``tests/dependency_stack.py``): the plugin reads no manifest or lockfile
-format, so a pass on a stack no tool writes shows it knows none.
-"""
-
 import contextlib
 import shutil
 from collections.abc import Mapping, Sequence
@@ -24,7 +18,6 @@ assert CONTRACT is not None
 
 
 def verdict(path: str, before: str | None, after: str | None) -> list[str] | str:
-    """What the contract says of one changed path: each change as text, or why it is not."""
     found = dependencies.judge(CONTRACT, {path: (before, after)}, read)[path]
     if isinstance(found, dependencies.NotDependencyOnlyError):
         return str(found)
@@ -41,9 +34,6 @@ def reason(path: str, before: str | None, after: str | None) -> str:
     result = verdict(path, before, after)
     assert isinstance(result, str), result
     return result
-
-
-# --- the section ----------------------------------------------------------------------------
 
 
 def test_a_binding_without_the_section_has_no_contract() -> None:
@@ -129,9 +119,6 @@ def test_a_path_that_leaves_the_directory_the_entry_point_reads_is_not_a_declare
     assert wide.original("a/b.manifest") == "a/b.manifest"
 
 
-# --- a manifest ------------------------------------------------------------------------------
-
-
 def test_new_dependencies_and_a_version_bump_are_dependency_only() -> None:
     after = stack.MANIFEST.replace("own-version 1.0", "own-version 2.0")
     after += "use dev delta ~2\nuse main beta 1.*\n"
@@ -163,9 +150,6 @@ def test_a_setting_beside_a_dependency_is_not_dependency_only() -> None:
 )
 def test_a_manifest_change_that_is_not_dependency_only_says_why(after: str, said: str) -> None:
     assert reason("app.manifest", stack.MANIFEST, after) == said
-
-
-# --- a lockfile ------------------------------------------------------------------------------
 
 
 def lock(*pins: str) -> str:
@@ -324,8 +308,6 @@ def test_a_spec_the_change_does_not_show_is_refused() -> None:
     assert str(found) == "the entry point reports '9' for beta, which no added line shows"
 
 
-# --- what the entry point prints ----------------------------------------------------------------
-
 REST = "rest\tapp.lock\tx\n"
 LOCKED = "locked\tapp.lock\tmain\tbeta\t1\t1\tregistry\thttps://registry.example\tsum\tone\n"
 DECLARED = "declared\tapp.manifest\tmain\tbeta\t1\tregistry\n"
@@ -384,9 +366,6 @@ def test_a_missing_rest_line_leaves_the_file_unjudged() -> None:
 def test_blank_lines_in_the_output_are_ignored() -> None:
     out = read({"app.lock": stack.LOCK})
     assert dependencies.read_output("\n" + out + "\n\n").rest.keys() == {"app.lock"}
-
-
-# --- what is judged ------------------------------------------------------------------------------
 
 
 def never_run(_: Mapping[str, str]) -> str:
@@ -457,9 +436,6 @@ def test_an_entry_point_that_fails_refuses_every_file_it_was_to_read() -> None:
     assert found.keys() == {"app.lock", "app.manifest"}
 
 
-# --- the entry point, run as the merge base has it -----------------------------------------------
-
-
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
     if shutil.which("just") is None:
@@ -472,7 +448,6 @@ def test_the_entry_point_reads_the_files_it_is_given_from_the_merge_bases_tree(
 ) -> None:
     base = git(project, "rev-parse", "HEAD")
     branch(project)
-    # The head's own reader prints a lie and a lock that is clean; only the base's runs.
     write(project, "tools/read_deps.py", "print('rest\\tapp.lock\\tx')\n")
     commit(project, "feat(core): the change")
     with dependency_entry.Entry(project, base) as run:
@@ -537,9 +512,6 @@ def test_a_tree_that_cannot_be_copied_is_a_refusal(project: Path) -> None:
         pytest.raises(dependencies.NotDependencyOnlyError, match="could not be copied"),
     ):
         run({"app.lock": stack.LOCK})
-
-
-# --- what guard-diff says of it --------------------------------------------------------------
 
 
 def test_guard_diff_reads_the_changed_files_through_the_merge_bases_binding(tmp_path: Path) -> None:
@@ -614,8 +586,6 @@ def test_guard_diff_asks_nothing_when_no_path_is_a_dependency_file_or_there_is_n
         == {}
     )
 
-
-# --- conformance -----------------------------------------------------------------------------
 
 NONE = "`none: the self-test has no such file`"
 
@@ -696,7 +666,6 @@ def unguarded(root: Path) -> list[str]:
 
 
 def declare_lockfile(root: Path) -> None:
-    """A declared lockfile in a repository the guard manifest knows nothing of."""
     swap(root, "docs/process/binding.md", "- Lockfiles: " + NONE, new="- Lockfiles: `*.lock`")
     write(root, "app.lock", stack.LOCK)
     git(root, "init", "-q")

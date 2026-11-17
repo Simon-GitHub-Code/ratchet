@@ -1,9 +1,3 @@
-"""The merge judge and a steering document that leaves with its feature (ADR 0064).
-
-A unit this change makes expired and leaves is red; one expired at the merge base never is. A
-records change may delete what ``expire`` lists, and append to the brief only the lines it carries.
-"""
-
 import json
 from pathlib import Path
 

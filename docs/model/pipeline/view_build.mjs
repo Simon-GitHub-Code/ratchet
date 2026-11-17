@@ -1,6 +1,5 @@
 import * as c from "./view_common.mjs";
 
-// The critic and its fix rounds are one state here; view_critic.mjs draws the rounds.
 const CRITIC = "The critic and its fix rounds";
 const LOOP = new Set(["critique", "fix"]);
 

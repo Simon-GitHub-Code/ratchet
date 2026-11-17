@@ -1,5 +1,3 @@
-"""The skills' text: what the owner-free run promises, pinned so an edit cannot drift it."""
-
 import re
 import shutil
 import subprocess
@@ -19,11 +17,8 @@ ADOPT = (SKILLS / "adopt/SKILL.md").read_text(encoding="utf-8")
 
 
 def test_adopt_asks_its_product_questions_first_and_chooses_tools_itself() -> None:
-    # Why: ADRs 0017 and 0034. The owner is asked about the product at step 3, in the first
-    # minutes, and the tools are the agent's; a tool the plugin ships is a regression.
     step_3 = ADOPT.split("3. **Recognise the repository.**", 1)[1].split("\n4. ", 1)[0]
     assert "nothing after this step asks the owner anything" in step_3
-    # Why: ADR 0049. The architecture and its tools are asked in the same round, not assumed.
     assert "**Assume** `adopt.tools`" not in ADOPT
     assert "**Ask** `architecture.system`" in ADOPT
     assert "**Ask** `architecture.tools`" in ADOPT
@@ -34,14 +29,11 @@ def test_adopt_asks_its_product_questions_first_and_chooses_tools_itself() -> No
     assert 'scripts/application_types.py" <type>...' in ADOPT
     assert "never from this plugin" in ADOPT
     assert "**A gate with nothing to run is red.**" in ADOPT
-    # Why: ADR 0020. The plugin ships no tool, so the adopting agent writes a fault per gate.
     assert "**A bite for every gate you bind.**" in ADOPT
     assert "the `bite-all` entry point plants each fault of `quality/bites.toml`" in ADOPT
 
 
 def test_adopt_binds_the_floor_and_what_has_arrived_and_builds_no_skeleton() -> None:
-    # Why: ADR 0028. A hobby project on its first day owes the floor alone; a skeleton built for
-    # the gates stood between the owner and the idea they sat down to write.
     assert "walking skeleton" not in ADOPT
     assert 'scripts/triggers.py" --count' in ADOPT
     assert 'scripts/triggers.py" --json' in ADOPT
@@ -50,9 +42,6 @@ def test_adopt_binds_the_floor_and_what_has_arrived_and_builds_no_skeleton() -> 
 
 
 def test_adopt_provisions_what_the_first_slice_needs_and_rehearses_it() -> None:
-    # Why: ADR 0032. A dogfood's first unattended feature blocked on guarded-file edits adoption
-    # could have made: no test runner, a config left to "the change that brings" something, a
-    # `boot` of `none`, no change-size ceiling. Adoption makes them and proves the slice runs.
     assert "**The tests are provisioned, not asked.**" in ADOPT
     assert "**Rehearse the first slice.**" in ADOPT
     assert "**A key a declared type needs is never removed to quiet a gate.**" in ADOPT
@@ -68,8 +57,6 @@ def test_adopt_provisions_what_the_first_slice_needs_and_rehearses_it() -> None:
 
 
 def test_adopt_leaves_the_permission_rules_to_step_8() -> None:
-    # Why: issue 20. Claude Code applies .claude/settings.json the moment it exists, so a copy at
-    # step 2 locked guards/** before step 8 filled the manifest. The file is written last.
     step_2 = ADOPT.split("2. **Copy the templates.**", 1)[1].split("\n3. ", 1)[0]
     step_8 = ADOPT.split("8. **Fill the manifest", 1)[1].split("\n9. ", 1)[0]
     assert "skipping `.claude/settings.json`" in step_2
@@ -79,8 +66,6 @@ def test_adopt_leaves_the_permission_rules_to_step_8() -> None:
 
 
 def test_the_feature_skill_shortens_a_long_subject_by_a_fixed_rule() -> None:
-    # Why: issue 27. A subject built from a long slug passed 72 characters, which tier 0 refuses,
-    # and each orchestrator then invented its own shorter one.
     feature = (SKILLS / "feature/SKILL.md").read_text(encoding="utf-8")
     assert "drop whole words from the end of the slug until it fits" in feature
     assert "at most 72 characters" in feature
@@ -91,7 +76,6 @@ FEATURE = " ".join((SKILLS / "feature/SKILL.md").read_text(encoding="utf-8").spl
 
 
 def test_the_feature_skill_parks_the_findings_of_a_run_that_ran_no_review() -> None:
-    # Why: ADR 0072. A finding still owed after its fix round ends the run before the review.
     assert "`unresolvedBlockingFindings`, and `reviewIssues` when a review ran" in FEATURE
     assert "with the record it breaks and the sentence it quotes" in FEATURE
     assert "A result with `stop` `carried` ran no review" in FEATURE
@@ -99,9 +83,6 @@ def test_the_feature_skill_parks_the_findings_of_a_run_that_ran_no_review() -> N
 
 
 def test_the_feature_skill_says_the_critic_did_not_run_in_both_modes() -> None:
-    # Why: the page put the critic's line in the pull request of one ticket only, and the drain's
-    # pull request was silent on it, while the workflow's result asks for it in every run. The
-    # shared section now carries it for both modes.
     shared = FEATURE.split("## The pull request", 1)[1].split(" ## ", 1)[0]
     assert (
         "When the critic did not run, the pull request says so and why, from the result's"
@@ -110,17 +91,11 @@ def test_the_feature_skill_says_the_critic_did_not_run_in_both_modes() -> None:
 
 
 def test_the_drain_closes_the_ticket_from_every_commit() -> None:
-    # Why: the page put `Closes <ref>` in the same clause as a shortened subject, so a commit
-    # whose subject fit could leave it out. Every commit of the change now closes its ticket, and
-    # the full title is added only when the subject was shortened.
     step = FEATURE.split("2. **Commit.**", 1)[1].split("3. **Bring it up to date.**", 1)[0]
     assert "The body holds `Closes <ref>`, whether or not the subject was shortened." in step
 
 
 def test_a_labelled_tickets_answers_are_the_owners_to_merge_with_a_forge_too() -> None:
-    # Why: the page said only what the run prints with no forge when a labelled ticket's answers
-    # were landed. The merge judge refuses the agent's change with a forge as well, so the page now
-    # says what the agent relays in each case.
     asking = FEATURE.split("## Questions for the owner", 1)[1]
     assert (
         "With a forge, the merge job leaves the pull request to the owner and comments why: relay"
@@ -129,8 +104,6 @@ def test_a_labelled_tickets_answers_are_the_owners_to_merge_with_a_forge_too() -
 
 
 def test_a_red_preflight_on_the_branch_stops_the_build() -> None:
-    # Why: the page said the preflight on the branch "must stay green" and nothing of a red one, so
-    # an agent could spawn the pipeline over it. It now stops as a red first preflight does.
     step_2 = FEATURE.split("2. **The branch.**", 1)[1].split("3. **The pipeline.**", 1)[0]
     assert (
         "**Red with `--branch`:** report `verdict: blocked` and, for each failure, its `check`,"
@@ -139,11 +112,6 @@ def test_a_red_preflight_on_the_branch_stops_the_build() -> None:
 
 
 def test_the_drain_reads_a_refusal_with_exit_2_as_no_conflict() -> None:
-    # Why: the page read every exit 2 of `update` as a rebase that conflicted. `drain.py` also
-    # exits 2 when it refuses before any work on the ticket, with a `drain:` or `merge:` line, and
-    # a rejudge over that would judge a branch nothing moved. One exit 2 can carry both a
-    # `merge:` recovery line and the rebase's JSON, so the JSON decides, and a line alone is a
-    # refusal that leaves the ticket.
     assert "When it prints JSON, the JSON decides" in FEATURE
     assert (
         "**Exit 2 from `update`, `close` or `split` with a `drain:` or `merge:` line and no JSON:**"
@@ -154,9 +122,6 @@ def test_the_drain_reads_a_refusal_with_exit_2_as_no_conflict() -> None:
 
 
 def test_the_drain_does_not_close_a_ticket_that_update_says_has_merged() -> None:
-    # Why: the page closed the ticket as waiting on every exit 1 of `update`. When `update` says
-    # the ticket is merged, its note already records the merge, and `close` refuses any other
-    # outcome. The page now leaves that ticket to the report's Merged list.
     step = FEATURE.split("3. **Bring it up to date.**", 1)[1].split("4. **Judge it again.**", 1)[0]
     assert (
         "**Exit 1 with `update: <ref> is merged and is not rebased`:** the ticket has landed. Do"
@@ -165,9 +130,6 @@ def test_the_drain_does_not_close_a_ticket_that_update_says_has_merged() -> None
 
 
 def test_a_split_plan_is_checked_before_drain_split_runs_it() -> None:
-    # Why: the page said to fix a refused plan and run `drain.py split` again, once. That command
-    # parks the ticket as too large on its first refusal, so there was no second run. The page now
-    # checks the plan with `split.py check`, which files nothing, and runs `split` only on a pass.
     too_large = FEATURE.split("## Too large: the agent splits it", 1)[1].split(" ## ", 1)[0]
     checked = (
         (
@@ -185,9 +147,6 @@ def test_a_split_plan_is_checked_before_drain_split_runs_it() -> None:
 
 
 def test_the_fork_test_has_one_wording_the_spec_role_and_the_conjecture_skill_share() -> None:
-    # Why: the conjecture skill asked the owner what the pipeline's Spec role would have assumed,
-    # because only the role's prompt held the examples. A prompt cannot follow a link, so the
-    # method page is the source and the prompt's copy is held to it here.
     page = (SKILLS / "method/pipeline.md").read_text(encoding="utf-8")
     section = page.split("\n### The Spec role's copy\n", 1)[1].split("\n## ", 1)[0]
     shared = [line.removeprefix("- ") for line in section.splitlines() if line.startswith("- ")]
@@ -210,8 +169,6 @@ def test_the_conjecture_skill_writes_the_block_the_preflight_asks() -> None:
 
 
 def test_the_conjecture_says_what_each_thing_the_owner_said_became() -> None:
-    # Why: ADR 0034. The owner cannot read code, so the conjecture is where he sees that
-    # nothing he said was dropped and nothing was invented; adoption keeps his words for it.
     conjecture = (SKILLS / "conjecture/SKILL.md").read_text(encoding="utf-8")
     assert "*What you asked for*" in conjecture
     for became in ("**built**", "**assumed**", "**left out**", "**added**"):
@@ -223,8 +180,6 @@ def test_the_conjecture_says_what_each_thing_the_owner_said_became() -> None:
 
 
 def test_init_asks_about_the_product_in_one_message() -> None:
-    # Why: ADR 0034. The owner is asked four product questions, and a fifth only before a
-    # remote would be made; the registry test holds their words, this holds their order.
     asked = re.findall(r"^\d\. \*\*Ask\*\* `([^`]+)`", INIT, re.MULTILINE)
     assert asked == ["init.purpose", "init.user", "init.difference", "init.place", "init.online"]
     assert "interactive" not in INIT
@@ -238,30 +193,22 @@ def test_init_passes_the_owners_answers_to_the_setups() -> None:
 
 
 def test_init_installs_a_missing_companion_plugin_without_asking() -> None:
-    # Why: two harness pages said init installs the companion plugins with the owner's consent,
-    # while the skill installs them as an assumption. A missing one is installed without asking,
-    # and the hand-over says so.
     step_1 = " ".join(INIT.split("1. **Check the ground.**", 1)[1].split("\n2. ", 1)[0].split())
     assert "is missing, install it without asking and say so in the hand-over" in step_1
 
 
 def test_init_leaves_the_agent_skills_block_to_the_tracker_setup() -> None:
-    # Why: step 5 told init to place the tracker setup's `## Agent skills` block, from a setup
-    # init does not run and which updates that section itself. Init writes only the tracker line.
     bullet = INIT.split("**`mattpocock-skills`: not run here.**", 1)[1].split("**`pstack`", 1)[0]
     assert "Agent skills" not in bullet
 
 
 def test_every_ratchet_skill_ends_with_the_route() -> None:
-    # Why: the owner's next command is the method's promise at every stage (ADR 0009); a
-    # hand-over that forgets it leaves the owner guessing which plugin's keystroke comes next.
     for name in ("init", "adopt", "feature", "safeguard", "architecture"):
         text = (SKILLS / name / "SKILL.md").read_text(encoding="utf-8")
         assert 'scripts/route.py" --root .' in text, name
 
 
 def test_the_safeguard_skill_asks_nothing_and_commits_as_the_gate_accepts() -> None:
-    # Why: ADRs 0028 and 0034 and the owner's principle: binding what is owed is not a question.
     safeguard = (SKILLS / "safeguard/SKILL.md").read_text(encoding="utf-8")
     assert "**Assume** `safeguard.tools`" in safeguard
     assert "**Ask**" not in safeguard
@@ -271,7 +218,6 @@ def test_the_safeguard_skill_asks_nothing_and_commits_as_the_gate_accepts() -> N
 
 
 def test_the_architecture_skill_asks_once_and_only_when_the_architecture_changes() -> None:
-    # Why: ADR 0052. A decision that holds is an assumption; a change is the owner's, asked once.
     text = (SKILLS / "architecture/SKILL.md").read_text(encoding="utf-8")
     review = text.split("\n## Review the architecture\n", 1)[1]
     assert "**Assume** `architecture.holds`" in review
@@ -285,9 +231,6 @@ def test_the_architecture_skill_asks_once_and_only_when_the_architecture_changes
 
 
 def test_the_safeguard_skill_guards_a_new_config_on_its_own_branch() -> None:
-    # Why: the hook and the merge judge read the manifest as the default branch holds it, so the
-    # agent adds the path on its branch and the owner merges it, and the settings are a fixed list
-    # no tool's config changes (ADR 0033).
     safeguard = (SKILLS / "safeguard/SKILL.md").read_text(encoding="utf-8")
     assert "Add the tool's config path to the `tool-config` paths" in safeguard
     assert "`.claude/settings.json` needs no change" in safeguard
@@ -298,11 +241,7 @@ def test_the_safeguard_skill_guards_a_new_config_on_its_own_branch() -> None:
 
 def test_next_says_what_the_upgrade_does_and_bounds_its_own_retries() -> None:
     next_page = flat("next/SKILL.md")
-    # Why: the route's upgrade line had no case on the page, so an agent relayed it bare or
-    # guessed what the upgrade leaves. The page now says what to add and that no count is given.
     assert "give no count of what is owed: only the upgrade's run knows it" in next_page
-    # Why: the two commands an agent runs looped back to the route with no end when one failed or
-    # was named again. The page now allows one more run, then stops and relays the output.
     assert (
         "When it fails a second time, or the route still names it, stop there and relay what the"
         " command printed, as it is." in next_page
@@ -311,10 +250,7 @@ def test_next_says_what_the_upgrade_does_and_bounds_its_own_retries() -> None:
 
 def test_fill_names_where_the_template_is_and_how_its_change_lands() -> None:
     fill = flat("fill/SKILL.md")
-    # Why: the template's path was written as if it sat in the project, where it does not exist.
     assert "`${CLAUDE_PLUGIN_ROOT}/skills/adopt/templates/docs/process/binding.md`" in fill
-    # Why: "hand it to the merge" named no action. The page now says how a change lands, in the
-    # safeguard skill's words.
     assert (
         "With no forge, write the change description at `.scratch/changes/<branch>.md` (the"
         " branch's `/` written as `-`) and run"
@@ -326,9 +262,6 @@ UNLISTED = '[[group]]\nname = "tool-config"\nreason = "Rule sets."\npaths = ["li
 
 
 def test_a_config_the_manifest_does_not_list_is_said_to_be_unguarded(tmp_path: Path) -> None:
-    # Why: safeguard's hand-over told the owner that until he listed a new tool's config, the
-    # snapshot check held it, so loosening it still showed. The check copies only the files the
-    # `tool-config` group lists: a loosened unlisted config passes it, as the verifier showed.
     root = repository(
         tmp_path,
         {"guards/manifest.toml": UNLISTED, "lint.toml": "a = 1\n", ".semgrep.yml": "rules: [x]\n"},
@@ -340,8 +273,6 @@ def test_a_config_the_manifest_does_not_list_is_said_to_be_unguarded(tmp_path: P
     safeguard = flat("safeguard/SKILL.md")
     hand_over = safeguard.split("6. **Hand over.**", 1)[1]
     assert "holds the tool's effective configuration" not in safeguard
-    # Since ADR 0033 the agent lists the config itself on its branch, so the hand-over names the
-    # path it listed instead of asking the owner to list it.
     assert "name the path you added to the manifest" in hand_over
     for page in ("method/SKILL.md", "method/ratchet.md"):
         text = flat(page)
@@ -361,7 +292,6 @@ OWN_FILES = (
 
 
 def own_texts() -> dict[str, str]:
-    """Every text file of Ratchet's own: skills, workflows, scripts, the README, docs but ADRs."""
     found: dict[str, str] = {}
     for root in OWN_FILES:
         for path in [root] if root.is_file() else sorted(root.rglob("*")):
@@ -374,7 +304,6 @@ def own_texts() -> dict[str, str]:
 
 
 def companion_references() -> list[tuple[str, int, str, str, bool]]:
-    """Each companion token: file, line, plugin, skill, and whether it has the slash."""
     names = "|".join(re.escape(name) for name in conformance.companions())
     token = re.compile(rf"(?<![\w/:.-])(/?)({names}):([a-z][a-z0-9-]*)(?![\w:])")
     return [
@@ -422,8 +351,6 @@ RULE_PARTS = (
         "anything a later change reverses without loss to the user: order, wording, layout, timing,"
         " limits, and, within the architecture the owner chose, tools and how it is built"
     ),
-    # Why: ADR 0049. The architecture and its tools are the one choice of how it is built that
-    # reaches the owner.
     "/ratchet:architecture",
 )
 PLACES = ["init/templates/AGENTS.md", "method/SKILL.md", "method/records.md", "method/pipeline.md"]
@@ -431,16 +358,12 @@ PLACES = ["init/templates/AGENTS.md", "method/SKILL.md", "method/records.md", "m
 
 @pytest.mark.parametrize("page", PLACES)
 def test_the_rule_on_asking_has_one_meaning_in_each_place_an_agent_reads_it(page: str) -> None:
-    # Why: ADR 0034. "What this should do" covered every behaviour, so a rerun's spec decided what
-    # a re-pasted link becomes, and its conjecture called that settled because a spec said so.
     text = " ".join((SKILLS / page).read_text(encoding="utf-8").split())
     for part in RULE_PARTS:
         assert part in text, (page, part)
 
 
 def test_the_conjecture_asks_every_open_fork_and_cites_what_it_built() -> None:
-    # Why: the rerun's table marked two rows "(left open)" as assumed and said no question was
-    # needed; two "built" rows named no criterion.
     conjecture = " ".join((SKILLS / "conjecture/SKILL.md").read_text(encoding="utf-8").split())
     assert "one thing at most" not in conjecture
     assert "Ask every such fork before you write anything, all in one message" in conjecture
@@ -451,7 +374,6 @@ def test_the_conjecture_asks_every_open_fork_and_cites_what_it_built() -> None:
 
 
 def table_problems(table: str) -> list[str]:
-    """Each row of a *What you asked for* table that slips a choice past the owner."""
     problems: list[str] = []
     for line in table.splitlines():
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
@@ -471,9 +393,6 @@ def table_problems(table: str) -> list[str]:
 
 
 def test_the_conjecture_table_never_slips_a_product_choice_in_as_added() -> None:
-    # Why: in three of three sampled runs the table wrote "(left open)" under the owner's column
-    # and **added** under the outcome; one made a product choice (Undo after re-pasting the same
-    # address is refused) without the owner. The skill's own example must hold the rule.
     verifier = (
         "| (left open) a double click | **added**: changes nothing | stories 14, 20 |\n"
         "| (left open) Undo after re-pasting the same address | **added**: refused | Notes |\n"
@@ -498,12 +417,6 @@ ANSWERED = re.compile(r"\banswer(?:ed)?\b.*\*You said\*|\*You said\*.*\banswer(?
 
 
 def fork_rule_problems(step: str) -> list[str]:
-    """Each way a conjecture step's own rule sentences let a fork past the owner.
-
-    The step must say how a fork the test gives the agent is written and how an answered fork's
-    row is written, and say it the right way: ``(not asked)`` and **assumed**, and the answer
-    quoted and **built**.
-    """
     problems: list[str] = []
     rules = re.split(r"(?<=[.?!])\s+", step)
     yours = [rule for rule in rules if GIVES_YOU.search(rule)]
@@ -526,9 +439,6 @@ def fork_rule_problems(step: str) -> list[str]:
 
 
 def test_the_conjecture_steps_say_how_each_fork_is_written() -> None:
-    # Why: the verifier wrote that a fork the test gives the agent is `(left open)` and **added**,
-    # and that an answered fork's row is **added**, and every test stayed green: only the example
-    # table was held to the rule, not the sentences that state it.
     page = (SKILLS / "conjecture/SKILL.md").read_text(encoding="utf-8")
     text = re.sub(r"^```.*?^```", "", page, flags=re.MULTILINE | re.DOTALL)
     conjecture = " ".join(text.split())
@@ -550,9 +460,6 @@ def conjecture_step(number: int) -> str:
 
 
 def test_the_size_estimate_is_written_on_the_ticket_and_never_on_a_spec() -> None:
-    # Why: the page wrote `## Size` on the shared spec beside the conjecture, and on a spec not
-    # yet split. The feature preflight reads `## Size` only from the ticket's own body, so a size
-    # written on a spec was never checked. The page now writes it on each ticket, and on no spec.
     step_2 = conjecture_step(2)
     assert (
         "**A ticket:** the block goes on the ticket itself, even when its siblings share a parent"
@@ -565,9 +472,6 @@ def test_the_size_estimate_is_written_on_the_ticket_and_never_on_a_spec() -> Non
 
 
 def test_a_ticket_that_lacks_only_its_size_gets_the_size_and_a_large_one_is_written() -> None:
-    # Why: the owner chose on 2026-11-15 that a ticket written before sizes were gets its size
-    # alone, and that a ticket over a ceiling is written with its size for the feature run to
-    # split (ADR 0046), where the page had stopped and handed the split back to them.
     step_1 = conjecture_step(1)
     assert "and the ticket states no `## Size`:** it was written before sizes were." in step_1
     assert "Write the size alone" in step_1
@@ -579,16 +483,11 @@ def test_a_ticket_that_lacks_only_its_size_gets_the_size_and_a_large_one_is_writ
 
 
 def test_the_conjecture_is_printed_once_at_the_hand_over() -> None:
-    # Why: step 3 and step 5 each said to print the conjecture, so it could go out with the
-    # questions and again at the hand-over. It is printed once, in the last reply.
     step_3 = conjecture_step(3)
     assert "It is printed once, in the final reply of step 5" in step_3
 
 
 def test_a_labelled_ticket_is_the_owners_to_merge_on_a_forge_too() -> None:
-    # Why: the labelled-ticket rule read as one for a repository with no forge, where a forge's
-    # merge job was said to merge every pull request. The merge judge leaves that change to the
-    # owner either way, and the page now says what happens on a forge.
     step_4 = conjecture_step(4)
     assert "the merge job leaves the pull request to the owner and comments why on it" in step_4
 
@@ -615,10 +514,6 @@ def criteria_digest(command: str, body: str, tmp_path: Path) -> str:
 def test_a_conjecture_is_drafted_again_when_its_criteria_change_and_only_then(
     tmp_path: Path,
 ) -> None:
-    # Why: step 1 stopped with "nothing to write" once a conjecture existed, so criteria changed
-    # by an overturned assumption or the owner's edit kept a conjecture drafted for the old ones.
-    # The digest is the check: a label, an answer, the conjecture itself or a forge's line endings
-    # must leave it as it was, and a changed criterion must move it.
     page = (SKILLS / "conjecture/SKILL.md").read_text(encoding="utf-8")
     reference = page.split("\n## The criteria digest\n", 1)[1]
     found = re.search(r"\*\*The body is a file\*\*.*`([^`]+)`$", reference, re.MULTILINE)
@@ -648,8 +543,6 @@ def test_a_conjecture_is_drafted_again_when_its_criteria_change_and_only_then(
 
 
 def test_a_redraft_keeps_the_answers_and_shows_the_owner_what_changed() -> None:
-    # Why: the owner chose a redraft that keeps their earlier answers, asks only what the change
-    # reopened and shows them what changed, and that lands as the first write did.
     step_3 = conjecture_step(3)
     assert "**A redraft:** ask only the forks the changed criteria opened" in step_3
     assert "Every other line under `## Answers` stays as it is" in step_3
@@ -662,17 +555,12 @@ def test_a_redraft_keeps_the_answers_and_shows_the_owner_what_changed() -> None:
 
 
 def test_the_conjecture_names_one_shared_spec_and_no_dead_clause() -> None:
-    # Why: step 4 named the shared spec by another condition than step 2, and the `(left open)`
-    # rule ended with a clause no row could fail. Both steps use one condition, and the rule ends
-    # at the row.
     shared = "the ticket's siblings share a parent spec"
     assert all(shared in conjecture_step(step).lower() for step in (2, 4))
     assert "while a row says `(left open)`." in conjecture_step(3)
 
 
 def test_adopt_asks_a_repository_with_code_whether_others_reach_it() -> None:
-    # Why: ADR 0028. The route's sign patterns miss a deploy job in release.yml and a production
-    # address in .env.example, so a deployed project with neither was asked nothing.
     asked = ADOPT.split("## What the owner is asked", 1)[1].split("\n## ", 1)[0]
     flat = " ".join(asked.split())
     assert "On a repository that already has code, always ask the first" in flat
@@ -682,7 +570,6 @@ def test_adopt_asks_a_repository_with_code_whether_others_reach_it() -> None:
 
 
 def test_init_and_adopt_take_the_owners_preferences_before_any_default() -> None:
-    # Why: ADR 0034 decision 7. With no interactive mode, a careful owner names a tool up front.
     for name, text in (("init", INIT), ("adopt", ADOPT)):
         assert "**What the owner asked for wins.**" in text, name
         assert 'as "you asked for"' in text, name
@@ -697,9 +584,6 @@ PREFERENCE_LINK = "(../method/records.md#a-preference-typed-after-a-command)"
 
 
 def test_a_typed_preference_chooses_among_allowed_options_and_never_loosens_a_safeguard() -> None:
-    # Why: a preference "wins over the defaults", and nothing said a preference could not turn a
-    # floor row to none or deny a life event; in the verifier's run only the agent's own judgment
-    # refused. The rule is written once, and every skill that takes a preference points at it.
     records = flat("method/records.md")
     assert PREFERENCE_RULE in records
     rule = records.split(PREFERENCE_RULE, 1)[1].split(" ## ", 1)[0]
@@ -738,9 +622,6 @@ KIND_OF_SOFTWARE = (
 
 
 def test_a_preference_never_declares_a_kind_of_software_the_tree_contradicts() -> None:
-    # Why: the records listed the kind of software among the options a preference chooses, and
-    # nothing checks the declared types against the tree, so a preference that called a server a
-    # command-line tool could drop every service row with no decision record.
     rule = flat("method/records.md").split(PREFERENCE_RULE, 1)[1].split(" ## ", 1)[0]
     options = rule.split("A preference chooses among the options a row allows:", 1)[1]
     assert "kind of software" not in options.split(".", 1)[0]
@@ -770,8 +651,6 @@ PREFERENCE_LIMITS = [
 
 @pytest.mark.parametrize(("page", "part"), PREFERENCE_LIMITS)
 def test_each_limit_on_a_preference_is_stated_where_it_is_taken(page: str, part: str) -> None:
-    # Why: the verifier deleted each of these and every test stayed green. Each is what keeps a
-    # typed preference from loosening a bar or declaring a life event without the owner's answer.
     text = flat(page)
     if page == "method/records.md":
         text = text.split(PREFERENCE_RULE, 1)[1].split(" ## ", 1)[0]
@@ -782,9 +661,6 @@ def test_each_limit_on_a_preference_is_stated_where_it_is_taken(page: str, part:
 
 
 def test_a_preference_not_applied_is_named_in_the_hand_over() -> None:
-    # Why: the preference paragraphs list a refused preference under **Assumed** as not applied,
-    # but the hand-over steps that build that block named only "you asked for", so the owner
-    # never saw that what he typed was not done.
     hand_overs = {
         "adopt": flat("adopt/SKILL.md").split("13. **Hand over.**", 1)[1],
         "init": flat("init/SKILL.md").split("9. **Hand over.**", 1)[1].split(" ## ", 1)[0],
@@ -796,7 +672,6 @@ def test_a_preference_not_applied_is_named_in_the_hand_over() -> None:
 
 
 def test_an_overturned_assumption_has_a_route_and_a_stated_cost() -> None:
-    # Why: an overturn rerun told the owner to edit the binding by hand to declare a life event.
     records = " ".join((SKILLS / "method/records.md").read_text(encoding="utf-8").split())
     procedure = records.split("## Overturning an assumption", 1)[1].split(" ## ", 1)[0]
     assert "the owner types `/ratchet:safeguard <event>`" in procedure
@@ -811,15 +686,10 @@ SWITCHES_A_TOOL = ("lock file", "the merge is yours")
 
 
 def example_costs(page: str) -> list[str]:
-    """Each example **Assumed** line a page gives, in double backticks after "such as"."""
     return re.findall(r"such as ``(.+?)``", flat(page))
 
 
 def test_every_cost_line_the_owner_reads_says_what_is_redone() -> None:
-    # Why: three example cost lines understated or were false. "Free until the first feature is
-    # built" is false once adoption has bound tools to the stack, and "two protected files you
-    # approve" left out the package list, its lock file, the tool's settings, the list of checks,
-    # the planted mistakes, the saved copies, and the owner's own edit and `just settings`.
     for page in ("init/templates/AGENTS.md", "method/SKILL.md", "method/records.md"):
         assert COST_PARTS in flat(page), page
     examples = {page: example_costs(f"{page}/SKILL.md") for page in ("init", "adopt", "safeguard")}
@@ -831,7 +701,6 @@ def test_every_cost_line_the_owner_reads_says_what_is_redone() -> None:
     for page in ("adopt", "safeguard"):
         for part in SWITCHES_A_TOOL:
             assert any(part in span for span in examples[page]), (page, part)
-    # Why: ADR 0049. Init no longer assumes the stack; adoption puts it to the owner.
     assert any("adoption then offers ways to build it" in span for span in examples["init"])
     records = flat("method/records.md")
     route = records.split("## Overturning an assumption", 1)[1].split(" ## ", 1)[0]
@@ -841,10 +710,6 @@ def test_every_cost_line_the_owner_reads_says_what_is_redone() -> None:
 
 
 def test_the_cost_check_names_the_stack_and_the_tool_route_names_what_is_redone() -> None:
-    # Why: the verifier deleted the sentence that says what a stack changed after adoption costs,
-    # and the tool route's "Nothing built is redone", and every test stayed green. An agent
-    # checks a cost line against these before the owner reads it. Since ADR 0049 the change is
-    # recorded by `/ratchet:architecture`, and each tool is still replaced on its own.
     records = flat("method/records.md")
     assumed = records.split("Assume, and list under **Assumed**", 1)[1]
     assumed = assumed.split(" The pipeline's", 1)[0]
@@ -858,7 +723,6 @@ def test_the_cost_check_names_the_stack_and_the_tool_route_names_what_is_redone(
 
 
 def test_adopt_hands_over_its_assumptions_without_question_keys() -> None:
-    # Why: the rerun's hand-over printed `adopt.types` and its siblings to the owner.
     step_13 = ADOPT.split("13. **Hand over.**", 1)[1]
     assert re.search(r"`(?:adopt|init|event|safeguard)\.[a-z-]+`", step_13) is None
     assert "no question key, type name or other method term in it" in step_13

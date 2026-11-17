@@ -1,9 +1,3 @@
-"""The architecture check: the binding declares the parts and names a whole decision record.
-
-ADR 0049. Each structural gap is one red line an agent can act on; an adopted repository that
-predates the section gets the template's section from the upgrade, and the rest is owed.
-"""
-
 import shutil
 from pathlib import Path
 
@@ -105,8 +99,6 @@ def test_each_gap_is_one_red_line(repo: Path, mutate: Mutate, failure: str) -> N
 def test_a_binding_without_the_section_gets_the_templates_and_the_rest_is_an_agents(
     repo: Path,
 ) -> None:
-    # Why: an adopted repository predates the section. The upgrade adds the template's, whose
-    # placeholders are then the agent's items that the owed ledger carries (ADR 0037).
     text = (repo / BINDING).read_text(encoding="utf-8")
     start = text.index(architecture.SECTION)
     end = text.index("\n## ", start + 1)

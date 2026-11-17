@@ -1,13 +1,9 @@
-"""Getopt-style option scanning, just enough to tell flags from operands."""
-
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True, slots=True)
 class Spec:
-    """The options of one command that take a value: short letters and long names."""
-
     short_values: str = ""
     long_values: frozenset[str] = frozenset()
 
@@ -17,8 +13,6 @@ NO_VALUES = Spec()
 
 @dataclass(frozen=True, slots=True)
 class Options:
-    """Flags seen (``-x`` per short letter, ``--name`` per long option), their values, operands."""
-
     flags: frozenset[str]
     values: dict[str, str] = field(default_factory=dict)
     operands: tuple[str, ...] = ()
@@ -67,7 +61,6 @@ class _Scan:
 
 
 def scan(args: Sequence[str], spec: Spec) -> Options:
-    """Scan ``args``; the options ``spec`` names take a value."""
     state = _Scan(spec)
     for arg in args:
         state.take(arg)
@@ -75,13 +68,6 @@ def scan(args: Sequence[str], spec: Spec) -> Options:
 
 
 def expand_long(args: Sequence[str], options: Collection[str]) -> list[str]:
-    """``args`` with each long option spelled as a prefix of exactly one of ``options`` made whole.
-
-    Git takes any unambiguous prefix of a long option, and an exact name wins over a longer one
-    that it prefixes (``--force`` is not ``--force-create``). ``options`` names the options a
-    rule looks at. A prefix of two of them, which git refuses as ambiguous, stays as written, and
-    so does everything after ``--``.
-    """
     expanded: list[str] = []
     for index, arg in enumerate(args):
         if arg == "--":

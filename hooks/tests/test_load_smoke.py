@@ -1,5 +1,3 @@
-"""``load_smoke``: concurrent requests judged on errors only, against an in-test server."""
-
 import argparse
 import http.client
 import http.server
@@ -41,7 +39,6 @@ HEALTH_ONLY = "load-smoke: health only: readiness is the one route requested (--
 
 @pytest.fixture(autouse=True)
 def inside_with_service(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The readiness URL as ``with_service.py`` exports it; no test's route is that one."""
     monkeypatch.setenv(gatelib.READY_ENV, "http://127.0.0.1:1/ready")
 
 
@@ -257,13 +254,11 @@ def closed_port() -> str:
 
 
 def held(url: str, *taken: gatelib.Connection) -> gatelib.Stopping:
-    """What the gate says, once asked, while it holds the listener ``url`` goes to."""
     port = urlsplit(url).port or 80
     return gatelib.Stopping({port: None}, listeners.ELSEWHERE, frozenset(taken), answered=True)
 
 
 def until_stopped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
-    """The stop marker and the sending path, exported as ``with_service.py --graceful`` does."""
     marker, sending = tmp_path / "stopping", tmp_path / "sending"
     monkeypatch.setenv(gatelib.STOPPING_ENV, str(marker))
     monkeypatch.setenv(gatelib.SENDING_ENV, str(sending))
@@ -320,31 +315,25 @@ def test_a_failure_after_the_signal_is_closed_when_refused_and_cut_otherwise(
     named = gatelib.Stopping({443: None}, listeners.ELSEWHERE, frozenset({tried(40000)}))
 
     def fail(error: OSError, *clients: int, naming: gatelib.Stopping = named) -> None:
-        """``http_status`` failing once the signal landed, after trying ``clients`` ports."""
-
         def http_status(
             *_: object, connecting: Callable[[gatelib.Connection], None], **__: object
         ) -> int:
             for client in clients:
                 connecting(tried(client))
-            gatelib.write_stopping(marker, naming)  # the signal lands while the request is out
+            gatelib.write_stopping(marker, naming)
             raise error
 
         monkeypatch.setattr(gatelib, "http_status", http_status)
 
-    # Why: a refused connect never reached the service, so it dropped nothing.
     fail(ConnectionRefusedError(), 40000)
     with pytest.raises(load_smoke.Closed):
         load_smoke.attempt(goal, 1, marker)
-    # Any other failure may be one the service accepted: whose it was is judged at the end, by
-    # whether the gate had named the last connection tried when the client saw it fail.
     fail(ConnectionResetError(), 39999, 40000)
     with pytest.raises(load_smoke.Cutoff) as cutoff:
         load_smoke.attempt(goal, 1, marker)
     assert cutoff.value.cut == load_smoke.Cut(
         "GET https://127.0.0.1/", "ConnectionResetError", 443, named=True, late=True, lost=True
     )
-    # With no connect tried there is no connection to match, so it counts.
     fail(OSError("no address"))
     assert load_smoke.attempt(goal, 1, marker) == (None, "GET https://127.0.0.1/: OSError")
 
@@ -373,9 +362,6 @@ def test_a_timeout_after_the_signal_counts_even_for_a_connection_the_gate_named(
 def test_a_name_the_gate_writes_only_after_the_client_saw_the_reset_is_not_the_gates_reset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Why: the gate names a connection before it resets it. A service that resets a request,
-    # waits for the client to let its port go and then connects from that same address and
-    # port gets the gate to name a connection exactly like the one it dropped, but too late.
     marker = tmp_path / "stopping"
     gatelib.write_stopping(marker, gatelib.Stopping({443: None}, listeners.ELSEWHERE, frozenset()))
     goal = load_smoke.Target("GET", "https://127.0.0.1/", None, None)
@@ -402,12 +388,6 @@ def cut_after_signal(
     *,
     as_gate: bool,
 ) -> tuple[int, str]:
-    """The smoke after the signal against a server that resets every connection.
-
-    With ``as_gate`` it first writes the connection's ports to the marker, as the gate does with
-    a connection it took from a listener the service let go of; without, it is a service
-    dropping requests it accepted.
-    """
     marker, _ = until_stopped(tmp_path, monkeypatch)
     taken: set[gatelib.Connection] = set()
     lock = threading.Lock()
@@ -431,8 +411,6 @@ def cut_after_signal(
 def test_a_connection_the_gate_took_and_reset_is_not_counted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Why: the gate takes what waited when the service stopped listening and what arrived after,
-    # so the note says both; "still waiting" alone was untrue of a connection that came later.
     code, out = cut_after_signal(tmp_path, monkeypatch, capsys, as_gate=True)
     assert out == (
         "load-smoke: 4 connection(s) reset after the stop signal are not counted, since the "
@@ -456,8 +434,6 @@ def test_a_connection_the_service_accepted_and_reset_after_the_signal_is_red(
 def test_a_green_run_judged_the_older_way_says_so_too(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Why: the less exact rule can be green on a service that dropped a request sent just after
-    # the signal, so a green verdict reached by it says so as a red one does.
     marker, _ = until_stopped(tmp_path, monkeypatch)
     told = gatelib.Stopping({}, "the host is not Linux", frozenset(), answered=True)
     gatelib.write_stopping(marker, told)
@@ -489,8 +465,6 @@ def test_where_the_gate_holds_no_listener_the_smoke_says_it_judged_the_older_way
 
 
 def test_each_port_is_judged_by_what_the_gate_knows_of_it() -> None:
-    # Why: one listener shut down, or a port no process of the service listened on before the
-    # signal, says nothing of the listener the gate still holds; only those ports lose exactness.
     told = gatelib.Stopping({80: None, 81: listeners.SHUT}, "none there", frozenset())
     cuts = [
         load_smoke.Cut(
@@ -509,11 +483,6 @@ def test_each_port_is_judged_by_what_the_gate_knows_of_it() -> None:
 def mains_verdict(
     goal: load_smoke.Target, error: Exception, *, at_start: bool, at_failure: bool
 ) -> str | None:
-    """What main's load smoke said of one failed request, or ``None`` when it did not count it.
-
-    Its ``attempt`` before the gate held listeners, verbatim but for the marker: ``at_start`` and
-    ``at_failure`` are whether the stop marker existed when the request started and failed.
-    """
     after_signal = at_start
     try:
         raise error
@@ -550,8 +519,6 @@ def test_where_the_gate_holds_no_listener_a_failure_is_judged_exactly_as_main_ju
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Why: without a copy of the listener the gate cannot tell a connection the service accepted
-    # from one it never did, so the stop is judged by main's rule, never stricter and never looser.
     marker = tmp_path / "stopping"
     fallback = gatelib.Stopping({}, "the gate holds no listener", frozenset())
     goal = load_smoke.Target("GET", "http://127.0.0.1:8000/work", None, None)

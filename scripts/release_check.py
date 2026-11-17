@@ -1,38 +1,4 @@
 #!/usr/bin/env python3
-"""The release check: is a version tag main's commit plus its commit file? ADR 0068.
-
-An install comes only from a tag ``vV``. The tag names a release commit C, which is the commit M
-that merged version V on main plus one file, ``.claude-plugin/commit``, holding M's sha. This
-script says whether a tag is that, so a moved or hand-made tag is red.
-
-Usage: ``release_check.py <tag> [--remote NAME] [--repo DIR]``. It reads the tag and the default
-branch from the remote, ``origin`` unless given, with ``git ls-remote``, so a tag moved there is
-seen though the local clone still holds the old one; the commits themselves must be held here, and
-a missing one is red with the ``git fetch`` that brings it. ``--repo`` is the repository to judge
-and is the current directory unless given. ``--local [--main REF]`` reads the local tag and the
-ref ``REF`` (``origin/main`` unless given) instead, and says ``local`` in its first line. Every run
-starts with one line saying which it read. Anyone can run it, in the release workflow after the
-tag is pushed or later.
-
-Exit 0 when every condition holds. Exit 1 when one fails, with one line for each. Exit 2 for a
-call this usage does not describe.
-
-The conditions, each a line of its own when it fails:
-
-* the tag names a commit C that holds ``.claude-plugin/commit`` as a regular file (mode 100644),
-  40 lowercase hex digits and an optional newline, naming a commit M the repository holds;
-* M is C's only parent;
-* C's tree without that file equals M's tree, and both trees can be read;
-* M is an ancestor of the main ref;
-* the ``version`` in M's ``.claude-plugin/plugin.json`` is the tag without its ``v``;
-* M is the commit on the main ref's first-parent line where that version became the version: its
-  first parent holds another one. A tag moved to a later commit of the same version is red.
-
-A red output ends with one line on what to do: an agent never moves or deletes a tag that fails
-the check, since the ``v*`` ruleset forbids it; the owner is told and the next patch version is
-released instead.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -112,7 +78,6 @@ def findings(repo: Path, tag: str, release_commit: str, *, main: str, label: str
 
 
 def remote_reads(repo: Path, remote: str, tag: str) -> tuple[str, str, str] | str:
-    """The tag's commit, the default branch's commit and its name on ``remote``, or a problem."""
     tags = git(repo, "ls-remote", remote, f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}")
     head = git(repo, "ls-remote", "--symref", remote, "HEAD")
     if tags is None or head is None:

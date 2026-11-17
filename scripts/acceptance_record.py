@@ -1,30 +1,3 @@
-"""The acceptance record and what it is held to: the ticket, the request log and its seal.
-
-A tester who saw only the ticket and an address writes one record per session. This module
-reads it and judges it against facts the tester did not write: the ticket's checklist, the log
-the proxy kept of every request, the seal over that log, the screenshots on disk and the files
-the product's code is made of. Every function here is pure; ``acceptance.py`` reads the files.
-
-``docs/acceptance.md`` is the reference for the record and the summary: every field, its type,
-and when it is required. A record of another ``schema`` is refused, and so is a field the
-reference does not list, so a misspelt field cannot quietly weaken a record.
-
-A record is accepted only when every rule below holds; each one broken is a sentence. It is for
-this session and the tree it served. Every checklist line of the ticket has exactly one
-criterion, with its text, and at least one criterion is not ``not-observable``: a record that
-calls every line unobservable tried nothing. A ``not-observable`` line says why and who can
-judge it instead. A ``pass`` cites a request this session logged, as the method, path and status
-the log holds, and every text it says the answer showed is in the stored answer; for a
-``web-ui`` it also cites a screenshot. A ``pass`` cites no request that broke, and no text its
-request sent itself, as a page that repeats its query does: that shows the request, not the
-product. Text sent in an earlier request and shown by a later one passes, since saving
-something and then seeing it is how most of a product is tried. A ``pass`` is kept by a check
-or says why it cannot be. A ``fail`` and every finding carry steps to reproduce; a blocker or
-major finding cites what it saw. Verdicts and severities come from their closed sets. No text
-names a file of the product's code, since the tester judges by use and never by reading. The
-log matches its seal.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -41,7 +14,6 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 SCHEMA = 1
-# The fields of each object, in the order docs/acceptance.md lists them.
 RECORD_FIELDS = (
     "schema",
     "session",
@@ -115,18 +87,11 @@ def plain(text: str) -> str:
 
 
 def promises(ticket: str) -> list[str]:
-    """The ticket's checklist lines, each with its whitespace collapsed."""
     return [plain(line) for line in CHECKLIST.findall(ticket)]
 
 
 @dataclass(frozen=True)
 class Entry:
-    """One line of ``requests.jsonl``: a request the tester made through the proxy.
-
-    ``request`` and ``response`` are the digests of the stored probes; ``error`` says how the
-    exchange broke, when it did.
-    """
-
     id: str
     method: str
     path: str
@@ -138,14 +103,11 @@ class Entry:
 
 @dataclass(frozen=True)
 class Exchange:
-    """A cited request and its answer as the proxy stored them, each matching the log's digest."""
-
     sent: bytes
     answer: bytes
 
 
 def read_log(data: bytes) -> tuple[dict[str, Entry], list[str]]:
-    """The entries of a request log by id, and a sentence for each line that is not one."""
     entries: dict[str, Entry] = {}
     problems: list[str] = []
     for number, line in enumerate(data.splitlines(), 1):
@@ -170,12 +132,6 @@ def read_log(data: bytes) -> tuple[dict[str, Entry], list[str]]:
 
 @dataclass(frozen=True)
 class Ending:
-    """What ``down`` added to a seal: when it came, and whether the session ended well.
-
-    ``early`` when the proxy had stopped before ``down`` came; ``stale`` when the work tree had
-    moved off the tree the session served.
-    """
-
     at: str
     early: bool
     stale: bool
@@ -183,13 +139,6 @@ class Ending:
 
 @dataclass(frozen=True)
 class Seal:
-    """What the proxy said it wrote when it stopped, and what ``down`` said about the stop.
-
-    ``ticket`` and ``session_file`` are the digests of the session's ``ticket.md`` and
-    ``session.json`` as they were when the proxy started, before the tester had an address.
-    ``unlogged`` counts the answers that reached the tester with no line in the log.
-    """
-
     requests: int
     unlogged: int
     sha256: str
@@ -201,7 +150,6 @@ class Seal:
 
 
 def parse_seal(raw: object) -> Seal | None:
-    """The seal in ``seal.json``, or ``None`` when it does not read as one."""
     if not isinstance(raw, dict):
         return None
     ending = raw.get("down")
@@ -228,11 +176,6 @@ def sha256(data: bytes) -> str:
 
 
 def seal_problems(data: bytes, seal: Seal | None, *, ticket: bytes, session: bytes) -> list[str]:
-    """Why the session on disk is not the one the proxy sealed and ``down`` ended; empty when it is.
-
-    ``data`` is the request log, ``ticket`` and ``session`` the session's copies of the ticket
-    and of ``session.json``.
-    """
     if seal is None:
         said = "the request log was never sealed: the proxy was stopped before it could seal it"
         return [f"{said}, so its requests cannot be trusted"]
@@ -262,7 +205,6 @@ def early(seal: Seal) -> str:
 
 
 def log_problems(data: bytes, seal: Seal) -> list[str]:
-    """Why the log on disk is not the log the proxy sealed; empty when it is."""
     held = data.count(b"\n")
     if sha256(data) == seal.sha256 and held == seal.requests:
         return []
@@ -276,8 +218,6 @@ def log_problems(data: bytes, seal: Seal) -> list[str]:
 
 @dataclass(frozen=True)
 class Citation:
-    """A logged request a verdict rests on, and what the tester says it showed."""
-
     request: str
     method: str
     path: str
@@ -287,8 +227,6 @@ class Citation:
 
 @dataclass(frozen=True)
 class Criterion:
-    """The verdict on one checklist line of the ticket."""
-
     id: str
     text: str
     verdict: str
@@ -303,8 +241,6 @@ class Criterion:
 
 @dataclass(frozen=True)
 class Finding:
-    """Something the tester found, with how to see it again."""
-
     id: str
     severity: str
     scope: str
@@ -318,8 +254,6 @@ class Finding:
 
 @dataclass(frozen=True)
 class Record:
-    """A tester's record of one session, as read."""
-
     session: str
     tree: str
     author: str
@@ -399,7 +333,6 @@ def objects(shape: Shape, key: str) -> list[Shape]:
 
 
 def parse_record(raw: object) -> tuple[Record | None, list[str]]:
-    """The record, or ``None`` and a sentence for each field that is not as the shape says."""
     problems: list[str] = []
     shape = Shape(raw, "the record", problems)
     schema = shape.raw.get("schema")
@@ -439,14 +372,6 @@ def parse_record(raw: object) -> tuple[Record | None, list[str]]:
 
 @dataclass(frozen=True)
 class Facts:
-    """What the record is held to, none of it written by the tester.
-
-    ``exchanges`` holds the stored request and answer of each cited request whose probes both
-    match the log; ``screenshots`` the cited paths that are PNG files inside the tester's directory;
-    ``code`` the repository paths of the product's files; ``served`` whether the product ever
-    answered in this session.
-    """
-
     session: str
     tree: str
     web_ui: bool
@@ -488,13 +413,11 @@ def citation_problems(where: str, cited: Citation, facts: Facts) -> list[str]:
 
 
 def echoed(text: str, sent: bytes) -> bool:
-    """Whether ``text`` is in the request as sent, or in it once its form encoding is undone."""
     raw = sent.decode("utf-8", "replace")
     return text in raw or text in urllib.parse.unquote_plus(raw)
 
 
 def shown_problems(where: str, cited: Citation, facts: Facts) -> list[str]:
-    """Why a pass cannot rest on ``cited``: it broke, or what it showed is what it sent."""
     entry, exchange = facts.log.get(cited.request), facts.exchanges.get(cited.request)
     if entry is not None and entry.error is not None:
         return [f"{where} passes on request {cited.request}, which did not complete: {entry.error}"]
@@ -617,7 +540,6 @@ def kept_problems(record: Record) -> list[str]:
 
 
 def written(record: Record) -> Iterator[tuple[str, str]]:
-    """Every text the tester wrote, but the ticket's own lines, with where it is."""
     for item in record.criteria:
         for text in (item.how, *item.steps, item.why, item.judge, item.unkept):
             yield f"criterion {item.id}", text
@@ -631,7 +553,6 @@ def written(record: Record) -> Iterator[tuple[str, str]]:
 
 
 def mention_problems(record: Record, code: tuple[str, ...]) -> list[str]:
-    """A file of the code named as a file: not after ``/``, which makes it a path on the site."""
     if not code:
         return []
     named = re.compile(
@@ -648,20 +569,17 @@ def mention_problems(record: Record, code: tuple[str, ...]) -> list[str]:
 
 
 def judge(record: Record, facts: Facts) -> list[str]:
-    """Every rule the record breaks, as a sentence; empty when it is accepted."""
     kept = {check.criterion for check in record.kept}
     problems = identity_problems(record, facts) + promise_problems(record, facts)
     for item in record.criteria:
         problems += criterion_problems(item, facts, kept)
     for found in record.findings:
         problems += finding_problems(found, facts, record.author)
-    # Why the harness is exempt: its record quotes the boot command, which may name a file.
     code = () if record.author == HARNESS else facts.code
     return problems + kept_problems(record) + mention_problems(record, code)
 
 
 def cannot_start(session: str, tree: str, *, ticket: list[str], said: str) -> dict[str, object]:
-    """The record the harness writes itself when the product cannot be started."""
     criteria = [
         {"id": f"C{n}", "text": text, "verdict": "unsure", "how": CANNOT_START, "why": CANNOT_START}
         for n, text in enumerate(ticket, 1)
@@ -689,7 +607,6 @@ def cannot_start(session: str, tree: str, *, ticket: list[str], said: str) -> di
 
 
 def digest(value: object) -> str:
-    """The SHA-256 of ``value`` as canonical JSON, so the same checks always hash alike."""
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
@@ -701,10 +618,6 @@ TALLIED = (
 
 
 def tally(results: object, checks: str) -> dict[str, int] | None:
-    """A replay's outcomes when it ran these very checks; ``None`` when it did not run them.
-
-    A replay wants every check held and a control every check unmet; one not run is neither.
-    """
     if not isinstance(results, dict) or results.get("checks") != checks:
         return None
     ran = results.get("results")
@@ -719,15 +632,12 @@ def tally(results: object, checks: str) -> dict[str, int] | None:
 
 @dataclass(frozen=True)
 class Session:
-    """What the harness recorded about a session: the summary's facts that are not the record's."""
-
     slug: str
     started: str
     seal: Seal | None
 
 
 def effects(record: Record) -> tuple[list[str], list[str]]:
-    """What keeps the change from merging, and what the owner must decide."""
     blocking = [item.id for item in record.criteria if item.verdict == "fail"]
     blocking += [
         found.id for found in record.findings if found.severity in HARMFUL and found.scope == "this"
@@ -742,7 +652,6 @@ def effects(record: Record) -> tuple[list[str], list[str]]:
 
 
 def summary(record: Record, session: Session, replays: tuple[object, object]) -> dict[str, object]:
-    """The committed summary of an accepted record: recorded facts only, the same on every run."""
     blocking, questions = effects(record)
     checks = digest(list(record.kept_raw))
     kept_ids = {check.criterion for check in record.kept}

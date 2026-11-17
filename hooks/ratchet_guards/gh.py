@@ -1,26 +1,3 @@
-"""Rules for the GitHub CLI: merges, branch protection, repository settings, labels and runs.
-
-The agent's ``gh`` runs as the owner, so GitHub cannot tell the two apart; these rules are
-where the difference is drawn. A merge asks: the pull request's merge job merges what the
-merge judge passes, with the workflow's own token, and the owner merges the rest (ADR 0021),
-so an agent's ``gh pr merge``, in any spelling, is neither. Reads pass: ``gh label list``
-and a ``GET`` on a labels endpoint are how an agent learns what the owner has set up.
-
-Label creation has one sanctioned path. ``gh label create <name>`` on the current checkout's
-own repository passes when ``docs/agents/triage-labels.md`` at the checkout root lists
-``<name>`` in its "Label in our tracker" column: the record the mattpocock-skills setup writes
-from the owner's answer, and a guard path in the decisions group once the repository is
-adopted. Creating a label routes nothing by itself; the list is the owner's; and a label named
-nowhere in the record is still refused. ``--force`` edits an existing label, ``-R`` names
-another repository, and both stay refused.
-
-Applying a label to an issue or pull request is routing, not label management, and passes,
-with one exception: the agent-ready label (the ``ready-for-agent`` role of the triage-labels
-record, as the tracker spells it) is the owner's agreement that a ticket is ready to build,
-and the feature preflight reads it as such. An agent that applies it is asking the owner, so
-the call asks.
-"""
-
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -32,8 +9,6 @@ from ratchet_guards.refs import MAIN_BRANCHES
 from ratchet_guards.verdict import Verdict
 
 _REPO_FLAGS = frozenset({"-R", "--repo", "--hostname"})
-# Why: `gh label list` is a read and `gh label` alone prints help; only the verbs that change a
-# label are the owner's.
 _LABEL_WRITES = frozenset({"create", "edit", "delete", "clone"})
 _FORCE = frozenset({"-f", "--force"})
 _LABEL_CREATE = Spec("Rcd", _REPO_FLAGS | {"--color", "--description"})
@@ -77,9 +52,6 @@ _LABELS = re.compile(r"(^|/)labels(/|$)")
 _REPOSITORY = re.compile(r"^/?repos/[^/]+/[^/]+/?$")
 _SETTINGS = re.compile(r"actions/(secrets|variables|permissions)|actions/workflows/.+/disable")
 _RUN_CANCEL = re.compile(r"actions/runs/.*cancel/?$")
-# Why: the forge's API writes a ref with no push, so the default branch and a tag named as it are
-# guarded here as `ratchet_guards.refs` guards them in `git` (ADR 0024). A body read from a file
-# names a ref the guard cannot see, and a GraphQL ref mutation names it by an opaque id.
 _DEFAULT_NAMES = "|".join(sorted(MAIN_BRANCHES))
 _REFS_ENDPOINT = re.compile(r"/git/refs(/|$)")
 _DEFAULT_REF = re.compile(rf"\b(heads|tags)/({_DEFAULT_NAMES})(?![\w./-])")
@@ -123,7 +95,6 @@ class _Call:
 
 
 def _writes_default_ref(call: _Call) -> bool:
-    """A ref write through the API on a default branch or a tag named as one."""
     if _REF_MUTATION.search(call.text):
         return True
     if not call.writes:
@@ -134,7 +105,6 @@ def _writes_default_ref(call: _Call) -> bool:
 
 
 def _commits_to_default(call: _Call) -> bool:
-    """A write through the contents API, which commits to the default branch unless told."""
     writes = call.writes and bool(_CONTENTS_ENDPOINT.search(call.endpoint))
     return writes and not _OTHER_BRANCH.search(call.text)
 
@@ -186,7 +156,6 @@ def _cells(line: str) -> list[str]:
 
 
 def listed_labels(record: str) -> frozenset[str]:
-    """The "Label in our tracker" column of the triage-labels record, backticks removed."""
     column: int | None = None
     labels: set[str] = set()
     for line in record.splitlines():
@@ -202,7 +171,6 @@ def listed_labels(record: str) -> frozenset[str]:
 
 
 def label_for_role(record: str, role: str) -> str | None:
-    """The tracker's label for a mattpocock/skills ``role`` in the triage-labels record."""
     columns: dict[str, int] = {}
     for line in record.splitlines():
         if not line.lstrip().startswith("|"):
@@ -220,27 +188,23 @@ def label_for_role(record: str, role: str) -> str | None:
 
 
 def _record(context: Context, guard: Guard) -> str | None:
-    """The triage-labels record of the checkout holding ``context.cwd``, if any."""
     filesystem = guard.locator.filesystem
     root = filesystem.checkout(filesystem.canonical(context.cwd))
     return None if root is None else filesystem.read_text(root / LABELS_RECORD)
 
 
 def _recorded(name: str, context: Context, guard: Guard) -> bool:
-    """Whether the checkout holding ``context.cwd`` records ``name`` as a triage label."""
     record = _record(context, guard)
     return record is not None and name in listed_labels(record)
 
 
 def ready_label(context: Context, guard: Guard) -> str:
-    """The agent-ready label here: the record's spelling, else the role name itself."""
     record = _record(context, guard)
     label = None if record is None else label_for_role(record, READY_ROLE)
     return label or READY_ROLE
 
 
 def applied_labels(words: Sequence[str]) -> list[str]:
-    """Every label the command applies through ``--add-label``, ``--label`` or ``-l``."""
     labels: list[str] = []
     remaining = iter(words)
     for word in remaining:
@@ -252,13 +216,11 @@ def applied_labels(words: Sequence[str]) -> list[str]:
 
 
 def _applies_ready_label(words: Sequence[str], context: Context, guard: Guard) -> str | None:
-    """The agent-ready label when this command applies it, else ``None``."""
     label = ready_label(context, guard)
     return label if label in applied_labels(words) else None
 
 
 def _label_create(words: Sequence[str], context: Context, guard: Guard) -> bool:
-    """Whether this ``gh label create`` is the sanctioned one: a recorded label, here, no force."""
     options = scan(words[1:], _LABEL_CREATE)
     names = options.operands[2:]
     if len(names) != 1 or options.flags & (_REPO_FLAGS | _FORCE):
@@ -267,7 +229,6 @@ def _label_create(words: Sequence[str], context: Context, guard: Guard) -> bool:
 
 
 def check(words: Sequence[str], context: Context, guard: Guard) -> list[Verdict]:
-    """Verdicts for one ``gh`` command run in ``context``."""
     operands = _operands(words[1:])
     if not operands:
         return []
