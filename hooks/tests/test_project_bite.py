@@ -2475,6 +2475,20 @@ def test_a_file_a_gate_changed_to_the_same_length_with_its_times_put_back_is_res
     assert target.read_text(encoding="utf-8") == "clean\n"
 
 
+def test_a_tracked_file_an_ignore_rule_also_matches_is_restored(tmp_path: Path) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, None)
+    write(root, "kept.secret", "clean\n")
+    git(root, "add", "--force", "kept.secret")
+    commit(root, "feat(core): a tracked file the ignore rules match")
+    copy = project_bite.make_copy(
+        root, tmp_path / "copy", registry=project_bite.Registry(), shell=project_bite.Shell()
+    )
+    target = copy.path / "kept.secret"
+    target.write_text("dirty\n", encoding="utf-8")
+    copy.restore()
+    assert target.read_text(encoding="utf-8") == "clean\n"
+
+
 def test_a_link_standing_where_a_directory_belongs_is_replaced_and_the_real_tree_is_untouched(
     tmp_path: Path,
 ) -> None:

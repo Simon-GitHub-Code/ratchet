@@ -580,6 +580,12 @@ def test_the_harness_record_for_a_product_that_cannot_start_is_accepted_and_bloc
     assert record.findings[0].actual == said
 
 
+def test_the_harness_record_may_quote_a_boot_command_that_names_a_file_of_the_code() -> None:
+    said = "It was started with `run src/settings.py` and did not answer"
+    raw = ar.cannot_start(SESSION, TREE, ticket=list(PROMISES), said=said)
+    assert judged(raw, served=False, log={}, exchanges={}) == []
+
+
 def test_what_blocks_the_merge_and_what_the_owner_decides() -> None:
     raw = good()
     criterion(raw, 1).update(verdict="fail", steps=["Open it."])
