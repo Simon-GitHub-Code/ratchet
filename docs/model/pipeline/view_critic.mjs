@@ -23,7 +23,9 @@ export const step = c.drawn(state, (_action, from, to) => {
   if (from.waits === "critique" && to.waits === "fix")
     return "it finds a major it does not see fixed";
   if (from.waits === "critique" && to.waits === "review")
-    return from.rounds < 2 ? "it finds nothing" : "it finds nothing, or a major is still owed";
+    return from.rounds < 2
+      ? "it finds nothing to fix"
+      : "it finds nothing to fix, or a new major with no round left";
   if (from.waits === "fix" && to.waits === "critique") return "the round is done";
   return c.answer(from, to);
 });
