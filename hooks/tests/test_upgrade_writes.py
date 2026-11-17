@@ -705,3 +705,18 @@ def test_a_cache_key_ending_in_the_run_is_green(repo: Path, part: str) -> None:
 def test_a_merge_workflow_without_a_cache_is_not_flagged(repo: Path) -> None:
     (repo / ".github/workflows/merge.yml").write_text("name: merge\njobs: {}\n", encoding="utf-8")
     assert [found for found in cache_findings(repo) if found.path.endswith("merge.yml")] == []
+
+
+def test_a_merge_workflow_that_reads_tier_2_its_own_way_is_left_for_an_agent_to_pass_tier_1(
+    repo: Path,
+) -> None:
+    merge = ".github/workflows/merge.yml"
+    lines = text(repo, merge).splitlines(keepends=True)
+    own = "".join(line for line in lines if not line.lstrip().startswith("tier1="))
+    own = own.replace('--tier1 "$tier1" --tier2 "$tier2"', '--tier2 "$deep"')
+    own = own.replace('tier2="$(', 'deep="$(')
+    (repo / merge).write_text(own, encoding="utf-8")
+    left = [f for f in settle(repo) if "--tier1" in f.problem]
+    assert text(repo, merge) == own
+    assert [f.path for f in left] == [merge]
+    assert isinstance(left[0].fix, conformance.Agent)
