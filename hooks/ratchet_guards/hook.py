@@ -387,6 +387,9 @@ class GitRepoState:
     def awaiting_final(self, cwd: Path) -> str | None:
         """The branch of the queue work tree at ``cwd`` whose start no final check has passed.
 
+        A note that holds ``rebasing`` awaits whatever ``passed`` says: its update moved, or is
+        moving, the branch off the start that check passed.
+
         The drain's notes are in the state directory of the main checkout, and each records its
         work tree's path, which is how a tree is found when it is detached mid-rebase.
         """
@@ -399,7 +402,11 @@ class GitRepoState:
                 note: object = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            if not isinstance(note, dict) or not note.get("start") or note.get("passed") is True:
+            if (
+                not isinstance(note, dict)
+                or not note.get("start")
+                or (note.get("passed") is True and not note.get("rebasing"))
+            ):
                 continue
             where, branch = note.get("worktree"), note.get("branch")
             if (

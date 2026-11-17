@@ -12,7 +12,7 @@ from ratchet_guards import bash
 from ratchet_guards.context import Context
 from ratchet_guards.hook import GitRepoState
 from ratchet_guards.verdict import RULES, Decision, Verdict
-from tests.repos import git
+from tests.repos import commit, git, write
 from tests.support import make_guard
 from tests.test_drain import (
     ALPHA,
@@ -155,3 +155,28 @@ def test_a_commit_after_an_update_cut_off_past_its_rebase_is_refused(
     assert run(root, "check", ALPHA, "--final") == 0
     capsys.readouterr()
     assert judged(COMMIT, tree_of(root)) == []
+
+
+@pytest.mark.parametrize(
+    "point", ["before_rebase", "after_rebase", "mid_note_write", "after_note_write"]
+)
+def test_an_update_cut_off_after_the_orchestrator_committed_parks_nothing(
+    tmp_path: Path, capsys: Out, point: str
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    assert run(root, "check", ALPHA, "--final") == 0
+    tree = tree_of(root)
+    assert judged(COMMIT, tree) == []
+    write(tree, "src/b.py", "B = 1\n")
+    commit(tree, "feat(core): the orchestrator's change")
+    moved(root)
+    with pytest.MonkeyPatch.context() as patch:
+        killed(patch, point)
+        with pytest.raises(KeyboardInterrupt):
+            run(root, "update", ALPHA)
+    capsys.readouterr()
+    assert run(root, "update", ALPHA) == 0
+    said = capsys.readouterr().out
+    assert "a role published" not in said
+    assert queue_notes.read_note(root, BRANCH_A).get("outcome") != drain.PARKED
