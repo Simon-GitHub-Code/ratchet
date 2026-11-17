@@ -4,7 +4,7 @@ Agents push and drive the forge's CLI as the owner, so the forge cannot tell an 
 
 ## The manifest
 
-`guards/manifest.toml` is the single list of guard paths, in groups with a reason each. Three things read it, so a guard path is one entry here and nowhere else: the hook and the merge judge, as the default branch holds it, and the diff check, at the merge base and at head.
+`guards/manifest.toml` is the single list of guard paths, in groups with a reason each. Three things read it, so a guard path is one entry here and nowhere else: the hook and the merge judge, as the default branch holds it, and the diff check.
 
 ```toml
 [[group]]
@@ -31,26 +31,11 @@ A group's `edit` says what a change to its paths gets:
 - **`deny`:** locks a group the owner edits by hand.
 - **`append`:** marks records an agent may add to, on the default branch as well.
 
-A group may carry `exclude` patterns its paths do not cover. A group whose `paths` is still empty matches nothing.
+A group may carry `exclude` patterns its paths do not cover.
 
 Edit-time control stays for exactly the files whose effect comes before the merge, and everything else is judged at merge. Beside the locked groups, two kinds of file act the moment they are written: CI workflows (the files directly under `.github/workflows/`) and agent-instruction files at any depth. The hook asks the owner before each write of either that it reads, on every branch ([A file that acts at once](#a-file-that-acts-at-once-ask)). They need no group of their own.
 
-The template manifest names the groups every binding has:
-
-- tool configs and thresholds
-- the command contract and gate scripts
-- ratchets
-- CI, its workflows and the pull-request template
-- the harness (`edit = "deny"`)
-- the manifest itself (`guards/**`)
-- local git hooks and config (`edit = "deny"`)
-- fitness tests
-- home-grown gate tools
-- formal models and the project-local verification skill
-- records: `docs/adr/**` and `GLOSSARY.md` (`edit = "append"`)
-- decisions: `docs/process/**`, `docs/agents/**`, `.claude/rules/**`, `AGENTS.md`, `CLAUDE.md`, the glossary map, `PRODUCT.md`, `DESIGN.md`
-
-The manifest also lists the one-way doors, as `[[door]]` tables: paths whose change cannot be taken back once it ships. A door guards nothing. The hook, `guard-diff` and the permission rules never read it. The merge judge does ([A one-way door](#a-one-way-door)).
+The manifest also lists the one-way doors, as `[[door]]` tables: paths whose change cannot be taken back once it ships. A door guards nothing.
 
 ### Changing the manifest
 
@@ -60,24 +45,15 @@ The manifest is locked against loss and open to additions. The hook and the merg
 
 - On a branch, an Edit or Write of `guards/manifest.toml` passes when all it does is add: a path after the others in a group's or a door's `paths`, or whole `[[group]]` or `[[door]]` tables after the ones there.
 - The first group that matches a path wins, so a path added to a group that also matches a pattern of a group below it would take paths from that group. Such a path, every other change, and every shell write, move or delete of the file are the owner's by hand.
-- If the default branch loses the file, the hook reads the last manifest it held and locks every path it named until the owner puts it back.
 
 ## The hook
 
-The method's plugin registers a PreToolUse hook on every edit and shell call: in Claude Code, Grok and Codex through the plugin's own `hooks.json`, in Antigravity through the copy of it the install converts, in pi and OpenCode through the adapters under `adapters/` (`docs/harness/`). The rules live once, in `hooks/ratchet_guards`. The hook checks an agent's ordinary writes. It is not a boundary against an agent that sets out to get round it, and ADR 0033 lists the writes it does not read.
-
-It makes three kinds of decision: pass, ask and deny. It answers `ask` when it cannot run. A git it cannot start, or one that runs past its 5 s limit, reads as no manifest, so the path rules then give no verdict.
-
-Each name in a git command is read as git reads it, so a push or a tag that git matches to a default ref, a `git` pointed at another repository (`--git-dir`, `GIT_DIR`), a command git is handed to run (`rebase --exec`, an editor, an alias) and a sync on a default branch that git reads as anything but the remote's default branch are judged as what git reads them as.
+The rules live once, in `hooks/ratchet_guards`. The hook checks an agent's ordinary writes. It is not a boundary against an agent that sets out to get round it, and ADR 0033 lists the writes it does not read.
 
 ### A guard path: pass on a branch, deny on the default branch
 
 An Edit, Write, MultiEdit, NotebookEdit, patch or shell write of a path in a group that is not locked gets no verdict when the commit it would go into lands on a branch other than the default one. Such a change reaches the default branch only through a merge, and the merge judge sends a guard path change to the owner with its reasons, so a prompt at the edit would have asked the owner the same question earlier, with less to go on.
 
-- **Which branch:** the hook reads it from the file's checkout, or from a `git switch` or `git checkout` earlier in the same command line.
-- **A switch the hook cannot read as one** (a branch in a variable or a substitution, a `git switch` inside `bash -c`, a substitution, `eval`, `xargs`, `find -exec` or a script git runs) may move any checkout to its default branch. A shell write of a guard path after it is judged as on the default branch, and the deny says to run the switch in a tool call of its own.
-- **A relative write after a `cd` the hook cannot follow** is judged as on the default branch too, on any branch.
-- **On the default branch:** where the commit would land on the default branch (`main`, `master`, or the branch the committed manifest is read from), or the hook cannot tell where it lands, the change is denied and the message says to make it on a branch.
 - **A detached `HEAD`** is a branch here: nothing reaches the default branch from it but a push or a merge, which the rules below judge.
 
 ### An addition to a record: pass
@@ -95,42 +71,15 @@ Two kinds of file act before any merge the judge could read:
 - **CI workflows.** GitHub runs a branch's own CI workflows, the files directly under `.github/workflows/`, on a push or a pull request, with the repository's token and secrets.
 - **Agent-instruction files.** Claude Code loads an agent-instruction file, `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `GEMINI.md` or anything under a `.claude/` directory, at any depth, and follows it. It loads a nested `CLAUDE.md` once an agent reads a file beside it, so an agent could write one, let the critic and reviewer run under it, and delete it before the commit.
 
-Each of these asks the owner on every branch, in one plain sentence, with the path:
-
-- an Edit, Write, MultiEdit, NotebookEdit or patch of either kind
-- a shell write, move or delete of one whose path the command line names: a redirect, `tee`, `cp`, `mv`, `rm`, an inline program, a `git` command that writes the path
-- a move or delete of `.github/workflows` itself, of `.github` or of a directory named `.claude`
-
-An inline program is read as writing a file one of its strings names whole, or names as a word of a string that reads as a command (one holding a redirect, or starting with a command that writes). Prose that names `AGENTS.md` asks nothing.
-
-The sentences are "This changes what GitHub runs with this repository's secrets, before any merge" or "This changes the instructions agents follow in this project, starting now", then "Allow it?".
-
-- **A locked path among them** is denied instead.
-- **A guard path among them, on the default branch,** is denied with the way to a branch.
-
-Names are matched without letter case. `.claude/worktrees/` is not an instruction directory, since each worktree under it is a checkout judged from its own root. Like every path rule this is on only once the manifest is on the default branch, so `/ratchet:adopt` writes its workflows and instructions without a prompt. `ratchet_guards.early` holds the one definition of an instruction file.
+`.claude/worktrees/` is not an instruction directory, since each worktree under it is a checkout judged from its own root. Like every path rule this is on only once the manifest is on the default branch, so `/ratchet:adopt` writes its workflows and instructions without a prompt.
 
 ### A merge or the agent-ready label: ask
 
 Each prompt is a plain sentence the owner can answer without knowing the guard.
 
-**Merging.** A change reaches the default branch through the merge judge or by the owner's hand. The hook asks on merging a pull request, and, on the default branch, on:
+**Merging.** A change reaches the default branch through the merge judge or by the owner's hand.
 
-- a `git merge`
-- a `git cherry-pick`
-- a `git am`
-- a `git read-tree`
-- a `git pull` that names another repository or branch
-
-The sync with the remote's own default branch still passes (`git pull`, `git merge --ff-only origin/main`), and so does the `merge` entry point. The prompt on merging a pull request says the merge job merges a pull request by itself once its checks pass and nothing in it needs the owner, that it then comments on the pull request with each reason it waits for him, and that `just merge-ready --head <branch>` prints the same reasons.
-
-**The agent-ready label.** The label is the owner's agreement that a ticket is ready to build, and the feature preflight reads it as such. The hook asks on:
-
-- applying the agent-ready label to an issue or pull request (`gh issue edit --add-label`, `gh issue create --label` and the `pr` forms), with the label as `docs/agents/triage-labels.md` spells the `ready-for-agent` role
-- giving a local ticket (`.scratch/<feature>/issues/<name>.md`, the file the route and the preflight read) that status through Edit, Write or MultiEdit, other than a part split from a labelled ticket that keeps to its promises
-- giving a local ticket that status through a command line or a patch that names the label and writes the ticket or a directory tickets live in, where one call over several tickets is one ask that names each
-
-The label prompt says the label marks a ticket ready for agents to build without him.
+**The agent-ready label.** The label is the owner's agreement that a ticket is ready to build, and the feature preflight reads it as such.
 
 ### A locked file: deny
 
@@ -139,37 +88,17 @@ An edit in a group marked `edit = "deny"` is denied: the harness and local git. 
 - the plugin's own files, every harness's installed plugins and the settings that enable them: `~/.claude/plugins/**` and `settings.json`, `~/.grok/installed-plugins/**`, `~/.grok/hooks/**` and `config.toml`, `~/.codex/plugins/**`, `hooks.json` and `config.toml`, `~/.pi/agent/extensions/**` and `settings.json`, `~/.config/opencode/plugins/**` and `opencode.json`
 - the `git-state` group in every checkout, adopted or not: `.git/refs/**`, `packed-refs`, `HEAD`, `info/grafts`, `shallow` and `objects/info/**`, because the default branch's ref is what the path rules are read through
 
-`guards/manifest.toml` is denied too: on the default branch to every change, and on any other branch to every change but an addition ([Changing the manifest](#changing-the-manifest)).
-
 ### A command that bypasses a gate or rewrites history: deny
-
-The hook denies:
-
-- **Gate bypasses:** `--no-verify` and its spellings (`-n`, any prefix git accepts), `git commit-tree`, `SKIP=` and `RATCHET_HOOK_PROBE=` (the answer the template recipes give a hook probe, which skips the gates), hook uninstalls, hook-path changes and a `chmod` of a guard path.
-- **History rewrites:** force pushes in every spelling, pushes to main, resets and rebases that move main, amending a pushed commit, history filters.
-- **The default branch's ref:** any command that moves, deletes or re-points the default branch's ref or a ref or setting it is read through: `git branch -f`, `-d`, `-m` or `-c` on `main` or `master`, `update-ref`, `symbolic-ref` set or delete, `checkout`/`switch -B`, `-C` or `-b` naming a default branch, a fetch or push refspec ending in a protected ref, `remote add origin`, `set-url`, `set-head`, `rename`, `remove`, a `git config` or `git -c` on `remote.*`, `url.*`, `alias.*` or `include.*`, and `replace`, `fast-import`, `send-pack` and `receive-pack` whole.
-- **Forge settings:** forge CLI calls (`gh` on GitHub) that change branch protection, rulesets, labels, repository settings, secrets, variables, workflows or runs. Reads of labels and runs pass: `gh label list`, a `GET` on a labels endpoint, `gh run list`.
-- **Harness switches:** nested `claude` invocations given settings or plugin flags, and `claude`, `grok`, `codex` and `pi` commands that disable or remove a plugin, package or marketplace.
-- **Shell writes of a guard path:** any shell write, move, copy, link or delete of a locked guard path, or of any guard path where the commit lands on the default branch, including through wrappers, substitutions, `eval`, heredocs and `-c` strings.
 
 An interpreter given its program inline is read by its text. `python3` (any `pythonX.Y`) with `-c` or with a program on stdin from a heredoc, a here-string or a pipe, `node -e`, `--eval`, `-p` or a heredoc, `perl -e`, `ruby -e`, `deno eval` and `bun -e` are denied when the program holds a quoted string naming a guard path (resolved against the working directory) and a write call (`open` for writing, `write_text`, `unlink`, `rename`, `shutil`, `subprocess`, `os.system`, `fs.writeFile`, `rm`, `child_process`, `File.write`, `open` with `>`, any `-i`).
 
-- A program that only reads a guard path passes.
 - Where a write of that path would be denied, one that reads it and writes an unguarded file is denied all the same, so the read goes in a call of its own.
-- Inside a longer string, a word made only of slashes (`a / b`) is an operator and names no path. A string that is exactly `/` still names the root, so `shutil.rmtree('/')` is denied.
 
 **A recorded label passes.** One write passes by a record: `gh label create <name>`, on the checkout's own repository, with no `--force`, when `docs/agents/triage-labels.md` at the checkout root lists `<name>` in its "Label in our tracker" column. Creating a label routes nothing by itself, the list is the owner's answer to the mattpocock-skills setup, and `docs/agents/**` is in the decisions group once the repository is adopted.
 
 ### What a deny says
 
-Every deny message ends in the way out:
-
-- for a locked path or a bypass, a gate dispute
-- on the default branch, a branch
-- after a switch the hook cannot read, the switch in a tool call of its own
-- for a relative path after a `cd` the hook cannot follow, an absolute path, since it may be either
-
-A verdict covers the whole tool call. Claude Code runs none of a denied command line, so a file write chained before the refused command is lost with it. The deny message says so and names the matched command. Keep a command the guard may refuse (a forge CLI call, a push, anything near a guard path) in a tool call of its own, so an unrelated write is never lost with it.
+A verdict covers the whole tool call. Claude Code runs none of a denied command line, so a file write chained before the refused command is lost with it. Keep a command the guard may refuse (a forge CLI call, a push, anything near a guard path) in a tool call of its own, so an unrelated write is never lost with it.
 
 ### The guard's log
 
@@ -192,13 +121,7 @@ The command rules are on from the first session, before `/ratchet:adopt` has wri
 
 The permission rules in the project's `.claude/settings.json` are a second, independent layer, the same in every repository and never written by hand. `just settings` writes them, and `just settings-check` (tier 1) fails on a rule missing from or foreign to the lists. `just settings`:
 
-- keeps a rule no version of the plugin writes, which the check still reports
-- never takes a rule out of `deny`
 - writes nothing under a plugin other than the one CI checks out, whose check would reject what it wrote
-
-`upgrade.py --apply` moves the pin and the rules together.
-
-The `deny` list names, as `Edit` rules, each path the owner changes by hand (the harness's settings, hooks, workflows, agents, skills and commands, the git hooks, config and refs, the user's settings and installed plugins), then the fixed command rules: the bypasses, a `core.hooksPath` change, the forge changes and the plain spellings of a write to the default branch's ref.
 
 - `git symbolic-ref` has no rule because it also reads, and the hook is the one layer on its other spellings.
 - `gh label create` is not in the deny list, because the hook lets a recorded label through and a settings deny would refuse that one too.
@@ -207,16 +130,15 @@ The `ask` list is empty. A rule matches a path or a command and cannot tell a br
 
 ## The diff check
 
-Some writes are out of the hook's reach: an interpreter running a script file by path (`python3 tool.py`), a path an interpreter builds at run time (a variable, a concatenation, a mode held in a variable, a decoded or fetched program), `git apply`, merges, variable paths in the shell, edits made outside the harness, and a ref name a variable, a file or a pipe supplies to a `git` command that would move the default branch. An interpreter given its program inline is not among them ([the hook reads it](#a-command-that-bypasses-a-gate-or-rewrites-history-deny)).
+Some writes are out of the hook's reach: an interpreter running a script file by path (`python3 tool.py`), a path an interpreter builds at run time (a variable, a concatenation, a mode held in a variable, a decoded or fetched program), `git apply`, merges, variable paths in the shell, edits made outside the harness, and a ref name a variable, a file or a pipe supplies to a `git` command that would move the default branch.
 
 The `guard-diff` entry point (tier 1) lists every changed path that matches the manifest at the merge base or at head, with renames split so moving a guard file away is caught. The merge judge reads the same listing from the commits, and a change it finds a guard path in waits for the owner.
 
 - **Under a dependency manifest, a lockfile or a snapshot of one,** the listing adds what the change does: the packages added, or each locked package's old and new versions, when that is all it does, and otherwise why not (another key changed, an existing entry changed or went, a source other than the registry, an artifact changed in place, a version that falls, a format it does not read). The path is still a guard path and still counted. A dependency is a decision the pull request states ([code.md](code.md)). The owner-away pipeline accepts one only when its spec named it and the listing found nothing else in the file.
-- **Under a path in an `append` group,** the listing runs the hook's own check on the merge base and the work tree and adds `additions:` with each term, `_Avoid_` item and ADR that came in, or `not additive:` with the reason. That path is counted too. `guard-diff --fail-unless-additive` exits 1 when any guard path changed other than by an addition, and the pipeline treats an `additions:` path as no guard change.
 
 ## The merge judge
 
-A change reaches the default branch in one of two ways: the merge judge passes it and it merges itself, or the owner merges it. The judge is `scripts/merge_ready.py`, behind the `merge-ready` entry point. It prints `merge: agent` or `merge: owner` with every reason. It reads commits only: the manifest at the default branch's tip, every other file at the merge base and at the head.
+A change reaches the default branch in one of two ways: the merge judge passes it and it merges itself, or the owner merges it. The judge is `scripts/merge_ready.py`, behind the `merge-ready` entry point.
 
 The owner merges when any of these holds, each under its own heading below: a guard path changed, a one-way door once the project is `deployed` or holds `irreplaceable-data`, new surface with no flag once it is `deployed`, a dispute, no clean approval, or the setting.
 
@@ -310,8 +232,6 @@ Its manifest must instead guard at least what the template's does: every templat
 
 - A run counts as green only when it tested that pull request against the default branch, so one that was retargeted, or whose branch has had a pull request against another base, is the owner's to merge.
 - The workflow is triggered by `workflow_run`, which takes the workflow file, the judge and the manifest from the default branch, so a pull request cannot change what judges it. The job reads the pull request's commits without checking them out or running them.
-- It merges what the judge passes with a merge commit and starts tier 2 on the default branch.
-- On every pull request it judges it leaves one comment with the verdict and its reasons, edited in place on each run.
 
 **With no forge** the `merge` entry point (`scripts/merge.py <branch>`) merges the branch in a scratch work tree, asks the judge, runs `check` on the merge result, and moves the default branch only when both pass. For the adoption it runs `check-deep` there instead. `merge.py --records` lands the records a skill left uncommitted on the default branch: it commits them on a branch of their own, `records/<time>`, and merges that branch the same way, so nothing is committed on the default branch itself.
 
