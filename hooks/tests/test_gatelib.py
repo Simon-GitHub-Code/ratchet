@@ -1,6 +1,7 @@
 """The gate library: one merge base for every gate, the changed paths, the thresholds file."""
 
 import contextlib
+import errno
 import http.server
 import os
 import signal
@@ -12,6 +13,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from hypothesis import given
@@ -229,6 +231,22 @@ def test_http_status_names_the_client_port_however_soon_the_connection_is_reset(
             gatelib.http_status("GET", url, timeout=5, connecting=clients.append)
         cutter.join()
     assert clients == accepted
+
+
+def test_reach_names_the_connection_before_it_waits_for_the_connect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order: list[str] = []
+    sock = MagicMock()
+    sock.connect_ex.return_value = errno.EINPROGRESS
+    sock.getsockname.return_value = ("127.0.0.1", 5)
+    sock.getsockopt.return_value = 0
+    selector = MagicMock()
+    selector.__enter__.return_value = selector
+    selector.select.side_effect = lambda _: order.append("waited") or [object()]
+    monkeypatch.setattr(gatelib.selectors, "DefaultSelector", lambda: selector)
+    gatelib.reach(sock, ("127.0.0.1", 80), timeout=1, connecting=lambda _: order.append("named"))
+    assert order == ["named", "waited"]
 
 
 def test_http_status_says_why_a_connect_failed_or_that_it_timed_out() -> None:
@@ -478,6 +496,16 @@ def test_chained_wants_apply_in_order_and_an_empty_chain_changes_nothing(
     assert gatelib.chained()(current) == (current or "")
     both = gatelib.chained(gatelib.created(text), lambda made: f"{made}!")
     assert both(current) == f"{text if current is None else current}!"
+
+
+def test_a_git_a_hook_pointed_at_another_repository_still_reads_the_repository_it_is_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    here = repository(tmp_path / "here")
+    elsewhere = repository(tmp_path / "elsewhere")
+    monkeypatch.setenv("GIT_DIR", str(elsewhere / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(elsewhere))
+    assert Path(gatelib.git_checked(here, "rev-parse", "--show-toplevel").strip()) == here.resolve()
 
 
 def test_a_git_that_fails_raises_instead_of_answering(tmp_path: Path) -> None:
