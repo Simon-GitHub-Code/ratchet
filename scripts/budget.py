@@ -6,7 +6,8 @@ Usage: ``budget.py KEY [--root DIR] [--file quality/thresholds.toml] [--report P
 measures its wall-clock seconds, and compares them with ``ceilings.seconds.KEY`` in the
 thresholds file. Exit status: the command's own when it fails; 1 when it passed but ran over
 its ceiling; 0 otherwise. A missing ceiling reports and passes: that is the first adoption.
-``--report`` appends one JSON line per run so CI can publish the timings.
+``--report`` appends one JSON line per run so CI can publish the timings; the line carries
+``at``, ``run`` and ``tree`` (``runrecord.py``).
 
 ``--set`` never records the pull-request proof's key, ``bite``: what a targeted proof takes
 depends on what the change touched, so the owner records it by hand.
@@ -41,7 +42,6 @@ seconds would otherwise become the first feature's ceiling.
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import re
 import subprocess
@@ -50,6 +50,8 @@ import time
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+
+import runrecord
 
 CEILINGS_TABLE = "ceilings.seconds"
 DEFAULT_HEADROOM = 1.5
@@ -171,17 +173,16 @@ def timed(command: list[str], cwd: Path) -> tuple[float, int]:
     return time.monotonic() - started, completed.returncode
 
 
-def report(path: Path, outcome: Outcome) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    record = {
+def report(path: Path, outcome: Outcome, stamp: dict[str, str]) -> None:
+    record: dict[str, object] = {
         "key": outcome.key,
         "seconds": round(outcome.seconds, 3),
         "ceiling": outcome.ceiling,
         "status": outcome.status,
         "exit": outcome.exit_code,
+        **stamp,
     }
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record) + "\n")
+    runrecord.append(path, record)
 
 
 def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
@@ -207,6 +208,7 @@ def main(argv: list[str]) -> int:
     root = Path(options.root).resolve()
     thresholds = root / options.file
     text = thresholds.read_text(encoding="utf-8") if thresholds.is_file() else ""
+    tree = runrecord.tree_id(root) if options.report else None
     seconds, exit_code = timed(command, root)
     ceiling, tier = held(text, options.key, options.tier)
     outcome = Outcome(options.key, seconds, ceiling, exit_code, tier, options.over == "block")
@@ -222,7 +224,7 @@ def main(argv: list[str]) -> int:
             " before runner variance turns it red"
         )
     if options.report:
-        report(root / options.report, outcome)
+        report(root / options.report, outcome, runrecord.stamp(root, tree))
     if options.headroom is not None and options.key == PROOF:
         print(f"ratchet-budget: the owner records {CEILINGS_TABLE}.{PROOF} by hand; --set skips it")
     elif options.headroom is not None and exit_code == 0:
