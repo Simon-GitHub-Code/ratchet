@@ -167,7 +167,7 @@ def link(root: Path, path: str, target: str) -> None:
 
 
 def test_a_clean_change_with_its_verdict_record_is_the_agents(root: Path) -> None:
-    change(root, {"src/a.py": "x = 2\n", "docs/features/thing/spec.md": "# Thing\n"})
+    change(root, {"src/a.py": "x = 2\n", "docs/features/thing/notes.md": "# Thing\n"})
     assert judged(root) == []
 
 
@@ -405,7 +405,7 @@ def test_a_drop_whose_pin_text_only_moved_around_is_the_agents(owing: Path) -> N
 
 def test_a_dependency_is_the_owners_whoever_named_it(root: Path) -> None:
     added = stack.MANIFEST + "use main beta 1.0\n"
-    change(root, {"app.manifest": added, "docs/features/thing/spec.md": "Needs beta.\n"})
+    change(root, {"app.manifest": added, "docs/features/thing/notes.md": "Needs beta.\n"})
     assert judged(root) == [
         (
             "guard: app.manifest (tool-config): a dependency is the owner's to merge:"
@@ -644,7 +644,7 @@ def test_removing_a_flag_that_is_already_on_changes_nothing_for_anyone(root: Pat
         (
             {
                 "tests/contract/surface.txt": MORE_SURFACE + "pkg.dark()\n",
-                "docs/features/thing/spec.md": "Feature flag: dark.\n",
+                "docs/features/thing/notes.md": "Feature flag: dark.\n",
                 "flags.toml": FLAGS + "# dark stays off\n",
             },
             "tests/contract/surface.txt",
@@ -1552,7 +1552,8 @@ def test_any_other_change_to_an_agreed_ticket_stays_the_owners(
     linked: Path, files: dict[str, str | None]
 ) -> None:
     change(linked, files, record=False)
-    assert judged(linked) == [f"{BUT}{TICKET} {FROZEN}"]
+    reasons = [reason for reason in judged(linked) if not reason.startswith("expired:")]
+    assert reasons == [f"{BUT}{TICKET} {FROZEN}"]
 
 
 def test_a_parent_that_reads_as_the_same_file_either_way_is_the_agents(tmp_path: Path) -> None:

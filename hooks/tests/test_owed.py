@@ -536,6 +536,7 @@ def keys_from(plugin: Path, place: Path) -> dict[str, list[list[str]]]:
     return json.loads(done.stdout)
 
 
+@pytest.mark.shard_slot(1)
 def test_no_owed_key_holds_where_the_plugin_or_the_project_lies(tmp_path: Path) -> None:
     """An owed entry is the same debt from any checkout of the plugin, so CI excuses its list."""
     one = keys_from(tmp_path / "plugin-one", tmp_path / "here")

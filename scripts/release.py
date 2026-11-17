@@ -37,6 +37,9 @@ Cutting a release:
   does that alone and never makes or moves a tag, so it mends a page step that failed.
 * A person's token merges the version PR, not a workflow's ``GITHUB_TOKEN``: GitHub starts no
   workflow from a push made with that token, so ``release.yml`` would not run.
+* Once the release page is up, an update must reach the tag from the previous one. In a config
+  directory of its own, with no SSH key and no ``PREFER_HTTPS``, install the plugin at the previous
+  tag, then run the marketplace update and the plugin update: the installed version must be V.
 """
 
 from __future__ import annotations
@@ -183,7 +186,9 @@ def notes(repo: Path, version: str) -> str:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="release.py")
+    parser = argparse.ArgumentParser(
+        prog="release.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--repo", type=Path, default=Path())
     parser.add_argument("--notes", metavar="V")
     parser.add_argument("--existing", action="store_true")

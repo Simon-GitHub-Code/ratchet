@@ -88,16 +88,6 @@ FILL_FIRST = frozenset(
 )
 TABLE = "owed"
 FIELDS = ("rule", "path", "problem", "since")
-HEADER = """\
-# What this project still owes since an upgrade of the Ratchet plugin (its ADR 0037).
-# Each entry is one thing a check found that the upgrade could not settle by itself: the check
-# that found it (`rule`), the file (`path`), what is wrong (`problem`) and the plugin version
-# whose upgrade wrote it down (`since`). While an entry is here, its check counts that one thing
-# as owed instead of failing. It excuses nothing else.
-# Between upgrades the list only gets shorter. Once a thing is fixed, `upgrade.py --apply` removes
-# its entry. A change that adds or alters an entry fails before it can merge, unless it also moves
-# the plugin to a newer version. Nobody needs to edit this file by hand.
-"""
 
 Key = tuple[str, str, str]
 
@@ -169,7 +159,7 @@ def render(entries: Sequence[Entry]) -> str:
         + "".join(f"{field} = {quoted(getattr(entry, field))}\n" for field in FIELDS)
         for entry in sorted(entries)
     ]
-    return "\n".join([HEADER, *blocks])
+    return "\n".join(blocks)
 
 
 def excused(keys: Sequence[Key], entries: Sequence[Entry]) -> tuple[list[bool], Counter[Key]]:

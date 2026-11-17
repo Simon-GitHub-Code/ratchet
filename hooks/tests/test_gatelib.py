@@ -454,8 +454,13 @@ def test_a_process_run_from_a_tree_is_ended_and_every_other_one_is_left(tmp_path
     tree = tmp_path / "tree"
     inside = servers.sleeper(tree)
     outside = start("import time\ntime.sleep(60)\n", tmp_path)
+    proc = tmp_path / "proc"
+    for process in (inside, outside):
+        entry = proc / str(process.pid)
+        entry.mkdir(parents=True)
+        (entry / "exe").symlink_to(Path(f"/proc/{process.pid}/exe").readlink())
     try:
-        assert gatelib.end_running_from(tree.resolve()) == [inside.pid]
+        assert gatelib.end_running_from(tree.resolve(), proc) == [inside.pid]
         assert inside.wait(timeout=5) == -signal.SIGKILL
         assert outside.poll() is None
     finally:

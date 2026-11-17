@@ -636,7 +636,7 @@ def holds_only_records(root: Path, default: str, name: str) -> bool:
     base = f"{HEADS}{default}"
     change = merge_ready.read(root, base, f"{HEADS}{name}")
     return not isinstance(change, merge_ready.Reason) and not merge_ready.not_records(
-        root, base, change.paths
+        root, base, change.paths, change=change
     )
 
 

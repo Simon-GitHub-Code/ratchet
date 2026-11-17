@@ -412,6 +412,16 @@ def test_a_product_question_stops_the_run_with_its_options() -> None:
     assert _run(None)["labels"] == [], "no ticket, no agent"
 
 
+def test_a_run_with_no_ticket_is_answered_with_the_command_to_run_and_never_throws() -> None:
+    for args in (None, {}, {"ref": "  "}, "  "):
+        ran = _run(args)
+        assert "error" not in ran, args
+        assert ran["labels"] == [], args
+        assert ran["result"]["verdict"] == "blocked", args
+        assert ran["result"]["preflight"]["failures"][0]["check"] == "ticket", args
+        assert "`/ratchet:feature <ticket>`" in ran["result"]["requiredByOrchestrator"][0], args
+
+
 def test_a_clean_run_spawns_six_agents_and_records_no_question() -> None:
     answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)

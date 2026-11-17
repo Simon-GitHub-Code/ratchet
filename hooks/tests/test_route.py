@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import documents
 import drain
 import hooks_installed
 import merge
@@ -65,6 +66,11 @@ class FakeGh:
 
 def issues(*items: tuple[int, str, str]) -> str:
     return json.dumps([{"number": n, "title": t, "body": b} for n, t, b in items])
+
+
+def expire(root: Path) -> None:
+    assert documents.main(["documents.py", "expire", "--root", str(root)]) == 0
+    commit(root, "docs: expire")
 
 
 def test_the_stages_before_adoption(tmp_path: Path) -> None:
@@ -681,13 +687,15 @@ def test_a_ticket_whose_branch_is_merged_is_resolved_not_rebuilt(tmp_path: Path)
     assert "`feature/2-b`" in done.why
     write(root, ticket, "# 02: B\n\nStatus: resolved" + CONJECTURE)
     commit(root, "docs(tracker): resolve 02")
+    assert route.decide(root, None).stage == "expire"
+    expire(root)
     assert route.decide(root, None).stage == "specify"
 
 
 def test_an_unnumbered_ticket_is_matched_by_its_branch() -> None:
     ticket = route.preflight.Ticket("idea.md", None, "Idea", "", (), is_open=True)
-    assert route.finished([ticket], ["feature/idea"]) is not None
-    assert route.finished([ticket], ["feature/other"]) is None
+    assert route.finished(Path(), [ticket], ["feature/idea"]) is not None
+    assert route.finished(Path(), [ticket], ["feature/other"]) is None
 
 
 def test_open_local_tickets_none_agent_ready_are_triaged_before_a_new_spec(
@@ -711,6 +719,8 @@ def test_open_local_tickets_none_agent_ready_are_triaged_before_a_new_spec(
     write(root, ".scratch/f/issues/03-c.md", "# 03: C\n\nStatus: resolved\n")
     write(root, ".scratch/f/issues/02-b.md", "# 02: B\n\nStatus: resolved\n")
     commit(root, "docs(tracker): all resolved")
+    assert route.decide(root, None).stage == "expire"
+    expire(root)
     assert route.decide(root, None).stage == "specify"
     assert route.decide(root, FakeGh(issues="[]")).stage == "specify", "a tracker is not triaged"
 
@@ -730,6 +740,8 @@ def test_local_ticket_numbers_repeat_across_features_so_branches_match_whole(
     commit(root, "feat(a): a")
     git(root, "switch", "-q", "main")
     git(root, "merge", "-q", "--no-ff", "feature/1-alpha", "-m", "Merge branch 'feature/1-alpha'")
+    assert route.decide(root, None).stage == "expire"
+    expire(root)
     assert route.decide(root, None).command == f"{route.FEATURE} {beta}"
 
 
@@ -785,7 +797,9 @@ def test_a_local_spec_without_tickets_is_split_next(tmp_path: Path) -> None:
     assert step.stage == "specify"
     write(root, ".scratch/settle/issues/01-parse.md", "# Parse\n\nStatus: resolved\n")
     commit(root, "docs: tickets")
-    assert route.decide(root, None).command == route.SPEC, "a spec whose tickets exist is split"
+    assert route.decide(root, None).stage == "expire", "a spec whose tickets are all done expires"
+    expire(root)
+    assert route.decide(root, None).command == route.SPEC
 
 
 def test_a_spec_without_a_conjecture_is_stated_before_it_is_split(tmp_path: Path) -> None:

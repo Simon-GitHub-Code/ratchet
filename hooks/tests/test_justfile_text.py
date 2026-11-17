@@ -84,10 +84,9 @@ def kept(old: str, new: str) -> bool:
 
 
 def copy_of(name: str) -> list[str]:
-    """The template's recipe as it stands: its comment, its attribute, its head and its body."""
     lines = TEMPLATE.split("\n")
     block = next(b for b in justfile_text.blocks(lines) if b.name == name)
-    return lines[block.start : block.end]
+    return justfile_text.uncommented(lines[block.start : block.end])
 
 
 def names_of(text: str) -> list[str]:
@@ -117,9 +116,7 @@ def test_two_recipes_copied_in_either_order_give_the_same_text(
 
 
 @given(justfiles(), st.sampled_from(COPIED))
-def test_a_copied_recipe_stands_apart_with_its_comment_and_attribute(
-    project: str, name: str
-) -> None:
+def test_a_copied_recipe_stands_apart_with_its_attribute(project: str, name: str) -> None:
     if name in names_of(project):
         return
     lines = justfile_text.with_recipe(TEMPLATE, name)(project).split("\n")
@@ -134,7 +131,6 @@ def test_a_recipe_goes_at_the_end_less_the_recipes_the_template_puts_after_it() 
     once = justfile_text.with_recipe(TEMPLATE, "hooks-installed")(project)
     assert once == (
         "ratchet_plugin := 'p'\n\nweekly: plugin-pin\n    echo weekly\n\ndeploy:\n    ./d\n\n"
-        "# Would a commit here run tier 0?\n# Red, with the repair, when it would not.\n"
         'hooks-installed:\n    python3 "{{ratchet_plugin}}/hooks_installed.py"\n'
     )
     only = "weekly: plugin-pin\n    echo weekly\n"
@@ -524,7 +520,7 @@ PLUGIN_TEMPLATE = (
 def test_a_justfile_with_no_plugin_line_is_given_the_block_before_its_first_recipe() -> None:
     project = 'set shell := ["sh", "-c"]\n\nlint:\n    echo lint\n'
     assert justfile_text.with_plugin_block(PLUGIN_TEMPLATE)(project) == (
-        'set shell := ["sh", "-c"]\n\n# the plugin\nplugin_choice := "a"\nplugin_py := "b"\n\n'
+        'set shell := ["sh", "-c"]\n\nplugin_choice := "a"\nplugin_py := "b"\n\n'
         "lint:\n    echo lint\n"
     )
 

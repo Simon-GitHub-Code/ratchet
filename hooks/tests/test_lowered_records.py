@@ -154,3 +154,34 @@ def test_a_version_of_the_file_that_does_not_parse_is_skipped_in_the_history(roo
     write(root, THRESHOLDS, table(None))
     commit(root, "chore: mended")
     assert change(root, "readd", "1") == 1, "the broken version is passed over"
+
+
+OWNERS_WORDS = "## In the owner's words"
+ANSWERED = ".scratch/f/issues/01-a.md"
+KEPT = "# 01: A\n\nStatus: resolved\n\n## Answers\n\n- the owner said so\n"
+
+
+def brief(*rows: str) -> str:
+    held = "".join(f"{row}\n" for row in rows)
+    return f"# Brief\n\n{OWNERS_WORDS}\n\n{held}\n## Purpose\n\nA purpose.\n"
+
+
+@pytest.mark.parametrize(
+    ("carried", "code"),
+    [("- 2026-11-17: the owner said so", 0), ("- 2026-11-17: something else", 1)],
+    ids=["its answers kept in the brief", "an answer dropped"],
+)
+def test_a_deleted_steering_file_whose_answer_the_brief_lacks_is_red(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], *, carried: str, code: int
+) -> None:
+    root = repository(
+        tmp_path / "r", {THRESHOLDS: table("2"), ANSWERED: KEPT, "docs/design-brief.md": brief()}
+    )
+    branch(root, "expire")
+    (root / ANSWERED).unlink()
+    write(root, "docs/design-brief.md", brief(carried))
+    commit(root, "docs: expire")
+    capsys.readouterr()
+    assert judge(root) == code
+    said = capsys.readouterr().out
+    assert ("its answer `- the owner said so` is not in" in said) == bool(code)

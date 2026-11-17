@@ -389,3 +389,10 @@ def test_the_cli_refuses_a_record_that_is_not_name_equals_path(
 ) -> None:
     assert run(written, "[]", "--record", pair) == 2
     assert f"`--record {pair}` is not NAME=PATH" in capsys.readouterr().err
+
+
+def test_help_prints_the_whole_description(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        quotes.main(["quotes.py", "--help"])
+    shown = capsys.readouterr().out
+    assert "The records, by name:" in shown

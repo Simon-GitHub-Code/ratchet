@@ -412,3 +412,10 @@ def test_tier_2_that_cannot_be_read_is_red(
 ) -> None:
     history(tmp_path)
     assert deep(tmp_path, capsys, runs) == "red"
+
+
+def test_help_prints_the_whole_description(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        forge_runs.main(["--help"])
+    shown = capsys.readouterr().out
+    assert "prints ``green``" in shown
