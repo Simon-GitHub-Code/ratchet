@@ -56,7 +56,7 @@ Skip a question whose choice the owner's words already make. Assume everything e
    Done when `conformance` names no `architecture` finding and `just check` is green.
 
 5. **Settle the ledger and open the change.**
-   - Delete each `[[owed]]` entry of `quality/owed.toml` whose `rule` is `architecture`, with the Edit tool. `conformance` is red on an entry whose finding is gone, and a ledger only shrinks between upgrades, so dropping them loosens nothing.
+   - Delete each `[[owed]]` entry of `quality/owed.toml` whose `rule` is `architecture`, with the Edit tool. A ledger only shrinks between upgrades, so dropping them loosens nothing.
    - Run `conformance` again and see it green on them.
    - Commit with the subject `chore(method): record the architecture`.
    - **With a forge:** push and open the pull request with every template section filled, the options and the answers under its summary.
@@ -76,7 +76,7 @@ Skip a question whose choice the owner's words already make. Assume everything e
 
 ## Review the architecture
 
-A review is owed when a kind of code that changes the project's shape first arrives, or the owner declares a life event (`deployed`, `irreplaceable-data` or `depended-on`). The catalogue's `[architecture]` table in [application-types.toml](../method/application-types.toml) names each trigger and the question its arrival reopens.
+The catalogue's `[architecture]` table in [application-types.toml](../method/application-types.toml) names each trigger and the question its arrival reopens.
 
 ### What the owner is asked when reviewing
 
@@ -98,7 +98,7 @@ At most one message, and only when the review finds that the architecture should
 
 1. **Check the ground.**
    - Start on the default branch with a clean tree.
-   - Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --root . --reviews` in one Bash call. It lists each owed review: its trigger, the kind or event, how many instances, and what the arrival reopens.
+   - Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --root . --reviews` in one Bash call.
    - When it lists nothing, say so, print the route as step 6 does, and stop.
    - Make the branch `docs/architecture-<what>`, where `<what>` is the kinds or the events in a word or two.
 
@@ -113,7 +113,7 @@ At most one message, and only when the review finds that the architecture should
    Done when you can say the decision in three sentences and name each part's job.
 
 3. **Read the code as it now is.**
-   - Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --root . --count`. It lists the instances of each kind.
+   - Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --root . --count`.
    - For each owed trigger, open every instance and say which part it sits in, what it reaches and what reaches it.
    - Use `mattpocock-skills:codebase-design` on the boundary the new kind sits at.
    - **For an event:** read what the event changes for the people it brings: who reaches the project and from where, what must survive, which surfaces are now promises.
@@ -162,6 +162,6 @@ At most one message, and only when the review finds that the architecture should
    - what arrived, what the review found, and what now holds: the decision kept, or the option the owner chose and what follows from it;
    - **The decision holds:** list it under **Assumed**, one line per trigger: what arrived, what you concluded and why in a clause, what changing it later costs, and that saying "rethink how it is built for <the thing that arrived>" reopens it.
 
-   The last lines are the route: run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines as they are. When safeguards are owed, it names `/ratchet:safeguard` next.
+   The last lines are the route: run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines as they are.
 
    Done when the reply says what arrived, what the review found and what now holds, lists a decision that holds under **Assumed**, and ends with the route's lines.

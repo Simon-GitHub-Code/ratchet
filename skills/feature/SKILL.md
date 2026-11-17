@@ -23,7 +23,7 @@ Pick the mode from what the owner typed:
 
 1. **Preflight, before any agent exists.**
    - Run, in one Bash call: `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" "<ticket>" --root .`.
-   - It prints JSON (`ok`, `failures`, `number`, `title`, `slug`, `branch`, `base`, `label`, `critic`, `critic_reason`, `named_gates`) and exits 1 when red. `base` is the default branch, read from the checkout and the binding.
+   - It prints JSON (`ok`, `failures`, `number`, `title`, `slug`, `branch`, `base`, `label`, `critic`, `critic_reason`, `named_gates`) and exits 1 when red.
    - **Red on `size` alone** (the ticket's own `## Size` passes a product ceiling): split it as [Too large](#too-large-the-agent-splits-it) says, then build the first part that is free.
    - **A `hooks` failure whose `produce` does not start `the owner:`** is yours to repair. Run the command it names in one Bash call, then the preflight again.
    - **A `hooks` failure whose `produce` starts `the owner:`** is a change of git config, which the guard refuses from an agent. Report it with the rest below; do not run it.
@@ -33,7 +33,7 @@ Pick the mode from what the owner typed:
 
 2. **The branch.**
    - When `git rev-parse --verify --quiet <branch>` finds the branch, `git switch <branch>`. Otherwise `git switch -c <branch> <base>`.
-   - Run the preflight again with `--branch <branch>`, its report written to a file made with `mktemp`, outside the work tree. It must stay green. The report also holds `start`, the state of the branch and the forge that the publish check of step 3 compares with.
+   - Run the preflight again with `--branch <branch>`, its report written to a file made with `mktemp`, outside the work tree. It must stay green.
    - **Red with `--branch`:** report `verdict: blocked` and, for each failure, its `check`, `detail` and `produce`. Spawn nothing. Stop.
 
    Done when you are on the branch and the preflight with `--branch` is green, or you have reported every failure and stopped.
@@ -45,7 +45,7 @@ Pick the mode from what the owner typed:
    args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "preflight": "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py", "namedGates": <the preflight's named_gates> }
    ```
 
-   The run is the one [pipeline.md](../method/pipeline.md) describes. It never commits, pushes or opens a pull request. The critic runs only when `critic` is true (the binding declares the `depended-on` life event).
+   The run is the one [pipeline.md](../method/pipeline.md) describes.
 
    **The publish check, each time the run returns or errors,** before anything is committed and before a resume: write the run's result, as JSON, to `<the report file of step 2>.result.json`, then run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/publish_check.py" <the report file of step 2> --root .` in one Bash call. A run that errored has no result: write none and add `--before-resume`.
    - **Exit 0:** nothing moved. Go on.
@@ -60,7 +60,7 @@ Pick the mode from what the owner typed:
 
 4. **A result that is not approved.** A `verdict` other than `approve`, an open `unresolvedBlockingFindings` or a red `checkOutput` tail commits nothing. An approved result goes to step 5.
    - Clear what the agents left with `git stash push -u -m "<branch>: <verdict> run"`, then `git switch <base>`.
-   - Name the stash in the hand-over. A `blocked` stash holds the ticket in the route until the default branch moves past the run.
+   - Name the stash in the hand-over.
 
    Then, for each of these the result holds:
    - **`openQuestions`:** ask each as `feature.open-question`, as [Questions for the owner](#questions-for-the-owner) says. When every one is answered and there is no guard edit, build the ticket again from step 1 in the same turn.
@@ -78,7 +78,7 @@ Pick the mode from what the owner typed:
    Done when the verdict record is the branch's last commit and holds nothing else.
 
 6. **Publish.**
-   - **With a forge:** push, and open the pull request as [The pull request](#the-pull-request) says. The `merge` workflow merges it once `ci` is green and the judge passes it.
+   - **With a forge:** push, and open the pull request as [The pull request](#the-pull-request) says.
    - **With no forge:** `just merge <branch>` judges the branch, runs `check` on the merge result and merges it, or prints why the merge is the owner's.
 
    Done when the pull request is open with every section filled, or `just merge` has printed its lines.
@@ -102,8 +102,7 @@ Pick the mode from what the owner typed:
 Run every command below from the repository's own checkout, on the default branch. `D` stands for `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py"`.
 
 1. **Clear what an interrupted drain left.**
-   - Run `D clean --all --root .`. It removes every queue work tree, keeps what one held uncommitted as the stash `<branch>: interrupted run`, and prints a line for each.
-   - A work tree whose uncommitted work git cannot stash stays, with a `left:` line saying why.
+   - Run `D clean --all --root .`.
    - It prints this drain's token on stderr (`drain: <token>`). Keep it. When you resume this drain, pass `--drain <token>` to `clean --all` and to `report`.
    - **Exit 2 with `another drain is running`:** another session's drain holds the repository. Stop and report it. `--take-over` is for the owner to say, when that drain is gone for good.
 
@@ -130,7 +129,6 @@ Run every command below from the repository's own checkout, on the default branc
    - First run `D check <ticket> --root .`, with no `--final`, since a role can still commit in the resume. On any exit but 0, settle it as [The publish check](#the-publish-check) says, and do not resume.
    - Resume that run once: the same Workflow call with its resume.
    - If it errors again, the ticket is not parked and the drain does not stop. Run `D close <ticket> --outcome waits --reason "errored: the pipeline run errored twice: <the error's first line>" --root .`.
-   - The next drain builds the ticket again, from the start.
    - A run that returns a result, even a refused one, never takes this path.
    - The same holds for the rejudge of step 4.4: resume it once, then close the ticket the same way.
 
@@ -141,7 +139,6 @@ Run every command below from the repository's own checkout, on the default branc
    1. **Not approved.**
       - **A result with `tooLarge`** is split as [Too large](#too-large-the-agent-splits-it) says, or parked there when its split is refused. The parts join the plan and the drain goes on.
       - **Any other `verdict` than `approve`** parks the ticket. Write the result to a file made with `mktemp` and run `D close <ticket> --outcome parked --result <file> --root .`. It removes the work tree, keeps what the agents left as the stash `<branch>: blocked run`, and holds the ticket until the ticket changes.
-      - A `triggers:` red in the result's `checkOutput` adds a reason that names `/ratchet:safeguard`, or `/ratchet:architecture` for an owed review. That ticket is held only until the safeguard is bound or the review has landed.
       - Keep the result's `openQuestions` for step 7.
    2. **Commit.** On `approve`:
       - First run `D check <ticket> --final --root .`. On any exit but 0, settle it as [The publish check](#the-publish-check) says, and commit nothing.
@@ -179,7 +176,7 @@ Run every command below from the repository's own checkout, on the default branc
    **A close refused with `<ref> merged, and a merge is not unsaid by closing it as <outcome>`:** the close has recorded that merge and removed a work tree its landing left. The ticket has landed: do not close it again, and go on at step 5 (`D plan`).
 
    **A ticket the plan lists as `built`** was committed by an earlier drain and has no run.
-   - When its `why` says it is behind the default branch, start it at step 4.3. `update` makes its work tree again, rebases it and drops the verdict record the move outdated. Then step 4.4 judges it again and 4.5 writes the new record.
+   - When its `why` says it is behind the default branch, start it at step 4.3. Then step 4.4 judges it again and 4.5 writes the new record.
    - Otherwise start it at step 4.6.
 
    Done when the ticket is closed, split, landed as `update` said, or left as step 4.6, exit 3 or a refusal with exit 2 says.
@@ -189,7 +186,7 @@ Run every command below from the repository's own checkout, on the default branc
    Done when every ticket the new plan starts has its run started.
 
 6. **The report.**
-   - When no run is in progress and the plan starts nothing more, run `D report --drain <token> --root .`. It writes `.ratchet/queue/<date>-<time>.md` and prints it.
+   - When no run is in progress and the plan starts nothing more, run `D report --drain <token> --root .`.
    - Print it to the owner whole, adding only the stash names of parked tickets.
    - `git worktree list` then lists no queue work tree but one a `left:` or `kept:` line named. That one stays as the script left it.
 
@@ -204,17 +201,12 @@ Run every command below from the repository's own checkout, on the default branc
 
 ### The publish check
 
-`D check <ticket>` compares the ticket's branch and the forge with the start that `open`, or a rebasing `update`, recorded in the ticket's note (ADR 0060). Only `--final` marks the start passed, and `land` refuses a start that no final check passed. Pass `--final` only on the check just before a commit. The guard enforces this order: a commit in a queue work tree, by `git commit`, `am`, `cherry-pick` or `revert`, is refused until the start has passed its final check.
+Pass `--final` only on the check just before a commit.
 
 - **Exit 0:** nothing moved. Go on.
 - **Exit 1:** a role committed, pushed or opened a pull request, or the orchestrator committed before the final check. The check has parked the ticket, kept what was uncommitted as a stash, and holds the ticket until its text changes. Commit nothing and land nothing. Go on at step 5 (`D plan`), and the report names it. When the line is `check: <ref> is merged and is not checked`, the ticket has landed instead: go on at step 5.
 - **Exit 2:** the note holds no start, which `open` records. Report the line, leave the ticket, and go on at step 5.
 - **Exit 3:** either the check found a rebase left unfinished or a state it cannot read, and has closed the ticket as waiting for a later drain to retry; or it refused before checking, since the ticket is held or its branch has no commit of its own and no work tree. Report the line and go on at step 5.
-
-### Tickets the drain holds or retries
-
-- **A ticket the plan lists as `held`** was parked or left to the owner for a decision. It is not landed again until its text changes or a path its run named as the cause changes on the default branch.
-- **A ticket that waited only for a reason the drain resolves itself** (`behind`, `moved`, `conflict`, `gates`, `refs`, `errored`) stays `built` and is retried, at most `RETRIES` times in a row (three). Then it is held with a reason that says so.
 
 ## The records of an approved change
 
@@ -259,24 +251,23 @@ A ticket that passes the product ceilings (the preflight's `size` failure, the s
    Done when the check has passed the plan, or the ticket is parked as too large: after a second refusal, or at once for a part.
 
 3. **File it.** In the repository's own checkout, run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py" split <ticket> --plan <file> --root .`, only with a plan the check passed.
-   - It checks the plan again, files the parts with the agent-ready label the parent holds now, closes the parent as `split` with its text unedited, and prints the parts.
    - **Exit 1:** it refused the plan and has already parked the ticket as too large: it prints `closed: <ref>: parked`, and the report gives the reason. The ticket is the owner's. Do not run it again.
 
    Done when the parts are printed, or `split` has parked the ticket as too large.
 
-4. **Go on.** The parts are tickets the plan now lists, so the drain builds them in order. The hand-over says the ticket was split, into what, and why.
+4. **Go on.** The hand-over says the ticket was split, into what, and why.
 
    Done when you hold the split's parts and its reason for the hand-over.
 
 ## Questions for the owner
 
-A question reaches the owner only when it is a product question: its answer shapes the product (`direction`) or cannot be taken back (`irreversible`). The result marks each one, from the spec role or from the role its `stoppedAfter` names, with two to four options, the recommended one first, and a sentence on why. Never ask the owner to confirm what you would do anyway, and never ask whether to go on.
+A question reaches the owner only when it is a product question: its answer shapes the product (`direction`) or cannot be taken back (`irreversible`). Never ask the owner to confirm what you would do anyway, and never ask whether to go on.
 
 1. **Ask** `feature.open-question`: "<the question the build stopped on, in the words of someone using the product>" All of them in one message, each as the spec role wrote it, so the owner can accept them all at once. The recommended option is first and its label ends with `(recommended)`; the description gives the reason.
 2. **Write each answer on the ticket** under `## Answers`, the question and the answer in one line each.
    - **A local ticket:** write them at the end of the file and land it from the default branch. With no forge, `just merge --records` (the `merge` entry point) commits it on a branch of its own. With a forge it goes on a branch of its own and through a pull request. Never commit on the default branch itself.
      - **A ticket that already carries the agent-ready label, or the spec such a ticket inherits from,** changes only by the owner's merge, with a forge or without (only a ticket's link paths may change alone). With no forge, the run prints `merge: owner` and the owner's command: relay both as they are. With a forge, the merge job leaves the pull request to the owner and comments why: relay that comment as it is.
    - **A tracker ticket:** `gh issue edit <n> --body-file <file>` with the full body, no label flag.
-3. **Record how the owner answered,** one Bash call per answer: `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/questions.py" record --skill feature --key "feature.<slug>.<n>" --kind <direction|irreversible> --recommended <yes|no> --root .`, where `<n>` is the question's place in the result. The log is `.ratchet/questions.tsv`, which no commit carries.
+3. **Record how the owner answered,** one Bash call per answer: `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/questions.py" record --skill feature --key "feature.<slug>.<n>" --kind <direction|irreversible> --recommended <yes|no> --root .`, where `<n>` is the question's place in the result.
 
    Done when every answer is on its ticket and has its line in the log.

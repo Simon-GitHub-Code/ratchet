@@ -431,5 +431,6 @@ restore-drill:
 prod-probe: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/load_smoke.py" --ready "bind: the live deployment's readiness URL" --url "bind: METHOD URL STATUS BODY of a live route safe to repeat"
 
-reports:
+reports: _plugin
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/documents.py" prunable
     @echo "bind: hotspots, coupling, complexity; advisory only"; exit 1

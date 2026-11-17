@@ -121,6 +121,19 @@ class Change:
     def kept(self, path: str) -> bool:
         return git(self.root, "cat-file", "-e", f"{self.head}:{path}") is not None
 
+    def moved(self, path: str) -> str | None:
+        """Where git reads ``path`` as renamed to between the merge base and the head, if it is."""
+        listed = git(self.root, "diff", "-M", "--name-status", "-z", self.fork, self.head) or ""
+        fields = iter(listed.split("\0"))
+        for status in fields:
+            if status[:1] == "R":
+                old, new = next(fields), next(fields)
+                if old == path:
+                    return new
+            else:
+                next(fields, None)
+        return None
+
 
 @dataclass(frozen=True)
 class Uncommitted(Change):
@@ -1180,20 +1193,37 @@ def lost_headings(change: Change) -> list[Reason]:
     reasons: list[Reason] = []
     for path in pages(change):
         kind = documents.kind_of(path, kinds)
-        before, after = change.before(path), change.after(path)
-        if kind is None or before is None or not change.kept(path):
+        before = change.before(path)
+        if kind is None or before is None:
             continue
+        target = path if change.kept(path) else change.moved(path)
+        if target is None or documents.kind_of(target, kinds) != kind:
+            reasons.extend(deleted_whole(path, kind))
+            continue
+        after = change.after(target) or ""
         reasons.extend(
             Reason(
                 "document",
-                f"`{path}` loses `{heading}`, which a {kind.name} page keeps, so the merge is the"
+                f"`{target}` loses `{heading}`, which a {kind.name} page keeps, so the merge is the"
                 " owner's",
             )
             for heading in kind.keeps
             if markdown_text.has_section(before, heading)
-            and not markdown_text.has_section(after or "", heading)
+            and not markdown_text.has_section(after, heading)
         )
     return reasons
+
+
+def deleted_whole(path: str, kind: documents.Kind) -> list[Reason]:
+    if not kind.keeps:
+        return []
+    return [
+        Reason(
+            "document",
+            f"`{path}` is deleted, and a {kind.name} page keeps `{kind.keeps[0]}`, so the merge"
+            " is the owner's",
+        )
+    ]
 
 
 def prune_pass(change: Change) -> bool:

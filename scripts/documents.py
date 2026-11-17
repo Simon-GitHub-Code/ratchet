@@ -36,6 +36,12 @@ TICKETS = "issues"
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 MARKERS = ("<<<<<<<", "|||||||", "=======", ">>>>>>>")
 PRUNE = re.compile(rf"`?({NEVER}|{CUT})`?(?:\s+keeping\s+(.+))?")
+PRUNE_AFTER = "Prune after"
+PRUNE_AFTER_DEFAULT = 10
+DOCS_PRUNE = re.compile(r"docs\(prune\)!?: ")
+PASSED = gatelib.STATE / "prune-pass"
+CITED = re.compile(r"(?P<path>[\w.@+-]+(?:/[\w.@+-]+)+)(?::(?P<symbol>[A-Za-z_][\w.]*))?")
+LINK = re.compile(r"\[[^\]\n]*\]\(([^)\s#]+)(?:#[^)\s]*)?\)")
 
 
 @dataclass(frozen=True)
@@ -78,9 +84,10 @@ def declared(binding: str | None) -> Declared | None:
     if binding is None or not markdown_text.has_section(binding, SECTION):
         return None
     tables = [t for t in markdown_text.tables(binding, SECTION) if t.header == COLUMNS]
+    after = after_problems(binding)
     if not tables:
         columns = " | ".join(COLUMNS)
-        return Declared((), (f"the section lacks its table with the columns {columns}",))
+        return Declared((), (f"the section lacks its table with the columns {columns}", *after))
     kinds: list[Kind] = []
     problems: list[str] = []
     for row in tables[0].rows:
@@ -89,7 +96,27 @@ def declared(binding: str | None) -> Declared | None:
             problems.append(problem)
         if kind:
             kinds.append(kind)
-    return Declared(tuple(kinds), tuple(problems))
+    return Declared(tuple(kinds), (*problems, *after))
+
+
+def after_line(binding: str | None) -> str | None:
+    return markdown_text.bullets(markdown_text.section(binding or "", SECTION)).get(PRUNE_AFTER)
+
+
+def whole(value: str) -> bool:
+    return value.isdecimal() and int(value) > 0
+
+
+def after_problems(binding: str) -> tuple[str, ...]:
+    value = after_line(binding)
+    if value is None or whole(value):
+        return ()
+    return (f"`- {PRUNE_AFTER}:` is not a whole number of merges, one or more",)
+
+
+def prune_after(binding: str | None) -> int:
+    value = after_line(binding)
+    return int(value) if value is not None and whole(value) else PRUNE_AFTER_DEFAULT
 
 
 def row_kind(row: Sequence[str], held: set[str]) -> tuple[Kind | None, str | None]:
@@ -371,12 +398,195 @@ def settled(text: str) -> str | None:
     return "\n".join([*head, "", *ordered, "", *tail])
 
 
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["expire"])
-    parser.add_argument("--root", default=".")
-    options = parser.parse_args(argv[1:])
-    done = expire(Path(options.root).resolve(), dt.datetime.now(tz=dt.UTC).date())
+@dataclass(frozen=True)
+class Citation:
+    path: str
+    symbol: str | None
+
+
+def citations(text: str, page: str) -> list[Citation]:
+    found: dict[Citation, None] = {}
+    for item in markdown_text.ticked(text):
+        match = CITED.fullmatch(item)
+        if match:
+            found[Citation(match["path"], match["symbol"])] = None
+    folder = posixpath.dirname(page)
+    for target in LINK.findall(text):
+        path = posixpath.normpath(posixpath.join(folder, target))
+        if ":" not in target and path.split("/")[0] not in ("", ".", ".."):
+            found[Citation(path, None)] = None
+    return list(found)
+
+
+def present(path: str, tree: Collection[str]) -> bool:
+    return path in tree or any(held.startswith(f"{path}/") for held in tree)
+
+
+def holds_symbol(root: Path, path: str, symbol: str) -> bool:
+    text = gatelib.read_text(root / path)
+    return text is not None and re.search(rf"(?<!\w){re.escape(symbol)}(?!\w)", text) is not None
+
+
+def cited(root: Path, pages: Iterable[str]) -> list[str]:
+    tree = set(gatelib.tracked_paths(root))
+    findings = []
+    for page in pages:
+        for cite in citations(gatelib.read_text(root / page) or "", page):
+            if not present(cite.path, tree):
+                findings.append(f"cited: {page}: `{cite.path}` is not in the tree")
+            elif cite.symbol and not holds_symbol(root, cite.path, cite.symbol):
+                findings.append(
+                    f"cited: {page}: `{cite.path}` does not hold `{cite.symbol}` as a whole word"
+                )
+    return findings
+
+
+def prunable_pages(root: Path, kinds: Sequence[Kind]) -> list[str]:
+    return sorted(
+        path
+        for path in gatelib.tracked_paths(root)
+        if path.endswith(MARKDOWN) and (kind := kind_of(path, kinds)) and kind.prune == CUT
+    )
+
+
+def changed_after(root: Path, page: str, path: str) -> bool:
+    last = gatelib.git(root, "log", "-1", "--format=%H", "--", page)
+    if not last:
+        return False
+    later = gatelib.git(root, "rev-list", "--count", f"{last}..HEAD", "--", path)
+    return int(later or 0) > 0
+
+
+def stale(root: Path) -> list[tuple[str, str]]:
+    tree = set(gatelib.tracked_paths(root))
+    pairs = (
+        (page, cite.path)
+        for page in prunable_pages(root, kinds_of(root))
+        for cite in citations(gatelib.read_text(root / page) or "", page)
+        if cite.path in tree
+    )
+    return [pair for pair in dict.fromkeys(pairs) if changed_after(root, *pair)]
+
+
+def landed_after(root: Path, ref: str, mark: str) -> int:
+    line = (gatelib.git(root, "rev-list", "--first-parent", ref) or "").split()
+    after = set((gatelib.git(root, "rev-list", "--ancestry-path", f"{mark}..{ref}") or "").split())
+    return sum(commit in after for commit in line) - (mark not in line)
+
+
+def count_after(root: Path, ref: str, commit: str) -> int | None:
+    span = f"{commit}..{ref}" if commit else ref
+    counted = gatelib.git(root, "rev-list", "--first-parent", "--count", span)
+    return int(counted) if counted else None
+
+
+def landed_since_pass(root: Path, ref: str) -> int | None:
+    counts = []
+    logged = (gatelib.git(root, "log", "--format=%H %s", ref) or "").splitlines()
+    marks = (line.split(" ", 1) for line in logged)
+    mark = next((pair[0] for pair in marks if DOCS_PRUNE.match(pair[-1])), None)
+    if mark:
+        counts.append(landed_after(root, ref, mark))
+    recorded = (gatelib.read_text(root / PASSED) or "").strip()
+    if recorded and (since := count_after(root, ref, recorded)) is not None:
+        counts.append(since)
+    if counts:
+        return min(counts)
+    return count_after(root, ref, "")
+
+
+@dataclass(frozen=True)
+class Due:
+    merges: int
+    page: str
+    path: str
+
+
+def due(root: Path, ref: str) -> Due | None:
+    merges = landed_since_pass(root, ref)
+    after = prune_after(gatelib.read_text(root / gatelib.BINDING))
+    if merges is None or merges < after:
+        return None
+    found = stale(root)
+    return Due(merges, *found[0]) if found else None
+
+
+def passed(root: Path) -> str | None:
+    tip = default_tip(root)
+    commit = gatelib.git(root, "rev-parse", tip) if tip else None
+    if not commit:
+        return None
+    (gatelib.state_dir(root) / PASSED.name).write_text(f"{commit}\n", encoding="utf-8")
+    return commit
+
+
+def filled(text: str) -> int:
+    return sum(1 for row in text.split("\n") if row.strip())
+
+
+def cuttable(text: str, keeps: Collection[str]) -> int:
+    kept = sum(
+        sum(row.rstrip() == heading for row in text.split("\n"))
+        + filled(markdown_text.section(text, heading))
+        for heading in keeps
+    )
+    return filled(text) - kept
+
+
+def prunable_counts(root: Path) -> list[tuple[str, int]]:
+    kinds = kinds_of(root)
+    held = prunable_pages(root, kinds)
+    return [
+        (
+            kind.name,
+            sum(
+                cuttable(gatelib.read_text(root / page) or "", kind.keeps)
+                for page in held
+                if kind_of(page, kinds) is kind
+            ),
+        )
+        for kind in kinds
+        if kind.prune == CUT
+    ]
+
+
+def prunable_line(counts: Iterable[tuple[str, int]]) -> str:
+    kinds = ", ".join(f"{name} {count}" for name, count in counts)
+    return (
+        f"prunable lines: {kinds} (a count, not a gate;"
+        " /ratchet:prune pages cuts them when a pass is due)"
+    )
+
+
+def report_cited(root: Path, pages: Sequence[str]) -> int:
+    findings = cited(root, pages)
+    for finding in findings:
+        print(finding)
+    return 1 if findings else 0
+
+
+def report_stale(root: Path) -> int:
+    for page, path in stale(root):
+        print(f"{page}\t{path}")
+    return 0
+
+
+def report_prunable(root: Path) -> int:
+    print(prunable_line(prunable_counts(root)))
+    return 0
+
+
+def report_passed(root: Path) -> int:
+    commit = passed(root)
+    if commit is None:
+        print("passed: the default branch has no commit to count from")
+        return 1
+    print(f"passed: merges are counted from {commit[:12]}")
+    return 0
+
+
+def report_expire(root: Path) -> int:
+    done = expire(root, dt.datetime.now(tz=dt.UTC).date())
     if done.problem is not None:
         print(f"expire: {done.problem}")
         return 1
@@ -387,6 +597,26 @@ def main(argv: list[str]) -> int:
     if not done.deleted:
         print("expire: nothing has expired")
     return 0
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("action", choices=["expire", "cited", "stale", "passed", "prunable"])
+    parser.add_argument("pages", nargs="*")
+    parser.add_argument("--root", default=".")
+    options = parser.parse_intermixed_args(argv[1:])
+    root = Path(options.root).resolve()
+    if options.action == "cited":
+        if not options.pages:
+            parser.error("cited needs the files whose citations it reads")
+        return report_cited(root, options.pages)
+    actions: dict[str, Callable[[Path], int]] = {
+        "stale": report_stale,
+        "prunable": report_prunable,
+        "passed": report_passed,
+        "expire": report_expire,
+    }
+    return actions[options.action](root)
 
 
 if __name__ == "__main__":
