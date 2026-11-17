@@ -17,7 +17,7 @@ LOSES = (
     " merge is the owner's"
 )
 PRODUCT_CUT = (
-    "document: prune: `PRODUCT.md` is a product and design page, which a prune pass does not cut,"
+    "prune: `PRODUCT.md` is a product and design page, which a prune pass does not cut,"
     " so the merge is the owner's"
 )
 SPEC = "docs/features/thing/spec.md"

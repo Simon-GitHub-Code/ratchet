@@ -1522,8 +1522,8 @@ def prune_reasons(change: Change) -> list[Reason]:
     kinds = head_kinds(change)
     return [
         Reason(
-            "document",
-            f"prune: `{path}` is a {kind.name} page, which a prune pass does not cut, so the"
+            "prune",
+            f"`{path}` is a {kind.name} page, which a prune pass does not cut, so the"
             " merge is the owner's",
         )
         for path in pages(change)
