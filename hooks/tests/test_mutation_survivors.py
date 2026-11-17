@@ -500,3 +500,12 @@ def test_a_changed_scope_with_nothing_changed_prints_nothing(tmp_path: Path, cap
     branch(root, "feature/x")
     assert run(root, "--tool", "cargo-mutants", "--changed", "--base", "main") == 0
     assert capsys.readouterr().out == ""
+
+
+def test_help_prints_the_neutral_record_format_a_tools_converter_writes(capsys: Out) -> None:
+    with pytest.raises(SystemExit):
+        gate.main(["mutation_survivors.py", "--help"])
+    shown = capsys.readouterr().out
+    for field in ("``file``", "``mutator``", "``status``", "``start``", "``unit``"):
+        assert field in shown
+    assert '{"file": ' in shown
