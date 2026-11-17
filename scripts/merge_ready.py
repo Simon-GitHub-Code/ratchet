@@ -87,6 +87,7 @@ import feature_preflight as preflight
 import flags as registry
 import gatelib
 import lowered
+import markdown_text
 import owed
 import plugin_pin
 
@@ -131,6 +132,8 @@ DOOR_EVENTS = frozenset({"deployed", "irreplaceable-data"})
 SURFACE_EVENTS = frozenset({"deployed"})
 FLAGS_QUESTION = "changed flags off and on"
 DOCS = "docs/"
+PRUNE_SLUG = "prune-pages"
+PRUNE_SUBJECT = re.compile(r"docs\(prune\)!?:")
 HARNESS = Group("harness", "The manifest says what a guard path is.", (MANIFEST_PATH,))
 # Why: Claude Code loads a CLAUDE.md beside any file it reads, and the other harnesses read
 # theirs the same way, so an agent obeys these at any depth; the manifest names the top only.
@@ -1478,6 +1481,56 @@ def expiry_reasons(change: Change) -> list[Reason]:
     ]
 
 
+def head_kinds(change: Change) -> tuple[documents.Kind, ...]:
+    return documents.all_kinds(change.after(BINDING))
+
+
+def pages(change: Change) -> list[str]:
+    return [path for path in change.paths if path.endswith(documents.MARKDOWN)]
+
+
+def lost_headings(change: Change) -> list[Reason]:
+    kinds = head_kinds(change)
+    reasons: list[Reason] = []
+    for path in pages(change):
+        kind = documents.kind_of(path, kinds)
+        before, after = change.before(path), change.after(path)
+        if kind is None or before is None or not change.kept(path):
+            continue
+        reasons.extend(
+            Reason(
+                "document",
+                f"`{path}` loses `{heading}`, which a {kind.name} page keeps, so the merge is the"
+                " owner's",
+            )
+            for heading in kind.keeps
+            if markdown_text.has_section(before, heading)
+            and not markdown_text.has_section(after or "", heading)
+        )
+    return reasons
+
+
+def prune_pass(change: Change) -> bool:
+    record = f"docs/features/{PRUNE_SLUG}/{documents.VERDICT}"
+    subjects = git(change.root, "log", "--format=%s", f"{change.fork}..{change.head}") or ""
+    return record in change.paths or any(PRUNE_SUBJECT.match(line) for line in subjects.split("\n"))
+
+
+def prune_reasons(change: Change) -> list[Reason]:
+    if not prune_pass(change):
+        return []
+    kinds = head_kinds(change)
+    return [
+        Reason(
+            "document",
+            f"prune: `{path}` is a {kind.name} page, which a prune pass does not cut, so the"
+            " merge is the owner's",
+        )
+        for path in pages(change)
+        if (kind := documents.kind_of(path, kinds)) and kind.prune != documents.CUT
+    ]
+
+
 def judge(
     root: Path,
     base_ref: str,
@@ -1533,6 +1586,8 @@ def judge(
         ),
         *dispute_reasons(change),
         *expiry_reasons(change),
+        *lost_headings(change),
+        *prune_reasons(change),
         *record_reasons(change, manifest),
     ]
 
