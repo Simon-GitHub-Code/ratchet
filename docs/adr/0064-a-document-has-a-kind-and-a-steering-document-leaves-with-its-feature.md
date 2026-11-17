@@ -23,6 +23,7 @@ A plan written to steer an agent toward a feature is worse context than the code
 | product and design | `PRODUCT.md`, `DESIGN.md` | standing | never; their own plugin rewrites them |
 | brief | `docs/design-brief.md` | standing | pass, never `## Purpose`, `## In the owner's words` or `## Explicitly out of slice one` |
 | readme | `README.md` at any depth | standing | pass |
+| change description | `.scratch/changes/<branch>.md` | standing | never |
 | local feature | `.scratch/<slug>/spec.md`, `.scratch/<slug>/issues/*.md` | steering | none |
 | feature spec | `docs/features/<slug>/spec.md` | steering | none |
 
