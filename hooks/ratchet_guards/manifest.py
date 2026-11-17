@@ -12,8 +12,8 @@ records an agent may add to and only the owner changes: an edit that ``ratchet_g
 finds additive passes even on the default branch (ADR 0014). Its
 optional ``exclude`` lists patterns its ``paths`` do not cover, such as agent worktrees under
 ``.claude/worktrees/``, which are checkouts of their own. A group whose ``paths`` list is
-empty matches nothing: the adopt template ships such groups behind ``# bind:`` comments until
-adopt fills them, and the conformance gate reports any still empty.
+empty matches nothing: the adopt template ships such groups until adopt fills them, and the
+conformance gate reports any still empty.
 
 The file also lists the repository's one-way doors, as ``[[door]]`` tables: paths whose change
 cannot be taken back once it ships (ADR 0021). A door is no guard group: the hook, ``guard-diff``

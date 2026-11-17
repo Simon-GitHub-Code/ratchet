@@ -36,8 +36,13 @@ Done when every surviving mutant is killed by a test or has an entry of its own 
 
 ```toml
 [<language>.coverage.<group>]
+paths = ["src/<group>/**"]
 line = 93.4
 branch = 88.0
+
+[<language>.coverage.core]
+paths = ["src/core/**"]
+absolute = true
 
 [<language>.mutation]
 score = 99.8

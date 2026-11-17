@@ -4526,7 +4526,7 @@ def record_mutations() -> list[Mutation]:
     ]
 
 
-UNBOUND_GROUP = re.compile(r"paths = \[\n(?:\s*# bind:[^\n]*\n)+\]")
+UNBOUND_GROUP = re.compile(r"^paths = \[\]$", re.MULTILINE)
 TYPES_PLACEHOLDER = re.compile(r"^- Application types: <[^\n]*>$", re.MULTILINE)
 EMPTY_TOOL_CELL = re.compile(r"^(\| [^|\n]+ \|) \|", re.MULTILINE)
 TEST_PATHS_PLACEHOLDER = re.compile(r"^- Tests: <[^\n]*>$", re.MULTILINE)

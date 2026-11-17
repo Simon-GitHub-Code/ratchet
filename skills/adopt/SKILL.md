@@ -144,8 +144,8 @@ Tell the owner this before step 1. It is not a question.
    Done when every entry point names a command, no Tool cell is empty, the architecture record exists, `AGENTS.md` holds the non-negotiables and the stack rules and no `## Layers` section, and neither file holds an angle-bracket placeholder outside Speed.
 
 8. **Fill the manifest, then generate the permission rules.**
-   - Add this stack's tool configs (the dependency manifest and its lockfile among them), fitness tests and gate tools to `guards/manifest.toml`, so no group has an empty `paths`. A path may be listed before its file exists.
-   - Bind the three `[[door]]` tables, the one-way doors the merge judge sends to the owner. A door with no path here keeps `paths = []` and says why in `none = "<reason>"`.
+   - Fill each empty `paths` of the groups in `guards/manifest.toml` with this stack's globs: `tool-config` takes the config file of every gate tool, the dependency manifest and its lockfile among them, `fitness` the fitness test directories, and `gate-tools` the directories of the gate tools the project writes. A path may be listed before its file exists. Where a project-local verification skill exists, add its directory to `formal`.
+   - Bind the three `[[door]]` tables, the one-way doors the merge judge sends to the owner: `one-way` takes the migrations, schema definitions and infrastructure code, `stored-data` the golden fixtures `data-compat` loads, and `contracts` the artefacts `contracts-check` and `api-check` diff. A door with no path here keeps `paths = []` and says why in `none = "<reason>"`.
    - Run `just settings` last, so the permission rules switch on only once every guard file is in place. It creates `.claude/settings.json` and writes its `deny` and `ask` lists. Never edit them by hand.
 
    Two things stay apart: the guard hook reads its path rules from the manifest on the default branch, so they start with the adoption's merge, while the permission rules come from the work tree's `.claude/settings.json` and start the moment `just settings` writes it.
@@ -206,7 +206,7 @@ Tell the owner this before step 1. It is not a question.
    **A gate with nothing to run is red.** No test, benchmark, fuzz target or scenario: the recipe fails and says what is missing, even where the tool's own exit code would pass. A row is bound only once its trigger has fired, so what it judges already has a member.
 
    **A bite for every gate you bind.**
-   - With each recipe, add its `[[bite]]` to `quality/bites.toml` as its header says: the smallest fault the gate exists to catch, and the words it prints for it. A collection gate gets a second bite that removes the collection.
+   - With each recipe, add its `[[bite]]` to `quality/bites.toml` in the form [tiers.md](../method/tiers.md#every-bound-gate-is-shown-to-bite) gives: the smallest fault the gate exists to catch, and the words it prints for it. A collection gate gets a second bite that removes the collection.
    - A row whose question requires a proof by name (`[proofs]` in `application-types.toml`: telemetry emitted, changed flags off and on, load smoke) gets a bite that plants that fault and claims it with `proof = "<name>"`.
    - A shipped service gate bound now needs one, since its row names your `boot`: `smoke` a deliverable that exits, `load-smoke` a route that answers with an error, `telemetry-e2e` a deliverable that exports nothing.
    - A `later:` row needs none.
