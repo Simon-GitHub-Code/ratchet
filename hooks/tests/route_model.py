@@ -172,6 +172,8 @@ class Advice(StrEnum):
     FORMAL_TICKET = "formal-ticket"
     FORMAL_ROUND = "formal-round"
     FORMAL_UPKEEP = "formal-upkeep"
+    PRUNE_COMMENTS = "prune-comments"
+    PRUNE_PAGES = "prune-pages"
     EXPIRE = "expire"
     GRILL = "grill"
     TRIAGE = "triage"
@@ -241,6 +243,9 @@ class ActionName(StrEnum):
     AGENT_RUNS_A_ROUND = "AgentRunsARound"
     OWNER_MERGES_THE_ROUND = "OwnerMergesTheRound"
     AGENT_FIXES_THE_ROUND_TICKET = "AgentFixesTheRoundTicket"
+    MERGES_LEAVE_A_PAGE_STALE = "MergesLeaveAPageStale"
+    AGENT_PRUNES_COMMENTS = "AgentPrunesComments"
+    AGENT_PRUNES_PAGES = "AgentPrunesPages"
 
 
 Slots = tuple[Ticket, Ticket]
@@ -288,6 +293,8 @@ class World:
     left: bool = False
     upkeep: Upkeep = Upkeep.CLEAR
     defect: Defect = Defect.NONE
+    comments: bool = False
+    pages: bool = False
 
 
 def adopted(world: World) -> bool:
@@ -327,7 +334,20 @@ def rest(world: World) -> bool:
         and not world.left
         and world.upkeep is Upkeep.CLEAR
         and world.defect is Defect.NONE
+        and not pruning(world)
     )
+
+
+def pruning(world: World) -> bool:
+    return world.comments or world.pages
+
+
+def unpruned(world: World) -> World:
+    return replace(world, comments=False, pages=False)
+
+
+def rest_but_the_prune(world: World) -> bool:
+    return rest(unpruned(world))
 
 
 def live(world: World) -> bool:
@@ -438,12 +458,15 @@ ROUND_TICKET: Final = Rule(Advice.FORMAL_TICKET, lambda w: w.upkeep is Upkeep.TI
 ROUND_WAITING: Final = Rule(Advice.FORMAL_ROUND, lambda w: w.upkeep in WAITING)
 MODEL_BEHIND: Final = Rule(Advice.FORMAL_UPKEEP, lambda w: w.upkeep in BEHIND)
 MEET: Final = Rule(Advice.CHANGE_TICKET, lambda w: held_for(w, Ticket.OWES_ITS_ROW))
+COMMENTS_OWED: Final = Rule(Advice.PRUNE_COMMENTS, lambda w: w.comments)
+PAGES_DUE: Final = Rule(Advice.PRUNE_PAGES, lambda w: w.pages)
+PRUNES: Final = frozenset({Advice.PRUNE_COMMENTS, Advice.PRUNE_PAGES})
 
 
 # The order is the order ``route.decide`` asks: setup, an unfinished change, the records, the rows
 # an upgrade left for an agent to fill, the architecture review, the safeguard, the architecture an
-# upgrade left owed, the formal model's upkeep, then the glossary and the tickets. The last rule
-# holds for any world, so the chain is total.
+# upgrade left owed, the formal model's upkeep, the prune pass, then the glossary and the tickets.
+# The last rule holds for any world, so the chain is total.
 CHAIN: Final = (
     Rule(Advice.INIT, lambda w: w.setup in {Setup.BARE, Setup.STARTED}),
     Rule(Advice.TRACKER, lambda w: w.setup is Setup.NAMED),
@@ -462,6 +485,8 @@ CHAIN: Final = (
     ROUND_TICKET,
     ROUND_WAITING,
     MODEL_BEHIND,
+    COMMENTS_OWED,
+    PAGES_DUE,
     Rule(Advice.EXPIRE, lambda w: w.left),
     Rule(Advice.GRILL, lambda w: not w.foundation),
     Rule(Advice.CONJECTURE, lambda w: w.upkeep is Upkeep.UNSTATED),
@@ -497,18 +522,23 @@ def swapped(rule: Rule, *by: Rule) -> Chain:
 
 
 def beneath(world: World, chain: Chain = CHAIN) -> str:
-    """The advice once nothing is unfinished in the checkout and nothing is owed.
+    """The advice once nothing is unfinished in the checkout and nothing before a due prune is owed.
+
+    Where the prune pass is named, the advice beneath it: the work it offers beside it.
 
     A ticket built on its branch is ``building``: its merge is what the checkout shows.
     """
     if Ticket.BUILT in world.tickets:
         return "building"
-    if world.upkeep in ROUND_TICKETS:
-        return ROUND_TICKETS[world.upkeep]
     clean = replace(world, head=Head.MAIN, tree=Tree.CLEAN, parked=False)
     recorded = replace(clean, architecture=Architecture.RECORDED)
-    owed = replace(recorded, owes=False, reviews=False, fills=False)
-    return advice(replace(owed, upkeep=Upkeep.CLEAR), chain)
+    owed = replace(recorded, owes=False, reviews=False, fills=False, upkeep=Upkeep.CLEAR)
+    due = advice(owed, chain)
+    if due in PRUNES and advice(world, chain) not in PRUNES:
+        return due
+    if world.upkeep in ROUND_TICKETS:
+        return ROUND_TICKETS[world.upkeep]
+    return advice(unpruned(owed), chain)
 
 
 @dataclass(frozen=True)
@@ -629,6 +659,7 @@ class Variant:
     deleter: Deleter = deletes
     chain: Chain = CHAIN
     refused_behind: frozenset[ActionName] = frozenset()
+    prune_blocks: bool = False
 
     def advice(self, world: World) -> Advice:
         return advice(world, self.chain)
@@ -646,7 +677,7 @@ class Action:
     outcomes: Successors
 
     def successors(self, world: World, variant: Variant = PAGES) -> Iterator[World]:
-        allowed = allowed_steps(world, variant.chain)
+        allowed = allowed_steps(world, variant)
         if allowed is not None and self.name not in allowed:
             return iter(())
         if self.name in variant.refused_behind and world.upkeep in BEHIND:
@@ -698,7 +729,18 @@ def following_today(world: World, chain: Chain = CHAIN) -> frozenset[ActionName]
 
 
 OFFERED: Final = frozenset({Advice.FORMAL_ROUND, Advice.FORMAL_UPKEEP})
+OFFERING: Final = OFFERED | PRUNES | {Advice.ARCHITECTURE}
 LABELS: Final = frozenset(Advice)
+ARRIVALS: Final = frozenset(
+    {
+        ActionName.KIND_OF_CODE_ARRIVES,
+        ActionName.KIND_THAT_REOPENS_THE_ARCHITECTURE_ARRIVES,
+        ActionName.UPGRADE_LEAVES_ROWS_TO_FILL,
+        ActionName.UPGRADE_FINDS_AN_EXPIRED_UNIT,
+        ActionName.MIRRORED_CODE_LANDS,
+        ActionName.MERGES_LEAVE_A_PAGE_STALE,
+    }
+)
 
 
 def beside_the_upkeep(world: World, chain: Chain) -> frozenset[ActionName]:
@@ -708,13 +750,25 @@ def beside_the_upkeep(world: World, chain: Chain) -> frozenset[ActionName]:
     return frozenset({ADVISED[named], ActionName.MIRRORED_CODE_LANDS, *offered})
 
 
-def allowed_steps(world: World, chain: Chain) -> frozenset[ActionName] | None:
+def beside_the_prune(world: World, variant: Variant) -> frozenset[ActionName]:
+    named = advice(world, variant.chain)
+    if named in PRUNES and variant.prune_blocks:
+        return frozenset({ADVISED[named]})
+    under = beneath(world, variant.chain)
+    offered = {ADVISED[Advice(under)]} if named in OFFERING and under in LABELS else set()
+    return frozenset({ADVISED[named], *offered, *ARRIVALS})
+
+
+def allowed_steps(world: World, variant: Variant) -> frozenset[ActionName] | None:
+    chain = variant.chain
     if world.setup is Setup.PINNED:
         return following_today(world, chain)
     if world.defect is Defect.KEPT:
         return frozenset({ADVISED[advice(world, chain)]})
     if world.upkeep is not Upkeep.CLEAR:
         return beside_the_upkeep(world, chain)
+    if pruning(world):
+        return beside_the_prune(world, variant)
     return None
 
 
@@ -767,13 +821,16 @@ def _owner_adopts(world: World) -> Iterator[World]:
         yield replace(world, setup=Setup.BOUND)
         return
     if world.setup in {Setup.TRACKED, Setup.ADOPTING, Setup.PINNED}:
-        yield replace(
+        adopted = replace(
             world,
             setup=Setup.BOUND,
             head=Head.MAIN,
             tree=Tree.CLEAN,
             architecture=Architecture.RECORDED,
         )
+        yield adopted
+        if world.setup is Setup.TRACKED:
+            yield replace(adopted, comments=True)
 
 
 @action(ActionName.OLDER_PLUGIN_ADOPTS)
@@ -1044,7 +1101,7 @@ per_ticket(
 @action(ActionName.UPGRADE_LEAVES_ROWS_TO_FILL)
 def _upgrade_leaves_rows_to_fill(world: World) -> Iterator[World]:
     """An upgrade at rest: rows to fill, and the architecture where none was asked (ADR 0049)."""
-    if rest(world) and world.tickets == (Ticket.RESOLVED, Ticket.RESOLVED):
+    if rest_but_the_prune(world) and world.tickets == (Ticket.RESOLVED, Ticket.RESOLVED):
         owed = world.architecture is Architecture.UNASKED
         yield replace(
             world, fills=True, architecture=Architecture.OWED if owed else world.architecture
@@ -1080,7 +1137,7 @@ def _agent_fills_rows(world: World) -> Iterator[World]:
 
 @action(ActionName.KIND_OF_CODE_ARRIVES)
 def _kind_of_code_arrives(world: World) -> Iterator[World]:
-    if rest(world) and Ticket.RESOLVED in world.tickets:
+    if rest_but_the_prune(world) and Ticket.RESOLVED in world.tickets:
         yield replace(world, owes=True)
 
 
@@ -1092,7 +1149,7 @@ def _kind_that_reopens_the_architecture_arrives(world: World) -> Iterator[World]
     a chart can draw; ``test_architecture_review`` holds the order there, the review and then the
     safeguard.
     """
-    if rest(world) and Ticket.RESOLVED in world.tickets:
+    if rest_but_the_prune(world) and Ticket.RESOLVED in world.tickets:
         yield replace(world, reviews=True)
 
 
@@ -1133,7 +1190,7 @@ def _owner_records_architecture(world: World) -> Iterator[World]:
 
 @action(ActionName.UPGRADE_FINDS_AN_EXPIRED_UNIT)
 def _upgrade_finds_an_expired_unit(world: World) -> Iterator[World]:
-    if rest(world) and Ticket.RESOLVED in world.tickets:
+    if rest_but_the_prune(world) and Ticket.RESOLVED in world.tickets:
         yield replace(world, left=True)
 
 
@@ -1250,7 +1307,7 @@ def _mirrored_code_lands(world: World) -> Iterator[World]:
     if (
         world.upkeep in landing
         and world.architecture is Architecture.RECORDED
-        and at_rest_but_the_upkeep(world)
+        and at_rest_but_the_upkeep(unpruned(world))
     ):
         yield replace(world, upkeep=landing[world.upkeep])
 
@@ -1275,6 +1332,24 @@ def _owner_merges_the_round(world: World) -> Iterator[World]:
 def _agent_fixes_the_round_ticket(world: World) -> Iterator[World]:
     if calm(world) and world.upkeep is Upkeep.TICKET:
         yield replace(world, upkeep=Upkeep.FIXED)
+
+
+@action(ActionName.MERGES_LEAVE_A_PAGE_STALE)
+def _merges_leave_a_page_stale(world: World) -> Iterator[World]:
+    if rest_but_the_prune(world) and not world.pages:
+        yield replace(world, pages=True)
+
+
+@action(ActionName.AGENT_PRUNES_COMMENTS, Advice.PRUNE_COMMENTS)
+def _agent_prunes_comments(world: World) -> Iterator[World]:
+    if settled(world) and world.comments:
+        yield replace(world, comments=False)
+
+
+@action(ActionName.AGENT_PRUNES_PAGES, Advice.PRUNE_PAGES)
+def _agent_prunes_pages(world: World) -> Iterator[World]:
+    if settled(world) and world.pages:
+        yield replace(world, pages=False)
 
 
 class Edge(NamedTuple):
@@ -1395,6 +1470,21 @@ ABOVE_ARCHITECTURE_CLEAR: Final = (
     'setup = "bound" /\\ hooks /\\ head = "main" /\\ tree = "clean" /\\ ~parked'
     f' /\\ ~fills /\\ ~reviews /\\ (~owes \\/ defect = "{Defect.OPEN}")'
 )
+
+
+def above_prune_open(world: World) -> bool:
+    return (
+        above_architecture_open(world)
+        or world.architecture is Architecture.OWED
+        or world.upkeep not in {Upkeep.CLEAR, Upkeep.UNSTATED}
+    )
+
+
+ABOVE_PRUNE_CLEAR: Final = (
+    f'{ABOVE_ARCHITECTURE_CLEAR}\n  /\\ architecture # "{Architecture.OWED}"'
+    f' /\\ upkeep \\in {{"{Upkeep.CLEAR}", "{Upkeep.UNSTATED}"}}'
+)
+NAMED_PRUNES: Final = ", ".join(f'"{label}"' for label in sorted(PRUNES))
 
 
 def beside(*named: Advice) -> str:
@@ -1687,6 +1777,21 @@ RULES: Final[dict[str, model_tla.Rule]] = {
         " otherwise name can be taken: neither is red.",
         beside(Advice.FORMAL_ROUND, Advice.FORMAL_UPKEEP),
     ),
+    "PruneNamedExactlyWhenDue": model_tla.Invariant(
+        "A prune pass is named exactly when one is due and nothing named before it is open: the"
+        " review, a safeguard, the owed architecture and the formal model's upkeep come first, and"
+        " the expired unit, the glossary and every ticket after it.",
+        f"(advice \\in {{{NAMED_PRUNES}}}) <=>\n  ((comments \\/ pages) /\\ {ABOVE_PRUNE_CLEAR})",
+    ),
+    "PruneNeverHidesTheWork": model_tla.Invariant(
+        "Where a prune pass is named, the step the route would otherwise name can be taken: a due"
+        " pass is never red.",
+        beside(Advice.PRUNE_COMMENTS, Advice.PRUNE_PAGES),
+    ),
+    "CommentsBeforePages": model_tla.Invariant(
+        "Where comments are owed, the route never names the pages pass: the comments come first.",
+        f'comments => advice # "{Advice.PRUNE_PAGES}"',
+    ),
 }
 
 
@@ -1725,10 +1830,11 @@ def charted(label: str) -> str:
 
 def shown(world: World) -> Shown:
     """What the charts read of ``world``."""
+    named = advice(world)
     return Shown(
-        advice(world),
+        named,
         real_advice(world),
-        charted(beneath(world)),
+        named if named in PRUNES else charted(beneath(unpruned(world))),
         world.head,
         world.tree,
         world.parked,

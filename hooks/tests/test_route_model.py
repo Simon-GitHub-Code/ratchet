@@ -317,6 +317,30 @@ def upkeep_hides_the_work(label: Label, graph: model.Graph) -> set[World]:
     }
 
 
+def prune_misnamed(label: Label) -> set[World]:
+    return {
+        s
+        for s in model.graph().states
+        if (label(s) in model.PRUNES) != (model.pruning(s) and not model.above_prune_open(s))
+    }
+
+
+def prune_hides_the_work(label: Label, graph: model.Graph) -> set[World]:
+    taken = defaultdict(set)
+    for edge in graph.edges:
+        taken[edge.source].add(edge.action)
+    return {
+        s
+        for s in graph.states
+        if label(s) in model.PRUNES
+        and model.ADVISED.get(Advice(model.beneath(s, graph.variant.chain))) not in taken[s]
+    }
+
+
+def pages_before_comments(label: Label, graph: model.Graph) -> set[World]:
+    return {s for s in graph.states if s.comments and label(s) is Advice.PRUNE_PAGES}
+
+
 def unfollowable(label: Label, graph: model.Graph) -> set[World]:
     taken = defaultdict(set)
     for edge in graph.edges:
@@ -384,6 +408,15 @@ CHECKS: dict[str, tuple[Callable[[Label], set[World]], Label]] = {
     ),
     "UpkeepNeverHidesTheWork": (
         lambda label: upkeep_hides_the_work(label, model.graph()),
+        model.advice,
+    ),
+    "PruneNamedExactlyWhenDue": (prune_misnamed, model.advice),
+    "PruneNeverHidesTheWork": (
+        lambda label: prune_hides_the_work(label, model.graph()),
+        model.advice,
+    ),
+    "CommentsBeforePages": (
+        lambda label: pages_before_comments(label, model.graph()),
         model.advice,
     ),
 }
@@ -509,6 +542,12 @@ def test_without_the_deleter_the_rule_breaks_after_both_tickets_are_finished_by_
 TO_A_KIND_OWED = [*BOTH_FINISHED_BY_HAND, ActionName.KIND_OF_CODE_ARRIVES]
 TO_MIRRORED_CODE = [*BOTH_FINISHED_BY_HAND, ActionName.MIRRORED_CODE_LANDS]
 TO_A_DEFECT = [*TO_A_KIND_OWED, ActionName.AGENT_BINDS_SAFEGUARD]
+WITH_COMMENTS_OWED = [
+    ActionName.OWNER_INITS,
+    ActionName.OWNER_SETS_UP_TRACKER,
+    ActionName.OWNER_ADOPTS,
+    ActionName.AGENT_INSTALLS_HOOKS,
+]
 WITHOUT_THE_STEP: dict[str, tuple[model.Variant, str, frozenset[str], list[ActionName]]] = {
     "the safeguard's filter of the defect's row": (
         model.Variant(
@@ -572,6 +611,60 @@ WITHOUT_THE_STEP: dict[str, tuple[model.Variant, str, frozenset[str], list[Actio
             ActionName.OWNER_AGREES_TICKET,
         ],
     ),
+    "the prune asked after the formal model's upkeep": (
+        model.Variant(
+            chain=(
+                *model.CHAIN[: model.CHAIN.index(model.SAFEGUARD_OWED) - 1],
+                model.COMMENTS_OWED,
+                model.PAGES_DUE,
+                *(
+                    rule
+                    for rule in model.CHAIN[model.CHAIN.index(model.SAFEGUARD_OWED) - 1 :]
+                    if rule.advice not in model.PRUNES
+                ),
+            )
+        ),
+        "PruneNamedExactlyWhenDue",
+        frozenset({"PruneNeverHidesTheWork"}),
+        [
+            *BOTH_FINISHED_BY_HAND,
+            ActionName.MERGES_LEAVE_A_PAGE_STALE,
+            ActionName.KIND_OF_CODE_ARRIVES,
+        ],
+    ),
+    "the prune asked before the ticket step": (
+        model.Variant(
+            chain=(
+                *(rule for rule in model.CHAIN[:-1] if rule.advice not in model.PRUNES),
+                model.COMMENTS_OWED,
+                model.PAGES_DUE,
+                model.CHAIN[-1],
+            )
+        ),
+        "PruneNamedExactlyWhenDue",
+        frozenset({"AdviceReachesRest"}),
+        WITH_COMMENTS_OWED,
+    ),
+    "the work offered beside a due prune": (
+        model.Variant(prune_blocks=True),
+        "PruneNeverHidesTheWork",
+        frozenset(),
+        WITH_COMMENTS_OWED,
+    ),
+    "the comments asked before the pages": (
+        model.Variant(
+            chain=model.swapped(model.COMMENTS_OWED, model.PAGES_DUE, model.COMMENTS_OWED)
+        ),
+        "CommentsBeforePages",
+        frozenset(),
+        [
+            *WITH_COMMENTS_OWED,
+            ActionName.OWNER_GRILLS,
+            ActionName.AGENT_COMMITS_ON_A_BRANCH,
+            ActionName.BRANCH_MERGES,
+            ActionName.MERGES_LEAVE_A_PAGE_STALE,
+        ],
+    ),
 }
 
 
@@ -583,6 +676,13 @@ def broken_by(graph: model.Graph) -> dict[str, set[World]]:
         "DefectTicketBeforeTheSafeguard": offers_the_defects_row(label, graph),
         "RoundBeforeBehind": behind_before_the_round(label, graph),
         "UpkeepNeverHidesTheWork": upkeep_hides_the_work(label, graph),
+        "PruneNamedExactlyWhenDue": {
+            s
+            for s in graph.states
+            if (label(s) in model.PRUNES) != (model.pruning(s) and not model.above_prune_open(s))
+        },
+        "PruneNeverHidesTheWork": prune_hides_the_work(label, graph),
+        "CommentsBeforePages": pages_before_comments(label, graph),
     }
     return {name: states for name, states in found.items() if states}
 
@@ -635,6 +735,7 @@ def test_the_formal_rules_are_met_where_they_bite() -> None:
         Advice.BLOCKED,
         Advice.BUILD,
         Advice.RESOLVE,
+        *model.PRUNES,
     }
     rounds = {
         (a.upkeep, b.upkeep) for a, act, b in graph.edges if act is ActionName.AGENT_RUNS_A_ROUND
@@ -645,6 +746,63 @@ def test_the_formal_rules_are_met_where_they_bite() -> None:
         (Upkeep.BEHIND, Upkeep.UNSTATED),
         (Upkeep.FIXED, Upkeep.WAITING),
     }
+
+
+def test_the_prune_rules_are_met_where_they_bite() -> None:
+    graph = model.graph()
+    due = [s for s in graph.states if model.pruning(s)]
+    assert {model.advice(s) for s in due} >= {
+        Advice.HOOKS,
+        Advice.COMMIT,
+        Advice.MERGE,
+        Advice.LAND_RECORDS,
+        Advice.MERGE_RECORDS,
+        Advice.FILL,
+        Advice.REVIEW,
+        Advice.SAFEGUARD,
+        Advice.ARCHITECTURE,
+        Advice.FORMAL_ROUND,
+        Advice.FORMAL_UPKEEP,
+        *model.PRUNES,
+    }
+    named = [s for s in due if model.advice(s) in model.PRUNES]
+    assert {model.beneath(s) for s in named} >= {
+        Advice.GRILL,
+        Advice.EXPIRE,
+        Advice.SPECIFY,
+        Advice.TRIAGE,
+        Advice.BUILD,
+        Advice.RESOLVE,
+        Advice.BLOCKED,
+    }
+    assert any(s.pages and model.advice(s) is Advice.PRUNE_COMMENTS for s in named)
+    changed = defaultdict(set)
+    for a, act, b in graph.edges:
+        for part in ("comments", "pages"):
+            if getattr(a, part) != getattr(b, part):
+                changed[part, getattr(b, part)].add(act)
+    assert changed == {
+        ("comments", True): {ActionName.OWNER_ADOPTS},
+        ("comments", False): {ActionName.AGENT_PRUNES_COMMENTS},
+        ("pages", True): {ActionName.MERGES_LEAVE_A_PAGE_STALE},
+        ("pages", False): {ActionName.AGENT_PRUNES_PAGES},
+    }
+    passes = {model.ADVISED[label] for label in model.PRUNES}
+    assert {
+        replace(b, comments=a.comments, pages=a.pages) == a
+        for a, act, b in graph.edges
+        if act in passes
+    } == {True}
+
+
+def test_the_walk_takes_pages_passes_that_cut_and_that_cut_nothing() -> None:
+    passes = [
+        real.Change(edge.source, edge.target)
+        for edge in model.graph().edges
+        if edge.action is ActionName.AGENT_PRUNES_PAGES
+    ]
+    cut = sum(real.cuts_a_page(change) for change in passes)
+    assert 0 < cut < len(passes), f"{cut} of the {len(passes)} pages passes cut a page"
 
 
 def breaks_in(graph: model.Graph) -> dict[str, bool]:
@@ -662,7 +820,7 @@ def test_a_unit_left_by_an_older_plugin_is_deleted_before_the_next_spec() -> Non
     left = [s for s in graph.states if s.left]
     assert left
     assert {(model.advice(s), model.real_advice(s)) for s in left} == {
-        (Advice.EXPIRE, Advice.EXPIRE)
+        (label, label) for label in (Advice.EXPIRE, *model.PRUNES)
     }
     deleted = {
         b.tree for a, act, b in graph.edges if act is ActionName.AGENT_DELETES_THE_EXPIRED_UNIT
@@ -1020,6 +1178,13 @@ def ask(repo: real.Repo, world: World, path: list[str]) -> None:
         assert step.then == after.command, disagreement(world, step, path)
         work = without(repo, "safeguard_step", "architecture_step", "formal_step")
         assert f"Or carry on with {work.command}:" in step.why, disagreement(world, step, path)
+    if real.classify(step) in model.PRUNES:
+        instead = without(repo, "prune_step")
+        under = model.beneath(model.as_the_route_reads(world))
+        assert real.classify(instead) is under, disagreement(world, instead, path)
+        assert step.then == instead.command, disagreement(world, step, path)
+        carry = f"Or carry on with {instead.command}: nothing is red for it"
+        assert carry in step.why, disagreement(world, step, path)
     if real.classify(step) in UPKEEP:
         instead = without(repo, "formal_step")
         under = model.beneath(model.as_the_route_reads(world))
@@ -1650,6 +1815,8 @@ DETOURS = [
     Advice.FORMAL_TICKET,
     Advice.FORMAL_ROUND,
     Advice.FORMAL_UPKEEP,
+    Advice.PRUNE_COMMENTS,
+    Advice.PRUNE_PAGES,
 ]
 
 
@@ -1691,7 +1858,7 @@ class RouteMachine(RuleBasedStateMachine):
         self.aims = aims
         while not model.adopted(self.world):
             name = model.ADVISED[model.advice(self.world)]
-            (after,) = model.ACTIONS[name].successors(self.world)
+            after = next(model.ACTIONS[name].successors(self.world))
             self.take(name, after)
 
     @rule(data=st.data())

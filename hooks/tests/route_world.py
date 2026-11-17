@@ -211,6 +211,12 @@ SYNCED_LINE: Final = re.compile(r"^- Synced: .*$", re.MULTILINE)
 LETTERS: Final = "ab"
 TICKETS_BRANCH: Final = "docs/tickets-"
 STATUS_LINE: Final = re.compile(r"^Status: .*$", re.MULTILINE)
+COMMENTED = "src/commented.py"
+COMMENT = "one, as the owner asked"
+CITED = "src/cited.py"
+README = "README.md"
+CUT_README = f"# A\n\nThe rule lives in `{CITED}`.\n"
+STALE_README = f"# A\n\nThe rule says one thing.\n\nThe rule lives in `{CITED}`.\n"
 
 
 @functools.cache
@@ -287,6 +293,7 @@ class Repo:
     defect: str | None = None
     rounds: int = 0
     waiting: str | None = None
+    prunes: int = 0
 
     @classmethod
     def start(cls, parent: Path) -> Repo:
@@ -508,6 +515,8 @@ def apply(repo: Repo, name: ActionName, change: Change) -> None:
 @does(ActionName.OWNER_INITS)
 def _owner_inits(repo: Repo, _change: Change) -> None:
     write(repo.root, "AGENTS.md", STANZA)
+    ignored = plugin_pin.PLUGIN / "skills/init/templates/gitignore"
+    write(repo.root, ".gitignore", ignored.read_text(encoding="utf-8"))
     snapshot(repo.root, "chore: init")
 
 
@@ -552,6 +561,10 @@ def adopt(repo: Repo, change: Change) -> None:
         return
     on_adoption_branch(repo)
     adoption(repo, change, pinned=True)
+    if change.after.comments:
+        write(repo.root, COMMENTED, f"x = 1  # {COMMENT}\n")
+        entry = owed.Entry(COMMENTED, owed.COMMENTS, COMMENT, repo.version())
+        write(repo.root, str(owed.LEDGER), owed.render([entry]))
     snapshot(repo.root, "chore(method): adopt")
     git(repo.root, "switch", "-q", "main")
     git(repo.root, "merge", "-q", "--no-ff", "--no-edit", ADOPTION)
@@ -968,7 +981,8 @@ def with_changed_tests(repo: Repo, text: str) -> str:
     )
     row = conformance.template_gate_row("changed tests run")
     text = text.replace("\n## Tests\n", f"\n## Tests\n\n{table}", 1)
-    text = text.replace("| test count did not fall |", f"{row}\n| test count did not fall |", 1)
+    if "\n| changed tests run |" not in text:
+        text = text.replace("| test count did not fall |", f"{row}\n| test count did not fall |", 1)
     path = repo.root / "justfile"
     if path.exists():
         listed = (gatelib.read_text(path) or "").replace(
@@ -1163,6 +1177,52 @@ def _agent_fixes_the_round_ticket(repo: Repo, _change: Change) -> None:
     merge_branch(repo)
 
 
+@does(ActionName.MERGES_LEAVE_A_PAGE_STALE)
+def _merges_leave_a_page_stale(repo: Repo, _change: Change) -> None:
+    if (gatelib.read_text(repo.root / README) or "") != STALE_README:
+        write(repo.root, README, STALE_README)
+        write(repo.root, CITED, "rule = 1\n")
+        snapshot(repo.root, "docs: the readme says where the rule lives")
+    for _ in range(documents.PRUNE_AFTER_DEFAULT):
+        repo.edits += 1
+        git(repo.root, "switch", "-q", "-c", f"change-{repo.edits}")
+        path = repo.root / CITED
+        path.write_text(f"{path.read_text(encoding='utf-8')}rule{repo.edits} = 1\n", "utf-8")
+        snapshot(repo.root, "feat: the rule changes")
+        merge_branch(repo)
+
+
+def prune_branch(repo: Repo, subject: str) -> str:
+    repo.prunes += 1
+    name = f"chore/prune-{subject}-{repo.prunes}"
+    git(repo.root, "switch", "-q", "-c", name)
+    return name
+
+
+@does(ActionName.AGENT_PRUNES_COMMENTS)
+def _agent_prunes_comments(repo: Repo, _change: Change) -> None:
+    prune_branch(repo, "comments")
+    write(repo.root, COMMENTED, "x = 1\n")
+    repo.settle(lambda entry: entry.rule == owed.COMMENTS)
+    snapshot(repo.root, f"refactor(prune): {COMMENTED}")
+    merge_branch(repo)
+
+
+def cuts_a_page(change: Change) -> bool:
+    return zlib.crc32(repr(change.before).encode()) % 2 == 1
+
+
+@does(ActionName.AGENT_PRUNES_PAGES)
+def _agent_prunes_pages(repo: Repo, change: Change) -> None:
+    if not cuts_a_page(change):
+        assert documents.passed(repo.root), "the default branch has a commit to count from"
+        return
+    prune_branch(repo, "pages")
+    write(repo.root, README, CUT_README)
+    snapshot(repo.root, f"docs(prune): {README}")
+    merge_branch(repo)
+
+
 @does(ActionName.SOMEONE_EDITS_CODE)
 def _someone_edits_code(repo: Repo, _change: Change) -> None:
     repo.edits += 1
@@ -1281,6 +1341,10 @@ RELEASES: Final = {
     "change ticket": Advice.CHANGE_TICKET,
 }
 WAITING: Final = "its change holds only records"
+PRUNES: Final = {
+    f"{route.PRUNE} comments": Advice.PRUNE_COMMENTS,
+    f"{route.PRUNE} pages": Advice.PRUNE_PAGES,
+}
 
 
 def classify(step: route.Step) -> Advice | None:
@@ -1296,6 +1360,8 @@ def classify(step: route.Step) -> Advice | None:
         return _records(step)
     if step.stage == "specify":
         return _specify(step)
+    if step.stage == "prune":
+        return PRUNES.get(step.command)
     if step.stage == "blocked-run":
         return next(
             (label for lead, label in RELEASES.items() if step.command.startswith(lead)), None
