@@ -92,7 +92,7 @@ date = 2026-11-06
 ```
 
 - **The identity is stable.** Tools number mutants per run, so it is the file, the mutator, the replacement and the mutant's place in its unit, `@<line>:<column>-<line>:<column>` counted from the unit's first line, plus a hash of the unit. An edit elsewhere in the file leaves the entry valid; an edit inside the unit changes the hash. The plugin's `scripts/mutation_survivors.py` computes both.
-- **Any mutation tool feeds the gate.** Its report is converted to one JSON line per mutant: the file, the mutator, the replacement, the status, the start and end of the mutated text, and the lines of the enclosing unit when the tool gives them. The converter is a few lines the repository keeps as a gate tool, and the script's docstring gives the format and a worked one.
+- **Any mutation tool feeds the gate.** Its report is converted to one JSON line per mutant: the file, the mutator, the replacement, the status, the start and end of the mutated text, and the lines of the enclosing unit when the tool gives them. The converter is a few lines the repository keeps as a gate tool, and `mutation_survivors.py --help` prints the format and a worked one.
 - **An entry excuses one mutant.** Entries and live survivors match one to one: a register with fewer entries than live survivors is red and names the unmatched ones. So a second survivor added to a function with a registered one needs an entry of its own.
 - **The reason has twenty characters or more.** Its honesty is for the owner's review: the register is a guard path.
 - **A stale entry fails.** An entry is stale when its mutant is now killed or gone, or its function hash changed, so editing a function forces its equivalents to be reviewed again.

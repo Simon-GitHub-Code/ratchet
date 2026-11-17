@@ -10,7 +10,7 @@ Design and testing belong to the other plugins:
 
 ## The rules
 
-- **Logic where every verifier reaches.** A decorated, wrapped or generated function is a docstring plus one call to a plain function with the same parameters. Logic inside a wrapper escapes the mutation tool while the coverage report still calls it covered. A fitness test enforces the shape.
+- **Logic where every verifier reaches.** A decorated, wrapped or generated function is one call to a plain function with the same parameters. Logic inside a wrapper escapes the mutation tool while the coverage report still calls it covered. A fitness test enforces the shape.
 - **Declared parts are checked.** The parts the binding's `## Architecture` section declares have a tool checking the dependency direction and a fitness test checking it again, so a violation cannot hide behind import-time side effects. A path declared pure has no I/O, clock, randomness or environment, and is an absolute path.
 - **Absolute paths.** The gate tools, and every path the binding declares pure, are held at 100% line and branch coverage by the coverage tool itself, with no exclusion reaching them.
 - **Limits are hard.** Size and complexity limits live in the lint config and a fitness test, tighter on absolute paths, and the binding holds the numbers. Split the unit rather than raise a limit.
