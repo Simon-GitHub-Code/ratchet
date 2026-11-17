@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.13.1
+
+A defect of the route is fixed, one 0.12.4 and 0.13.0 share, which the first-hour evaluation of 0.13.0 found. When a parked ticket's guard edits sat on a branch whose merge the merge judge leaves to the owner, the route could not see that branch from the default branch, and the owner's answer on the ticket released the whole park, its guard part with it. So the route named `/ratchet:feature` for a ticket still held, and the owner went round the same hold again. Upgrade from 0.13.0 as the README's Upgrading section says: the upgrade moves the pin line to 0.13.1 and changes nothing else in the project. From an earlier version, the 0.13.0 notes apply too.
+
+- From the default branch, the route names the owner's merge of a branch the merge judge leaves to the owner. It names such a branch only when it carries its change description under `.scratch/changes/`, no run is attached to it, no other work tree has it checked out, and it is not a `formal/` branch. The step says the judge's first reason and the command that prints every reason. Deleting the branch instead brings back the step that lands the guard edits.
+- Each part of a park is released by its own cause, and the route names only the parts still open. An edit of the ticket, such as the owner's answer, releases its questions and its size. The guard part is released when the guard edits it named land, or when the branch holding them merges, and by a ticket edit only for a park recorded with no base commit. A dispute the run filed counts as a guard hold, and the guard paths it covers as its causes. A park that names no kinds, such as one written from a result that was not JSON, is released as before, by an edit of the ticket or by its causes landing.
+- `drain.py close` and `split` refuse a `--result` file that holds no JSON object: they exit 2 and write no note. Such a file used to write a hold with no kinds, which held the ticket with nothing to release it.
+
+The route model took its turn first. It gains a branch that waits for the owner's merge and a ticket parked for both questions and guard edits, and five new rules hold. The route of 0.13.0 breaks them, and its shortest break of the rule that no build is named while a hold's cause is unmet is the evaluation's own run, 16 steps.
+
+The first-hour evaluation's sandbox refuses fewer harmless commands, the plugin's own bytecode setting among them. Nothing the plugin ships changes.
+
 ## 0.13.0
 
 Upgrade from any version from 0.10.0 on, as the README's Upgrading section says. The upgrade writes most of what is new and records the rest as owed, so it is green when it lands. Three things follow it:
