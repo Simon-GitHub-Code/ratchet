@@ -11,17 +11,37 @@ from typing import TYPE_CHECKING
 import application_types
 import architecture
 import gatelib
+import justfile_text
 import markdown_text
 import owed
+import pins
+import plugin_pin
 import suppressions
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
 
-RULE = "comments"
+RULE = owed.COMMENTS
 LIBRARY = "library"
 PUBLISHED = "Published interface"
+NOT_A_LIBRARY = "none: not a library"
 FIELDS = ("path", "line", "kind", "text")
+SECTION = "## Comments"
+COLUMNS = ("Files", "Comments")
+LISTED = "listed"
+LISTER = "comments-list"
+JUSTFILE = "justfile"
+NONE_PREFIX = "none:"
+MIN_REASON = 10
+DOCUMENTS = (".md", ".markdown")
+SNIFFED = 8000
+RECORD_REFUSED = (
+    f"{RULE}: refused: only the adoption and the change that first fills the lister record what"
+    " the gate finds; a later comment is red until it is gone"
+)
+RECORD_UNPINNED = (
+    f"{RULE}: refused: the binding pins no plugin version for an entry to be owed since"
+)
 
 
 class Kind(StrEnum):
@@ -50,10 +70,131 @@ class Allowed:
 class Verdict:
     problems: list[str]
     owed: int
+    red: tuple[Record, ...] = ()
+
+
+@dataclass(frozen=True)
+class Row:
+    globs: tuple[str, ...]
+    listed: bool
+
+
+@dataclass(frozen=True)
+class Table:
+    rows: tuple[Row, ...]
+    problems: tuple[str, ...]
+
+
+def row_of(rules: Table, path: str) -> Row | None:
+    return next((row for row in rules.rows if gatelib.matches(path, list(row.globs))), None)
+
+
+def listed(rules: Table, path: str) -> bool:
+    row = row_of(rules, path)
+    return row is not None and row.listed
+
+
+@dataclass(frozen=True)
+class Scope:
+    paths: tuple[str, ...]
+    binding: str | None
+    whole: bool
+    note: str = ""
 
 
 class RefusedError(ValueError):
     pass
+
+
+def table(binding: str | None) -> Table | None:
+    if binding is None or not markdown_text.has_section(binding, SECTION):
+        return None
+    found = markdown_text.table(binding, SECTION)
+    if found is None or found.header != COLUMNS:
+        return Table((), (f"the section lacks its table with the columns {' | '.join(COLUMNS)}",))
+    rows: list[Row] = []
+    problems: list[str] = []
+    for files, comments in found.rows:
+        globs = tuple(markdown_text.ticked(files))
+        said = comments.strip("` ")
+        if files.startswith("<") or comments.startswith("<"):
+            problems.append("the Comments table still has the template's placeholder row")
+        elif not globs:
+            problems.append(f"the Comments row '{files}' gives no glob in backticks")
+        elif said == LISTED:
+            rows.append(Row(globs, listed=True))
+        elif said.startswith(NONE_PREFIX) and len(said[len(NONE_PREFIX) :].strip()) >= MIN_REASON:
+            rows.append(Row(globs, listed=False))
+        else:
+            problems.append(
+                f"the Comments row {files} says '{comments}': write `listed`, or"
+                " `none: <reason>` for code nobody writes by hand"
+            )
+    if not rows and not problems:
+        problems.append("the Comments table has no row: one row per kind of tracked file")
+    return Table(tuple(rows), tuple(problems))
+
+
+def placeholder(justfile: str | None) -> bool:
+    if justfile is None or not justfile_text.defines_recipe(justfile, LISTER):
+        return False
+    return justfile_text.BINDS in justfile_text.code_of(
+        "\n".join(justfile_text.definition(justfile, LISTER))
+    )
+
+
+def bound(binding: str | None, justfile: str | None) -> bool:
+    found = table(binding)
+    return found is not None and not found.problems and not placeholder(justfile)
+
+
+def bound_at(root: Path, base: str | None) -> bool:
+    if base is None:
+        return bound(gatelib.read_text(root / gatelib.BINDING), gatelib.read_text(root / JUSTFILE))
+    return bound(gatelib.show(root, base, str(gatelib.BINDING)), gatelib.show(root, base, JUSTFILE))
+
+
+def first_listed(root: Path, base: str | None) -> str | None:
+    if not bound_at(root, None) or (base is not None and bound_at(root, base)):
+        return None
+    pin = plugin_pin.pinned(gatelib.read_text(root / gatelib.BINDING))
+    return pin.version if pin else None
+
+
+def judgeable(root: Path, path: str) -> bool:
+    if path.lower().endswith(DOCUMENTS):
+        return False
+    try:
+        with (root / path).open("rb") as handle:
+            return b"\0" not in handle.read(SNIFFED)
+    except OSError:
+        return False
+
+
+def tracked_text(root: Path) -> list[str]:
+    return [path for path in gatelib.tracked_paths(root) if judgeable(root, path)]
+
+
+def scope(root: Path, base: str | None) -> Scope:
+    binding = gatelib.read_text(root / gatelib.BINDING)
+    if not bound_at(root, None):
+        note = (
+            f"{RULE}: green: the lister is not bound yet, so nothing is judged; the conformance"
+            f" gate holds the '{SECTION}' section until it is filled"
+        )
+        return Scope((), binding, whole=False, note=note)
+    then = gatelib.show(root, base, str(gatelib.BINDING)) if base is not None else None
+    if base is not None and bound_at(root, base):
+        rules = table(then) or Table((), ())
+        changed = [p for p in gatelib.changed_paths(root, base) if judgeable(root, p)]
+        return Scope(tuple(path for path in changed if listed(rules, path)), then, whole=False)
+    rules = table(binding) or Table((), ())
+    paths = tuple(path for path in tracked_text(root) if listed(rules, path))
+    note = (
+        f"{RULE}: the merge base has no bound lister, so this change judges every file a"
+        " `listed` row of its own Comments table matches"
+    )
+    return Scope(paths, then or binding, whole=True, note=note)
 
 
 def key(record: Record) -> owed.Key:
@@ -111,6 +252,32 @@ def allowed(binding: str | None) -> Allowed:
     return Allowed(patterns, tuple(markdown_text.ticked(lines.get(PUBLISHED, ""))))
 
 
+def interface_problems(binding: str) -> list[str]:
+    line = f"'- {PUBLISHED}:'"
+    value = markdown_text.bullets(markdown_text.section(binding, architecture.SECTION)).get(
+        PUBLISHED
+    )
+    if value is None:
+        missing = (
+            f"the Architecture section has no {line} line: the globs of the files whose doc"
+            f" comments are a library's promise, each in backticks, or `{NOT_A_LIBRARY}`"
+            " (ADR 0063)"
+        )
+        return [missing]
+    if value.startswith("<"):
+        return [f"the Architecture section's {line} line is still the template's placeholder"]
+    if value.strip("` ") == NOT_A_LIBRARY:
+        library = LIBRARY in (application_types.declared(binding) or [])
+        return (
+            [f"the types declare `{LIBRARY}`, and {line} says none: name the globs of its files"]
+            if library
+            else []
+        )
+    if not markdown_text.ticked(value):
+        return [f"the Architecture section's {line} line names no glob in backticks"]
+    return []
+
+
 def directives(root: Path, paths: Iterable[str], patterns: Sequence[str]) -> set[tuple[str, int]]:
     searched = sorted(set(paths))
     if not searched or not patterns:
@@ -136,7 +303,17 @@ def findings(root: Path, records: Sequence[Record], rules: Allowed) -> list[Reco
         for record in records
         if (record.path, record.line) not in matched
         and not (record.kind is Kind.DOC and gatelib.matches(record.path, list(rules.published)))
+        and not pinned_note(root, record)
     ]
+
+
+def pinned_note(root: Path, record: Record) -> bool:
+    if not pins.is_workflow(record.path):
+        return False
+    lines = (gatelib.read_text(root / record.path) or "").split("\n")
+    line = lines[record.line - 1] if record.line <= len(lines) else ""
+    uses = pins.USES.match(line)
+    return bool(uses and pins.SHA.search(uses.group(1)) and pins.VERSION_COMMENT.search(line))
 
 
 def finding_line(record: Record) -> str:
@@ -167,27 +344,62 @@ def judge(root: Path, output: str, *, judged: frozenset[str], binding: str | Non
     entries = [entry for entry in ledger.entries if entry.rule == RULE]
     hits, left = owed.excused([key(record) for record in found], entries)
     problems = [f"{owed.LEDGER}: {problem}" for problem in ledger.problems]
-    problems += [finding_line(r) for r, hit in zip(found, hits, strict=True) if not hit]
+    red = tuple(record for record, hit in zip(found, hits, strict=True) if not hit)
+    problems += [finding_line(record) for record in red]
     problems += [
         stale_line(path, text, count)
         for (_, path, text), count in sorted(left.items())
         if path in judged or not (root / path).is_file()
     ]
-    return Verdict(problems, sum(hits))
+    return Verdict(problems, sum(hits), red)
+
+
+def record(root: Path, red: Sequence[Record], since: str) -> int:
+    added = [owed.Entry(r.path, RULE, r.text.strip(), since) for r in red if r.text.strip()]
+    if added:
+        path = root / owed.LEDGER
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(owed.recorded(added)(gatelib.read_text(path)), encoding="utf-8")
+    return len(added)
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="comments.py")
     parser.add_argument("--root", type=Path, default=Path())
     parser.add_argument("--base")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--files", action="store_true")
+    modes.add_argument("--changed", action="store_true")
+    parser.add_argument("--record", action="store_true")
     parser.add_argument("paths", nargs="*")
     options = parser.parse_args(argv[1:])
     root = options.root.resolve()
     base = gatelib.base_commit(root, options.base)
-    binding = (gatelib.show(root, base, str(gatelib.BINDING)) if base else None) or (
-        gatelib.read_text(root / gatelib.BINDING)
-    )
-    verdict = judge(root, sys.stdin.read(), judged=frozenset(options.paths), binding=binding)
+    if options.files or options.changed:
+        judged = scope(root, base)
+        if options.files:
+            sys.stdout.write("".join(f"{path}\0" for path in judged.paths))
+            return 0
+        paths, binding = frozenset(judged.paths), judged.binding
+        if judged.note:
+            print(judged.note)
+    else:
+        judged = None
+        paths = frozenset(options.paths)
+        binding = (gatelib.show(root, base, str(gatelib.BINDING)) if base else None) or (
+            gatelib.read_text(root / gatelib.BINDING)
+        )
+    output = sys.stdin.read()
+    verdict = judge(root, output, judged=paths, binding=binding)
+    if options.record:
+        if judged is None or not judged.whole:
+            return gatelib.report(RULE, [RECORD_REFUSED], base)
+        pin = plugin_pin.pinned(gatelib.read_text(root / gatelib.BINDING))
+        if pin is None:
+            return gatelib.report(RULE, [RECORD_UNPINNED], base)
+        added = record(root, verdict.red, pin.version)
+        print(f"{RULE}: recorded {added} owed since {pin.version} in {owed.LEDGER}")
+        verdict = judge(root, output, judged=paths, binding=binding)
     if verdict.owed:
         print(f"{RULE}: {verdict.owed} owed in {owed.LEDGER}")
     return gatelib.report(RULE, verdict.problems, base)

@@ -162,7 +162,7 @@ test-files *files:
 # runs its gates at once through the plugin's runner, so it takes as long as its slowest gate and
 # one run names every red gate; CI reads the same lists (its `shape` job runs `just --evaluate`)
 # and gives each gate a job of its own. `tier0_tree_gates` is tier 0 less the history gate.
-tier0_tree_gates := "fmt-check lint types imports deadcode lint-workflows secrets flags pins limits markers prose snapshots-check ratchet-lowered suppressions"
+tier0_tree_gates := "fmt-check lint types imports deadcode lint-workflows secrets flags pins limits markers prose snapshots-check ratchet-lowered suppressions comments"
 tier0_gates := tier0_tree_gates + " commits"
 tier1_gates := "test coverage diff-coverage test-counts tests-changed mutation-changed contracts-check audit duplication build smoke telemetry flag-states load-smoke bite api-check data-compat doctests sast iac artefact-scan type-coverage doc-coverage change-size guard-diff settings-check conformance triggers incidents rollback dependency-faults config-refusal graceful-stop"
 tier2_gates := "mutation api-deep symbolic fuzz e2e test-stability reproducible sanitizers perf dast pentest load telemetry-e2e flags-expired a11y formal bite-all"
@@ -227,6 +227,9 @@ install:
 # under `dir` as data and prints the section's records. Bind it, or have the section say `none:`.
 dependencies dir:
     @echo "bind: print the records the Dependencies section describes, for the files under {{dir}}"; exit 1
+
+comments-list *files:
+    @echo "bind: list the comments of the files given, read as data: one tab-separated record per line a comment occupies (path, line, comment or doc, the text without its delimiters); exit non-zero on a file it cannot read"; exit 1
 
 # The one guard every recipe that runs a file of the plugin depends on.
 [no-exit-message]
@@ -357,6 +360,9 @@ snapshots-check: _plugin
 
 suppressions: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/suppressions.py"
+
+comments *options: _plugin
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/comments.py" --files | xargs -0 -r just comments-list | {{plugin_py}} "{{ratchet_plugin}}/scripts/comments.py" --changed {{options}}
 
 # The flag registry: declared, owned, off when new. `flags-expired` asks the calendar, in tier 2.
 # Add `--used-in <source dir>` once the stack is bound, so a flag leaves the registry with its code.

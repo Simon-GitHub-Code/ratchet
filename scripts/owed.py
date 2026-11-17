@@ -42,10 +42,12 @@ import gatelib
 import plugin_pin
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
 LEDGER = Path("quality/owed.toml")
 OWN = "owed"
+COMMENTS = "comments"
+GATE_RULES = frozenset({COMMENTS})
 # Why: a finding that another tier 0 or tier 1 gate also judges red is never owed: conformance
 # would print it as owed while that gate stays red on the same thing. Each pair is a check here, or
 # one file of it, and the gate that judges the same condition. The ledger's own findings are never
@@ -72,7 +74,16 @@ NEVER: dict[tuple[str, str | None], str] = {
 # owed, so the window is one agent step. The checks are named by rule, the name the ledger already
 # keys an entry by; the owner has nothing to do for any of them.
 FILL_FIRST = frozenset(
-    {"signs", "pins", "suppressions", "dependencies", "installs", "mutation", "changed_tests"}
+    {
+        "signs",
+        "pins",
+        "suppressions",
+        "dependencies",
+        "installs",
+        "mutation",
+        "changed_tests",
+        "comments_section",
+    }
 )
 TABLE = "owed"
 FIELDS = ("rule", "path", "problem", "since")
@@ -200,7 +211,7 @@ def kept(found: Counter[Key]) -> gatelib.Want:
         for block in blocks:
             (entry,) = parse(f"[[{TABLE}]]\n{block}").entries
             seen[entry.key] += 1
-            flags.append(seen[entry.key] <= found[entry.key])
+            flags.append(entry.rule in GATE_RULES or seen[entry.key] <= found[entry.key])
         if all(flags):
             return text or ""
         body = [f"[[{TABLE}]]\n{block}" for block, keep in zip(blocks, flags, strict=True) if keep]
@@ -244,12 +255,49 @@ def below(version: str, floor: str) -> bool:
     return version != floor and plugin_pin.newer(version, floor) is not True
 
 
+def followed(
+    added: Counter[Entry], gone: Counter[Entry], renamed: Mapping[str, str]
+) -> Counter[Entry]:
+    moves: Counter[Entry] = Counter()
+    left = Counter(gone)
+    for entry in sorted(added.elements()):
+        source = next(
+            (
+                old
+                for old in sorted(left.elements())
+                if renamed.get(old.path) == entry.path
+                and (old.rule, old.problem, old.since) == (entry.rule, entry.problem, entry.since)
+            ),
+            None,
+        )
+        if source is not None:
+            left[source] -= 1
+            moves[entry] += 1
+    return moves
+
+
+def gated(entries: Counter[Entry], first_listed: str | None) -> list[str]:
+    return [
+        f"{LEDGER}: adds '{entry.problem}' for {entry.path} ({entry.rule})"
+        + (
+            "; only the adoption and the change that first fills the lister record what the"
+            f" {entry.rule} gate finds, and this change is neither; an entry may only go"
+            if first_listed is None
+            else f" since '{entry.since}'; the change first fills the lister under the pin"
+            f" {first_listed}, so what it records is owed since {first_listed}"
+        )
+        for entry in sorted(entries.elements())
+        if entry.since != first_listed
+    ]
+
+
 def grown(
     before: Ledger,
     after: Ledger,
     *,
     binding: tuple[str | None, str | None],
     floor: str | None,
+    exempt: tuple[str | None, Mapping[str, str]] | None = None,
 ) -> list[str]:
     """Why the ledger at head is more than the one at the merge base allows, one line each.
 
@@ -257,17 +305,24 @@ def grown(
     a newer version, and then it carries that version as ``since``.
     """
     problems = [f"{LEDGER}: {problem}" for problem in after.problems]
-    added = sorted((Counter(after.entries) - Counter(before.entries)).elements())
+    first_listed, renamed = exempt or (None, {})
+    new = Counter(after.entries) - Counter(before.entries)
+    new -= followed(new, Counter(before.entries) - Counter(after.entries), renamed)
+    own = Counter({entry: count for entry, count in new.items() if entry.rule in GATE_RULES})
+    problems += gated(own, first_listed)
+    added = sorted((new - own).elements())
+    if not added:
+        return problems
     pin = moved(*binding, floor=floor)
     if pin is None:
-        old, new = (plugin_pin.pinned(text) for text in binding)
+        old, now = (plugin_pin.pinned(text) for text in binding)
         why = (
-            f"with a pin of {new.version}; {new.version} is older than the plugin in use, {floor},"
+            f"with a pin of {now.version}; {now.version} is older than the plugin in use, {floor},"
             " and from a base that pins nothing the ledger grows only with a pin at least as new"
             " as the plugin that judges it"
-            if old is None and new is not None and floor is not None
+            if old is None and now is not None and floor is not None
             else f"without moving the plugin pin to a newer version ({pin_name(old)} at the merge"
-            f" base, {pin_name(new)} here)"
+            f" base, {pin_name(now)} here)"
         )
         return problems + [
             f"{LEDGER}: adds or changes '{entry.problem}' for {entry.path} ({entry.rule}) {why};"

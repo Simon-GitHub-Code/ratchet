@@ -1108,7 +1108,15 @@ DONE = World(
 
 
 FILLED_BY_THE_UPGRADE = frozenset(
-    {"changed_tests", "dependencies", "installs", "pins", "signs", "suppressions"}
+    {
+        "changed_tests",
+        "comments_section",
+        "dependencies",
+        "installs",
+        "pins",
+        "signs",
+        "suppressions",
+    }
 )
 
 
@@ -1168,6 +1176,7 @@ def test_the_real_upgrade_owes_more_than_the_model_and_leaves_a_faithful_adoptio
     assert beyond - {route.ARCHITECTURE_RULE} == {
         "adrs",
         "binding",
+        "bites",
         "brief",
         "commit_hooks",
         "doors",

@@ -3,11 +3,13 @@
 import atexit
 import functools
 import json
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -703,3 +705,96 @@ def test_the_entries_an_agent_fills_first_are_those_of_the_named_checks(tmp_path
     (tmp_path / owed.LEDGER).write_text(owed.render(entries), encoding="utf-8")
     assert [entry.rule for entry in owed.fill_first(tmp_path)] == ["pins"]
     assert owed.main(["owed", "--root", str(tmp_path), "--fill-first"]) == 0
+
+
+# --- the comments gate's entries (ADR 0063) -------------------------------------------------------
+
+COMMENT = owed.Entry("src/a.txt", owed.COMMENTS, "an old reason", VERSION)
+UNFILLED_ROW = re.compile(r"^\| <`globs` of one kind of file>[^\n]*$", re.MULTILINE)
+UNBOUND_LISTER = re.compile(r'^(comments-list \*files:\n)    @echo "bind:[^\n]*\n', re.MULTILINE)
+
+
+def fill_lister(root: Path) -> None:
+    binding = root / BINDING
+    text = binding.read_text(encoding="utf-8")
+    assert UNFILLED_ROW.search(text), "the upgrade added the Comments section"
+    binding.write_text(UNFILLED_ROW.sub("| `**` | listed |", text), encoding="utf-8")
+    justfile = root / "justfile"
+    recipes = justfile.read_text(encoding="utf-8")
+    assert UNBOUND_LISTER.search(recipes), "the upgrade added the lister's bind line"
+    justfile.write_text(UNBOUND_LISTER.sub(r"\1    cat {{files}} > /dev/null\n", recipes))
+
+
+def merged(root: Path, name: str) -> None:
+    commit(root, f"chore(method): {name}")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "-q", "--ff-only", "change")
+    branch(root, name.replace(" ", "-"))
+
+
+def test_the_upgrade_owes_the_comments_section_as_a_fill_first_item(repo: Path) -> None:
+    owing = [e for e in owed.read(repo).entries if e.rule == "comments_section"]
+    assert [e.problem for e in owing] == [
+        "the Comments table still has the template's placeholder row"
+    ]
+    assert "comments_section" in owed.FILL_FIRST
+
+
+def test_the_change_that_first_fills_the_lister_may_record_comments_owed_since_the_pin(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fill_lister(repo)
+    add(repo, COMMENT)
+    assert gate(repo, capsys)[0] == 0
+    add(repo, replace(COMMENT, problem="backdated", since="0.0.1"))
+    code, out = gate(repo, capsys)
+    assert code == 1
+    assert (
+        f"adds 'backdated' for src/a.txt (comments) since '0.0.1'; the change first fills the"
+        f" lister under the pin {VERSION}, so what it records is owed since {VERSION}"
+    ) in out
+
+
+def test_a_comment_recorded_by_any_later_change_is_red(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    add(repo, COMMENT)
+    code, out = gate(repo, capsys)
+    assert code == 1
+    assert "only the adoption and the change that first fills the lister record what" in out
+    fill_lister(repo)
+    merged(repo, "fill the lister")
+    add(repo, replace(COMMENT, problem="a reason written after"))
+    code, out = gate(repo, capsys)
+    assert code == 1
+    assert "'a reason written after' for src/a.txt (comments); only the adoption" in out
+
+
+def test_an_owed_comment_follows_a_rename_git_reports_and_nothing_else(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fill_lister(repo)
+    (repo / "src").mkdir(exist_ok=True)
+    (repo / "src/a.txt").write_text("x\ny\nz\n~~ an old reason\n", encoding="utf-8")
+    add(repo, COMMENT)
+    merged(repo, "fill the lister")
+    git(repo, "mv", "src/a.txt", "src/b.txt")
+    moved = [replace(e, path="src/b.txt") if e == COMMENT else e for e in owed.read(repo).entries]
+    (repo / LEDGER).write_text(owed.render(moved), encoding="utf-8")
+    assert gate(repo, capsys)[0] == 0
+    reworded = [replace(e, problem="reworded") if e.path == "src/b.txt" else e for e in moved]
+    (repo / LEDGER).write_text(owed.render(reworded), encoding="utf-8")
+    code, out = gate(repo, capsys)
+    assert code == 1
+    assert "adds 'reworded' for src/b.txt (comments)" in out
+
+
+def test_conformance_leaves_the_comments_gates_entries_to_that_gate(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fill_lister(repo)
+    add(repo, COMMENT)
+    _, out = checked(repo, capsys)
+    assert "an old reason" not in out
+    kept = owed.kept(Counter())((repo / LEDGER).read_text(encoding="utf-8"))
+    assert COMMENT in owed.parse(kept).entries

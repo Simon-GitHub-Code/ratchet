@@ -23,9 +23,9 @@ section, as the adoption has since ADR 0049; an adoption by a plugin from before
 neither. An upgrade runs the real ``upgrade.py --apply`` as a process, from a copy of the plugin
 committed as the next version, on a branch the world merges. ``/ratchet:fill`` writes the rows on
 a branch and settles the ledger by running that upgrade again, which drops each entry whose
-finding is gone. The binding keeps the sections an upgrade added while the world rewrites its own
-parts. ``/ratchet:architecture`` writes the record and the parts, settles the ledger, and leaves
-its branch for the owner to merge.
+finding is gone. The binding keeps the sections and the Gates rows an upgrade added while the
+world rewrites its own parts. ``/ratchet:architecture`` writes the record and the parts, settles the
+ledger, and leaves its branch for the owner to merge.
 
 The upgrade that asks the ``Flag:`` line before deployment (ADR 0061) declares an application type
 the catalogue asks it of, the binding naming no life event. From then on the conjecture writes the
@@ -56,6 +56,7 @@ from typing import Final
 
 import application_types
 import architecture
+import comments
 import conformance
 import drain
 import feature_preflight as preflight
@@ -115,10 +116,12 @@ ARCHITECTURE_RECORD = (
     "## Refutation criterion\n\nA second team needs to deploy on its own.\n"
 )
 ARCHITECTURE_SECTION = (
-    "\n" + architecture.SECTION + "\n\n- Decision: `{record}`\n\n| Part | Path | May depend on |\n"
+    "\n" + architecture.SECTION + "\n\n- Decision: `{record}`\n"
+    f"- {comments.PUBLISHED}: {comments.NOT_A_LIBRARY}\n\n| Part | Path | May depend on |\n"
     "| --- | --- | --- |\n| rules | `src/rules/**` | nothing |\n| web | `src/**` | rules |\n"
 )
 ARCHITECTURE_BRANCH = "chore/architecture"
+GATES = "## Gates"
 SECTIONS: Final = re.compile(r"\n(?=## )")
 REVIEW_ROW = (
     f"| {triggers.REVIEW_QUESTION} | `ratchet` plugin `scripts/triggers.py` | 1 | |"
@@ -314,7 +317,7 @@ class Repo:
             entries="".join(
                 f"| {name} | `{command}` |\n" for name, command in self.entries.items()
             ),
-            gates=gates + REVIEW_ROW,
+            gates=gates + REVIEW_ROW + self.kept_gates(),
             triggers=rows,
             architecture=self.architecture,
         )
@@ -332,6 +335,14 @@ class Repo:
             for block in SECTIONS.split(text)[1:]
             if not markdown_text.has_section(made, block.split("\n", 1)[0])
         )
+
+    def kept_gates(self) -> str:
+        found = markdown_text.table(gatelib.read_text(self.root / route.BINDING) or "", GATES)
+        if found is None:
+            return ""
+        own = {f"q{n}" for n in range(1, len(self.tools) + 1)} | {triggers.REVIEW_QUESTION}
+        rows = zip(found.rows, found.lines[2:], strict=True)
+        return "".join(f"{line}\n" for row, line in rows if row[0] not in own)
 
     def version(self) -> str:
         """The plugin version the binding pins: one more minor version for each upgrade."""
@@ -869,6 +880,9 @@ FILLED: Final = {
     "## Image pins": "| Files | Reference |\n| --- | --- |\n| none: no file names an image | |\n",
     "## Suppressions": (
         "| Kind | Pattern | Rule |\n| --- | --- | --- |\n\n| Question | Kinds |\n| --- | --- |\n"
+    ),
+    comments.SECTION: (
+        "| Files | Comments |\n| --- | --- |\n| `**` | none: nobody writes it by hand |\n"
     ),
 }
 
