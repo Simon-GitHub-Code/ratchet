@@ -159,6 +159,7 @@ LEFT_SPEC = f"# Settle\n\n{STORIES}\n\n1. As the owner, I am told the next comma
 SPEC = f"{LEFT_SPEC}\n## Answers\n\n- `spec.scope`: one command, not a list of them.\n"
 ANSWERS = "## Answers"
 OWNERS_WORDS = "## In the owner's words"
+BRIEF = f"# Brief\n\n{OWNERS_WORDS}\n\n- `adopt.purpose`: tell me the next command.\n"
 EXPIRED_ON = "2026-11-17"
 CONJECTURE_SKILL: Final = plugin_pin.PLUGIN / "skills/conjecture/SKILL.md"
 CRITERIA_LINE: Final = re.compile(r"^- Criteria: .*$", re.MULTILINE)
@@ -528,7 +529,7 @@ def _agent_installs_hooks(repo: Repo, _change: Change) -> None:
 @does(ActionName.OWNER_GRILLS)
 def _owner_grills(repo: Repo, _change: Change) -> None:
     write(repo.root, "GLOSSARY.md", GLOSSARY)
-    write(repo.root, "docs/design-brief.md", "# Brief\n")
+    write(repo.root, "docs/design-brief.md", BRIEF)
 
 
 @does(ActionName.OWNER_WRITES_SPEC)
@@ -608,7 +609,7 @@ def expire(repo: Repo) -> None:
     repo.edits += 1
     unit = repo.root / repo.feature()
     said = [
-        f"- {EXPIRED_ON}, `{path.relative_to(repo.root)}`: {line.removeprefix('- ')}"
+        f"- {EXPIRED_ON}: {line.removeprefix('- ')}"
         for path in sorted(unit.rglob("*.md"))
         for line in markdown_text.section(path.read_text(encoding="utf-8"), ANSWERS).split("\n")
         if line.strip()
@@ -618,12 +619,7 @@ def expire(repo: Repo) -> None:
         text = brief.read_text(encoding="utf-8").rstrip("\n")
         held = markdown_text.section(text, OWNERS_WORDS).strip("\n")
         words = "\n".join([held, *said]).strip("\n")
-        text = (
-            with_body(text, OWNERS_WORDS, words)
-            if markdown_text.has_section(text, OWNERS_WORDS)
-            else f"{text}\n\n{OWNERS_WORDS}\n\n{words}\n"
-        )
-        brief.write_text(text, encoding="utf-8")
+        brief.write_text(with_body(text, OWNERS_WORDS, words), encoding="utf-8")
     git(repo.root, "rm", "-r", "-q", "-f", "--", repo.feature())
 
 
