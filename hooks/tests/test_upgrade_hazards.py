@@ -263,7 +263,7 @@ TRIGGERS = (
 )
 
 
-def test_a_gates_row_whose_trigger_has_fired_is_written_later_and_owed_at_once(
+def test_a_gates_row_whose_trigger_has_fired_is_never_steered_to_later(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = fixture("0.8.2", tmp_path)
@@ -272,11 +272,31 @@ def test_a_gates_row_whose_trigger_has_fired_is_written_later_and_owed_at_once(
     commit(root)
     assert upgrade.main(["upgrade.py", "--root", str(root)]) == 1
     out = capsys.readouterr().out
-    assert "    - add the 'configuration hardening' row as `later: code:container`" in out
-    assert "bind it: its trigger `code:container` has fired here" not in out
+    fired = next(line for line in out.splitlines() if "'configuration hardening' row" in line)
+    assert "bind it: its trigger `code:container` has fired here" in fired
+    assert "later" not in fired.split("never dropped")[1]
+    assert "'container' has 1 instance here: Dockerfile" in out
     assert "    - add the 'changed flags off and on' row as `later: code:flag`" in out
     assert "    - add the 'incidents tighten a gate' row, bound to the plugin's own gate" in out
     assert "a row that says `later: <trigger>` needs none" not in out
+
+
+def test_a_formal_row_whose_trigger_has_fired_is_written_later_and_the_others_are_not(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = fixture("0.8.2", tmp_path)
+    table = TRIGGERS + "| concurrency | `lock.txt` | |\n"
+    (root / BINDING).write_text((root / BINDING).read_text() + table)
+    (root / "Dockerfile").write_text("FROM scratch\n")
+    (root / "lock.txt").write_text("a lock\n")
+    commit(root)
+    assert upgrade.main(["upgrade.py", "--root", str(root)]) == 1
+    out = capsys.readouterr().out
+    assert (
+        "    - add the 'formal verification of concurrency' row as `later: code:concurrency`" in out
+    )
+    assert "    - add the 'configuration hardening' row as `later: code:container`" not in out
+    assert "bind it: its trigger `code:container` has fired here" in out
 
 
 def test_whether_a_trigger_fired_is_said_unknown_without_its_triggers_row(

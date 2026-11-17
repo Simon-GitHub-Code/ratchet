@@ -1078,9 +1078,11 @@ def moved_triggers(
 def dropped_row(failure: str, question: str, *, trigger: str, fired: Fired) -> Finding:
     """A Gates row the catalogue gained since the adoption: its template row, and how to fill it.
 
-    Why: ADR 0062. A trigger that has fired is written `later:` too, when the Triggers table can
-    count its kinds: the row is owed at once, the route names the safeguard, and the next instance
-    is red until it is bound. A trigger it cannot count is the agent's to settle.
+    Why: ADR 0028. `later:` is for a trigger that has not fired; written for one that has, it is
+    green and defers a safeguard already owed. So the item says which this repository is. The
+    three `formal verification of <kind>` rows are the exception (ADR 0062): one whose kind the
+    Triggers table can count is written `later:` even once fired, so it is owed at once, the route
+    names the safeguard, and the next instance is red until it is bound.
     """
     gate = next(
         row.gate for row in project_bite.gate_rows(template_binding()) if row.question == question
@@ -1101,10 +1103,18 @@ def dropped_row(failure: str, question: str, *, trigger: str, fired: Fired) -> F
         if shipped(row) or gate in CARRIED_GATES:
             edit = (f"add the '{question}' row, bound to the plugin's own gate", row)
     elif {state for state, _ in said} == {True}:
-        fill = (
-            f"add the template's row as `later: {trigger}`: it has fired here, so the row is owed"
-        )
         fix = Agent(start, (*shown, bite))
+        if FORMAL_PROOF in application_types.load().proofs.get(question, ()):
+            fill = (
+                f"add the template's row as `later: {trigger}`: it has fired here, so the row is"
+                " owed"
+            )
+            edit = (
+                f"add the '{question}' row as `later: {trigger}`",
+                with_tool(row, f"later: {trigger}"),
+            )
+        else:
+            fill = f"add the template's row and bind it: its trigger `{trigger}` has fired here"
     else:
         fill = (
             f"add the template's row, bound, or `later: {trigger}` only while that trigger has"
@@ -1112,11 +1122,13 @@ def dropped_row(failure: str, question: str, *, trigger: str, fired: Fired) -> F
         )
         waits = f"; a row that says `later: {trigger}` needs none while that trigger has not fired"
         fix = Agent(start, (*shown, bite + waits))
-    if not always and None not in {state for state, _ in said}:
-        edit = (
-            f"add the '{question}' row as `later: {trigger}`",
-            with_tool(row, f"later: {trigger}"),
-        )
+        # Why: `later:` is written only for a trigger known not to have fired. One whose kind
+        # the Triggers table cannot count might have, and `later:` would defer what is owed.
+        if None not in {state for state, _ in said}:
+            edit = (
+                f"add the '{question}' row as `later: {trigger}`",
+                with_tool(row, f"later: {trigger}"),
+            )
     # Why: what to write changes as the trigger fires; the row owed does not (ADR 0037).
     problem = f"{failure}; {fill}"
     if edit is None:
