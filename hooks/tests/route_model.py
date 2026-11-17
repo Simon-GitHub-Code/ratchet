@@ -128,6 +128,12 @@ class Flag(StrEnum):
     ASKED = "asked"
 
 
+class Answers(StrEnum):
+    NONE = "none"
+    ON_THE_UNIT = "on-the-unit"
+    DROPPED = "dropped"
+
+
 class Advice(StrEnum):
     """What the route tells the owner: one label per distinct next step."""
 
@@ -145,6 +151,7 @@ class Advice(StrEnum):
     REVIEW = "review"
     SAFEGUARD = "safeguard"
     ARCHITECTURE = "architecture"
+    EXPIRE = "expire"
     GRILL = "grill"
     TRIAGE = "triage"
     CONJECTURE_SPEC = "conjecture-spec"
@@ -198,6 +205,8 @@ class ActionName(StrEnum):
     AGENT_LANDS_THE_REVIEW = "AgentLandsTheReview"
     AGENT_BINDS_SAFEGUARD = "AgentBindsSafeguard"
     OWNER_RECORDS_ARCHITECTURE = "OwnerRecordsArchitecture"
+    UPGRADE_FINDS_AN_EXPIRED_UNIT = "UpgradeFindsAnExpiredUnit"
+    AGENT_DELETES_THE_EXPIRED_UNIT = "AgentDeletesTheExpiredUnit"
     SOMEONE_EDITS_CODE = "SomeoneEditsCode"
     AGENT_COMMITS_ON_A_BRANCH = "AgentCommitsOnABranch"
     BRANCH_MERGES = "BranchMerges"
@@ -248,6 +257,8 @@ class World:
     fills: bool = False
     architecture: Architecture = Architecture.UNASKED
     flag: Flag = Flag.WAITS
+    answers: Answers = Answers.NONE
+    left: bool = False
 
 
 def adopted(world: World) -> bool:
@@ -284,7 +295,16 @@ def rest(world: World) -> bool:
         and not world.fills
         and world.architecture is not Architecture.OWED
         and all(ticket in CLOSED for ticket in world.tickets)
+        and not world.left
     )
+
+
+def live(world: World) -> bool:
+    return world.spec is not Spec.NONE or any(ticket in OPEN for ticket in world.tickets)
+
+
+def expires(before: World, after: World) -> bool:
+    return live(before) and not live(after) and Ticket.RESOLVED in after.tickets
 
 
 def with_ticket(world: World, slot: int, ticket: Ticket) -> World:
@@ -394,6 +414,7 @@ CHAIN: Final = (
     Rule(Advice.REVIEW, lambda w: w.reviews),
     Rule(Advice.SAFEGUARD, lambda w: w.owes),
     Rule(Advice.ARCHITECTURE, lambda w: w.architecture is Architecture.OWED),
+    Rule(Advice.EXPIRE, lambda w: w.left),
     Rule(Advice.GRILL, lambda w: not w.foundation),
     Rule(Advice.TRIAGE, lambda w: _no_ticket(w) and triage_waits(w)),
     Rule(Advice.CONJECTURE_SPEC, lambda w: _no_ticket(w) and _spec_unstated(w)),
@@ -477,6 +498,7 @@ DIVERGENCES: Final[tuple[Divergence, ...]] = (
             tickets=(Ticket.STATED, Ticket.TRIAGE),
             inherits=True,
             architecture=Architecture.RECORDED,
+            answers=Answers.ON_THE_UNIT,
         ),
     ),
     Divergence(
@@ -496,6 +518,27 @@ DIVERGENCES: Final[tuple[Divergence, ...]] = (
             foundation=True,
             tickets=(Ticket.STALE, Ticket.TRIAGE),
             architecture=Architecture.RECORDED,
+            answers=Answers.ON_THE_UNIT,
+        ),
+    ),
+    Divergence(
+        name="expired-unit-unread",
+        holds=lambda world: world.left,
+        reads=lambda world: replace(world, left=False),
+        contradicts=(
+            "The route names a records change that deletes it, and the records check allows the"
+            " deletion of a file `expire` lists, where today a record may not be deleted"
+            " (`merge_ready.py:1115-1116`)."
+        ),
+        source="docs/adr/0064-a-document-has-a-kind-and-a-steering-document-leaves-with-its-feature.md",
+        breaks=frozenset({"RealAdviceCanBeFollowed", "RealExpiredUnitBeforeTheWork"}),
+        example=World(
+            setup=Setup.BOUND,
+            hooks=True,
+            foundation=True,
+            tickets=(Ticket.RESOLVED, Ticket.RESOLVED),
+            architecture=Architecture.RECORDED,
+            left=True,
         ),
     ),
 )
@@ -520,6 +563,24 @@ def real_advice(world: World) -> Advice:
 
 
 Successors = Callable[[World], Iterator[World]]
+Deleter = Callable[[World, World], World]
+
+
+def deletes(before: World, after: World) -> World:
+    if not expires(before, after):
+        return after
+    carried = after.answers is Answers.ON_THE_UNIT and after.tree is Tree.RECORDS
+    return replace(after, answers=Answers.NONE, tree=Tree.CODE if carried else after.tree)
+
+
+def leaves(before: World, after: World) -> World:
+    return replace(after, left=True) if expires(before, after) else after
+
+
+def drops_the_answers(before: World, after: World) -> World:
+    if expires(before, after) and after.answers is Answers.ON_THE_UNIT:
+        return replace(after, answers=Answers.DROPPED)
+    return after
 
 
 @dataclass(frozen=True)
@@ -528,7 +589,12 @@ class Action:
 
     name: ActionName
     follows: tuple[Advice, ...]
-    successors: Successors
+    outcomes: Successors
+
+    def successors(self, world: World, deleter: Deleter = deletes) -> Iterator[World]:
+        if world.setup is Setup.PINNED and self.name not in following_today(world):
+            return iter(())
+        return (lined(deleter(world, after)) for after in self.outcomes(world))
 
 
 ACTIONS: Final[dict[ActionName, Action]] = {}
@@ -554,16 +620,8 @@ def following_today(world: World) -> frozenset[ActionName]:
 def action(name: ActionName, *follows: Advice) -> Callable[[Successors], Successors]:
     """Register ``successors`` as action ``name``; each advice in ``follows`` leads to it."""
 
-    def taken(successors: Successors) -> Successors:
-        def take(world: World) -> Iterator[World]:
-            if world.setup is Setup.PINNED and name not in following_today(world):
-                return iter(())
-            return map(lined, successors(world))
-
-        return take
-
     def register(successors: Successors) -> Successors:
-        ACTIONS[name] = Action(name, follows, taken(successors))
+        ACTIONS[name] = Action(name, follows, successors)
         for advice_label in follows:
             if advice_label in ADVISED:
                 message = f"{advice_label} is followed by {ADVISED[advice_label]} and {name}"
@@ -659,13 +717,19 @@ def _owner_grills(world: World) -> Iterator[World]:
 
 @action(ActionName.OWNER_WRITES_SPEC, Advice.SPECIFY)
 def _owner_writes_spec(world: World) -> Iterator[World]:
-    if calm(world) and world.spec is Spec.NONE and all(t in CLOSED for t in world.tickets):
+    if (
+        calm(world)
+        and not world.left
+        and world.spec is Spec.NONE
+        and all(t in CLOSED for t in world.tickets)
+    ):
         yield replace(
             world,
             spec=Spec.BARE,
             tickets=(Ticket.NONE, Ticket.NONE),
             inherits=False,
             tree=Tree.RECORDS,
+            answers=Answers.ON_THE_UNIT,
         )
 
 
@@ -948,6 +1012,24 @@ def _owner_records_architecture(world: World) -> Iterator[World]:
         yield replace(world, architecture=Architecture.RECORDED, head=Head.WORK)
 
 
+@action(ActionName.UPGRADE_FINDS_AN_EXPIRED_UNIT)
+def _upgrade_finds_an_expired_unit(world: World) -> Iterator[World]:
+    if rest(world) and Ticket.RESOLVED in world.tickets:
+        yield replace(world, left=True)
+
+
+@action(ActionName.AGENT_DELETES_THE_EXPIRED_UNIT, Advice.EXPIRE)
+def _agent_deletes_the_expired_unit(world: World) -> Iterator[World]:
+    if calm(world) and world.left:
+        carried = world.answers is Answers.ON_THE_UNIT
+        yield replace(
+            world,
+            left=False,
+            answers=Answers.NONE,
+            tree=Tree.CODE if carried else Tree.RECORDS,
+        )
+
+
 def on_a_clean_branch(world: World, *heads: Head) -> bool:
     """Whether the setup is done and a clean branch of ``heads`` is checked out."""
     return adopted(world) and world.head in heads and world.tree is Tree.CLEAN
@@ -1060,7 +1142,7 @@ class Graph:
 
 
 @functools.cache
-def graph(start: World = World()) -> Graph:  # noqa: B008 # -- World is frozen
+def graph(start: World = World(), deleter: Deleter = deletes) -> Graph:  # noqa: B008 # -- World is frozen
     """The reachable worlds and the edges between them, from ``start``."""
     seen = {start: None}
     edges: list[Edge] = []
@@ -1068,7 +1150,7 @@ def graph(start: World = World()) -> Graph:  # noqa: B008 # -- World is frozen
     while todo:
         source = todo.popleft()
         for name, act in ACTIONS.items():
-            for target in act.successors(source):
+            for target in act.successors(source, deleter):
                 edges.append(Edge(source, name, target))
                 if target not in seen:
                     seen[target] = None
@@ -1237,6 +1319,30 @@ def the_edit_moves_nothing_else() -> str:
     )
 
 
+NEW_WORK: Final = frozenset(
+    {
+        Advice.SPECIFY,
+        Advice.CONJECTURE_SPEC,
+        Advice.SPLIT,
+        Advice.TRIAGE,
+        Advice.CONJECTURE,
+        Advice.BUILD,
+        Advice.DRAIN,
+    }
+)
+
+
+def expired_before_the_work(label: Callable[[World], Advice]) -> Callable[[World], bool]:
+    def check(world: World) -> bool:
+        return not world.left or label(world) not in NEW_WORK
+
+    return check
+
+
+def only_the_upgrade_finds_a_unit_left() -> str:
+    return f"[][(~left /\\ left') => {ActionName.UPGRADE_FINDS_AN_EXPIRED_UNIT}]_vars"
+
+
 def no_run_without_the_line() -> str:
     """TLA+ text: while the line is missing, no step is a feature run or the drain."""
     runs = " \\/ ".join(RUNS)
@@ -1362,6 +1468,25 @@ RULES: Final[dict[str, model_tla.Rule]] = {
     "TheCriteriaEditMovesNothingElse": model_tla.Property(
         "An edit of the criteria makes a stated conjecture stale and changes nothing else.",
         the_edit_moves_nothing_else(),
+    ),
+    "NoStepLeavesTheUnitItExpires": model_tla.Property(
+        "A step that makes the unit expired deletes it: only the upgrade that ships ADR 0064 finds"
+        " one left in the tree.",
+        only_the_upgrade_finds_a_unit_left(),
+    ),
+    "ExpiredUnitBeforeTheWork": model_tla.Invariant(
+        "Where an expired unit is left in the tree, the route names no spec, ticket, build or"
+        " drain.",
+        expired_before_the_work(advice),
+    ),
+    "RealExpiredUnitBeforeTheWork": model_tla.Invariant(
+        "Where an expired unit is left in the tree, the real route names no spec, ticket, build or"
+        " drain.",
+        expired_before_the_work(real_advice),
+    ),
+    "TheOwnersAnswersOutliveTheUnit": model_tla.Invariant(
+        "No unit is deleted with the owner's `## Answers` lines left out of the brief.",
+        f'answers # "{Answers.DROPPED}"',
     ),
 }
 
