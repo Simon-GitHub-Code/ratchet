@@ -610,6 +610,13 @@ def test_locator_prefers_a_home_hit_and_falls_back_to_the_checkout() -> None:
     assert locator.classify(Path("/nowhere/CLAUDE.md"), destructive=False) is None
 
 
+def test_a_path_the_home_and_its_checkout_both_reach_is_read_in_the_home_view() -> None:
+    locator = Locator(MANIFEST, FakeFilesystem(guarded=(HOME,)))
+    hit = locator.classify(HOME / ".claude/settings.json", destructive=False)
+    assert hit is not None
+    assert hit.path == "~/.claude/settings.json"
+
+
 def test_a_hit_names_the_canonical_path_it_found() -> None:
     locator = Locator(MANIFEST, FakeFilesystem())
     hit = locator.classify(ROOT / "docs/../CLAUDE.md", destructive=False)
@@ -716,6 +723,7 @@ ANYWHERE = (frozenset({"main", "master"}), MAYBE)
         (["git", "checkout", "README.md"], ({"README.md"}, MAYBE)),
         (["git", "checkout", "origin/main"], ({"origin/main"}, MAYBE)),
         (["git", "checkout", "unknown"], ({"unknown"}, MAYBE)),
+        (["git", "checkout", "--force", "unknown"], ({"unknown"}, MAYBE)),
         (["git", "-C", "sub", "switch", "feat/x"], ({"feat/x"}, MAYBE)),
         (["git", "--git-dir=x", "switch", "feat/x"], ({"feat/x"}, MAYBE)),
         (["git", "--work-tree", "x", "switch", "-c", "feat/x"], ({"feat/x"}, MAYBE)),
@@ -953,6 +961,13 @@ def test_the_branch_the_manifest_is_committed_on_is_a_default_branch() -> None:
     assert not make_guard(Heads(branch="trunk")).lands_now(Context(ROOT), ROOT / "CLAUDE.md")
 
 
+def test_a_git_aimed_at_a_repository_the_guard_cannot_read_is_held_to_main_and_master() -> None:
+    guard = make_guard(Heads(branch="feat/x", defaults=MAIN_BRANCHES | {"trunk"}))
+    assert rules("git push origin trunk", guard) == ["push-main"]
+    assert rules("git --git-dir=/r/.git push origin trunk", guard) == []
+    assert rules("git --git-dir=/r/.git push origin main", guard) == ["push-main"]
+
+
 @pytest.mark.parametrize(
     ("context", "on_a_branch", "on_main"),
     [
@@ -988,6 +1003,7 @@ def test_a_switch_earlier_on_the_line_decides_where_a_change_lands(
         ("git switch main && echo x > justfile", "feat/x", ["guard-path-default"]),
         ("git switch -c topic && echo x > justfile", "main", []),
         ("git switch main; echo x > justfile", "feat/x", ["guard-path-default"]),
+        ("(git switch main); echo x > justfile", "feat/x", ["guard-path-default"]),
         ("git switch topic; echo x > justfile", "feat/x", []),
         ("git switch topic; echo x > justfile", "main", ["guard-path-default"]),
         ("git switch - && echo x > justfile", "feat/x", ["guard-path-default"]),

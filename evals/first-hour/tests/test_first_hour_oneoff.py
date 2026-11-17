@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from first_hour import appcheck, oneoff, reduce
+from first_hour import appcheck, oneoff, reduce, transcript
 
 DEEP_RED = (
     "==> bite-all <==\nparallel: bite-all: red (exit 1) in 2s\n"
@@ -161,6 +161,15 @@ def test_the_hand_driven_runs_logs_reduce_like_a_driven_run(tmp_path: Path) -> N
     assert m["gates"]["later"] == {"perf": "life:x"}
     assert m["cost_usd"]["session"] == 4.0
     assert m["app"]["finding"] == appcheck.NO_WAY
+
+
+def test_a_block_recorded_as_its_repr_counts_as_a_block_recorded_whole() -> None:
+    said = f"{transcript.GUARD_DENIED}: a guard path\nparallel: lint: red (exit 1) in 0.1s"
+    whole = {"content": [{"_type": "ToolResultBlock", "content": said}]}
+    as_repr = {"content": [f"ToolResultBlock(content={said!r})"]}
+    counted = [{"kind": "guard-denial"}, {"kind": "session-red", "gates": ["lint"]}]
+    assert transcript.events("UserMessage", whole) == counted
+    assert transcript.events("UserMessage", as_repr) == counted
 
 
 @pytest.mark.parametrize(

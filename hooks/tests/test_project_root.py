@@ -139,6 +139,20 @@ def test_a_submodule_the_default_branch_records_is_judged_by_its_own_manifest(
     assert "(vendor/loose/.claude/settings.json)" in loose["permissionDecisionReason"]
 
 
+def test_a_submodule_only_a_branch_records_is_judged_as_part_of_the_project(
+    tmp_path: Path,
+) -> None:
+    library = checkout(tmp_path, name="library")
+    root = checkout(tmp_path, name="project")
+    switch_to_a_branch(root)
+    allow = ("-c", "protocol.file.allow=always")
+    _git(root, *allow, "submodule", "add", "-q", str(library), "vendor/library")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "library")
+    said = answer(root, write(root, root / "vendor/library/.claude/settings.json"))
+    assert said["permissionDecision"] == "ask"
+    assert "(vendor/library/.claude/settings.json)" in said["permissionDecisionReason"]
+
+
 def test_the_shim_judges_from_the_project_directory_the_harness_names(project: Path) -> None:
     git_init(project / ".claude")
     inside = project / ".claude"

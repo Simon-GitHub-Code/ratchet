@@ -196,6 +196,16 @@ def test_a_write_or_edit_that_appends_whole_groups_or_doors_passes_on_a_branch(
     assert write(adopted, "guards/notes.md") == {}
 
 
+def test_an_addition_is_read_against_the_default_branchs_manifest_not_the_work_tree(
+    adopted: Path,
+) -> None:
+    shrunk = TEMPLATE.replace('    "justfile",\n', "")
+    (adopted / MANIFEST).write_text(shrunk, encoding="utf-8")
+    said = write(adopted, MANIFEST, shrunk + EXTRA_GROUP)
+    assert said["permissionDecision"] == "deny"
+    assert "changes, removes or reorders a [[group]]" in said["permissionDecisionReason"]
+
+
 @pytest.mark.parametrize(
     ("bind", "pattern"),
     [
