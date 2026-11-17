@@ -1,20 +1,3 @@
-# Every question a Ratchet skill tells an agent to put to the owner, and every question that
-# became an assumption instead (ADR 0034). `hooks/tests/test_owner_questions.py` holds the skills
-# to this file: a skill line that asks the owner something must name an `[[ask]]` key below, of
-# kind `product`, with the text written here word for word; an `[[assume]]` key must appear in
-# its skill as the default the hand-over states. The one exception is the kind `architecture`
-# (ADR 0049): the system and the tools that check it, asked once at adoption, or when the owner
-# revisits them or an arrival reopens them (ADR 0052), in the same round as the product questions. Only keys under `architecture.` may
-# carry it, and their words are held to the same plain words as a product question's.
-#
-# A product question is a choice that decides what becomes of something of the user's (kept,
-# deleted, merged, duplicated, overwritten, shared), who may see or do it, or what the user can
-# do at all, where nothing the owner said or answered settles it. Its text is in plain words: no
-# method term. Nothing reviews a change to this file on its own: a pull request that registers a
-# tooling question as `product`, with matching skill text, passes the test (ADR 0034).
-# Text in angle brackets is a question the agent writes at run time from what it found; the
-# words in the brackets say what kind of question it may be.
-
 [[ask]]
 key = "init.purpose"
 skills = ["init"]
@@ -105,18 +88,11 @@ skills = ["adopt", "architecture"]
 kind = "architecture"
 text = "Which tools should check the work? Each set names one tool for each kind of check, for the design I recommend."
 
-# ADR 0052: when an arrival or a life event reopens the architecture and the review finds it no
-# longer fits, the ways to change it go to the owner in one message. Each way is a different
-# product to live with (what is kept and where, who can reach it, what happens when something is
-# down), and undoing it later rewrites the project, so it is his.
 [[ask]]
 key = "architecture.change"
 skills = ["architecture"]
 kind = "architecture"
 text = "<what the project now does that the way it is built did not plan for, and two or three ways forward, each with what someone using it would notice, what it costs, and how hard it is to undo, the recommended one first>"
-
-# Questions the first-hour dogfood of 2026-11-13 recorded, or the skills asked before ADR 0034,
-# that a sensible default answers. Each is taken, acted on, and stated in the hand-over.
 
 [[assume]]
 key = "init.defaults"

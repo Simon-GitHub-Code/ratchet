@@ -2182,3 +2182,22 @@ def test_a_judge_again_run_after_two_updates_reads_the_deleted_spec() -> None:
 def test_the_page_was_checked_and_drawn_from_the_current_exports() -> None:
     page = PLUGIN_ROOT / "docs/model/drain.md"
     assert not (why := model_tla.stale(page, *model.exports())), why
+
+
+def test_each_module_drawn_whole_holds_no_more_states_than_the_statechart_tool_draws() -> None:
+    drawn_whole = {
+        "DrainLanding",
+        "DrainWork",
+        "DrainTicketLife",
+        "DrainTicketLifeGated",
+        "DrainLife",
+        "DrainLeaseShown",
+        "DrainExpiryShown",
+    }
+    tables = {
+        export.name: export.module.partition("_ ==\n  <<\n")[2].partition("\n  >>")[0]
+        for export in model.exports()
+    }
+    states = {name: rows.count("\n") + 1 for name, rows in tables.items()}
+    assert drawn_whole <= states.keys()
+    assert {name: states[name] for name in drawn_whole if states[name] > 500} == {}

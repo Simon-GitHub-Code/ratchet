@@ -3,22 +3,16 @@ on:
   push:
     branches: [main]
   schedule:
-    # The adopter sets the hour: one when nobody works on the repository. Cron reads UTC.
     - cron: "0 3 * * *"
   workflow_dispatch:
 permissions:
   contents: read
-# Why: a nightly that is still running when the next starts is two nightlies; the newer one wins.
 concurrency:
   group: deep-${{ github.ref }}
   cancel-in-progress: true
 env:
   RATCHET_PLUGIN: ${{ github.workspace }}/ratchet
 jobs:
-  # Why: the gates of a tier are the lists at the top of the `justfile`, the lists a local run is
-  # built from, and this job turns them into matrices: adding a gate is one word there and never a
-  # change to this file. The long gates run as one job per shard, and the count is the binding's
-  # `- Shards:` line, 1 on day one. Adding runners is that one number.
   shape:
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -50,29 +44,26 @@ jobs:
     needs: shape
     strategy:
       fail-fast: false
-      # Why: one job per gate, so the wall clock is the slowest gate and one run shows every red.
       matrix:
         gate: ${{ fromJSON(needs.shape.outputs.tier2) }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with: { fetch-depth: 0 }
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with: { repository: Simon-GitHub-Code/ratchet, ref: "<ratchet-sha>", path: ratchet } # the plugin at the commit the binding pins; adopt fills it
+        with: { repository: Simon-GitHub-Code/ratchet, ref: "<ratchet-sha>", path: ratchet }
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: | # bind: the dependency directory, the mutation cache, the fuzz corpus
+          path: |
             .cache
-          key: tier2-${{ runner.os }}-${{ matrix.gate }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('quality/snapshots/**') }}-${{ github.sha }} # bind: lockfiles and tool configs
+          key: tier2-${{ runner.os }}-${{ matrix.gate }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('quality/snapshots/**') }}-${{ github.sha }}
           restore-keys: |
             tier2-${{ runner.os }}-${{ matrix.gate }}-
-      # bind: toolchain setup, pinned, with the setup action's own cache on
+      - { name: "bind: toolchain setup, pinned, with the setup action's own cache on", run: exit 1 }
       - run: python3 "$RATCHET_PLUGIN/scripts/budget.py" "${{ matrix.gate }}" --tier tier2 --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with: { name: "timing-${{ matrix.gate }}", path: .ratchet/timing.jsonl }
-  # Why: a matrix with no values is an error GitHub raises before the job exists, so a project with
-  # no long gate (an empty `*_sharded` list in the `justfile`) skips the job instead.
   tier2-long:
     if: needs.shape.outputs.tier2_long != '[]'
     runs-on: ubuntu-latest
@@ -87,16 +78,16 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with: { fetch-depth: 0 }
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with: { repository: Simon-GitHub-Code/ratchet, ref: "<ratchet-sha>", path: ratchet } # the plugin at the commit the binding pins; adopt fills it
+        with: { repository: Simon-GitHub-Code/ratchet, ref: "<ratchet-sha>", path: ratchet }
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: | # bind: the dependency directory, the mutation cache, the fuzz corpus
+          path: |
             .cache
-          key: tier2-${{ runner.os }}-${{ matrix.gate }}-${{ matrix.shard }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('quality/snapshots/**') }}-${{ github.sha }} # bind: lockfiles and tool configs
+          key: tier2-${{ runner.os }}-${{ matrix.gate }}-${{ matrix.shard }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('quality/snapshots/**') }}-${{ github.sha }}
           restore-keys: |
             tier2-${{ runner.os }}-${{ matrix.gate }}-${{ matrix.shard }}-
-      # bind: toolchain setup, pinned, with the setup action's own cache on
+      - { name: "bind: toolchain setup, pinned, with the setup action's own cache on", run: exit 1 }
       - run: python3 "$RATCHET_PLUGIN/scripts/budget.py" "${{ matrix.gate }}" --tier tier2 --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
         env:
           SHARD: ${{ matrix.shard }}

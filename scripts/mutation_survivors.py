@@ -432,7 +432,9 @@ def _read(root: Path, given: str) -> str | None:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--root", default=".")
     parser.add_argument("--tool", required=True, help="the register's `tool` key")
     parser.add_argument("--mutants", help="the run's mutants: JSON lines, `-` for stdin")
