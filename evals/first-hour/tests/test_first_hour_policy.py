@@ -113,6 +113,10 @@ FORGE_AND_NETWORK = [
     ("bash <<EOF\ngit push origin main\nEOF", "pushes"),
     ("python3 - <<EOF\nimport socket\nEOF", "inline code"),
     ("ssh host <<EOF\nls\nEOF", "network"),
+    ("cat <<'EOF' | bash\ngh pr create --fill\nEOF", "calls a forge"),
+    ("cat <<'EOF' | sh\ngit push origin main\nEOF", "pushes to a remote"),
+    ("tee x.sh <<'EOF' | bash\ngh pr create\nEOF", "calls a forge"),
+    ("cat > x.sh <<'EOF'\ngh pr create\nEOF\nbash x.sh", "calls a forge"),
 ]
 
 
@@ -171,13 +175,6 @@ ALLOWED = [
     "go list -m -f '{{.Path}}' github.com/rhysd/actionlint@latest",
     "for m in github.com/rhysd/actionlint; do curl -s https://proxy.golang.org/$m/@latest; done",
     "rsync -a --ignore-existing --itemize-changes /tmp/fh-run/plugin/t/ /tmp/fh-run/app/",
-    (
-        "mkdir -p q && cat > q/x.patch <<'EOF'\ndiff --git a/a.rb b/a.rb\nnew file mode 100644\n"
-        "--- /dev/null\n+++ b/a.rb\n+gh pr create\n+github.com/x/y\nEOF\n"
-        "git apply --check q/x.patch && echo ok"
-    ),
-    "cat >> spec.md <<'EOF'\n\n## Answers\n\n- git push; ssh host\nEOF",
-    "tee out.txt <<'EOF'\nrsync a b:c\nEOF",
 ]
 
 

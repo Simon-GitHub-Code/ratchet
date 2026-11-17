@@ -34,7 +34,6 @@ _SHELL = re.compile(r"(?:ba|da|z)?sh$")
 _SCRIPTED = frozenset({"sed", "awk", "gawk", "mawk", "grep", "egrep", "fgrep", "rg", "printf"})
 _AWKS = frozenset({"awk", "gawk", "mawk"})
 _AWK_VALUE_FLAGS = frozenset({"-v", "-F"})
-_INERT = frozenset({"cat", "tee", "git", "patch", "tr", "sort", "wc", "head", "tail"})
 _WRAPPERS = frozenset({"env", "command", "exec", "time", "nohup", "sudo", "xargs"})
 _SCRIPT_FLAGS = frozenset({"-e", "--expression", "--regexp"})
 _PUNCTUATION = ";&|()<>\n"
@@ -55,11 +54,6 @@ def words(command: str) -> Iterator[Word]:
             yield from (Word(w.raw) for w in words(body))
         elif kind == "code":
             yield from _literals(body)
-
-
-def without_inert_bodies(command: str) -> str:
-    shell_text, bodies = _split_heredocs(command)
-    return "\n".join([shell_text, *(body for kind, body in bodies if kind != "inert")])
 
 
 @dataclass(frozen=True)
@@ -170,9 +164,7 @@ def _reader(before: str) -> str:
     name = next((_basename(w) for w in plain if _basename(w) not in _WRAPPERS), "")
     if _SHELL.match(name):
         return "shell"
-    if _INTERPRETER.match(name):
-        return "code"
-    return "inert" if name in _INERT else "data"
+    return "code" if _INTERPRETER.match(name) else "data"
 
 
 def _last_simple(text: str) -> list[str]:

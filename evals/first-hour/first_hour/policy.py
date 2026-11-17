@@ -214,11 +214,10 @@ def _writable(path: str, scope: Scope) -> bool:
 
 
 def shell(command: str, scope: Scope) -> Decision:
-    text = shellpaths.without_inert_bodies(command)
     for pattern, why in _FORBIDDEN:
-        if pattern.search(text):
+        if pattern.search(command):
             return Decision(allowed=False, why=why)
-    refused = _refused_by_what_runs(command, text)
+    refused = _refused_by_what_runs(command)
     if refused is not None:
         return Decision(allowed=False, why=refused)
     here = scope
@@ -231,9 +230,9 @@ def shell(command: str, scope: Scope) -> Decision:
     return ALLOW
 
 
-def _refused_by_what_runs(command: str, text: str) -> str | None:
+def _refused_by_what_runs(command: str) -> str | None:
     scanned = shellpaths.scan(command)
-    mentions = len(_CURL.findall(text))
+    mentions = len(_CURL.findall(command))
     if scanned is None:
         return _refused_as_text(command, mentions=mentions)
     curls = [call for call in scanned.calls if call.name == "curl"]
