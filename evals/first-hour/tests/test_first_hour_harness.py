@@ -1,6 +1,7 @@
 import asyncio
 import concurrent.futures
 import contextlib
+import dataclasses
 import json
 import os
 import signal
@@ -27,10 +28,14 @@ def _own_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
 
 
-def make_run(tmp_path: Path, **budget: float) -> tuple[harness.Run, harness.Operator]:
+def make_run(
+    tmp_path: Path, toolchains: tuple[Path, ...] = (), **budget: float
+) -> tuple[harness.Run, harness.Operator]:
     operator = fakes.operator(tmp_path)
     plugin = fakes.plugin(tmp_path / "checkout")
-    run = harness.setup(fakes.config(plugin, tmp_path / "run", **budget), operator, os.environ)
+    config = fakes.config(plugin, tmp_path / "run", **budget)
+    config = dataclasses.replace(config, toolchains=toolchains)
+    run = harness.setup(config, operator, os.environ)
     run.sandboxed = False
     run.env.update(fakes.GIT_ENV)
     return run, operator
@@ -72,6 +77,29 @@ def test_a_whole_run_follows_the_route_to_a_usable_merge(tmp_path: Path) -> None
     assert models.sessions[0].closed
     logged = [e for e in events(run) if e["kind"] == "question" and e["channel"] == "prose"]
     assert logged[0]["read"] == "Built it. Shall I use blue? I recommend blue."
+
+
+def test_the_measurements_name_the_toolchains_the_run_was_given(tmp_path: Path) -> None:
+    given = (tmp_path / "toolchains" / "go", tmp_path / "toolchains" / "dotnet")
+    for tree in given:
+        tree.mkdir(parents=True)
+    run, operator = make_run(tmp_path, toolchains=given)
+    run.env["FAKE_ALSO"] = fakes.LIFE_EVENT
+    assert all(f"--ro-bind {t} {t} " in " ".join(sandbox_argv(run)) for t in given)
+
+    asyncio.run(harness.drive(run, operator, fakes.Models()))
+
+    written = json.loads((run.layout.root / "metrics.json").read_text())
+    assert written["meta"]["toolchains"] == [str(t) for t in given]
+    bare, bare_operator = make_run(tmp_path / "bare")
+    bare.env["FAKE_ALSO"] = fakes.LIFE_EVENT
+    assert (
+        asyncio.run(harness.drive(bare, bare_operator, fakes.Models()))["meta"]["toolchains"] == []
+    )
+
+
+def sandbox_argv(run: harness.Run) -> list[str]:
+    return dataclasses.replace(run, sandboxed=True).wrap(["true"])
 
 
 @pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])

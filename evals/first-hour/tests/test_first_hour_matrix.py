@@ -87,6 +87,51 @@ def test_a_runs_command_names_its_persona_directory_and_budget(tmp_path: Path) -
     }
 
 
+def test_a_runs_command_gives_it_every_toolchain_of_the_matrix(tmp_path: Path) -> None:
+    given = (tmp_path / "go", tmp_path / "rust")
+    settings = matrix.Settings(tmp_path / "plugin", 90.0, 40.0, "opus", "haiku", given)
+    argv = matrix.command(Path("/x/run.py"), settings, persona="go-todo-cli", directory=tmp_path)
+    assert argv[-4:] == ["--toolchain", str(given[0]), "--toolchain", str(given[1])]
+
+
+@pytest.mark.parametrize("subcommand", ["run", "probe", "matrix"])
+def test_a_toolchain_that_would_open_the_home_or_the_temp_location_is_refused(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    capsys: pytest.CaptureFixture[str],
+    subcommand: str,
+) -> None:
+    home, temp = tmp_path / "home", tmp_path / "temp"
+    (home / ".cargo" / "bin").mkdir(parents=True)
+    temp.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr("tempfile.tempdir", str(temp))
+    base = ["run.py", subcommand, "--plugin", "p", "--dir", "d", "--toolchain"]
+    for refused in (home, home / ".cargo", tmp_path, temp, tmp_path / "missing"):
+        with pytest.raises(SystemExit) as exit_:
+            run.main([*base, str(refused)])
+        assert exit_.value.code == 2
+        assert f"--toolchain: {refused}" in capsys.readouterr().err
+
+
+def test_a_toolchain_deeper_in_the_home_goes_to_every_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    given = home / ".rustup" / "toolchains" / "stable"
+    given.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    launched: list[list[str]] = []
+    monkeypatch.setattr(matrix, "launch_process", lambda argv: launched.append(argv) or 1)
+    argv = ["run.py", "matrix", "--plugin", str(tmp_path), "--dir", str(tmp_path / "m")]
+    argv += ["--personas", "go-todo-cli,rust-shortener", "--toolchain", str(given)]
+
+    assert run.main(argv) == 0
+
+    assert [a[a.index("--toolchain") :] for a in launched] == [["--toolchain", str(given)]] * 2
+
+
 def test_a_row_reads_the_measures_of_one_run() -> None:
     cells = matrix.row(owner("go-todo-cli"), METRICS)
     assert len(cells) == len(matrix.HEADER)
@@ -131,6 +176,16 @@ def test_a_row_names_the_harness_commit_that_drove_its_run(
     harness: dict[str, object] | None, cell: str
 ) -> None:
     meta = {} if harness is None else {"harness": harness}
+    cells = matrix.row(owner("a"), {**METRICS, "meta": meta})
+    assert dict(zip(matrix.HEADER, cells, strict=True))["Harness"] == cell
+
+
+@pytest.mark.parametrize(
+    ("toolchains", "cell"),
+    [([], "fa9ee31"), (["/a"], "fa9ee31, 1 toolchain"), (["/a", "/b"], "fa9ee31, 2 toolchains")],
+)
+def test_a_row_counts_the_toolchains_its_run_was_given(toolchains: list[str], cell: str) -> None:
+    meta = {"harness": {"commit": "fa9ee3129eb54ced"}, "toolchains": toolchains}
     cells = matrix.row(owner("a"), {**METRICS, "meta": meta})
     assert dict(zip(matrix.HEADER, cells, strict=True))["Harness"] == cell
 

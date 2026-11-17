@@ -36,8 +36,9 @@ only for ``agent``. The owner merges when any of these holds:
   is a decision the owner agrees to: the reason names its title.
 - ``file``: a guard, door or record path is a symbolic link or a submodule, at the merge base
   or at the head. Git shows a link's target as its text, which is not what a gate reads there.
-- ``target``, ``behind``, ``tier2``: the pull request targets another branch; the branch does not
-  hold the default branch's tip, so its gates ran on an older one; tier 2 is red there.
+- ``target``, ``behind``, ``tier1``, ``tier2``: the pull request targets another branch; the
+  branch does not hold the default branch's tip, so its gates ran on an older one; tier 1 or tier
+  2 is red there.
 - ``refs``, ``manifest``: the judge could not read what it judges. It fails closed. One change
   is read without a manifest on the default branch: the adoption, which brings the manifest and
   the binding to a default branch whose tip and merge base hold neither. There is no gate before
@@ -58,7 +59,8 @@ The gates are not its question: the merge job runs it once they are green, and `
 writes this record, so an agent can forge it: every other reason above is read from the diff.
 
 Usage: ``merge_ready.py [--root DIR] [--base REF] [--head REF] [--target BRANCH] [--current]
-[--tier2 green|red|none] [--report FILE]`` and ``merge_ready.py record [--root DIR]``.
+[--tier1 green|red|none] [--tier2 green|red|none] [--report FILE]`` and ``merge_ready.py record
+[--root DIR]``.
 """
 
 from __future__ import annotations
@@ -85,6 +87,7 @@ import feature_preflight as preflight
 import flags as registry
 import gatelib
 import lowered
+import markdown_text
 import owed
 import plugin_pin
 
@@ -123,12 +126,14 @@ STATUS = re.compile(r"^- Status:[ \t]*(\S+)[ \t]*$", re.MULTILINE)
 DECIDED = frozenset({"upheld", "rejected"})
 TREE = re.compile(r"[0-9a-f]{40,64}")
 APPROVE = "approve"
-TIER2_STATES = ("green", "red", "none")
+TIER_STATES = ("green", "red", "none")
 RED = "red"
 DOOR_EVENTS = frozenset({"deployed", "irreplaceable-data"})
 SURFACE_EVENTS = frozenset({"deployed"})
 FLAGS_QUESTION = "changed flags off and on"
 DOCS = "docs/"
+PRUNE_SLUG = "prune-pages"
+PRUNE_SUBJECT = re.compile(r"docs\(prune\)!?:")
 HARNESS = Group("harness", "The manifest says what a guard path is.", (MANIFEST_PATH,))
 # Why: Claude Code loads a CLAUDE.md beside any file it reads, and the other harnesses read
 # theirs the same way, so an agent obeys these at any depth; the manifest names the top only.
@@ -1393,10 +1398,11 @@ def record_reasons(change: Change, manifest: Manifest) -> list[Reason]:
 
 @dataclass(frozen=True)
 class Asked:
-    """What the caller knows that no commit says: the pull request's target and tier 2's state."""
+    """What the caller knows that no commit says: the pull request's target and tier states."""
 
     target: str | None = None
     current: bool = False
+    tier1: str = "none"
     tier2: str = "none"
 
 
@@ -1416,14 +1422,15 @@ def setting_reasons(change: Change, base_ref: str, asked: Asked) -> list[Reason]
                 " gates ran on a merge with an older one; bring it up to date and they rerun",
             )
         )
-    if asked.tier2 == RED:
-        reasons.append(
-            Reason(
-                "tier2",
-                f"tier 2 is red on `{default}`: that is the next piece of work, and the owner"
-                " merges what fixes it",
+    for tier, state in (("1", asked.tier1), ("2", asked.tier2)):
+        if state == RED:
+            reasons.append(
+                Reason(
+                    f"tier{tier}",
+                    f"tier {tier} is red on `{default}`: that is the next piece of work, and the"
+                    " owner merges what fixes it",
+                )
             )
-        )
     return reasons
 
 
@@ -1471,6 +1478,56 @@ def expiry_reasons(change: Change) -> list[Reason]:
             " and commit what it deletes",
         )
         for unit in documents.left(before, after)
+    ]
+
+
+def head_kinds(change: Change) -> tuple[documents.Kind, ...]:
+    return documents.all_kinds(change.after(BINDING))
+
+
+def pages(change: Change) -> list[str]:
+    return [path for path in change.paths if path.endswith(documents.MARKDOWN)]
+
+
+def lost_headings(change: Change) -> list[Reason]:
+    kinds = head_kinds(change)
+    reasons: list[Reason] = []
+    for path in pages(change):
+        kind = documents.kind_of(path, kinds)
+        before, after = change.before(path), change.after(path)
+        if kind is None or before is None or not change.kept(path):
+            continue
+        reasons.extend(
+            Reason(
+                "document",
+                f"`{path}` loses `{heading}`, which a {kind.name} page keeps, so the merge is the"
+                " owner's",
+            )
+            for heading in kind.keeps
+            if markdown_text.has_section(before, heading)
+            and not markdown_text.has_section(after or "", heading)
+        )
+    return reasons
+
+
+def prune_pass(change: Change) -> bool:
+    record = f"docs/features/{PRUNE_SLUG}/{documents.VERDICT}"
+    subjects = git(change.root, "log", "--format=%s", f"{change.fork}..{change.head}") or ""
+    return record in change.paths or any(PRUNE_SUBJECT.match(line) for line in subjects.split("\n"))
+
+
+def prune_reasons(change: Change) -> list[Reason]:
+    if not prune_pass(change):
+        return []
+    kinds = head_kinds(change)
+    return [
+        Reason(
+            "prune",
+            f"`{path}` is a {kind.name} page, which a prune pass does not cut, so the"
+            " merge is the owner's",
+        )
+        for path in pages(change)
+        if (kind := documents.kind_of(path, kinds)) and kind.prune != documents.CUT
     ]
 
 
@@ -1529,6 +1586,8 @@ def judge(
         ),
         *dispute_reasons(change),
         *expiry_reasons(change),
+        *lost_headings(change),
+        *prune_reasons(change),
         *record_reasons(change, manifest),
     ]
 
@@ -1600,14 +1659,15 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--target")
     parser.add_argument("--current", action="store_true")
-    parser.add_argument("--tier2", choices=TIER2_STATES, default="none")
+    parser.add_argument("--tier1", choices=TIER_STATES, default="none")
+    parser.add_argument("--tier2", choices=TIER_STATES, default="none")
     parser.add_argument("--report", type=Path)
     options = parser.parse_args(argv[2:] if recording else argv[1:])
     root = Path(options.root).resolve()
     if recording:
         return write_record(root, sys.stdin.read())
     base = options.base or default_ref(root)
-    asked = Asked(options.target, options.current, options.tier2)
+    asked = Asked(options.target, options.current, tier1=options.tier1, tier2=options.tier2)
     notes: list[str] = []
     reasons = judge(root, base, options.head, asked=asked, notes=notes)
     print(render(reasons), end="")
