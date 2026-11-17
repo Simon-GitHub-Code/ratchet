@@ -1,5 +1,6 @@
 """``bite.py``: every shipped gate goes red on its violation and green without it."""
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -91,6 +92,19 @@ def test_a_gate_that_does_not_bite_fails_the_run(
         "bite: deaf: DOES NOT BITE\n  the gate is green with the fault planted\n"
         "  said by its command\n  said by the gate\n"
     )
+
+
+def test_a_lister_that_fails_turns_the_comments_gate_red_and_says_what_it_said(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
+    bite.scratch(tmp_path)
+    assert bite.run(bite.comments_gate, tmp_path, [])[0] == 0
+    bite.lister_that_fails(tmp_path)
+    code, said = bite.run(bite.comments_gate, tmp_path, [])
+    assert code == 1
+    assert "comments: the lister failed: the lister cannot read its files" in said
 
 
 def says_from_a_command(_argv: list[str]) -> int:

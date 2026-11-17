@@ -511,6 +511,10 @@ def lister_reports_what_the_line_lacks(root: Path) -> None:
     write(root, LISTER, LISTER_CODE.replace("said = text.lstrip('~ ')", "said = 'a ghost'"))
 
 
+def lister_that_fails(root: Path) -> None:
+    write(root, LISTER, "import sys\nsys.exit('the lister cannot read its files')\n")
+
+
 PLUGIN_COPY = "plugin"
 PLUGIN_MANIFEST = f"{PLUGIN_COPY}/{plugin_pin.MANIFEST}"
 
@@ -587,6 +591,7 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
         lister_reports_what_the_line_lacks,
         [],
     ),
+    ("comments: a lister that fails", comments_gate, lister_that_fails, []),
     ("pins", pins.main, unpin, []),
     ("prose", prose.main, avoided_word, []),
     ("snapshots-check", snapshots.main, change_config, ["--check"]),

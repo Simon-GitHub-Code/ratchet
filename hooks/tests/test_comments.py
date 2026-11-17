@@ -465,6 +465,38 @@ def test_the_adoption_records_what_exists_and_a_later_comment_is_red(
     )
 
 
+def test_an_adoption_with_no_comment_records_none_and_writes_no_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+) -> None:
+    root = repository(tmp_path, {"src/old.txt": "x\n"})
+    branch(root)
+    write(root, BINDING_PATH, LISTED)
+    assert changed(root, "", monkeypatch, "--record") == 0
+    assert "comments: recorded 0 owed since 1.2.3" in capsys.readouterr().out
+    assert not (root / owed.LEDGER).exists()
+
+
+def test_an_adoption_whose_binding_pins_no_plugin_version_records_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+) -> None:
+    root = repository(tmp_path, {"src/old.txt": "x // old reason\n"})
+    branch(root)
+    write(root, BINDING_PATH, LISTED.replace(PIN, ""))
+    old = "src/old.txt\t1\tcomment\told reason\n"
+    assert changed(root, old, monkeypatch, "--record") == 1
+    assert comments.RECORD_UNPINNED in capsys.readouterr().out
+    assert not (root / owed.LEDGER).exists()
+
+
+def test_a_listed_file_the_change_deletes_is_not_judged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+) -> None:
+    root = project(tmp_path, LISTED, {"src/gone.txt": "x // old reason\n", "src/kept.txt": "y\n"})
+    (root / "src/gone.txt").unlink()
+    write(root, "src/kept.txt", "y\nz\n")
+    assert judged(root, monkeypatch, capsys) == ["src/kept.txt"]
+
+
 LISTER = """\
 for f in "$@"; do
   awk -v OFS='\\t' -v f="$f" '{ i = index($0, "//"); if (i) { t = substr($0, i + 2); k = "comment";

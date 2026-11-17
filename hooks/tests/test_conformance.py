@@ -1420,6 +1420,68 @@ def test_a_listed_row_needs_a_bound_lister_and_a_bite_that_plants_into_its_files
     assert red(repo) == []
 
 
+PLANTS = """
+[[bite]]
+gate = "comments"
+name = "a replaced line"
+replace = { path = "lib/a.txt", old = "x", new = "x // a reason" }
+expect = "a comment"
+
+[[bite]]
+gate = "comments"
+name = "a patched line"
+patch = "quality/bites/comment.patch"
+expect = "a comment"
+
+[[bite]]
+gate = "comments"
+name = "a removed file"
+remove = ["old/**"]
+expect = "a comment"
+"""
+COMMENT_PATCH = """\
+--- a/app/a.txt
++++ b/app/a.txt
+@@ -1 +1 @@
+-x
++x // a reason
+"""
+
+
+def test_a_replace_or_patch_bite_plants_into_its_files_and_a_remove_bite_plants_nothing(
+    repo: Path,
+) -> None:
+    rows = "\n".join(f"| `{glob}` | listed |" for glob in ("lib/**", "app/**", "old/**"))
+    replace(BINDING, COMMENTS_ROW, rows)(repo)
+    registry = (repo / "quality/bites.toml").read_text(encoding="utf-8")
+    write("quality/bites.toml", registry + PLANTS)(repo)
+    write("quality/bites/comment.patch", COMMENT_PATCH)(repo)
+    unplanted = [line for line in red(repo) if "and no [[bite]] of gate 'comments'" in line]
+    only_old = (
+        "quality/bites.toml: the Comments row `old/**` is `listed`, and no [[bite]] of gate"
+        " 'comments' plants into a file it matches; add one, so the lister is shown to find a"
+        " comment of that kind (ADR 0063)"
+    )
+    assert unplanted == [only_old]
+
+
+@pytest.mark.parametrize(
+    ("old", "problem"),
+    [
+        (
+            f"| Files | Comments |\n| --- | --- |\n{COMMENTS_ROW}\n",
+            "the section lacks its table with the columns Files | Comments",
+        ),
+        (f"{COMMENTS_ROW}\n", "the Comments table has no row: one row per kind of tracked file"),
+    ],
+)
+def test_a_comments_section_with_no_table_or_no_row_is_red(
+    repo: Path, old: str, problem: str
+) -> None:
+    replace(BINDING, old, "")(repo)
+    assert any(problem in line for line in red(repo)), red(repo)
+
+
 def test_the_published_interface_is_named_or_said_to_be_none_outside_a_library(
     repo: Path,
 ) -> None:
@@ -1434,6 +1496,11 @@ def test_the_published_interface_is_named_or_said_to_be_none_outside_a_library(
     )
     replace(BINDING, published, "- Published interface: `src/api/**`")(repo)
     assert not any("Published interface" in line for line in red(repo))
+    replace(BINDING, "`src/api/**`", "src/api/**")(repo)
+    assert (
+        f"{BINDING}: the Architecture section's '- Published interface:' line names no glob in"
+        " backticks"
+    ) in red(repo)
 
 
 def test_documentation_coverage_bound_outside_a_library_is_unbound_by_the_upgrade(
