@@ -6,7 +6,7 @@ Read this before you change a threshold, a ceiling, a listed config or the mutan
 
 ### Raise the thresholds a change earned
 
-1. **Run `ratchet`.** It runs the suites and raises each value to the measured one, never lowering one. It reads the last full mutation runs for the scores and refreshes the snapshots.
+1. **Run `ratchet`.** It reads the last full mutation runs for the scores and refreshes the snapshots.
 2. **Commit the result with the change that earned it.**
 
 Done when the values `ratchet` raised and the snapshots it refreshed are committed in the change that earned them.
@@ -51,15 +51,13 @@ score = 99.8
 coverage = 97.1
 ```
 
-- The `ratchet-lowered` entry point (tier 0) flattens the file to dotted keys at the merge base and at head. It fails on any key that is lower or missing.
-- Relaxing a value is an owner's change with an ADR behind it. The ADR names each loosening on a line of its own, `Relaxes: <key> from <old> to <new>`, with `removed` for a dropped key and `true` and `false` for a flag such as `absolute`. `ratchet-lowered` passes exactly the loosenings an ADR names, and prints which ADR.
+- Relaxing a value is an owner's change with an ADR behind it. The ADR names each loosening on a line of its own, `Relaxes: <key> from <old> to <new>`, with `removed` for a dropped key and `true` and `false` for a flag such as `absolute`.
 - An agent may write a new ADR, never one with this line. A record that carries `Relaxes:` is no addition, so the merge judge sends the change to the owner and the guard refuses it on the default branch: the line is the owner's ([guards.md](guards.md)).
 
 ### The owed ledger
 
 `quality/owed.toml` holds what the project owes since an upgrade: the findings a new plugin version raised that the upgrade could not settle itself. The upgrade writes the file, and nobody edits it by hand (plugin ADR 0037).
 
-- The conformance gate counts each entry as owed and is not red on it.
 - An entry excuses one finding: the check, the file and the problem it names. No entry excuses a finding another gate judges, such as the permission rules or the thresholds.
 - Between upgrades the list only falls. An entry goes once its finding is fixed (`upgrade.py --apply` drops it), and a change that only drops entries needs no owner at the merge.
 - `ratchet-lowered` fails a change that adds or alters an entry, unless the same change moves the plugin pin to a newer version and the merge base was already red on that finding.
@@ -97,22 +95,20 @@ date = 2026-11-06
 - **The reason has twenty characters or more.** Its honesty is for the owner's review: the register is a guard path.
 - **A stale entry fails.** An entry is stale when its mutant is now killed or gone, or its function hash changed, so editing a function forces its equivalents to be reviewed again.
 - **A timeout counts as a kill**, as mutation tools count it, unless the register holds an entry for the mutant. Then the run cannot tell it from a survivor, and the gate is red and says so.
-- **An entry without the `@` suffix** is from a register written before the place was part of the identity. Each is red until replaced: the gate names it as the old identity, lists the live mutants it matched, and prints an entry to paste for each unregistered survivor. The owner reviews them and writes one entry per mutant they judge equivalent, with a reason of their own. Nothing carries over unreviewed.
+- **An entry without the `@` suffix** is from a register written before the place was part of the identity. The owner reviews them and writes one entry per mutant they judge equivalent, with a reason of their own. Nothing carries over unreviewed.
 - **Scope.** A partial run judges only its scope. Pull requests mutate changed functions (tier 1). The default branch mutates everything on the absolute paths (tier 2).
 
 ## 5. Listed configuration is snapshotted
 
-`quality/snapshots/` holds a copy of each file the `tool-config` group of `guards/manifest.toml` lists. The `snapshots-check` entry point (tier 0) copies them again and diffs. Loosening a listed config therefore shows as a reviewed diff instead of a silent config edit, and a config the group does not list is neither guarded nor recorded: an agent can loosen it and no gate sees it. Adoption lists each config it writes. After adoption `/ratchet:safeguard` adds a new tool's config path to the manifest on its branch, and the path is guarded once the owner merges that change.
+`quality/snapshots/` holds a copy of each file the `tool-config` group of `guards/manifest.toml` lists. Loosening a listed config therefore shows as a reviewed diff instead of a silent config edit, and a config the group does not list is neither guarded nor recorded: an agent can loosen it and no gate sees it. Adoption lists each config it writes. After adoption `/ratchet:safeguard` adds a new tool's config path to the manifest on its branch, and the path is guarded once the owner merges that change.
 
 ## 6. Ceilings only fall
 
 `[ceilings.seconds]` in `quality/thresholds.toml` holds the wall-clock ceiling of each tier, and of any gate with its own runner.
 
 - The `budget` entry point wraps the run and goes red over the ceiling. That blocks everywhere but on a pull request, where the runner varies and CI asks it to report (`--over report`).
-- `ratchet-lowered` fails a raised ceiling exactly as it fails a lowered threshold.
-- `budget --set` records the first ceiling from a measured run with headroom, no lower than the tier's budget, and afterwards only lowers it.
 - A ceiling is paid for by caching, splitting, sharding or running less, never by a quarantined test. Read [tiers.md](tiers.md#speed) for how.
 
 ## Limits versus ratchets
 
-A ratchet that only rises cannot hold a ceiling, so the file carries both directions: thresholds rise, ceilings fall, and the gate knows which is which by the `ceilings` table. Size and complexity are hard limits rather than either, tighter on absolute paths, held in the lint config and in a fitness test, with the numbers in the binding. Split the unit rather than raise the limit.
+A ratchet that only rises cannot hold a ceiling, so the file carries both directions: thresholds rise, ceilings fall. Size and complexity are hard limits rather than either, tighter on absolute paths, held in the lint config and in a fitness test, with the numbers in the binding. Split the unit rather than raise the limit.

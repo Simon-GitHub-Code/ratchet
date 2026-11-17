@@ -48,6 +48,7 @@ class Settings:
     usd: float
     model: str
     owner_model: str
+    toolchains: tuple[Path, ...] = ()
 
 
 def command(run_py: Path, settings: Settings, *, persona: str, directory: Path) -> list[str]:
@@ -71,6 +72,7 @@ def command(run_py: Path, settings: Settings, *, persona: str, directory: Path) 
         settings.model,
         "--owner-model",
         settings.owner_model,
+        *(w for t in settings.toolchains for w in ("--toolchain", str(t))),
     ]
 
 
@@ -113,7 +115,10 @@ def harness_cell(metrics: Mapping[str, object]) -> str:
     commit = _at(metrics, "meta.harness.commit")
     if not commit:
         return "not recorded"
-    return str(commit)[:7] + (" (dirty)" if _at(metrics, "meta.harness.dirty") else "")
+    given = _at(metrics, "meta.toolchains")
+    count = len(given) if isinstance(given, list) else 0
+    toolchains = f", {count} toolchain{'s' * (count > 1)}" if count else ""
+    return str(commit)[:7] + (" (dirty)" if _at(metrics, "meta.harness.dirty") else "") + toolchains
 
 
 def stopped(metrics: Mapping[str, object], error: str) -> str:
