@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import tempfile
 from dataclasses import dataclass, field
@@ -234,6 +235,7 @@ def argv(
     """
     trees = layout.writable if writable is None else tuple(writable)
     args = ["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
+    args += ["--ro-bind", str(_passwd(layout)), "/etc/passwd"]
     args += ["--tmpfs", "/home", "--tmpfs", "/run/user"]
     args += ["--bind", str(layout.tmp), "/tmp", "--bind", str(layout.tmp), "/var/tmp"]
     args += ["--ro-bind", str(layout.root), str(layout.root)]
@@ -245,6 +247,18 @@ def argv(
     args += ["--remount-ro", "/home"]
     args += ["--unshare-pid", "--unshare-ipc", "--die-with-parent", "--new-session"]
     return [*args, "--", *command]
+
+
+def _passwd(layout: Layout) -> Path:
+    return layout.root / "passwd"
+
+
+def _with_home(passwd: str, uid: int, home: Path) -> str:
+    entries = [line.split(":") for line in passwd.splitlines()]
+    for entry in entries:
+        if entry[2:3] == [str(uid)] and entry[5:6]:
+            entry[5] = str(home)
+    return "".join(":".join(entry) + "\n" for entry in entries)
 
 
 def shell_prefix(layout: Layout, tools: Mapping[str, Path]) -> str:
@@ -344,6 +358,8 @@ def prepare(layout: Layout, tools: Mapping[str, Path], plugins: Sequence[Plugin]
     layout.appcheck.mkdir(exist_ok=True)
     layout.runtime.mkdir(mode=0o700, exist_ok=True)
     (layout.home / ".gitconfig").write_text(GITCONFIG, encoding="utf-8")
+    system = Path("/etc/passwd").read_text(encoding="utf-8")
+    _passwd(layout).write_text(_with_home(system, os.getuid(), layout.home), encoding="utf-8")
     layout.shell.write_text(shell_prefix(layout, tools), encoding="utf-8")
     layout.shell.chmod(0o755)
     for name, path in tools.items():

@@ -377,6 +377,14 @@ def test_a_given_toolchain_hidden_with_the_operators_home_runs_inside_ahead_of_t
 
 
 @needs_bwrap
+def test_the_users_own_entry_names_the_runs_home_inside(layout: sandbox.Layout) -> None:
+    look = "import os, pwd; e = pwd.getpwuid(os.getuid()); print(e.pw_dir, e.pw_uid)"
+    seen = inside(layout, f'python3 -c "{look}"')
+    assert seen.stdout.split() == [str(layout.home), str(os.getuid())], seen.stderr
+    assert inside(layout, "getent passwd root").stdout.startswith("root:x:0:0:")
+
+
+@needs_bwrap
 @pytest.mark.parametrize(
     "look",
     [
