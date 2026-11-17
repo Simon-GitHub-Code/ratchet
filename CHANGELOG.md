@@ -1,5 +1,74 @@
 # Changelog
 
+## 0.13.0
+
+Upgrade from any version from 0.10.0 on, as the README's Upgrading section says. The upgrade writes most of what is new and records the rest as owed, so it is green when it lands. Three things follow it:
+
+- **Type `/ratchet:fill` next.** Until it lands, no feature and no drain starts. It gives every Markdown file a kind, fills the Comments table and binds its lister, records the comments the project already has, adds a Triggers row for the new `state-machine` kind, and writes the suites table that `tests-changed` reads.
+- **Ask an agent to work what the upgrade left owed.** `quality/owed.toml` lists it: the comments gate's bites, the `- Published interface:` line, the `- Incremental:` line, the shared suite report, and the formal verification rows once their Triggers rows exist. Then `upgrade.py --apply` drops what is settled.
+- **Read what the upgrade changed in your justfile and merge workflow.** It adds `comments` to the tier 0 gates, `RATCHET_RUN` to the justfile so a run shares one suite, and `--tier1` to `.github/workflows/merge.yml` so a red tier 1 holds merges.
+
+One gate is loosened on purpose: a project that does not declare `library` has `documentation coverage, ratcheted` rewritten to `none: not a library`, since a doc comment outside a library's published interface is now red (ADR 0063).
+
+Comments are red, and the code is the context (ADR 0063).
+
+- A new tier 0 gate, `no prose comments`, allows a comment only where a tool reads it: a line that a kind of the binding's `## Suppressions` matches (`kept` names a directive that silences nothing), or a pinned action's version note. A doc comment is allowed only on a library's published interface.
+- The project writes its lister, `just comments-list`, which prints `path<TAB>line<TAB>kind<TAB>text`. The lister is a guard path.
+- The comments a project already has are recorded once, by `just comments --record` in the change that first binds the lister, and owed. They follow renames. A comment with no text cannot be recorded, so it is deleted.
+- The plugin writes no comment into a project. The ledger's header is gone, recipes copied from the template carry none, and the templates and the catalogue ship comment-free.
+- Outside its CI workflows and the eval sample projects, the plugin itself holds no prose comment or docstring. It keeps the docstrings its code prints or checks and the directives tools read. Each constraint a comment stated is now a test seen to fail when it breaks, or a line of an ADR. The workflows' comments go in a later change.
+
+Every document has a kind, and the ones that steer a feature leave with it (ADR 0064).
+
+- The catalogue names a kind for each Markdown file the method writes. Standing kinds stay. Steering kinds (a feature's spec, a local unit and its tickets) expire. The binding's `## Documents` adds the project's own, and conformance is red on a Markdown file of no kind.
+- A local unit expires when its last ticket closes and no open ticket names its files. A feature spec expires once its review verdict exists. The feature step and the drain delete it and carry each `## Answers` line, dated, to the brief's `## In the owner's words`.
+- The merge judge holds a change that makes a unit expire and leaves it in the tree. `ratchet-lowered` is red on a change that deletes a spec or ticket and drops one of its answers.
+- The first drain after the upgrade deletes the units and specs that are already finished.
+
+`/ratchet:prune` deletes what the code already says (ADR 0065).
+
+- `/ratchet:prune comments` works through the owed comments in batches the change-size ceiling allows. It deletes each one, or first encodes the constraint it claims as a test seen red, a type, a lint rule or a decision record.
+- `/ratchet:prune pages` cuts what a page of a `pass` kind repeats of the code, once `- Prune after:` merges (10 by default) have landed and the page cites a path that changed after it. `documents.py cited` is red on a cut whose citation is gone.
+- The owner is asked nothing. A fresh review agent reads every removal, and its verdict lets the merge judge pass the change. The route offers both, and neither is ever red.
+- The merge judge leaves to the owner any change that removes a heading a page's kind keeps, or deletes such a page whole, and any prune pass that touches a page not of a `pass` kind.
+
+Formal verification is asked of the first concurrent code, parser or state machine (ADR 0062).
+
+- Three tier 2 rows, `formal verification of concurrency`, `of untrusted input` and `of state`, and a new code kind, `state-machine`. Each row's proof is a break planted in the code the model mirrors, with the model unchanged, which the check catches.
+- The binding's new `## Formal verification` holds `- Model:`, `- Mirrors:` and `- Synced:`. `/ratchet:safeguard` writes the model with `pstack:create-formal-verification-skill`, and the route offers a round of upkeep with `pstack:maintain-formal-verification-skill` when mirrored code moves past `- Synced:`. Upkeep is never red.
+- On the upgrade, a row whose kind the project already has is owed at once.
+
+Fuzzing is coverage-guided, and a solver searches the first parser (ADR 0070).
+
+- A bound `fuzzing` row needs a `guarded-crash` bite: a crash reached only through an exact value of four or more bytes that the parser compares against.
+- `symbolic checking` is now asked when the first untrusted input arrives, and its bite is `related-fields`. The upgrade moves a `later: code:formal-model` row to the new trigger and owes both bites.
+
+The suite runs once per check (ADR 0071). The binding's `## Shared reports` names the producer, and `report.py` runs it once per run and tree for every gate that reads it. A local `check` runs the suite once, under coverage, where it ran it four times. A local `test` is slower, since it is now instrumented. CI is unchanged.
+
+A finding quotes what it breaks (ADR 0072). A blocker or major from the critic or the reviewer names a record and quotes it, and only a finding whose quote that record holds is owed a fix. The publish check reads the run's result and is red on an owed finding whose quote is not found. An unfound quote goes to `unstated` and starts no fix round, and a fix loop that is not converging stops.
+
+A check runs the test files a change touches (ADR 0073). The binding's `## Tests` gains a suites table, and the new tier 1 gate `tests-changed` runs the test files a change adds or edits through each suite's own recipe. Each role in the pipeline runs it while it works, and the preflight names the gates a ticket's criteria hold.
+
+A red tier 1 on the default branch holds merges, as a red tier 2 does (ADR 0069). Until a later push to the default branch is green, the merge judge leaves every pull request to the owner. A project with more than 100 runs of a workflow no longer reads tier 2 as red.
+
+Every line of the timing record carries the time, the run and the tree, and a feature run states its time, its `check` runs and how many judged a tree already green. A path the `- Local caches:` line names that does not exist is printed and recorded.
+
+The skills say only what the code cannot (ADR 0066). Each sentence of a skill page is an instruction, a reason or a restatement of what a script does, and the restatements are gone. The pipeline's loop stays whole, since other harnesses run it by hand from the page.
+
+Smaller fixes:
+
+- The upgrade puts the plugin's interpreter on the template's inline Python lines, and carries the jobs lines into a justfile older than `ratchet.jobs`.
+- The marketplace entry names the HTTPS address, so an update needs no SSH key.
+- Gates that each use every core share a schedule group, and the runner names a group whose chain outlasts every gate beside it. An upgraded justfile keeps its groups. Copy `serial1` from the template to take the new one.
+- The binding names the mutation tool's incremental mode, and the recipe takes it locally, never in CI or a bite.
+- A drain `check` after an interrupted `update` says to run `update` again, and the guard refuses a commit while an update is under way.
+- A one-ticket feature run's commit waits for its publish check.
+- Five scripts print their whole description under `--help`.
+
+Decided, with no code: the plugin keeps its own runner, and a container pipeline engine is a project's to bind under its own entry points (ADR 0074).
+
+The models took their turns. The drain model obeys the guard's final-check gate, and found the interrupted-update defect fixed above. The route and drain models let a steering unit leave with its last ticket, a shared unit with the last ticket to land, and carry its answers to the brief as records. The pipeline's charts are drawn from today's model.
+
 ## 0.12.4
 
 The first tagged release. Upgrade from any version from 0.10.0 on, as the README's Upgrading section says. The first upgrade to a tagged release starts from a red pin line that names the command to run.
