@@ -31,6 +31,7 @@ import change_size
 import changed_tests
 import comments
 import documents
+import formal_model
 import gatelib
 import hooks_installed
 import installs
@@ -1086,7 +1087,10 @@ def dropped_row(failure: str, question: str, *, trigger: str, fired: Fired) -> F
     """A Gates row the catalogue gained since the adoption: its template row, and how to fill it.
 
     Why: ADR 0028. `later:` is for a trigger that has not fired; written for one that has, it is
-    green and defers a safeguard already owed. So the item says which this repository is.
+    green and defers a safeguard already owed. So the item says which this repository is. The
+    three `formal verification of <kind>` rows are the exception (ADR 0062): one whose kind the
+    Triggers table can count is written `later:` even once fired, so it is owed at once, the route
+    names the safeguard, and the next instance is red until it is bound.
     """
     gate = next(
         row.gate for row in project_bite.gate_rows(template_binding()) if row.question == question
@@ -1107,8 +1111,18 @@ def dropped_row(failure: str, question: str, *, trigger: str, fired: Fired) -> F
         if shipped(row) or gate in CARRIED_GATES:
             edit = (f"add the '{question}' row, bound to the plugin's own gate", row)
     elif {state for state, _ in said} == {True}:
-        fill = f"add the template's row and bind it: its trigger `{trigger}` has fired here"
         fix = Agent(start, (*shown, bite))
+        if FORMAL_PROOF in application_types.load().proofs.get(question, ()):
+            fill = (
+                f"add the template's row as `later: {trigger}`: it has fired here, so the row is"
+                " owed"
+            )
+            edit = (
+                f"add the '{question}' row as `later: {trigger}`",
+                with_tool(row, f"later: {trigger}"),
+            )
+        else:
+            fill = f"add the template's row and bind it: its trigger `{trigger}` has fired here"
     else:
         fill = (
             f"add the template's row, bound, or `later: {trigger}` only while that trigger has"
@@ -1262,6 +1276,19 @@ def check_triggers(root: Path) -> Iterable[Finding]:
                 f"{BINDING_PATH}: the Triggers table names kind '{name}', which the catalogue"
                 f" lacks; the kinds are {', '.join(catalogue.kinds)}"
             )
+
+
+def check_trigger_kinds(root: Path) -> Iterable[Finding]:
+    """Each kind of code a question asked of the declared types names, with no Triggers row.
+
+    Why: ADR 0062. The agent writes the row from the repository alone, so ``owed.FILL_FIRST`` holds
+    this check; ``check_triggers`` also raises the Life events line, which is the owner's question.
+    """
+    text = read(root / BINDING_PATH)
+    if text is None or not markdown_text.has_section(text, triggers.SECTION.strip()):
+        return
+    catalogue = application_types.load()
+    kinds, _ = triggers.parse(text)
     types = set(application_types.declared(text) or [])
     asked = catalogue.kinds_asked(types)
     for name in sorted(catalogue.kinds_required(types) - set(kinds)):
@@ -1274,6 +1301,146 @@ def check_triggers(root: Path) -> Iterable[Finding]:
             f"{BINDING_PATH}: the Triggers table has no row for kind '{name}', {why}"
             f" ({catalogue.kinds[name]}); write its Paths, or `none: <reason>`"
         )
+
+
+FORMAL_PROOF = "code-departs-from-model"
+FORMAL_STOPS = "the proof that the formal model's code is the code it mirrors"
+
+
+def default_ref(root: Path) -> str | None:
+    """The first candidate default branch that names a commit here, or ``None``."""
+    return next(
+        (
+            name
+            for name in gatelib.default_branches(root)
+            if gatelib.git(root, "rev-parse", "--verify", "--quiet", f"{name}^{{commit}}")
+        ),
+        None,
+    )
+
+
+def formal_globs(root: Path, formal: formal_model.Formal) -> Iterable[Finding]:
+    """A glob of the section that matches no tracked file."""
+    tracked = gatelib.tracked_paths(root)
+    for label, globs in (("Model", formal.model), ("Mirrors", formal.mirrors)):
+        for glob in globs:
+            if not any(gatelib.matches(path, [glob]) for path in tracked):
+                yield agent(
+                    f"{BINDING_PATH}: the '- {label}:' glob `{glob}` of '{formal_model.SECTION}'"
+                    " matches no tracked file; write the glob of a file that exists"
+                )
+
+
+def formal_group(root: Path, formal: formal_model.Formal) -> Iterable[Finding]:
+    """A tracked file of ``- Model:`` that the default branch's ``formal`` group does not hold."""
+    ref = default_ref(root)
+    text = gatelib.show(root, ref, "guards/manifest.toml") if ref else None
+    try:
+        guards = guard_manifest.parse(text if text is not None else "")
+    except guard_manifest.ManifestError:
+        return
+    for path in gatelib.tracked_paths(root):
+        group = guards.group_of(path)
+        if gatelib.matches(path, list(formal.model)) and (group is None or group.name != "formal"):
+            yield agent(
+                f"guards/manifest.toml: `{path}` is a '- Model:' path of '{formal_model.SECTION}'"
+                f" and the default branch's `formal` group does not hold it; add it there, so the"
+                " owner merges a change to the model"
+            )
+
+
+def formal_synced(root: Path, formal: formal_model.Formal) -> Iterable[Finding]:
+    """The ``- Synced:`` commit: held by this clone, and an ancestor of ``HEAD``."""
+    synced = formal.synced
+    if not synced:
+        yield agent(f"{BINDING_PATH}: '{formal_model.SECTION}' has no '- Synced:' commit")
+    elif gatelib.git(root, "rev-parse", "--verify", "--quiet", f"{synced}^{{commit}}") is None:
+        yield agent(
+            f"{BINDING_PATH}: the '- Synced:' commit {synced} is not in this clone; fetch it with"
+            f" `git fetch origin {synced}`, or the full history with `git fetch --unshallow`"
+        )
+    elif gatelib.git(root, "merge-base", "--is-ancestor", synced, "HEAD") is None:
+        yield agent(f"{BINDING_PATH}: the '- Synced:' commit {synced} is not an ancestor of HEAD")
+
+
+def inside(planting: set[str], formal: formal_model.Formal, paths: Sequence[str]) -> bool:
+    """Whether a fault plants something, all of it in the mirror and the kind, none in the model."""
+    return bool(planting) and all(
+        gatelib.matches(path, list(formal.mirrors))
+        and gatelib.matches(path, list(paths))
+        and not gatelib.matches(path, list(formal.model))
+        for path in planting
+    )
+
+
+def formal_bites(
+    root: Path, binding: str, formal: formal_model.Formal, *, rows: Sequence[project_bite.Row]
+) -> Iterable[Finding]:
+    """Per bound per-kind row, a bite of its gate that claims the proof inside the mirror.
+
+    Every path the fault plants must match a ``- Mirrors:`` glob and a Paths glob of the row's
+    kind, and no ``- Model:`` glob, so the proof breaks the code and leaves the model as it was.
+    """
+    catalogue = application_types.load()
+    kinds, _ = triggers.parse(binding)
+    source = read(root / project_bite.REGISTRY)
+    bites = project_bite.read_registry(source)[0].bites if source is not None else ()
+    for row in rows:
+        kind = application_types.code_kinds(catalogue.trigger_of(row.question))[0]
+        paths = kinds[kind].paths if kind in kinds else ()
+        wanted = [
+            bite
+            for bite in bites
+            if bite.gate == row.gate
+            and bite.proof == FORMAL_PROOF
+            and inside(planted(root, bite.fault), formal, paths)
+        ]
+        if not wanted:
+            yield replace(
+                agent(
+                    f"{project_bite.REGISTRY}: the bound row '{row.question}' needs a [[bite]] of"
+                    f" gate '{row.gate}' with proof = \"{FORMAL_PROOF}\" whose fault plants only"
+                    f" into files matching both a '- Mirrors:' glob and a Paths glob of the"
+                    f" `{kind}` Triggers row, and no '- Model:' glob"
+                ),
+                stops=FORMAL_STOPS,
+            )
+
+
+def check_formal_verification(root: Path) -> Iterable[Finding]:
+    """The ``## Formal verification`` section (ADR 0062): what the model mirrors, and the proof.
+
+    Asked once a per-kind formal row is bound to a tool, or the section is filled.
+    """
+    text = read(root / BINDING_PATH)
+    if text is None:
+        return
+    catalogue = application_types.load()
+    rows = [
+        row
+        for row in project_bite.gate_rows(text)
+        if FORMAL_PROOF in catalogue.proofs.get(row.question, ()) and row.bound
+    ]
+    formal = formal_model.read(text)
+    if formal is None:
+        if rows and not markdown_text.has_section(text, formal_model.SECTION):
+            problem = (
+                f"has no '{formal_model.SECTION}' section, which says what the formal model"
+                " mirrors (ADR 0062); add the template's section and fill it"
+            )
+            yield missing_section(
+                BINDING_PATH, problem, formal_model.SECTION, template_text=template_binding()
+            )
+        elif rows:
+            yield agent(
+                f"{BINDING_PATH}: '{formal_model.SECTION}' still holds the template's placeholders;"
+                " write '- Model:', '- Mirrors:' and '- Synced:'"
+            )
+        return
+    yield from formal_globs(root, formal)
+    yield from formal_group(root, formal)
+    yield from formal_synced(root, formal)
+    yield from formal_bites(root, text, formal, rows=rows)
 
 
 def later(tool: str) -> bool:
@@ -3571,6 +3738,8 @@ CHECKS: tuple[Check, ...] = (
     check_binding,
     check_architecture,
     check_triggers,
+    check_trigger_kinds,
+    check_formal_verification,
     check_dependencies,
     check_suppressions,
     check_comments_section,
@@ -4579,7 +4748,9 @@ EMPTY_TOOL_CELL = re.compile(r"^(\| [^|\n]+ \|) \|", re.MULTILINE)
 TEST_PATHS_PLACEHOLDER = re.compile(r"^- Tests: <[^\n]*>$", re.MULTILINE)
 TRIGGERS_PLACEHOLDER = re.compile(r"^\| <kind> \|[^\n]*$", re.MULTILINE)
 INCREMENTAL_PLACEHOLDER = re.compile(r'"bind: the mutation tool\'s option[^"]*"')
-SPEED_PLACEHOLDER = re.compile(r"^(- (?!Local caches)[A-Z][a-z ]+: )<[^\n]*>$", re.MULTILINE)
+SPEED_PLACEHOLDER = re.compile(
+    r"^(- (?!Local caches|Model:|Mirrors:|Synced:)[A-Z][a-z ]+: )<[^\n]*>$", re.MULTILINE
+)
 INSTALL_PLACEHOLDER = re.compile(r"^- Install: <[^\n]*>$", re.MULTILINE)
 DEPENDENCY_PLACEHOLDER = re.compile(
     r"^- (Manifests|Lockfiles|Entry point): <[^\n]*>$", re.MULTILINE
@@ -4644,6 +4815,10 @@ def fill_binding(text: str) -> str:
     text = COMMENTS_PLACEHOLDER.sub(SELF_TEST_COMMENTS, text)
     text = DOCUMENTS_PLACEHOLDER.sub(SELF_TEST_DOCUMENTS, text)
     # Why: ADR 0028. One row waits on its trigger and so needs no bite; the rest are bound.
+    for question, proven in application_types.load().proofs.items():
+        if FORMAL_PROOF in proven:
+            trigger = application_types.load().trigger_of(question)
+            text = text.replace(f"| {question} | |", f"| {question} | later: {trigger} |")
     text = text.replace(
         "| rolls back safely | |",
         "| rolls back safely | later: life:deployed and code:stored-format |",

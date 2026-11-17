@@ -9,6 +9,7 @@ const COARSE = {
   "land-guard": "Release the ticket the drain parked",
   "change-ticket": "Release the ticket the drain parked",
   safeguard: "Release the ticket the drain parked",
+  release: "Release the ticket the drain parked",
   build: "Build the agent-ready tickets",
   drain: "Build the agent-ready tickets",
 };

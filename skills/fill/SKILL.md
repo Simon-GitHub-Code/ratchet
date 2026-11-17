@@ -24,6 +24,7 @@ An upgrade adds sections to the binding whose rows state what this project's own
 
 3. **Read the repository, then write each row.** For each section the list names, read the template's text for it in `${CLAUDE_PLUGIN_ROOT}/skills/adopt/templates/docs/process/binding.md`. Then write its rows in the binding from what the tree and its tools show:
    - **Life event signs:** the files that mark a deployment or a store of records.
+   - **Triggers:** a row of `## Triggers` for each kind the `trigger_kinds` finding names, with this stack's Paths and a Pattern where a path is not enough, or `none: <reason>` for a kind this project cannot have. Prove each with `triggers.py --count`, as [adopt step 4](../adopt/SKILL.md) says. The closing `upgrade.py --apply` then adds the kind's Gates rows.
    - **Image pins:** the files that name a container image, and the pattern that finds the reference.
    - **Suppressions:** the directives the bound tools read, including the kinds that silence the coverage question.
    - **Comments:** the Comments table, one row per kind of tracked file other than Markdown, `listed` or `none: <reason>`, and the `comments-list` recipe as the section says. Every directive the files carry goes into Suppressions, `kept` where it silences no gate. Then run `just comments --record`: this change binds the lister, so it reads every file a `listed` row matches and records what it finds as owed. No later change may record.

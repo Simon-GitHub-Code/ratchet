@@ -1,4 +1,4 @@
-// The owner's words for the route's model, shared by the five charts of docs/model/route.md.
+// The owner's words for the route's model, shared by the six charts of docs/model/route.md.
 
 export const NEXT = {
   init: "Run /ratchet:init",
@@ -25,6 +25,9 @@ export const NEXT = {
   architecture: "Record the architecture",
   expire: "Delete the expired unit",
   resolve: "Mark the merged ticket resolved",
+  "formal-ticket": "Fix the bug the formal model's round found",
+  "formal-round": "Merge the formal model's round",
+  "formal-upkeep": "Run the formal model's round",
 };
 
 export const checkout = (v) => {
@@ -85,5 +88,9 @@ const STEP = {
   AgentLandsRecords: "an agent lands the records",
   RecordsRunStops: "the landing run stops",
   OwnerMergesRecords: "you merge the records branch",
+  MirroredCodeLands: "code the formal model mirrors lands",
+  AgentRunsARound: "an agent runs the formal model's round",
+  OwnerMergesTheRound: "you merge the round",
+  AgentFixesTheRoundTicket: "an agent fixes the bug the round found",
 };
 export const step_ = (action) => STEP[action];

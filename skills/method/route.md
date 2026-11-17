@@ -53,15 +53,18 @@ Debugging enters at stage 7: `diagnosing-bugs`, which an agent may call, or `/ps
 9. **An owed architecture review:** `/ratchet:architecture`.
 10. **An owed safeguard:** `/ratchet:safeguard`.
 11. **An architecture an upgrade left owed:** `/ratchet:architecture`.
-12. **No glossary or design brief yet:** `/mattpocock-skills:grill-with-docs`.
-13. **No agent-ready ticket:** agree an open ticket, then the conjecture of a local spec that lacks one, then split a local spec, then `/mattpocock-skills:to-spec`.
-14. **An open ticket whose branch is merged:** mark it resolved.
-15. **Every agent-ready ticket waits on an open blocker:** finish the blocker.
-16. **Every unblocked agent-ready ticket is held:** release the first of them.
-17. **More than one ticket states a conjecture:** the drain. **One:** its build.
-18. **Otherwise:** `/ratchet:conjecture` for the first ticket.
+12. **The formal model's upkeep:** a ticket its last round filed, as work; else a `formal/upkeep-` branch waiting for the owner's merge; else, when mirrored code changed since `- Synced:`, `/ratchet:safeguard`.
+13. **No glossary or design brief yet:** `/mattpocock-skills:grill-with-docs`.
+14. **No agent-ready ticket:** agree an open ticket, then the conjecture of a local spec that lacks one, then split a local spec, then `/mattpocock-skills:to-spec`.
+15. **An open ticket whose branch is merged:** mark it resolved.
+16. **Every agent-ready ticket waits on an open blocker:** finish the blocker.
+17. **Every unblocked agent-ready ticket is held:** release the first of them.
+18. **More than one ticket states a conjecture:** the drain. **One:** its build.
+19. **Otherwise:** `/ratchet:conjecture` for the first ticket.
 
-Steps 9 to 11 wrap the step beneath them, the first of 12 to 18 that holds. The route names the first of 9 to 11 that is owed, and its `why:` line offers the step beneath: `Or carry on with <command>: <cost>`. Its `then:` names the next of 9 to 11 still owed, else the step beneath.
+Steps 9 to 12 wrap the step beneath them, the first of 13 to 19 that holds. The route names the first of 9 to 12 that is owed, and its `why:` line offers the step beneath: `Or carry on with <command>: <cost>`. Its `then:` names the next of 9 to 12 still owed, else the step beneath.
+
+The formal model's upkeep is never red: a change to mirrored code may leave the model true, and only a round can tell. A round waits for the owner because it moves `- Synced:` and may change the model, both guard paths. A ticket from a round comes first: the update it keeps fails until the fix lands, and no pull-request run would show that, since tier 2 runs only on the default branch.
 
 ## States that decide `next:`
 
@@ -95,7 +98,7 @@ A `records/<time>` branch checked out (step 2) is a run that stopped before it s
 
 **A branch already merged (step 5).** A working branch whose every commit the default branch already holds is left, never merged again: the route names `git switch <default>`, then `/ratchet:next`. `just merge` leaves a clean checkout on the default branch itself once it has merged the branch it was on. So this state follows a merge cut off before that switch, or a merge by hand. With no forge, it also follows a branch cut and never built on.
 
-**Rows an upgrade left owed that an agent writes from the repository alone (step 8).** They are the binding's Life event signs, Image pins, Suppressions, Install and Dependencies sections and a mutation recipe the plugin no longer reads. The route names `/ratchet:fill`, which reads the tree and its tools, proposes each row and writes it. The owner is asked nothing. The feature preflight and the drain refuse to start work while one is owed, and the refusal names the step, so the window after an upgrade is that one agent step.
+**Rows an upgrade left owed that an agent writes from the repository alone (step 8).** They are the rows `owed.py --fill-first` lists: binding sections an upgrade added that the tree and its tools answer, such as Suppressions, Comments, Documents and Triggers, and a mutation recipe the plugin no longer reads. The route names `/ratchet:fill`, which reads the tree and its tools, proposes each row and writes it. The owner is asked nothing. The feature preflight and the drain refuse to start work while one is owed, and the refusal names the step, so the window after an upgrade is that one agent step.
 
 **An owed architecture review (step 9).** Two things trigger one:
 
@@ -112,13 +115,13 @@ While no decision record names that trigger, the route names `/ratchet:architect
 While a row one of them fires is still `later:`, the route names `/ratchet:safeguard` and what is owed. An agent chooses the tool, writes the recipe and the fault, and binds the row.
 
 - **It sits after steps 1 to 7,** since a safeguard is its own branch off a clean default branch.
-- **It sits before steps 12 to 18,** since the next change that adds another instance of an owed kind is red, and binding first keeps that build from stalling.
+- **It sits before steps 13 to 19,** since the next change that adds another instance of an owed kind is red, and binding first keeps that build from stalling.
 
 The change that brought the kind was free, however many files it touched. The next one that adds another instance waits for the safeguard, so carrying on costs nothing until the owner adds another. A declared event is never red.
 
 **An architecture an upgrade left owed (step 11).** A repository adopted before the architecture was asked has no decision record or no declared parts. The upgrade writes that down in `quality/owed.toml` under the `architecture` check, rather than turning anything red. While such an entry stands, the route names `/ratchet:architecture`. An agent drafts the options from the code, keeping what is here first, and the owner answers one round. The record and the binding's `## Architecture` section land in one change whose merge is the owner's. Nothing is red for it.
 
-**No agent-ready ticket (step 13).** With local tickets the route asks three things first, in this order:
+**No agent-ready ticket (step 14).** With local tickets the route asks three things first, in this order:
 
 1. **Open tickets, none agent-ready:** the route names the first unblocked one for the owner to agree.
 2. **A local spec with no tickets beside it that states no conjecture, or does not say how it is operated:** `/ratchet:conjecture <spec>`, since its tickets inherit both. `to-tickets` comes after it.
@@ -126,11 +129,11 @@ The change that brought the kind was free, however many files it touched. The ne
 
 With none of these, or when the tickets are a forge's issues, the route names `/mattpocock-skills:to-spec`.
 
-**An open ticket whose branch is merged (step 14).** The ticket is marked resolved: `Status: resolved` on a local ticket, the issue closed on a forge. Its branch is the exact `feature/<n>-<slug>` name the feature preflight gives it from the ticket's current title. The branch counts as merged only as the second parent of a merge on the default branch's first-parent line, as `git merge --no-ff` makes.
+**An open ticket whose branch is merged (step 15).** The ticket is marked resolved: `Status: resolved` on a local ticket, the issue closed on a forge. Its branch is the exact `feature/<n>-<slug>` name the feature preflight gives it from the ticket's current title. The branch counts as merged only as the second parent of a merge on the default branch's first-parent line, as `git merge --no-ff` makes.
 
-**Every agent-ready ticket blocked (step 15).** When every agent-ready ticket waits on an open blocker, the route names `finish ticket <ref> "<title>", then mark it resolved` for the first open blocker it finds. When no blocker the tickets name can be found, it names `/mattpocock-skills:to-spec`, with `to-tickets` and the conjecture after it.
+**Every agent-ready ticket blocked (step 16).** When every agent-ready ticket waits on an open blocker, the route names `finish ticket <ref> "<title>", then mark it resolved` for the first open blocker it finds. When no blocker the tickets name can be found, it names `/mattpocock-skills:to-spec`, with `to-tickets` and the conjecture after it.
 
-**A held ticket (step 16).** A free, unblocked ticket is built first, so a held one never stalls the queue. The route names a release only when every unblocked ticket is held, and then for the first of them. A blocked run or the drain's park holds a ticket.
+**A held ticket (step 17).** A free, unblocked ticket is built first, so a held one never stalls the queue. The route names a release only when every unblocked ticket is held, and then for the first of them. A blocked run or the drain's park holds a ticket.
 
 **A blocked run.** A `/ratchet:feature` run that blocks leaves a stash named `<branch>: blocked run`. The route holds that ticket until what blocked it changes on the default branch, and names the questions or guard edits instead, so `/ratchet:next` never offers a rerun that would block the same way.
 
@@ -154,7 +157,7 @@ The drain's plan and the route share that one rule (`queue_notes.released`). The
 
 It never names a bare `/ratchet:feature` for a held ticket, since the drain would refuse it again. Dropping the stash releases nothing.
 
-**The drain (step 17).** With more than one agent-ready ticket that states a conjecture, the route names `/ratchet:feature` with no ticket: the drain. It builds them in work trees of their own and merges what the merge judge passes. Read the drain section of [pipeline.md](pipeline.md) for how it plans, builds and merges them.
+**The drain (step 18).** With more than one agent-ready ticket that states a conjecture, the route names `/ratchet:feature` with no ticket: the drain. It builds them in work trees of their own and merges what the merge judge passes. Read the drain section of [pipeline.md](pipeline.md) for how it plans, builds and merges them.
 
 ## The `also:` lines
 

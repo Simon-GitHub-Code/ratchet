@@ -449,3 +449,14 @@ def test_a_row_dropped_and_put_back_later_does_not_make_the_return_an_arrival(
     write(root, "src/a.py", CALL)
     assert run(root) == 1
     assert "returning, not arriving" in capsys.readouterr().out
+
+
+def test_the_log_of_names_splits_a_rename_so_a_move_out_of_a_path_shows_its_old_path(
+    tmp_path: Path,
+) -> None:
+    root = repository(tmp_path, {"src/a.py": "a = 1\n" * 20})
+    (root / "lib").mkdir()
+    git(root, "mv", "src/a.py", "lib/a.py")
+    moved = commit(root, "refactor: move the module out of src")
+    names = dict(triggers.touched(root, "HEAD"))[moved].split("\n")
+    assert sorted(name for name in names if name) == ["lib/a.py", "src/a.py"]

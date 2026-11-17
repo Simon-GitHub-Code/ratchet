@@ -61,6 +61,7 @@ import conformance
 import documents
 import drain
 import feature_preflight as preflight
+import formal_model
 import gatelib
 import markdown_text
 import merge
@@ -70,17 +71,28 @@ import plugin_pin
 import queue_notes
 import route
 import triggers
-from tests.repos import branch, git, install_hooks, repository, skeleton, snapshot, write
+from tests.repos import (
+    branch,
+    commit,
+    git,
+    install_hooks,
+    repository,
+    skeleton,
+    snapshot,
+    write,
+)
 from tests.route_model import (
     STATED,
     ActionName,
     Advice,
     Architecture,
+    Defect,
     Flag,
     Head,
     Setup,
     Ticket,
     Tree,
+    Upkeep,
     World,
     expires,
     runnable_slots,
@@ -180,6 +192,22 @@ OWN_CONJECTURE: Final = frozenset(Ticket) - {
     Ticket.READY,
     Ticket.RESOLVED,
 }
+FORMAL_QUESTIONS: Final = {
+    application_types.code_kinds(application_types.load().trigger_of(question))[0]: question
+    for question, proofs in application_types.load().proofs.items()
+    if conformance.FORMAL_PROOF in proofs
+}
+DEFECT_KINDS: Final = ("state-machine",)
+FORMAL_GROUP = (
+    '\n[[group]]\nname = "formal"\nreason = "The model the code must mirror."\n'
+    'paths = ["formal/**"]\n'
+)
+MIRRORED = "src/mirrored"
+FORMAL_SECTION = (
+    f"\n{formal_model.SECTION}\n\n- Model: `formal/**`\n- Mirrors: `{MIRRORED}/**`\n"
+    "- Synced: {synced}\n"
+)
+SYNCED_LINE: Final = re.compile(r"^- Synced: .*$", re.MULTILINE)
 LETTERS: Final = "ab"
 TICKETS_BRANCH: Final = "docs/tickets-"
 STATUS_LINE: Final = re.compile(r"^Status: .*$", re.MULTILINE)
@@ -255,6 +283,10 @@ class Repo:
     asked: bool = False
     entries: dict[str, str] = field(default_factory=lambda: dict(ENTRY_POINTS))
     manifest: str = MANIFEST
+    named: dict[int, str] = field(default_factory=dict)
+    defect: str | None = None
+    rounds: int = 0
+    waiting: str | None = None
 
     @classmethod
     def start(cls, parent: Path) -> Repo:
@@ -281,7 +313,13 @@ class Repo:
         and they are most of the files a copy would write.
         """
         shutil.copytree(self.root, root, symlinks=True, copy_function=share_objects)
-        return replace(self, root=root, tools=list(self.tools), reopened=list(self.reopened))
+        return replace(
+            self,
+            root=root,
+            tools=list(self.tools),
+            reopened=list(self.reopened),
+            named=dict(self.named),
+        )
 
     def feature(self) -> str:
         """The directory of the current spec, relative to the root."""
@@ -299,18 +337,18 @@ class Repo:
         ``## Architecture`` section, empty while it has none.
         """
         gates = "".join(
-            f"| q{n} | {tool or f'later: code:kind{n}'} | 1 | | `just q{n}` |\n"
+            f"| {self.question(n)} | {tool or self.later(n)} | 1 | | `just q{n}` |\n"
             for n, tool in enumerate(self.tools, 1)
         )
         # Why two globs: a ticket the drain parks adds a second file of the kind.
         rows = "".join(
-            f"| kind{n} | `src/kind{n}.py`, `src/kind{n}-*.py` | |\n"
+            f"| {self.kind(n)} | `src/kind{n}.py`, `src/kind{n}-*.py` | |\n"
             for n, _tool in enumerate(self.tools, 1)
         ) + "".join(f"| {kind} | `src/{kind}.py` | |\n" for kind in self.reopened)
         if self.asked:
             rows += "".join(
                 f"| {kind} | none: the project has none yet | |\n"
-                for kind in sorted(ASKED_KINDS - set(self.reopened))
+                for kind in sorted(ASKED_KINDS - set(self.reopened) - set(self.named.values()))
             )
         made = BINDING.format(
             pin=PIN.format(version=self.version()) if pinned else UNPINNED,
@@ -337,11 +375,20 @@ class Repo:
             if not markdown_text.has_section(made, block.split("\n", 1)[0])
         )
 
+    def kind(self, n: int) -> str:
+        return self.named.get(n, f"kind{n}")
+
+    def later(self, n: int) -> str:
+        return f"later: code:{self.kind(n)}"
+
+    def question(self, n: int) -> str:
+        return FORMAL_QUESTIONS[self.named[n]] if n in self.named else f"q{n}"
+
     def kept_gates(self) -> str:
         found = markdown_text.table(gatelib.read_text(self.root / route.BINDING) or "", GATES)
         if found is None:
             return ""
-        own = {f"q{n}" for n in range(1, len(self.tools) + 1)} | {triggers.REVIEW_QUESTION}
+        own = {self.question(n) for n in range(1, len(self.tools) + 1)} | {triggers.REVIEW_QUESTION}
         rows = zip(found.rows, found.lines[2:], strict=True)
         return "".join(f"{line}\n" for row, line in rows if row[0] not in own)
 
@@ -383,11 +430,13 @@ class Repo:
         name = f"{LETTERS[slot].upper()}{self.spec}"
         head = f"# {slot + 1:02d}: {name}\n\n{blocker}"
         status = STATUS.get(ticket, "ready-for-agent")
+        line = f"{self.defect}\n\n" if self.defect and slot == 0 else ""
         criteria = f"{CRITERIA}\n\n- [ ] The route names the next command for {name}.\n"
-        text = f"{head}Status: {status}\n\n{criteria}"
+        text = f"{head}Status: {status}\n\n{line}{criteria}"
         if ticket in OWN_CONJECTURE and not inherits:
             text = f"{text}\n{CONJECTURE}"
-            return f"{text}\n{criteria_line(text, CRITERIA)}"
+            stated = f"{text}\n{criteria_line(text, CRITERIA)}"
+            return f"{stated}\n{FLAG_ANSWER}" if line and self.asked else stated
         return text
 
     def write_ticket(self, slot: int, ticket: Ticket, *, inherits: bool) -> None:
@@ -535,6 +584,7 @@ def _owner_grills(repo: Repo, _change: Change) -> None:
 
 @does(ActionName.OWNER_WRITES_SPEC)
 def _owner_writes_spec(repo: Repo, _change: Change) -> None:
+    repo.defect = None
     repo.spec += 1
     write(repo.root, repo.spec_path(), SPEC)
 
@@ -549,8 +599,8 @@ def _owner_states_spec_conjecture(repo: Repo, change: Change) -> None:
 def answers_the_flag_on_the_spec(repo: Repo) -> None:
     """The conjecture's answer and ``Flag:`` line, on the spec its tickets read, once."""
     path = repo.root / repo.feature() / "spec.md"
-    text = path.read_text(encoding="utf-8")
-    if FLAG_ANSWER not in text:
+    text = gatelib.read_text(path)
+    if text is not None and FLAG_ANSWER not in text:
         path.write_text(f"{text}\n{FLAG_ANSWER}", encoding="utf-8")
 
 
@@ -573,6 +623,9 @@ def _owner_states_conjecture(repo: Repo, change: Change) -> None:
             redraft(repo.root / repo.ticket_path(slot), CRITERIA)
     if change.after.flag is not Flag.WAITS:
         answers_the_flag_on_the_spec(repo)
+    if change.before.upkeep is Upkeep.UNSTATED:
+        unstated = (repo.root / round_ticket_path(repo)).read_text(encoding="utf-8")
+        write(repo.root, round_ticket_path(repo), stated_round_ticket(repo, unstated))
     snapshot(repo.root, "docs(tracker): the owner's conjecture of a ticket")
 
 
@@ -712,6 +765,11 @@ NEWER: Final = frozenset({"base"})
 @does(ActionName.DRAIN_PARKS_TICKET)
 def _drain_parks_ticket(repo: Repo, change: Change) -> None:
     kind = change.after.tickets[change.slot]
+    if kind is Ticket.OWES_ITS_ROW:
+        (n,) = repo.named
+        output = second_instance_judged(repo, f"kind{n}")
+        park(repo, change.slot, {"verdict": "blocked", "checkOutput": output})
+        return
     park(repo, change.slot, {"verdict": "blocked", **BLOCKS[kind]})
     if kind is Ticket.PARKED:
         # Why: a note an older drain wrote names the guard hold and its cause but no base commit,
@@ -980,11 +1038,129 @@ def _agent_deletes_the_expired_unit(repo: Repo, _change: Change) -> None:
     expire(repo)
 
 
+def kept_branch(kind: str) -> str:
+    return f"{formal_model.NAMESPACE}/kept-{kind}"
+
+
+def finds_a_defect(repo: Repo) -> None:
+    n = len(repo.tools)
+    assert n not in repo.named, "the defect is found binding the row of the last arrival"
+    (kind,) = (kind for kind in DEFECT_KINDS if kind not in repo.named.values())
+    repo.named[n] = kind
+    branch(repo.root, kept_branch(kind))
+    write(repo.root, f"formal/{kind}.md", "The kept model, which the code breaks.\n")
+    snapshot(repo.root, "chore(formal): the model the safeguard kept")
+    git(repo.root, "switch", "-q", "main")
+    repo.defect = f"Formal model: defect `{repo.question(n)}`, kept on `{kept_branch(kind)}`"
+    repo.spec += 1
+    write(repo.root, "docs/process/binding.md", repo.binding())
+    repo.write_ticket(0, Ticket.READY, inherits=False)
+    snapshot(repo.root, "chore: the safeguard leaves its row owed and files the defect")
+
+
+def binds_from_the_kept_model(repo: Repo) -> None:
+    (kind,) = repo.named.values()
+    git(repo.root, "merge", "-q", "--no-ff", "--no-edit", kept_branch(kind))
+    in_sync(repo)
+
+
 @does(ActionName.AGENT_BINDS_SAFEGUARD)
-def _agent_binds_safeguard(repo: Repo, _change: Change) -> None:
+def _agent_binds_safeguard(repo: Repo, change: Change) -> None:
+    if change.after.defect is Defect.OPEN:
+        finds_a_defect(repo)
+        return
+    if change.before.defect is Defect.KEPT:
+        binds_from_the_kept_model(repo)
     repo.tools = [tool or "`just safe`" for tool in repo.tools]
     write(repo.root, "docs/process/binding.md", repo.binding())
     snapshot(repo.root, "chore: bind the safeguard")
+
+
+def in_sync(repo: Repo) -> None:
+    text = gatelib.read_text(repo.root / route.BINDING) or ""
+    if markdown_text.has_section(text, formal_model.SECTION):
+        return
+    if FORMAL_GROUP not in repo.manifest and 'name = "formal"' not in repo.manifest:
+        repo.manifest += FORMAL_GROUP
+        write(repo.root, "guards/manifest.toml", repo.manifest)
+    write(repo.root, "formal/model.md", "The model of the mirrored code.\n")
+    write(repo.root, f"{MIRRORED}/__init__.py", "")
+    tip = commit(repo.root, "chore(formal): the model and the code it mirrors")
+    write(repo.root, str(route.BINDING), text + FORMAL_SECTION.format(synced=tip))
+    snapshot(repo.root, "chore(formal): the binding names what the model mirrors")
+
+
+def mirrored_change(repo: Repo, name: str) -> None:
+    repo.edits += 1
+    write(repo.root, f"{MIRRORED}/{name}{repo.edits}.py", "x = 1\n")
+
+
+@does(ActionName.MIRRORED_CODE_LANDS)
+def _mirrored_code_lands(repo: Repo, _change: Change) -> None:
+    in_sync(repo)
+    mirrored_change(repo, "change")
+    snapshot(repo.root, "feat: a change to the code the model mirrors")
+
+
+ROUND_TICKET = (
+    "# 01: R{k}\n\nStatus: ready-for-agent\n\nFormal model: round, kept on `{kept}`\n\n"
+    f"{CRITERIA}\n\n- [ ] The code keeps the property the round found broken.\n"
+)
+
+
+def stated_round_ticket(repo: Repo, unstated: str) -> str:
+    text = f"{unstated}\n{CONJECTURE}"
+    stated = f"{text}\n{criteria_line(text, CRITERIA)}"
+    return f"{stated}\n{FLAG_ANSWER}" if repo.asked else stated
+
+
+def round_unit(repo: Repo) -> str:
+    return f".scratch/formal-{repo.rounds}"
+
+
+def round_ticket_path(repo: Repo) -> str:
+    return f"{round_unit(repo)}/issues/01-r{repo.rounds}.md"
+
+
+@does(ActionName.AGENT_RUNS_A_ROUND)
+def _agent_runs_a_round(repo: Repo, change: Change) -> None:
+    repo.rounds += 1
+    tip = git(repo.root, "rev-parse", "main")
+    checked = tip[: formal_model.SHORT]
+    if change.after.upkeep in {Upkeep.TICKET, Upkeep.UNSTATED}:
+        kept = f"{formal_model.NAMESPACE}/kept-upkeep-{checked}"
+        branch(repo.root, kept)
+        write(repo.root, "formal/model.md", f"The model, updated at {checked}.\n")
+        snapshot(repo.root, "chore(formal): the round's update, which the code breaks")
+        git(repo.root, "switch", "-q", "main")
+        text = ROUND_TICKET.format(k=repo.rounds, kept=kept)
+        if change.after.upkeep is Upkeep.TICKET:
+            text = stated_round_ticket(repo, text)
+        write(repo.root, round_ticket_path(repo), text)
+        snapshot(repo.root, "docs(tracker): the bug the round found")
+        return
+    repo.waiting = f"{formal_model.UPKEEP}{checked}"
+    branch(repo.root, repo.waiting)
+    path = repo.root / route.BINDING
+    synced = SYNCED_LINE.sub(f"- Synced: {tip}", path.read_text(encoding="utf-8"))
+    path.write_text(synced, encoding="utf-8")
+    snapshot(repo.root, "chore(formal): the round checked the model against the code")
+    git(repo.root, "switch", "-q", "main")
+
+
+@does(ActionName.OWNER_MERGES_THE_ROUND)
+def _owner_merges_the_round(repo: Repo, _change: Change) -> None:
+    git(repo.root, "merge", "-q", "--no-ff", "--no-edit", str(repo.waiting))
+    repo.waiting = None
+
+
+@does(ActionName.AGENT_FIXES_THE_ROUND_TICKET)
+def _agent_fixes_the_round_ticket(repo: Repo, _change: Change) -> None:
+    git(repo.root, "switch", "-q", "-c", f"feature/round-{repo.rounds}")
+    mirrored_change(repo, "fix")
+    git(repo.root, "rm", "-r", "-q", "--", round_unit(repo))
+    snapshot(repo.root, "fix: the bug the round found")
+    merge_branch(repo)
 
 
 @does(ActionName.SOMEONE_EDITS_CODE)
@@ -1087,6 +1263,9 @@ STAGES: Final = {
     "architecture-review": Advice.REVIEW,
     "safeguard": Advice.SAFEGUARD,
     "architecture": Advice.ARCHITECTURE,
+    "formal-ticket": Advice.FORMAL_TICKET,
+    "formal-round": Advice.FORMAL_ROUND,
+    "formal-upkeep": Advice.FORMAL_UPKEEP,
     "expire": Advice.EXPIRE,
     "triage": Advice.TRIAGE,
     "resolve": Advice.RESOLVE,
