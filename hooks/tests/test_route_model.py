@@ -1112,6 +1112,7 @@ FILLED_BY_THE_UPGRADE = frozenset(
         "changed_tests",
         "comments_section",
         "dependencies",
+        "documents",
         "installs",
         "pins",
         "signs",

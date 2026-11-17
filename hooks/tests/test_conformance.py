@@ -16,6 +16,7 @@ import application_types
 import conformance
 import justfile_text
 import markdown_text
+import owed
 from tests import adopted
 from tests.repos import git, repository
 from tests.support import PLUGIN_ROOT
@@ -1516,3 +1517,102 @@ def test_documentation_coverage_bound_outside_a_library_is_unbound_by_the_upgrad
     assert isinstance(finding(repo, line).fix, conformance.Auto)
     replace(BINDING, "- Application types: cli", "- Application types: cli, library")(repo)
     assert line not in red(repo)
+
+
+DOCUMENTS_ROW = conformance.SELF_TEST_DOCUMENTS
+DOCUMENTS_MISSING = (
+    "has no '## Documents' section, which gives this project's own Markdown files a kind"
+    " (ADR 0064); add the template's section and fill it"
+)
+
+
+def no_kind(path: str) -> str:
+    return (
+        f"{BINDING}: `{path}` is a Markdown file of no kind; add a row for it to '## Documents',"
+        " `never` or `pass`, or move it under a kind's paths (ADR 0064)"
+    )
+
+
+def test_a_binding_without_the_documents_section_is_owed_it_from_the_template(repo: Path) -> None:
+    replace(BINDING, "## Documents\n", "## Pages\n")(repo)
+    line = f"{BINDING}: {DOCUMENTS_MISSING}"
+    assert line in red(repo)
+    found = finding(repo, line)
+    assert isinstance(found.fix, conformance.Auto)
+    assert found.rule == "documents"
+    assert "documents" in owed.FILL_FIRST
+
+
+def test_a_markdown_file_of_no_kind_is_red_with_its_path(repo: Path) -> None:
+    git(repo, "init", "-q")
+    replace(BINDING, DOCUMENTS_ROW, "| pages | `docs/pages/*.md` | `never` |")(repo)
+    assert no_kind(".github/pull_request_template.md") in red(repo)
+    write("docs/pages/a.md", "# A\n")(repo)
+    assert no_kind("docs/pages/a.md") not in red(repo)
+    write("notes/stray.md", "# Stray\n")(repo)
+    assert no_kind("notes/stray.md") in red(repo)
+
+
+def test_a_file_the_methods_own_kinds_match_needs_no_row(repo: Path) -> None:
+    git(repo, "init", "-q")
+    replace(BINDING, DOCUMENTS_ROW, "| pages | `docs/pages/*.md` | `never` |")(repo)
+    write(".scratch/slug/spec.md", "# Spec\n")(repo)
+    write("docs/features/slug/spec.md", "# Spec\n")(repo)
+    assert not any(".scratch/slug/spec.md" in line for line in red(repo))
+    assert not any("docs/features/slug/spec.md" in line for line in red(repo))
+
+
+def test_a_pass_row_keeping_a_heading_its_files_lack_is_not_a_finding(repo: Path) -> None:
+    replace(BINDING, DOCUMENTS_ROW, "| pages | `**/*.md` | `pass` keeping `## Nowhere` |")(repo)
+    assert red(repo) == []
+
+
+@pytest.mark.parametrize(
+    ("row", "problem"),
+    [
+        (
+            "| <kind> | <`globs` of its files> | <`never`, or `pass` keeping <`## heading`>> |",
+            "the table still has the template's placeholder row",
+        ),
+        (
+            "| self-test pages | `**/*.md` | sometimes |",
+            "has a Prune of neither `never` nor `pass`",
+        ),
+        ("| self-test pages | none | `never` |", "names no paths: write the globs in backticks"),
+        (
+            f"{DOCUMENTS_ROW}\n| self-test pages | `*.md` | `never` |",
+            "the kind 'self-test pages' is listed twice",
+        ),
+        (
+            "| self-test pages | `**/*.md` | `never` keeping `## A` |",
+            "is `never` and keeps headings: only a `pass` row keeps any",
+        ),
+    ],
+)
+def test_a_documents_row_with_a_wrong_shape_is_red(repo: Path, row: str, problem: str) -> None:
+    replace(BINDING, DOCUMENTS_ROW, row)(repo)
+    assert any(problem in line for line in red(repo)), red(repo)
+
+
+def test_a_documents_section_without_its_table_is_red(repo: Path) -> None:
+    replace(BINDING, f"| Kind | Paths | Prune |\n| --- | --- | --- |\n{DOCUMENTS_ROW}\n", "")(repo)
+    assert any(
+        "the section lacks its table with the columns Kind | Paths | Prune" in line
+        for line in red(repo)
+    )
+
+
+def test_the_depended_on_event_may_carry_the_forges_signs(repo: Path) -> None:
+    replace(
+        BINDING,
+        "| depended-on | none: the self-test has no such file |",
+        "| depended-on | `.github/FUNDING.yml` |",
+    )(repo)
+    assert red(repo) == []
+    replace(BINDING, "`.github/FUNDING.yml`", "words")(repo)
+    assert any("'depended-on' names no globs" in line for line in red(repo))
+
+
+def test_a_repository_without_a_binding_raises_no_documents_finding(repo: Path) -> None:
+    remove(BINDING)(repo)
+    assert not any(found.rule == "documents" for found in conformance.findings(repo))

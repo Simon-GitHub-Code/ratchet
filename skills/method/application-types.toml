@@ -82,9 +82,80 @@ in-binding = true
 
 [events.depended-on]
 meaning = "people outside the project rely on it: users, customers, other teams"
-# Why: files a maintainer writes for strangers (how to contribute, report a flaw, behave, file an
-# issue, fund the work). A README or a licence is no sign: a private project has them too.
-signs = ["CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md", ".github/ISSUE_TEMPLATE/**", ".github/FUNDING.yml"]
+signs = ["CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md"]
+
+[[documents]]
+name = "instructions"
+paths = ["AGENTS.md", "**/AGENTS.md"]
+lifetime = "standing"
+prune = "never"
+
+[[documents]]
+name = "binding"
+paths = ["docs/process/**"]
+lifetime = "standing"
+prune = "never"
+
+[[documents]]
+name = "tracker setup"
+paths = ["docs/agents/**"]
+lifetime = "standing"
+prune = "never"
+
+[[documents]]
+name = "glossary"
+paths = ["GLOSSARY.md", "GLOSSARY-MAP.md"]
+lifetime = "standing"
+prune = "never"
+
+[[documents]]
+name = "decision"
+paths = ["docs/adr/*.md"]
+lifetime = "standing"
+prune = "never"
+
+[[documents]]
+name = "dispute"
+paths = ["docs/disputes/*.md"]
+lifetime = "standing"
+prune = "never"
+
+[[documents]]
+name = "incident"
+paths = ["docs/incidents/*.md"]
+lifetime = "standing"
+prune = "never"
+
+[[documents]]
+name = "product and design"
+paths = ["PRODUCT.md", "DESIGN.md"]
+lifetime = "standing"
+prune = "never"
+
+[[documents]]
+name = "brief"
+paths = ["docs/design-brief.md"]
+lifetime = "standing"
+prune = "pass"
+keeps = ["## Purpose", "## In the owner's words", "## Explicitly out of slice one", "## Slice one", "## Explicitly out"]
+
+[[documents]]
+name = "readme"
+paths = ["README.md", "**/README.md"]
+lifetime = "standing"
+prune = "pass"
+
+[[documents]]
+name = "local feature"
+paths = [".scratch/*/spec.md", ".scratch/*/issues/*.md"]
+lifetime = "steering"
+prune = "none"
+
+[[documents]]
+name = "feature spec"
+paths = ["docs/features/*/spec.md"]
+lifetime = "steering"
+prune = "none"
 
 # One [[question]] per question this file says something about. A question it does not list
 # applies to all six types, judges no collection and is asked always.

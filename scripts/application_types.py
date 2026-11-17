@@ -305,12 +305,14 @@ def signs_in(binding: str | None) -> Signs | None:
     """The binding's life event signs table, or ``None`` when the section is missing.
 
     A row is the event and its Paths: globs in backticks, or ``none: <reason>``. Every event of
-    the catalogue that ``in-binding`` names needs a row, and a row names no other event.
+    the catalogue that ``in-binding`` names needs a row, and a row names no event that has neither
+    ``in-binding`` nor shipped signs.
     """
     if binding is None or not markdown_text.has_section(binding, SIGNS_SECTION):
         return None
     events = load().events
     needed = [name for name, event in events.items() if event.in_binding]
+    allowed = [name for name, event in events.items() if event.in_binding or event.signs]
     tables = [t for t in markdown_text.tables(binding, SIGNS_SECTION) if t.header == SIGNS_COLUMNS]
     if not tables:
         columns = " | ".join(SIGNS_COLUMNS)
@@ -322,8 +324,8 @@ def signs_in(binding: str | None) -> Signs | None:
         plain = cell.strip("` ")
         if name.startswith("<") or cell.startswith("<"):
             problems.append("the table still has the template's placeholder row")
-        elif name not in needed:
-            known = ", ".join(needed)
+        elif name not in allowed:
+            known = ", ".join(allowed)
             problems.append(f"the row '{name}' is no event whose signs the binding holds: {known}")
         elif name in globs:
             problems.append(f"the event '{name}' is listed twice")

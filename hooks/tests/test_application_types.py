@@ -212,6 +212,14 @@ def test_the_signs_of_an_undeclared_event_are_the_first_paths_the_tree_matches(
     assert application_types.signs_seen(tmp_path) == {}
 
 
+def test_a_readme_or_a_licence_is_no_sign_of_depended_on(tmp_path: Path) -> None:
+    binding = "- Application types: cli\n- Life events: deployed\n"
+    files = {"docs/process/binding.md": binding, "README.md": "x", "LICENSE": "x"}
+    assert "depended-on" not in application_types.signs_seen(repository(tmp_path, files))
+    files["CONTRIBUTING.md"] = "x"
+    assert "depended-on" in application_types.signs_seen(repository(tmp_path / "shared", files))
+
+
 def test_a_missing_events_line_declares_every_event_to_a_judge() -> None:
     every = frozenset(application_types.load().events)
     assert application_types.declared_or_all("# Binding\n") == every
