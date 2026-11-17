@@ -480,17 +480,6 @@ def as_its_criteria_unread(world: World) -> World:
     return replace(world, tickets=(first, second))
 
 
-def as_its_carried_answers_unread(world: World) -> World:
-    if world.parked:
-        return replace(
-            world,
-            parked=False,
-            tickets=(Ticket.MERGED, Ticket.RESOLVED),
-            answers=Answers.ON_THE_UNIT,
-        )
-    return replace(world, tree=Tree.CODE)
-
-
 DIVERGENCES: Final[tuple[Divergence, ...]] = (
     Divergence(
         name="adoption-proved-by-its-pin",

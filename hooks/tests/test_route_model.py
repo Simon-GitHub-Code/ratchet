@@ -20,7 +20,7 @@ import tempfile
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import replace
-from functools import cache, reduce
+from functools import cache
 from pathlib import Path
 from typing import NamedTuple
 
@@ -362,18 +362,6 @@ def test_a_rule_breaks_only_where_a_divergence_says_it_does(name: str) -> None:
     assert label is model.real_advice or not broken
 
 
-def test_a_state_that_holds_two_divergences_is_read_the_same_in_either_order() -> None:
-    both = [s for s in model.graph().states if sum(e.holds(s) for e in model.DIVERGENCES) > 1]
-    assert {(s.setup, s.answers) for s in both} == {(Setup.PINNED, Answers.CARRIED)}
-    for state in both:
-        held = [e for e in model.DIVERGENCES if e.holds(state)]
-        read = {
-            reduce(lambda world, entry: entry.reads(world), order, state)
-            for order in itertools.permutations(held)
-        }
-        assert read == {model.as_the_route_reads(state)}
-
-
 def test_the_architecture_rules_are_met_where_they_bite() -> None:
     """The owed architecture is named beside a build and a drain, begun and ended by its steps."""
     graph = model.graph()
@@ -479,8 +467,9 @@ def test_a_unit_left_by_an_older_plugin_is_deleted_before_the_next_spec() -> Non
     graph = model.graph()
     left = [s for s in graph.states if s.left]
     assert left
-    assert {model.advice(s) for s in left} == {Advice.EXPIRE}
-    assert {model.real_advice(s) for s in left} == {Advice.SPECIFY}
+    assert {(model.advice(s), model.real_advice(s)) for s in left} == {
+        (Advice.EXPIRE, Advice.EXPIRE)
+    }
     deleted = {
         b.tree for a, act, b in graph.edges if act is ActionName.AGENT_DELETES_THE_EXPIRED_UNIT
     }
@@ -490,6 +479,18 @@ def test_a_unit_left_by_an_older_plugin_is_deleted_before_the_next_spec() -> Non
         (ActionName.OWNER_RESOLVES_TICKET, Tree.RECORDS),
         (ActionName.OWNER_WORKS_TICKET_THEMSELF, Tree.CLEAN),
     }
+
+
+def test_the_finish_the_blocked_line_names_never_expires_the_unit() -> None:
+    graph = model.graph()
+    blocked = {s for s in graph.states if Advice.BLOCKED in {model.advice(s), model.real_advice(s)}}
+    finish = model.ADVISED[Advice.BLOCKED]
+    assert blocked
+    assert not any(s.left for s in blocked)
+    assert not [
+        b for a, act, b in graph.edges if a in blocked and act is finish and model.expires(a, b)
+    ]
+    assert any(act is finish and model.expires(a, b) for a, act, b in graph.edges)
 
 
 def test_the_last_mark_leaves_the_answers_carried_in_records_and_names_their_landing() -> None:
@@ -513,9 +514,14 @@ def test_the_last_mark_leaves_the_answers_carried_in_records_and_names_their_lan
 def test_the_last_mark_appends_to_the_brief_only_dated_answers_of_the_files_it_deletes(
     tmp_path: Path,
 ) -> None:
-    (entry,) = (e for e in model.DIVERGENCES if e.name == "carried-answers-read-as-code")
-    path = path_to(entry.example)
-    assert path[-1].action is ActionName.OWNER_RESOLVES_TICKET
+    marks = [
+        edge
+        for edge in model.graph().edges
+        if edge.action is ActionName.OWNER_RESOLVES_TICKET
+        and model.expires(edge.source, edge.target)
+    ]
+    mark = min(marks, key=lambda edge: len(spanning().trail(edge.source)))
+    path = [*path_to(mark.source), mark]
     repo = real.Repo.start(tmp_path)
     for source, name, target in path:
         real.apply(repo, name, real.Change(source, target))
@@ -794,6 +800,11 @@ def ask(repo: real.Repo, world: World, path: list[str]) -> None:
     """
     step = real.read(repo)
     assert real.classify(step) is model.real_advice(world), disagreement(world, step, path)
+    if real.classify(step) in {Advice.RESOLVE, Advice.BLOCKED}:
+        taken = model.ACTIONS[model.ADVISED[model.real_advice(world)]].successors(world)
+        deletes = any(model.expires(world, after) for after in taken)
+        named = f", then run `{route.EXPIRE}`" in step.command
+        assert named is deletes, disagreement(world, step, path)
     if real.classify(step) is Advice.ARCHITECTURE:
         instead = without(repo, "architecture_step")
         under = model.beneath(model.as_the_route_reads(world))
