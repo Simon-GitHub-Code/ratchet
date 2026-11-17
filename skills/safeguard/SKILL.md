@@ -19,7 +19,7 @@ The owner is asked nothing. A tool the architecture record names was their choic
 1. **Find what is owed.**
    - Start on the default branch with a clean tree. Make the branch `chore/safeguard-<what>`, where `<what>` is the kinds or the event in a word or two.
    - Given an event, write it on the binding's `- Life events:` line with the Edit tool, replacing `none`. The binding is a guard path, so the owner's merge of this change is the declaration.
-   - Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --root . --json` in one Bash call. It lists each owed row: the question, its trigger, the kind or event, and how many instances.
+   - Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --root . --json` in one Bash call.
    - When it lists nothing and the route's line said the formal model is behind, run [a round of upkeep](#a-round-of-the-formal-models-upkeep) instead of these steps. When it lists nothing else, say so, print the route as step 6 does, and stop.
 
    Done when you hold the list.
@@ -48,7 +48,7 @@ The owner is asked nothing. A tool the architecture record names was their choic
 
    Done when no owed row is `later:`, except a row a defect ticket of this run names, and each bound gate bites.
 
-   **A defect at binding.** When the create skill reports a property the code breaks, the gate would be red, and this run changes no product code. Leave that row `later:` and bind the rest. Push the model to `formal/kept-<kind>`, which never merges. File a ticket that names the row and carries the counterexample in the code's words, with the line ``Formal model: defect `<row>`, kept on `formal/kept-<kind>` ``, and under it: "A fix that adds an instance of this kind merges `formal/kept-<kind>` and binds the row in the same change." Once the fix lands, the route names this skill again, and the row binds from the kept model with its gate green.
+   **A defect at binding.** When the create skill reports a property the code breaks, the gate would be red, and this run changes no product code. Leave that row `later:` and bind the rest. Push the model to `formal/kept-<kind>`, which never merges. File a ticket that names the row and carries the counterexample in the code's words, with the line ``Formal model: defect `<row>`, kept on `formal/kept-<kind>` ``, and under it: "A fix that adds an instance of this kind merges `formal/kept-<kind>` and binds the row in the same change."
 
 4. **Record the choice.** Write an ADR under the next free number, one line per row: the question, the tool and its version, where you checked it, and the alternative you passed over. A new ADR passes the guard without asking.
 
@@ -56,7 +56,7 @@ The owner is asked nothing. A tool the architecture record names was their choic
 
 5. **Prove it and open the change.**
    - Run `conformance` and `check`, both to green.
-   - Commit with the subject `chore(method): safeguard <what>`, at most 72 characters; the `commits` gate accepts it.
+   - Commit with the subject `chore(method): safeguard <what>`, at most 72 characters.
    - Push and open the pull request with every template section filled: under Gates the table of step 2 and each `just bite-one` verdict, under Criticism every tool you could not check.
    - With no forge, write the change description at `.scratch/changes/<branch>.md` (the branch's `/` written as `-`) and run `just merge <branch>`.
 
@@ -73,7 +73,7 @@ The owner is asked nothing. A tool the architecture record names was their choic
 
 ## A round of the formal model's upkeep
 
-The route names this skill when a commit on the default branch has touched code the model mirrors since `- Synced:`. A round checks the model against the code as it is now.
+A round checks the model against the code as it is now.
 
 1. **Branch.** Note the default branch's head commit, `<commit>`. Make the branch `formal/upkeep-<commit>` from it. When a `formal/kept-upkeep-` branch exists from a ticket since closed, start from its update.
 2. **Run the round.** Load `pstack:maintain-formal-verification-skill`, and act on its outcome:

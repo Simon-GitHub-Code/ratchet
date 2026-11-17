@@ -14,7 +14,7 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` from what the o
 
 1. **Read the ticket.**
    - Run `gh issue view <n> --json number,title,body,comments` in one Bash call, or read the file.
-   - Read its parent spec too: the one a `Parent:` line or a `## Parent` section names, or, for a local ticket under `<feature>/issues/`, the `<feature>/spec.md` beside that directory, which the preflight reads as its parent.
+   - Read its parent spec too: the one a `Parent:` line or a `## Parent` section names, or, for a local ticket under `<feature>/issues/`, the `<feature>/spec.md` beside that directory.
    - **The ticket, or its parent, states a conjecture:** check that it is current. Run the digest command of [The criteria digest](#the-criteria-digest) on the body that holds the conjecture, with the heading its `- Criteria:` line names.
      - **The command prints another digest than the line names:** the criteria changed after the conjecture was written. Redraft it: run steps 2 to 5, each as its *redraft* case says. The case below does not apply.
      - **It prints the same digest, or the conjecture has no `- Criteria:` line:** the conjecture is current, and the case below decides.
@@ -67,12 +67,12 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` from what the o
    - Write the estimate as two lines: `- Product lines: <N>` and `- Product files: <M>`.
    - **A ticket:** the block goes on the ticket itself, even when its siblings share a parent spec, since the preflight reads `## Size` only from the ticket's own body.
    - **A spec that has not been split:** write no `## Size`. Make the estimate all the same, for the ceiling case below.
-   - The ceilings are `product_lines` and `product_files` of `[ceilings.change]` in `quality/thresholds.toml`. The feature preflight refuses a ticket whose stated size passes either.
+   - The ceilings are `product_lines` and `product_files` of `[ceilings.change]` in `quality/thresholds.toml`.
    - Be honest and not hopeful: the spec stage estimates the whole change again and stops it when it is larger.
    - **The estimate passes a ceiling:** write it as it is, and the ticket with it. The feature run splits a ticket whose `## Size` passes a ceiling before it builds, by size and without a question, as ADR 0046 says.
    - **A spec that has not been split, whose estimate passes a ceiling:** `/mattpocock-skills:to-tickets` slices a spec by what a person can use and not by its size, so name in the reply the argument that asks it for slices under both ceilings, with both numbers in it.
 
-   **The `## Operability` block.** Write one line per concern the binding's application types are asked; the preflight of step 5 names any it still wants. Take each line from the ticket and the binding's Feature flags, Telemetry and Limits sections, or write `none` and why.
+   **The `## Operability` block.** Write one line per concern the binding's application types are asked. Take each line from the ticket and the binding's Feature flags, Telemetry and Limits sections, or write `none` and why.
    - `- Flag:` the flag the behaviour ships behind.
    - `- Signal:` the span, metric or log that shows it working.
    - `- Load:` the route or input the load gates gain.
@@ -106,11 +106,11 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` from what the o
    - **A redraft:** replace each section this run drafted, where it stands, instead of appending it. `## Answers` keeps every earlier line. It lands as below, as the first write did.
    - **The ticket's siblings share a parent spec:** write the conjecture and the operability on the spec, and say that its tickets inherit them. `## Size` goes on the ticket.
    - **The argument is a spec that has not been split:** append `## Conjecture` and `## Operability` only.
-   - **The tracker is on the forge:** run `gh issue edit <n> --body-file <file>` with the full body in one Bash call, one call per issue you write to. Pass no label flag: the agent-ready label is the owner's act, and the guard asks on it.
+   - **The tracker is on the forge:** run `gh issue edit <n> --body-file <file>` with the full body in one Bash call, one call per issue you write to. Pass no label flag: the agent-ready label is the owner's act.
    - **The tracker is local:** edit the file and land it. The preflight refuses a dirty tree, and the ticket file is a record, not work in progress.
-     - **The repository has no forge:** run the `merge` entry point with `--records` (`just merge --records`) in one Bash call. It commits the records alone on a branch of their own and merges it when the merge judge and `check` pass. The judge asks no verdict record of records alone.
+     - **The repository has no forge:** run the `merge` entry point with `--records` (`just merge --records`) in one Bash call.
      - **The repository has a forge:** commit the file on a branch of its own and open the pull request. Its merge job merges it.
-     - A ticket that already carries the agent-ready label, and the spec such a ticket inherits from, change only by the owner's merge, with or without a forge. The merge judge leaves that change to the owner and says why.
+     - A ticket that already carries the agent-ready label, and the spec such a ticket inherits from, change only by the owner's merge, with or without a forge.
        - **No forge:** the run prints `merge: owner` and their command, which you relay as it is.
        - **A forge:** the merge job leaves the pull request to the owner and comments why on it. Hand over without waiting for that job, as step 5 says.
      - Never commit on the default branch itself.
@@ -145,4 +145,3 @@ The `- Criteria:` line records which criteria a conjecture was drafted against, 
 - The digest is what this command prints:
   - **The body is a file** (a local ticket or spec, or the file step 4 passes to `gh issue edit`): `tr -d '\r' < <file> | awk -v h='<heading>' '/^## /{f=($0==h)} f && NF' | git hash-object --stdin`
   - **The body is a forge issue's:** `gh issue view <n> --json body --jq .body | tr -d '\r' | awk -v h='<heading>' '/^## /{f=($0==h)} f && NF' | git hash-object --stdin`
-- The command reads only the criteria section, from its heading to the next `## ` heading, and drops the carriage returns a forge's web editor adds. Blank lines do not count, so a blank line added or trimmed between sections leaves the digest as it was. A label, a new line under `## Answers` or a rewritten conjecture leaves the digest as it was.

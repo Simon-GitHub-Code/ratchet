@@ -6,14 +6,14 @@ disable-model-invocation: true
 
 # Fill what the upgrade owes
 
-Write the binding rows an upgrade left owed that the repository alone answers. The route names this step right after an upgrade, and no feature and no drain starts until it is done. Load the `ratchet:method` skill first.
+Write the binding rows an upgrade left owed that the repository alone answers. Load the `ratchet:method` skill first.
 
-An upgrade adds sections to the binding whose rows state what this project's own tree and tools say, and records each as owed. The owner is asked nothing: every row is yours to propose and write, from your knowledge of the tools the repository uses and from the tree.
+The owner is asked nothing: every row is yours to propose and write, from your knowledge of the tools the repository uses and from the tree.
 
 ## Steps
 
 1. **List it.**
-   - Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/owed.py" --fill-first`. Each line is the check, the file and what is missing.
+   - Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/owed.py" --fill-first`.
    - Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/conformance.py"` for the same findings with the fix each one names.
 
    Done when you hold every owed line and the fix conformance names for it.
@@ -24,11 +24,11 @@ An upgrade adds sections to the binding whose rows state what this project's own
 
 3. **Read the repository, then write each row.** For each section the list names, read the template's text for it in `${CLAUDE_PLUGIN_ROOT}/skills/adopt/templates/docs/process/binding.md`. Then write its rows in the binding from what the tree and its tools show:
    - **Life event signs:** the files that mark a deployment or a store of records.
-   - **Triggers:** a row of `## Triggers` for each kind the `trigger_kinds` finding names, with this stack's Paths and a Pattern where a path is not enough, or `none: <reason>` for a kind this project cannot have. Prove each with `triggers.py --count`, as [adopt step 4](../adopt/SKILL.md) says. The closing `upgrade.py --apply` then adds the kind's Gates rows.
+   - **Triggers:** a row of `## Triggers` for each kind the `trigger_kinds` finding names, with this stack's Paths and a Pattern where a path is not enough, or `none: <reason>` for a kind this project cannot have. Prove each with `triggers.py --count`, as [adopt step 4](../adopt/SKILL.md) says.
    - **Image pins:** the files that name a container image, and the pattern that finds the reference.
    - **Suppressions:** the directives the bound tools read, including the kinds that silence the coverage question.
    - **Comments:** the Comments table, one row per kind of tracked file other than Markdown, `listed` or `none: <reason>`, and the `comments-list` recipe as the section says. Every directive the files carry goes into Suppressions, `kept` where it silences no gate. Then run `just comments --record`: this change binds the lister, so it reads every file a `listed` row matches and records what it finds as owed. No later change may record.
-   - **Documents:** one row of `## Documents` per kind of tracked Markdown file that no kind matches yet, `never` or `pass`; `conformance` lists each such file. Give the `depended-on` row of `## Life event signs` the forge's files a maintainer writes for strangers.
+   - **Documents:** one row of `## Documents` per kind of tracked Markdown file that no kind matches yet, `never` or `pass`. Give the `depended-on` row of `## Life event signs` the forge's files a maintainer writes for strangers.
    - **Install:** whether an install comes first.
    - **Dependencies:** how dependencies are read.
    - **Suites:** the suites table under `## Tests`, one row per suite: the gate that runs it whole, the globs of its test files, and the recipe that runs given files of it, or `none: <reason>`. In the same pass, bind the Gates row `changed tests run` to `just tests-changed` and add `tests-changed` to the justfile's `tier1_gates`. A Gates row bound before its table exists turns tier 1 red.
@@ -44,7 +44,7 @@ An upgrade adds sections to the binding whose rows state what this project's own
 
    Done when `conformance.py` prints none of the findings you filled, and each gate you ran finds what the tree has.
 
-5. **Settle the ledger.** Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/upgrade.py" --apply`. It drops the entries whose findings are gone and writes nothing else owed.
+5. **Settle the ledger.** Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/upgrade.py" --apply`.
 
    Done when `owed.py --fill-first` prints nothing.
 
