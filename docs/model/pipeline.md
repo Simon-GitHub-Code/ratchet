@@ -130,13 +130,13 @@ All of them run on `workflows/pipeline.js` itself in one node process, in a cont
 
 ## Charts
 
-The rules were checked in Python on `Pipeline.tla`, SHA-256 `d58e1de03e413a8fa700ca5558c5eda639fa06d32d805a54e9979308d519981e`: 6,080 states and 19,046 steps, twenty-five rules hold and three break, each by the run above. TLC, run on the same module, reached the same 6,080 states and counts 19,047 states generated: the start and 19,046 steps. With the twenty-five rules that hold it finds no error, and each of the three that break it breaks by the same run as Python. The charts below were drawn from the model before ADR 0072; they are owed to the next change that runs the `statechart` command. A run that has ended has no step out, so the module tells TLC that this is no deadlock.
+The rules were checked in Python on `Pipeline.tla`, SHA-256 `d58e1de03e413a8fa700ca5558c5eda639fa06d32d805a54e9979308d519981e`: 6,080 states and 19,046 steps, twenty-five rules hold and three break, each by the run above. TLC, run on the same module, reached the same 6,080 states and counts 19,047 states generated: the start and 19,046 steps. With the twenty-five rules that hold it finds no error, and each of the three that break it breaks by the same run as Python. A run that has ended has no step out, so the module tells TLC that this is no deadlock.
 
-That module is too large for the statechart tool to draw whole. The tool draws only the shortest run to each rule that breaks, which is the last chart. The others are drawn from `PipelineStage.tla`, SHA-256 `aeb59f31711bde4bd31345c69438adbd32143728af5f6213c882f114b37600a6`: the same graph seen through the stage a run is at, and each step through the answer the script reads, so whether a role published does not show there. The stage is the agent the run waits on, or how it ended and after which stage, with whether it is a rejudge, whether the critic runs, and the fix rounds. Each of those reports says that TLC reached 79 states and 175 steps. A box groups states, and an arrow from a box leaves every state in it.
+That module is too large for the statechart tool to draw whole. The tool draws only the shortest run to each rule that breaks, which is the last chart. The others are drawn from `PipelineStage.tla`, SHA-256 `aeb59f31711bde4bd31345c69438adbd32143728af5f6213c882f114b37600a6`: the same graph seen through the stage a run is at, and each step through the answer the script reads, so whether a role published does not show there. The stage is the agent the run waits on, or how it ended and after which stage, with whether it is a rejudge, whether the critic runs, and the fix rounds. Each of those reports says that TLC reached 96 states and 247 steps. A box groups states, and an arrow from a box leaves every state in it.
 
 ### A first build
 
-19 states and 28 arrows. It does not draw the 31 steps that stay in one state. The critic and its fix rounds are one state here, and the next chart draws them. The fix pass and the review after it are drawn here.
+19 states and 34 arrows. It does not draw the 38 steps that stay in one state. The critic and its fix rounds are one state here, and the next chart draws them. The fix pass and the review after it are drawn here.
 
 ```mermaid
 ---
@@ -178,6 +178,7 @@ stateDiagram-v2
   s4 --> s6: it finds a gap
   s5 --> s17: it measures the change over a ceiling
   s5 --> s7: the change is built [nobody depends on the project yet]
+  s5 --> s16: it departs from a criterion, or from an assumption that is yours
   s6 --> s16: it asks you, or needs a guard path changed
   s6 --> s17: it measures or estimates the change over a ceiling
   s6 --> s9: it asks nothing and fits
@@ -185,13 +186,18 @@ stateDiagram-v2
   s7 --> s18: it approves, and nothing stands against the change
   s7 --> s19: it requests changes, or something stands against the change
   s7 --> s10: it finds a blocker in the change [nobody depends on the project yet]
-  s8 --> s7: the critic finds nothing, or two rounds are spent
+  s7 --> s16: it finds a case that is yours, or leaves you a finding no quote holds
+  s8 --> s7: the critic finds nothing to fix, or two rounds are spent
+  s8 --> s16: the critic or a fix round leaves you a call
   s9 --> s5: it finds no gap, or one the run keeps as an assumption
   s8 --> s17: a fix round measures the change over a ceiling
   s10 --> s11: the pass is done
   s10 --> s17: it measures the change over a ceiling
+  s10 --> s16: it departs from a criterion, or from an assumption that is yours
   s11 --> s18: it approves, and nothing stands against the change
   s11 --> s19: it requests changes, or something stands against the change
+  s11 --> s16: it finds a case that is yours, or leaves you a finding no quote holds
+  s8 --> s19: the critic finds again the major it was fixed for, and no review runs
   s1 --> s14: the agent dies
 ```
 
@@ -199,9 +205,11 @@ Something stands against the change when the spec's tests fail for the wrong rea
 
 Before the project is depended-on, a review that finds a blocker or a major issue of its own in the change hands it to the fix pass, whatever its verdict, unless it also finds a dropped promise of the ticket. The review after the pass decides. Its approval approves when nothing else stands against the change, and anything else ends in changes requested. There is no second pass.
 
+A role that builds or judges stops the run for you with a question when the call is yours. The build, a fix round or the reconcile does so on a departure from a criterion of the spec, or from an assumption that is the owner's. The critic does so on a case no record states that is the owner's. A review does so on such a case, on a blocker of its own whose quote its record does not hold, and on a finding the critic could not quote that it gives no role.
+
 ### The critic and its fix rounds
 
-11 states and 14 arrows. It does not draw the 120 steps that stay in one state. Everything before the critic, every run of a project nobody depends on yet and every rejudge is the first state.
+12 states and 22 arrows. It does not draw the 135 steps that stay in one state. Everything before the critic, every run of a project nobody depends on yet and every rejudge is the first state.
 
 ```mermaid
 ---
@@ -218,31 +226,40 @@ stateDiagram-v2
   }
   s7: Stopped on an error, resume the run
   s8: The review
-  s9: Stopped too large, split the ticket
-  s10: Approved
-  s11: Changes requested
+  s9: Stopped for you, a question or a guard path to change
+  s10: Stopped too large, split the ticket
+  s11: Approved
+  s12: Changes requested
   [*] --> s0
   s0 --> s2: the change is built [the project is depended-on]
-  s2 --> s8: it finds nothing
+  s2 --> s8: it finds nothing to fix
   s2 --> s3: it finds a major it does not see fixed
+  s2 --> s9: it finds a case no record states, which is yours
   s8 --> s7: the agent dies
-  s8 --> s10: it approves, and nothing stands against the change
-  s8 --> s11: it requests changes, or something stands against the change
+  s8 --> s11: it approves, and nothing stands against the change
+  s8 --> s12: it requests changes, or something stands against the change
+  s8 --> s9: it finds a case that is yours, or leaves you a finding no quote holds
   s3 --> s4: the round is done
-  s3 --> s9: it measures the change over a ceiling
-  s4 --> s8: it finds nothing
+  s3 --> s10: it measures the change over a ceiling
+  s3 --> s9: it departs from a criterion, or from an assumption that is yours
+  s4 --> s8: it finds nothing to fix
   s4 --> s5: it finds a major it does not see fixed
+  s4 --> s12: it finds again the major it was fixed for, and no review runs
+  s4 --> s9: it finds a case no record states, which is yours
   s5 --> s6: the round is done
-  s5 --> s9: it measures the change over a ceiling
-  s6 --> s8: it finds nothing, or a major is still owed
+  s5 --> s10: it measures the change over a ceiling
+  s5 --> s9: it departs from a criterion, or from an assumption that is yours
+  s6 --> s8: it finds nothing to fix, or a new major with no round left
+  s6 --> s12: it finds again the major it was fixed for, and no review runs
+  s6 --> s9: it finds a case no record states, which is yours
   s1 --> s7: the agent dies
 ```
 
-A major still owed after the second round reaches the review, and the script forces changes requested with that finding unresolved in the result.
+The critic finds nothing to fix when it finds no major, or only a major whose quote its record does not hold, which goes to the review. A major the critic finds again after the round that was given it ends the run in changes requested, with that finding unresolved, and no review starts. A new major after the second round reaches the review with no round left, and the script forces changes requested with that finding unresolved in the result.
 
 ### Judging a rebased branch again
 
-9 states and 9 arrows. It does not draw the 144 steps that stay in one state. Every first build is one state here.
+10 states and 11 arrows. It does not draw the 211 steps that stay in one state. Every first build is one state here.
 
 ```mermaid
 ---
@@ -258,17 +275,20 @@ stateDiagram-v2
   s5: Stopped on an error, an input is missing
   s6: Stopped on an error, resume the run
   s7: Stopped too large, split the ticket
-  s8: Approved
-  s9: Changes requested
+  s8: Stopped for you, a question or a guard path to change
+  s9: Approved
+  s10: Changes requested
   [*] --> s0
   s0 --> s1: the feature skill starts a build
   s0 --> s3: it judges again a branch that rebased cleanly
   s0 --> s4: it judges again a branch whose rebase conflicted or whose check went red
   s0 --> s5: it judges a branch again without the first run's slug or spec path
-  s3 --> s8: it approves, and nothing stands against the change
-  s3 --> s9: it requests changes, or something stands against the change
+  s3 --> s9: it approves, and nothing stands against the change
+  s3 --> s10: it requests changes, or something stands against the change
+  s3 --> s8: it finds a case that is yours, or leaves you a finding no quote holds
   s4 --> s3: the rebase is finished
   s4 --> s7: it measures the change over a ceiling
+  s4 --> s8: it departs from a criterion, or from an assumption that is yours
   s2 --> s6: the agent dies
 ```
 
