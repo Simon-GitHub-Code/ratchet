@@ -20,7 +20,7 @@ import tempfile
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import replace
-from functools import cache
+from functools import cache, reduce
 from pathlib import Path
 from typing import NamedTuple
 
@@ -38,6 +38,7 @@ from hypothesis.stateful import (
 
 import conformance
 import hooks_installed
+import markdown_text
 import merge_ready
 import owed
 import route
@@ -361,9 +362,16 @@ def test_a_rule_breaks_only_where_a_divergence_says_it_does(name: str) -> None:
     assert label is model.real_advice or not broken
 
 
-def test_no_state_holds_two_divergences() -> None:
+def test_a_state_that_holds_two_divergences_is_read_the_same_in_either_order() -> None:
     both = [s for s in model.graph().states if sum(e.holds(s) for e in model.DIVERGENCES) > 1]
-    assert both == []
+    assert {(s.setup, s.answers) for s in both} == {(Setup.PINNED, Answers.CARRIED)}
+    for state in both:
+        held = [e for e in model.DIVERGENCES if e.holds(state)]
+        read = {
+            reduce(lambda world, entry: entry.reads(world), order, state)
+            for order in itertools.permutations(held)
+        }
+        assert read == {model.as_the_route_reads(state)}
 
 
 def test_the_architecture_rules_are_met_where_they_bite() -> None:
@@ -479,9 +487,58 @@ def test_a_unit_left_by_an_older_plugin_is_deleted_before_the_next_spec() -> Non
     assert deleted == {Tree.RECORDS}
     expiring = {(act, b.tree) for a, act, b in graph.edges if model.expires(a, b)}
     assert expiring == {
-        (ActionName.OWNER_RESOLVES_TICKET, Tree.CODE),
+        (ActionName.OWNER_RESOLVES_TICKET, Tree.RECORDS),
         (ActionName.OWNER_WORKS_TICKET_THEMSELF, Tree.CLEAN),
     }
+
+
+def test_the_last_mark_leaves_the_answers_carried_in_records_and_names_their_landing() -> None:
+    graph = model.graph()
+    marks = [
+        b
+        for a, act, b in graph.edges
+        if model.expires(a, b) and act is ActionName.OWNER_RESOLVES_TICKET
+    ]
+    assert {(b.tree, b.answers) for b in marks} == {(Tree.RECORDS, Answers.CARRIED)}
+    assert {model.advice(b) for b in marks if b.setup is Setup.BOUND} == {Advice.LAND_RECORDS}
+    landings = {ActionName.AGENT_LANDS_RECORDS, ActionName.OWNER_MERGES_RECORDS}
+    ends = {
+        (act, b.parked)
+        for a, act, b in graph.edges
+        if a.answers is Answers.CARRIED and b.answers is not Answers.CARRIED
+    }
+    assert ends == {(act, False) for act in landings}
+
+
+def test_the_last_mark_appends_to_the_brief_only_dated_answers_of_the_files_it_deletes(
+    tmp_path: Path,
+) -> None:
+    (entry,) = (e for e in model.DIVERGENCES if e.name == "carried-answers-read-as-code")
+    path = path_to(entry.example)
+    assert path[-1].action is ActionName.OWNER_RESOLVES_TICKET
+    repo = real.Repo.start(tmp_path)
+    for source, name, target in path:
+        real.apply(repo, name, real.Change(source, target))
+    status = git(repo.root, "status", "--porcelain", "--no-renames").splitlines()
+    brief = str(route.DESIGN_BRIEF)
+    deleted = sorted(line[3:] for line in status if line[:2].strip() == "D")
+    assert sorted(line[3:] for line in status) == sorted([*deleted, brief])
+    assert deleted
+    assert all(name.startswith(f"{repo.feature()}/") for name in deleted)
+    diff = git(repo.root, "diff", "--unified=0", "HEAD", "--", brief).splitlines()
+    added = [line[1:] for line in diff if line.startswith("+") and not line.startswith("+++")]
+    removed = [line for line in diff if line.startswith("-") and not line.startswith("---")]
+    answers = {
+        line
+        for name in deleted
+        for line in markdown_text.section(
+            git(repo.root, "show", f"HEAD:{name}"), real.ANSWERS
+        ).splitlines()
+        if line.strip()
+    }
+    assert added
+    assert removed == []
+    assert {line.replace(f"- {real.EXPIRED_ON}: ", "- ", 1) for line in added} <= answers
 
 
 def test_the_step_that_resolves_the_last_ticket_deletes_the_unit_and_keeps_its_answers(
