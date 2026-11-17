@@ -93,6 +93,22 @@ def test_a_process_left_running_is_seen_however_narrow_the_terminal(
         left.wait()
 
 
+def test_a_supervisor_that_does_not_hold_its_lock_is_never_signalled_so_a_reused_pid_survives(
+    tmp_path: Path,
+) -> None:
+    unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        directory = tmp_path / "session"
+        directory.mkdir()
+        (directory / "live.lock").write_text(f"{unrelated.pid}\n", encoding="utf-8")
+        assert acceptance.end(directory) == []
+        with pytest.raises(subprocess.TimeoutExpired):
+            unrelated.wait(timeout=0.5)
+    finally:
+        unrelated.kill()
+        unrelated.wait()
+
+
 def test_up_puts_the_proxy_before_the_head_and_down_stops_all_of_it(
     product: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -135,12 +135,19 @@ def held_before(root: Path, base: str, kind: Kind) -> str | None:
 
 
 @functools.lru_cache(maxsize=16)
-def touched(root: Path, base: str) -> tuple[tuple[str, str], ...]:
+def touched(root: Path, commit: str) -> tuple[tuple[str, str], ...]:
     listed = gatelib.git(
-        root, "log", "-m", "--first-parent", "--no-renames", "--name-only", "--format=%x00%H", base
+        root,
+        "log",
+        "-m",
+        "--first-parent",
+        "--no-renames",
+        "--name-only",
+        "--format=%x00%H",
+        commit,
     )
     blocks = (block.partition("\n") for block in (listed or "").split("\0")[1:])
-    return tuple((commit, names_text) for commit, _, names_text in blocks)
+    return tuple((found, names_text) for found, _, names_text in blocks)
 
 
 def later_trigger(tool: str) -> str | None:
@@ -233,37 +240,37 @@ def reviews_at(root: Path, ref: str | None) -> list[Review]:
     return found
 
 
-def first_held(root: Path, ref: str, kind: Kind) -> int | None:
-    log = touched(root, ref)
+def first_held(root: Path, commit: str, kind: Kind) -> int | None:
+    log = touched(root, commit)
     for place in range(len(log) - 1, -1, -1):
-        commit, names_text = log[place]
+        found, names_text = log[place]
         if (
             any(kind.finds(path) for path in names_text.split("\n") if path)
-            and instances(root, commit, {kind.name: kind})[kind.name]
+            and instances(root, found, {kind.name: kind})[kind.name]
         ):
             return place
     return None
 
 
-def added_at(root: Path, ref: str, path: str) -> int | None:
+def added_at(root: Path, commit: str, path: str) -> int | None:
     listed = gatelib.git(
-        root, "log", "-m", "--first-parent", "--diff-filter=A", "--format=%H", ref, "--", path
+        root, "log", "-m", "--first-parent", "--diff-filter=A", "--format=%H", commit, "--", path
     )
     added = (listed or "").split()
-    places = {commit: place for place, (commit, _) in enumerate(touched(root, ref))}
+    places = {found: place for place, (found, _) in enumerate(touched(root, commit))}
     return places.get(added[-1]) if added else None
 
 
 def settled(
-    root: Path, ref: str, reviews: Sequence[Review], *, key: str, kind: Kind | None
+    root: Path, commit: str, reviews: Sequence[Review], *, key: str, kind: Kind | None
 ) -> bool:
     counting = [review for review in reviews if not review.problems and key in review.keys]
     if kind is None:
         return bool(counting)
-    arrival = first_held(root, ref, kind)
+    arrival = first_held(root, commit, kind)
     if arrival is None:
         return False
-    return any((at := added_at(root, ref, r.path)) is None or at < arrival for r in counting)
+    return any((at := added_at(root, commit, r.path)) is None or at < arrival for r in counting)
 
 
 def why_not(reviews: Sequence[Review], key: str) -> str:

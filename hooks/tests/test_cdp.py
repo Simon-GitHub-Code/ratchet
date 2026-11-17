@@ -162,3 +162,9 @@ def test_the_browser_is_the_one_named_or_the_first_usual_name_on_the_path(
 
 def test_the_pipe_ends_the_browser_is_given_are_above_the_descriptors_it_maps_them_to() -> None:
     assert cdp.HIGH_FD > 4
+
+
+def test_a_browser_without_its_sandbox_reaches_no_host_but_the_loopback() -> None:
+    assert "--no-sandbox" not in cdp.FLAGS or (
+        "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1" in cdp.FLAGS
+    ), "a browser run with --no-sandbox must resolve no host but the loopback"

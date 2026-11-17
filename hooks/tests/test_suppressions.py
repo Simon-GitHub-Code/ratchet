@@ -265,3 +265,14 @@ def test_a_malformed_kind_is_red(repo: Path) -> None:
         "| k | `(` | rises |",
     )
     assert any("needs one backticked extended regex" in p for p in found(repo))
+
+
+def test_a_pattern_edged_with_punctuation_counts_inside_a_word(tmp_path: Path, capsys: Out) -> None:
+    binding = BINDING.replace("`QUIET\\|HUSH`", "`HUSH\\(`")
+    assert "HUSH\\(" in binding
+    root = repository(tmp_path, {"docs/process/binding.md": binding, "a.txt": "plain\n"})
+    commit(root, "feat(core): second")
+    branch(root)
+    write(root, "a.txt", "call.HUSH(arg)\n")
+    assert run(root) == 1
+    assert "quiet: rose from 0 to 1" in capsys.readouterr().out
