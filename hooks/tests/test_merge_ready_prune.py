@@ -103,9 +103,12 @@ def test_a_brief_deleted_whole_is_the_owners(tmp_path: Path) -> None:
 def test_a_page_moved_to_a_path_of_its_kind_is_read_as_a_move(tmp_path: Path) -> None:
     binding = BASE[BINDING].replace("## Dependencies", NOTES_TABLE + "## Dependencies", 1)
     page = "# Notes\n\n## Purpose\n\nA purpose.\n\n## Detail\n\n" + "Detail line.\n" * 20
-    repository(tmp_path, {**BASE, BINDING: binding, "notes/a.md": page})
+    repository(
+        tmp_path, {**BASE, BINDING: binding, "notes/a.md": page, "notes/z.md": page + "Z.\n"}
+    )
     branch(tmp_path, "feature/4-thing")
     git(tmp_path, "mv", "notes/a.md", "notes/b.md")
+    git(tmp_path, "mv", "notes/z.md", "notes/y.md")
     commit(tmp_path, "feat: the change")
     stamp(tmp_path)
     assert judged(tmp_path) == []
