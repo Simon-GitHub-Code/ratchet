@@ -2739,9 +2739,11 @@ RELEASED_JOBS_LINES = frozenset({'jobs := env_var_or_default("RATCHET_JOBS", num
 def with_template_jobs(template: str) -> gatelib.Want:
     """The justfile with a released ``jobs`` line, and the comment above it, made the template's."""
     block = "\n".join(
-        (
-            *justfile_text.definition(template, "configured_jobs"),
-            *justfile_text.definition(template, "jobs"),
+        justfile_text.uncommented(
+            (
+                *justfile_text.definition(template, "configured_jobs"),
+                *justfile_text.definition(template, "jobs"),
+            )
         )
     )
 

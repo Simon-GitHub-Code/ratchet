@@ -35,6 +35,14 @@ def code_of(justfile: str) -> str:
     return "\n".join(line for line in justfile.splitlines() if not line.lstrip().startswith("#"))
 
 
+def uncommented(lines: Sequence[str]) -> list[str]:
+    return [
+        line
+        for line in lines
+        if not line.lstrip().startswith("#") or line.lstrip().startswith(SHEBANG)
+    ]
+
+
 def definition(text: str, name: str) -> tuple[str, ...]:
     """The recipe or variable ``name`` of a justfile: its comment, its head and its body."""
     lines = text.splitlines()
@@ -237,7 +245,7 @@ def plugin_block(template: str) -> list[str]:
         return []
     while first > 0 and lines[first - 1].startswith("#"):
         first -= 1
-    return lines[first:last]
+    return uncommented(lines[first:last])
 
 
 def with_plugin_block(template: str) -> Want:
@@ -312,7 +320,7 @@ def with_recipe(template: str, name: str) -> Want:
         message = f"the template has no recipe {name!r}"
         raise ValueError(message)
     template_lines, wanted, head = found
-    copy = template_lines[wanted.start : wanted.end]
+    copy = uncommented(template_lines[wanted.start : wanted.end])
     rank = {block.name: place for place, block in enumerate(blocks(template_lines))}
 
     helpers = [
@@ -367,7 +375,7 @@ def with_template_recipe(template: str, name: str) -> Want:
         message = f"the template has no recipe {name!r}"
         raise ValueError(message)
     template_lines, wanted, _ = found
-    copy = template_lines[wanted.start : wanted.end]
+    copy = uncommented(template_lines[wanted.start : wanted.end])
     copied = with_recipe(template, name)
 
     def want(current: str | None) -> str:
