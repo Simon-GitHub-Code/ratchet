@@ -444,3 +444,11 @@ def test_a_cell_of_a_row_the_table_does_not_hold_is_left_as_it_was() -> None:
     text = "## Gates\n\n| Question | Tool |\n| --- | --- |\n| lint | `just lint` |\n"
     assert markdown_text.with_cell("## Gates", "fuzz", column=1, value="later: x")(text) == text
     assert markdown_text.with_cell("## Other", "lint", column=1, value="later: x")(text) == text
+
+
+def test_a_heading_that_is_repeated_gives_the_lines_under_every_copy() -> None:
+    text = "## Gates\n\nfirst\n\n## Other\n\nmiddle\n\n## Gates\n\nsecond\n"
+    held = markdown_text.section(text, "## Gates")
+    assert "first" in held
+    assert "second" in held
+    assert "middle" not in held

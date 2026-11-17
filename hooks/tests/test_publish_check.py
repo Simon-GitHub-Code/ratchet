@@ -1055,3 +1055,10 @@ def test_a_moved_branch_and_an_invented_quote_are_both_said(tmp_path: Path, chec
         unquoted("DESIGN.md", "invented", why="the record `DESIGN.md` is absent"),
         QUOTES_RED,
     ]
+
+
+def test_help_prints_the_whole_description(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        publish_check.main(["publish_check.py", "--help"])
+    shown = capsys.readouterr().out
+    assert '{"branch": "feature/4-x"' in shown

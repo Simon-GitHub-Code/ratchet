@@ -801,6 +801,18 @@ def test_a_manifest_that_does_not_parse_asks_for_a_path_in_its_checkout(
     assert answer(session, edit_from(session, session / "justfile")) == {}
 
 
+def test_a_manifest_that_does_not_parse_asks_for_every_path_in_its_checkout(
+    tmp_path: Path, session: Path
+) -> None:
+    broken = checkout(tmp_path, manifest="[[group]]\nname = 1\n", name="broken")
+    guard = hook.local_guard(session)
+    for name in ("justfile", "notes.md", "justfile"):
+        case = json.dumps(edit_from(session, broken / name))
+        asked = json.loads(hook.run(case, lambda: guard))["hookSpecificOutput"]
+        assert asked["permissionDecision"] == "ask"
+        assert "ManifestError" in asked["permissionDecisionReason"]
+
+
 def test_the_session_manifest_is_still_read_when_it_does_not_parse(
     tmp_path: Path, adopted: Path
 ) -> None:

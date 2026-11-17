@@ -647,7 +647,11 @@ def settle(moves: list[str], quoted: list[str], *, halted: bool, unread: str | N
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="publish_check.py", description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        prog="publish_check.py",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("start", type=Path, help="the start state: a JSON object with `start`")
     parser.add_argument("--root", default=".")
     parser.add_argument(

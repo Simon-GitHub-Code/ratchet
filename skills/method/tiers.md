@@ -17,6 +17,25 @@ A binding declares what the repository is, on one line: `- Application types: se
 
 A type decides which questions apply. It never decides the tool. Every question applies to every type unless [application-types.toml](application-types.toml) narrows it, and that file is the single source: the conformance gate reads it, and `python3 scripts/application_types.py <type>...` in the plugin prints the rows a set of types leaves out. Contract drift, for example, is asked only of a service, accessibility only of a web interface or an app, and a library is not asked whether it starts, emits telemetry or holds under load. The weekly `load-soak` follows `load`.
 
+| Catalogue table | Holds |
+| --- | --- |
+| `[types]` | each application type and what it is |
+| `[kinds]` | each kind of code a `code:` trigger names; its text is what the binding's Triggers row matches |
+| `[architecture]` | each trigger whose first arrival reopens the architecture, with the question it reopens |
+| `[events.<event>]` | each life event: its `meaning`, and either `signs`, globs over the tree the route reads to propose it, or `in-binding = true`, where the binding's `## Life event signs` table names this stack's signs |
+| `[proofs]` | each named proof and the fault it plants |
+| `[[question]]` | one per question the catalogue narrows |
+
+A `[[question]]` holds:
+- `name`: the question, as the binding's Gates table spells it;
+- `applies-to`: the types it is asked of, all six when absent;
+- `trigger`: `always` when absent, `code:<kind>`, `life:<event>`, or parts joined by `and`;
+- `collection = true`: its gate judges a set the project writes, so it carries a `remove` bite;
+- `directives = true`: a directive in the code can tell its tool to skip a finding, so the binding's `## Suppressions` names the kinds that silence it;
+- `proofs`: the named proofs its gate's bites claim.
+
+A question the catalogue does not list is asked of every type, always, and judges no collection.
+
 A row is never dropped. One that applies names a tool or is an accepted gap, as above. One that applies to none of the declared types says `none: not a <type>`, naming a type the question is asked of, and needs no ADR: the type line is the reason. One that applies and whose trigger has not fired says `later: <trigger>`, and judges nothing until it fires. The conformance gate is red on a missing or unknown type, on an empty Tool cell, on a row that applies bound to `none` without a reason and an ADR the repository holds, and on a dropped row.
 
 ## When each tier runs
@@ -48,7 +67,7 @@ Every comparison against history uses the merge base with the default branch (`H
 | Is everything reachable and declared? | dead-code and dependency-hygiene tools |
 | Is the build held to the same bar as the product? | shell, CI and config linters |
 | Is anything secret in the commit, the tree or the history? | a secret scanner |
-| Is every feature flag declared once, owned, off when new and due for removal? | the method's flags gate over `flags.toml`: key, owner, default, a `remove-by` date or `permanent`, a reason; a flag the merge base lacks defaults to off; a key no source file names is removed |
+| Is every feature flag declared once, owned, off when new and due for removal? | the method's flags gate over `flags.toml`, one `[[flag]]` table per flag: `key`, `owner`, `default`, a `remove-by` date or `permanent = true`, and a `reason` of twenty characters or more; a flag the merge base lacks defaults to off; a key no source file names is removed |
 | Is every dependency, action and image pinned exactly, and every CI job least-privileged? | lockfile matches the manifest with no floating range; actions and images pinned by digest; workflow permissions declared and minimal |
 | Is every unit within its size and complexity limits? | the linter's size and complexity rules plus a fitness test, with the numbers the binding's Limits section holds; a hard limit, split the unit |
 | Did the count of TODO, FIXME, HACK and XXX markers rise? | counted at the merge base and at head, never stored |
@@ -275,7 +294,24 @@ A tool is chosen per repository, so no recipe is shipped for it. These hold for 
 
 The method ships no tool, so it cannot promise that a repository's recipes work. The repository shows it. `quality/bites.toml` holds one `[[bite]]` or more for each Gates row whose Tool cell names a tool the repository chose, a row that pairs a plugin script with a tool of the stack included. A row bound `none` or `later: <trigger>` needs none, and nor does a row bound to the plugin's scripts alone: `scripts/bite.py` proves those. A row's bite is written when the row is bound, in the same change.
 
-A bite names its `gate` (the last word of the row's entry point), the fault in a few words, exactly one fault, and `expect`: words the gate prints when it is red on this fault. The fault is `write` (create or replace one file), `replace` (in a file that exists, the one place an exact text stands becomes another), `patch` (a diff under `quality/bites/`) or `remove` (delete what the globs match). A fault inside a file other changes also edit, such as a manifest or a lockfile, is a `replace`: it keeps applying while the lines around it change, where a patch's context breaks on the first unrelated edit. A fault that no longer applies is red, never skipped. A gate that judges a collection, which `application-types.toml` marks, carries a `remove` bite as well: the collection emptied, and the gate red. A question may also require a proof by name, a fault that only its gate can catch, and a bite claims it with `proof`. The catalogue requires six: `outside-the-seam` of `telemetry emitted` (an entry point registered outside the instrumented seam), `broken-flag-state` of `changed flags off and on` (a flag whose on state breaks a test its off state passes), `erroring-route` of `load smoke` (a route the smoke requests that answers with an error), `guarded-crash` of `fuzzing` (a crash reached only when the input holds an exact value of four bytes or more that the parser compares against, which blind mutation does not reach in the bite's seconds), `related-fields` of `symbolic checking` (a crash reached only when two fields of the input satisfy an arithmetic relation, which a solver reaches and comparing bytes with constants does not) and `code-departs-from-model` of each formal verification of a kind (a change to the code the model mirrors that breaks a property the model holds, with the model left as it was). The repository writes the fault; the name says what it must be. `args` are appended to the gate's command, and `commit = true` commits the fault first, for a gate that reads history.
+A bite is a `[[bite]]` table of `quality/bites.toml` and holds exactly one fault:
+
+| Key | Value |
+| --- | --- |
+| `gate` | the last word of the row's entry point: `just lint` is `lint` |
+| `name` | the fault in a few words, unique within its gate |
+| `expect` | words the gate prints because of this fault, such as the rule's code or the name of what is missing |
+| `write` | a fault: `{ path = "...", content = "..." }` creates or replaces one file; `content` may be a list of strings, joined, so a planted secret is split and no scanner reads the registry as a leak |
+| `replace` | a fault: `{ path = "...", old = "...", new = "..." }`, or a list of them; in a file that exists, the one place `old` stands becomes `new`, and `old` standing nowhere or twice is red |
+| `patch` | a fault: the path of a diff under `quality/bites/`, applied with `git apply` |
+| `remove` | a fault: globs, and every file they match is deleted |
+| `proof` | the named proof this bite is, where the row's question requires one |
+| `args` | optional words appended to the gate's command, such as the seconds a fuzz run takes or the one file a whole-tree run is narrowed to |
+| `commit` | optional; `true` commits the fault in the copy first, for a gate that reads history or the index |
+
+Before the first `[[bite]]`, two optional keys serve every bite. `setup` is a list of commands run once in each scratch copy, in order. A copy holds what git sees and nothing ignored, so `setup` rebuilds from the lockfile what the gates do not build themselves, and builds the deliverable once so a gate's own build is incremental. `include` lists ignored paths a gate needs that `setup` cannot rebuild, copied when present.
+
+A fault inside a file other changes also edit, such as a manifest or a lockfile, is a `replace`: it keeps applying while the lines around it change, where a patch's context breaks on the first unrelated edit. A fault that no longer applies is red, never skipped. A gate that judges a collection, which `application-types.toml` marks, carries a `remove` bite as well: the collection emptied, and the gate red. A question may also require a proof by name, a fault that only its gate can catch, and a bite claims it with `proof`. The catalogue requires five: `outside-the-seam` of `telemetry emitted` (an entry point registered outside the instrumented seam), `broken-flag-state` of `changed flags off and on` (a flag whose on state breaks a test its off state passes), `erroring-route` of `load smoke` (a route the smoke requests that answers with an error), `guarded-crash` of `fuzzing` (a crash reached only when the input holds an exact value of four bytes or more that the parser compares against, which blind mutation does not reach in the bite's seconds) and `related-fields` of `symbolic checking` (a crash reached only when two fields of the input satisfy an arithmetic relation, which a solver reaches and comparing bytes with constants does not). The repository writes the fault; the name says what it must be.
 
 `scripts/project_bite.py` makes a scratch copy of the work tree as git sees it, runs the registry's `setup` there, and records the copy: every file git sees or tracks, the index, `HEAD` and the exclude file. After every run, and once before the first, the copy is restored to that record, so every run starts from the same copy; what git ignores stays as the last run left it, and an empty directory setup made is gone, since git holds no directory. For each bite the gate runs (green), the fault is planted, and the gate runs again (red); after a gate's last bite it runs again with no fault, once for each set of `args` among its bites that bit. A fault aimed where restoring does not reach (an ignored file, a path through a link, inside another repository, a new `.gitignore` or `.gitattributes`) is not planted.
 
