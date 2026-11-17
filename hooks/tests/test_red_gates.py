@@ -159,3 +159,10 @@ def test_the_command_prints_the_report_and_says_when_there_is_none(
     assert capsys.readouterr().out == ""
     with pytest.raises(SystemExit):
         red_gates.main(["red_gates.py", str(log), "--lines", "0"])
+
+
+def test_help_prints_the_whole_description(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        red_gates.main(["red_gates.py", "--help"])
+    shown = capsys.readouterr().out
+    assert "Usage: ``red_gates.py LOG [--lines N]``" in shown
