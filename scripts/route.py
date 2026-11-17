@@ -474,7 +474,7 @@ def releases(hold: queue_notes.Hold, ticket: preflight.Ticket, default_branch: s
         )
     if hold.reviews:
         steps.append(f"run {ARCHITECTURE} for {', '.join(hold.reviews)}")
-    meet = f"change ticket {ref} to meet what the drain parked it for"
+    meet = meet_step(ref)
     defective = defect_kind(ticket)
     if hold.owes and defective in hold.owes:
         others = [kind for kind in hold.owes if kind != defective]
@@ -484,6 +484,16 @@ def releases(hold: queue_notes.Hold, ticket: preflight.Ticket, default_branch: s
     elif hold.owes:
         steps.append(f"run {SAFEGUARD} for {', '.join(hold.owes)}")
     return steps or [meet]
+
+
+def meet_step(ref: str) -> str:
+    """The step that frees a parked ticket whose text is the cause."""
+    return f"change ticket {ref} to meet what the drain parked it for"
+
+
+def owner_merge(default: str, name: str) -> str:
+    """The merge the owner types for branch ``name``."""
+    return f"`git switch {default} && git merge --no-ff {name}`, typed by the owner"
 
 
 def defect_kind(ticket: preflight.Ticket) -> str | None:
@@ -855,7 +865,7 @@ def records_waiting(checkout: Checkout) -> Step | None:
             "records",
         )
     return Step(
-        f"`git switch {default} && git merge --no-ff {name}`, typed by the owner",
+        owner_merge(default, name),
         f"the merge judge leaves branch `{name}` to the owner, and its change holds only"
         f" records, so the owner merges or deletes it: {reasons[0].text};"
         f" {merge_command(root, name)} prints every reason{more}",
@@ -1017,7 +1027,7 @@ class Upkeep:
     defects: frozenset[str] = frozenset()
     ticket: preflight.Ticket | None = None
     waiting: str | None = None
-    behind: str | None = None
+    behind: formal_model.Behind | None = None
 
 
 def formal_tickets(root: Path, gh: preflight.Runner | None) -> list[preflight.Ticket]:
@@ -1056,27 +1066,39 @@ def formal_step(upkeeping: Upkeep, checkout: Checkout, instead: Step) -> Step | 
         return Step(
             f"{FEATURE} {ticket.ref}",
             f'ticket {ticket.ref} "{ticket.title}" carries what the formal model\'s last round'
-            f" found. {carry}",
+            f" found, and fixing it is the model's next step. {carry}",
             instead.command,
             "formal-ticket",
         )
     if upkeeping.waiting is not None:
         return Step(
-            f"`git switch {checkout.default_branch} && git merge --no-ff {upkeeping.waiting}`,"
-            " typed by the owner",
-            f"branch `{upkeeping.waiting}` holds a round of the formal model's upkeep and waits"
-            f" for your merge. {carry}",
+            owner_merge(checkout.default_branch, upkeeping.waiting),
+            f"branch `{upkeeping.waiting}` holds a round of the formal model's upkeep, and it"
+            f" changes guard paths, so it waits for your merge. {carry}",
             instead.command,
             "formal-round",
         )
-    if upkeeping.behind is None:
+    late = upkeeping.behind
+    if late is None:
         return None
-    return Step(
-        SAFEGUARD,
-        f"the formal model is behind the code it mirrors: {upkeeping.behind}. {carry}",
-        instead.command,
-        "formal-upkeep",
-    )
+    if not late.synced:
+        why = (
+            "the formal model has never been checked against the code: the binding's"
+            " `- Synced:` line names no commit"
+        )
+    elif not late.commit:
+        why = (
+            f"the formal model may be behind: this clone does not hold the `- Synced:` commit"
+            f" {late.synced}, so it cannot tell; fetch the default branch's full history, then"
+            " run this again"
+        )
+    else:
+        why = (
+            f"the formal model is behind the code it mirrors: commit {late.commit} on"
+            f" `{checkout.default_branch}` changed mirrored code after the `- Synced:` commit"
+            f" {late.synced}, so a round checks the model against it"
+        )
+    return Step(SAFEGUARD, f"{why}. {carry}", instead.command, "formal-upkeep")
 
 
 def architecture_step(root: Path, instead: Step) -> Step | None:

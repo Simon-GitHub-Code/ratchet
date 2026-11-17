@@ -86,11 +86,9 @@ def test_a_mirrored_commit_the_sync_cannot_reach_is_behind_whatever_its_date(
     formal = formal_model.Formal(("formal/**",), ("src/**/*.py",), sync)
     assert formal_model.behind(root, "main", formal) is None
     git(root, "merge", "-q", "--no-ff", "late", "-m", "Merge branch late")
-    reason = formal_model.behind(root, "main", formal)
-    assert reason is not None
-    assert reason.endswith(
-        f"changed code the model mirrors since the `- Synced:` commit {sync[:12]}"
-    )
+    late = formal_model.behind(root, "main", formal)
+    assert late is not None
+    assert (late.synced, len(late.commit)) == (sync[:12], 12)
     assert formal_model.behind(root, "main", formal_model.Formal((), ("src/**/*.py",), base))
 
 
@@ -106,11 +104,9 @@ def test_a_clone_without_the_sync_commit_and_a_binding_without_one_read_as_behin
 ) -> None:
     root, _ = adopted(tmp_path)
     gone = formal_model.Formal((), ("src/**",), "f" * 40)
-    assert "does not hold the `- Synced:` commit ffffffffffff" in str(
-        formal_model.behind(root, "main", gone)
-    )
+    assert formal_model.behind(root, "main", gone) == formal_model.Behind("f" * 12)
     assert formal_model.behind(root, "main", formal_model.Formal((), ("src/**",), "")) == (
-        "the binding's `- Synced:` line names no commit"
+        formal_model.Behind("")
     )
 
 
@@ -157,8 +153,8 @@ def test_a_model_in_sync_names_nothing_and_one_behind_names_the_safeguard_beside
     assert step == route.Step(
         route.SAFEGUARD,
         f"the formal model is behind the code it mirrors: commit {mirrored[:12]} on `main`"
-        f" changed code the model mirrors since the `- Synced:` commit {base[:12]}."
-        f" Or carry on with {route.SPEC}: nothing is red for it",
+        f" changed mirrored code after the `- Synced:` commit {base[:12]}, so a round checks the"
+        f" model against it. Or carry on with {route.SPEC}: nothing is red for it",
         route.SPEC,
         "formal-upkeep",
     )
@@ -169,7 +165,11 @@ def test_a_clone_without_the_sync_commit_is_told_behind_and_why(tmp_path: Path) 
     synced(root, "f" * 40)
     step = route.decide(root, None)
     assert step.stage == "formal-upkeep"
-    assert "does not hold the `- Synced:` commit" in step.why
+    assert step.why == (
+        "the formal model may be behind: this clone does not hold the `- Synced:` commit"
+        f" {'f' * 12}, so it cannot tell; fetch the default branch's full history, then run"
+        f" this again. Or carry on with {route.SPEC}: nothing is red for it"
+    )
 
 
 def test_an_owed_row_comes_before_the_upkeep(tmp_path: Path) -> None:
@@ -199,7 +199,11 @@ def test_a_round_ticket_is_work_and_wins_over_a_waiting_branch_and_behind(tmp_pa
         f"{route.FEATURE} .scratch/f/issues/01-t.md",
         "formal-ticket",
     )
-    assert step.why.startswith('ticket .scratch/f/issues/01-t.md "T" carries what the formal model')
+    assert step.why == (
+        'ticket .scratch/f/issues/01-t.md "T" carries what the formal model\'s last round found,'
+        " and fixing it is the model's next step. Or carry on with"
+        f" {route.FEATURE} .scratch/f/issues/01-t.md: nothing is red for it"
+    )
 
 
 def test_a_round_waiting_names_the_owners_merge_and_a_kept_branch_never_waits(
@@ -221,8 +225,19 @@ def test_a_round_waiting_names_the_owners_merge_and_a_kept_branch_never_waits(
         step.command
         == "`git switch main && git merge --no-ff formal/upkeep-abc`, typed by the owner"
     )
-    assert step.why.startswith(
-        "branch `formal/upkeep-abc` holds a round of the formal model's upkeep"
+    assert step.why == (
+        "branch `formal/upkeep-abc` holds a round of the formal model's upkeep, and it changes"
+        " guard paths, so it waits for your merge. Or carry on with"
+        f" {route.SPEC}: nothing is red for it"
+    )
+
+
+def test_a_binding_with_no_sync_commit_says_it_was_never_checked(tmp_path: Path) -> None:
+    root, _ = adopted(tmp_path)
+    synced(root, "")
+    assert route.decide(root, None).why == (
+        "the formal model has never been checked against the code: the binding's `- Synced:`"
+        f" line names no commit. Or carry on with {route.SPEC}: nothing is red for it"
     )
 
 

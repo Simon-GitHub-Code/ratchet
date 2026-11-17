@@ -50,16 +50,24 @@ def read(binding: str) -> Formal | None:
     return Formal(globs(lines.get("Model", "")), mirrors, lines.get("Synced", "").strip(" `"))
 
 
-def behind(root: Path, default: str, formal: Formal) -> str | None:
-    """Why the model is behind the code on ``default``, or ``None`` when it is in sync."""
+@dataclass(frozen=True)
+class Behind:
+    """How the model is behind: a mirrored ``commit`` after ``synced``, or nothing to compare.
+
+    ``synced`` empty means never checked; ``commit`` empty means the clone lacks ``synced``.
+    """
+
+    synced: str
+    commit: str = ""
+
+
+def behind(root: Path, default: str, formal: Formal) -> Behind | None:
+    """How the model is behind the code on ``default``, or ``None`` when it is in sync."""
     synced = formal.synced
     if not synced:
-        return "the binding's `- Synced:` line names no commit"
+        return Behind("")
     if gatelib.git(root, "rev-parse", "--verify", "--quiet", f"{synced}^{{commit}}") is None:
-        return (
-            f"this clone does not hold the `- Synced:` commit {synced[:SHORT]}: fetch the full"
-            " history of the default branch"
-        )
+        return Behind(synced[:SHORT])
     hit = gatelib.git(
         root,
         "log",
@@ -71,12 +79,7 @@ def behind(root: Path, default: str, formal: Formal) -> str | None:
         "--",
         *(f":(glob){mirror}" for mirror in formal.mirrors),
     )
-    if not hit:
-        return None
-    return (
-        f"commit {hit[:SHORT]} on `{default}` changed code the model mirrors since the"
-        f" `- Synced:` commit {synced[:SHORT]}"
-    )
+    return Behind(synced[:SHORT], hit[:SHORT]) if hit else None
 
 
 def started(root: Path) -> bool:
