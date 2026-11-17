@@ -135,6 +135,7 @@ class Upkeep(StrEnum):
     WAITING = "waiting"
     WAITING_BEHIND = "waiting-behind"
     TICKET = "ticket"
+    UNSTATED = "unstated"
     FIXED = "fixed"
 
 
@@ -432,6 +433,7 @@ def defect_open(world: World) -> bool:
 BEHIND: Final = frozenset({Upkeep.BEHIND, Upkeep.FIXED})
 WAITING: Final = frozenset({Upkeep.WAITING, Upkeep.WAITING_BEHIND})
 SAFEGUARD_OWED: Final = Rule(Advice.SAFEGUARD, lambda w: w.owes and not defect_open(w))
+ROUND_TICKETS: Final = {Upkeep.TICKET: Advice.BUILD, Upkeep.UNSTATED: Advice.CONJECTURE}
 ROUND_TICKET: Final = Rule(Advice.FORMAL_TICKET, lambda w: w.upkeep is Upkeep.TICKET)
 ROUND_WAITING: Final = Rule(Advice.FORMAL_ROUND, lambda w: w.upkeep in WAITING)
 MODEL_BEHIND: Final = Rule(Advice.FORMAL_UPKEEP, lambda w: w.upkeep in BEHIND)
@@ -462,6 +464,7 @@ CHAIN: Final = (
     MODEL_BEHIND,
     Rule(Advice.EXPIRE, lambda w: w.left),
     Rule(Advice.GRILL, lambda w: not w.foundation),
+    Rule(Advice.CONJECTURE, lambda w: w.upkeep is Upkeep.UNSTATED),
     Rule(Advice.TRIAGE, lambda w: _no_ticket(w) and triage_waits(w)),
     Rule(Advice.CONJECTURE_SPEC, lambda w: _no_ticket(w) and _spec_unstated(w)),
     Rule(Advice.SPLIT, lambda w: _no_ticket(w) and w.spec is Spec.STATED),
@@ -500,8 +503,8 @@ def beneath(world: World, chain: Chain = CHAIN) -> str:
     """
     if Ticket.BUILT in world.tickets:
         return "building"
-    if world.upkeep is Upkeep.TICKET:
-        return Advice.BUILD
+    if world.upkeep in ROUND_TICKETS:
+        return ROUND_TICKETS[world.upkeep]
     clean = replace(world, head=Head.MAIN, tree=Tree.CLEAN, parked=False)
     recorded = replace(clean, architecture=Architecture.RECORDED)
     owed = replace(recorded, owes=False, reviews=False, fills=False)
@@ -929,6 +932,8 @@ def _owner_states_conjecture(world: World) -> Iterator[World]:
         yield from (replace(w, flag=flag) for w in redrafted(world, redraft))
     if calm(world) and world.flag is Flag.MISSING and STATED & set(world.tickets):
         yield replace(world, flag=flag)
+    if calm(world) and world.upkeep is Upkeep.UNSTATED:
+        yield replace(world, upkeep=Upkeep.TICKET)
 
 
 def redrafted(world: World, slots: Iterable[int]) -> Iterator[World]:
@@ -1256,6 +1261,7 @@ def _agent_runs_a_round(world: World) -> Iterator[World]:
         yield replace(world, upkeep=Upkeep.WAITING)
         if world.upkeep is Upkeep.BEHIND and at_rest_but_the_upkeep(world):
             yield replace(world, upkeep=Upkeep.TICKET)
+            yield replace(world, upkeep=Upkeep.UNSTATED)
 
 
 @action(ActionName.OWNER_MERGES_THE_ROUND, Advice.FORMAL_ROUND)
@@ -1404,7 +1410,7 @@ def defect_before_the_safeguard(label: str) -> str:
     return f'defect = "{Defect.OPEN}" => {label} # "{Advice.SAFEGUARD}"'
 
 
-AHEAD_OF_BEHIND: Final = frozenset({Upkeep.TICKET, Upkeep.WAITING_BEHIND})
+AHEAD_OF_BEHIND: Final = frozenset({Upkeep.TICKET, Upkeep.UNSTATED, Upkeep.WAITING_BEHIND})
 
 
 def round_before_behind(label: str) -> str:

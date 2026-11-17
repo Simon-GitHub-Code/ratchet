@@ -546,6 +546,17 @@ WITHOUT_THE_STEP: dict[str, tuple[model.Variant, str, frozenset[str], list[Actio
         frozenset({"AdviceCanBeFollowed", "AdviceReachesRest", "UpkeepNeverHidesTheWork"}),
         [*TO_MIRRORED_CODE, ActionName.AGENT_RUNS_A_ROUND],
     ),
+    "the conjecture of a round's ticket that states none": (
+        model.Variant(
+            chain=model.swapped(
+                model.ROUND_TICKET,
+                model.Rule(Advice.FORMAL_TICKET, lambda w: w.upkeep in model.ROUND_TICKETS),
+            )
+        ),
+        "AdviceCanBeFollowed",
+        frozenset({"AdviceReachesRest"}),
+        [*TO_MIRRORED_CODE, ActionName.AGENT_RUNS_A_ROUND],
+    ),
     "the work offered beside behind": (
         model.Variant(refused_behind=frozenset(model.RUNS)),
         "UpkeepNeverHidesTheWork",
@@ -606,8 +617,15 @@ def test_the_formal_rules_are_met_where_they_bite() -> None:
     }
     assert named == {
         (Upkeep.TICKET, Advice.FORMAL_TICKET),
+        (Upkeep.UNSTATED, Advice.CONJECTURE),
         (Upkeep.WAITING_BEHIND, Advice.FORMAL_ROUND),
     }
+    stated = {
+        (a.upkeep, b.upkeep)
+        for a, act, b in graph.edges
+        if act is ActionName.OWNER_STATES_CONJECTURE and a.upkeep is not b.upkeep
+    }
+    assert stated == {(Upkeep.UNSTATED, Upkeep.TICKET)}
     offered = {model.beneath(s) for s in graph.states if model.advice(s) in model.OFFERED}
     assert offered == {
         Advice.SPECIFY,
@@ -624,6 +642,7 @@ def test_the_formal_rules_are_met_where_they_bite() -> None:
     assert rounds == {
         (Upkeep.BEHIND, Upkeep.WAITING),
         (Upkeep.BEHIND, Upkeep.TICKET),
+        (Upkeep.BEHIND, Upkeep.UNSTATED),
         (Upkeep.FIXED, Upkeep.WAITING),
     }
 

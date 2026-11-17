@@ -5,6 +5,7 @@ export const state = (v) => {
   if (v.upkeep === "ticket") {
     return v.advice === "formal-ticket" ? "A round's ticket: the route names it" : "A round's ticket: unfinished work comes first";
   }
+  if (v.upkeep === "unstated") return "A round's ticket states no conjecture: the route names its conjecture";
   if (v.upkeep === "waiting") {
     return v.advice === "formal-round" ? "A round waits for your merge" : "A round waits: unfinished work comes first";
   }

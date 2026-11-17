@@ -623,6 +623,9 @@ def _owner_states_conjecture(repo: Repo, change: Change) -> None:
             redraft(repo.root / repo.ticket_path(slot), CRITERIA)
     if change.after.flag is not Flag.WAITS:
         answers_the_flag_on_the_spec(repo)
+    if change.before.upkeep is Upkeep.UNSTATED:
+        unstated = (repo.root / round_ticket_path(repo)).read_text(encoding="utf-8")
+        write(repo.root, round_ticket_path(repo), stated_round_ticket(repo, unstated))
     snapshot(repo.root, "docs(tracker): the owner's conjecture of a ticket")
 
 
@@ -1105,8 +1108,8 @@ ROUND_TICKET = (
 )
 
 
-def round_ticket(repo: Repo, kept: str) -> str:
-    text = f"{ROUND_TICKET.format(k=repo.rounds, kept=kept)}\n{CONJECTURE}"
+def stated_round_ticket(repo: Repo, unstated: str) -> str:
+    text = f"{unstated}\n{CONJECTURE}"
     stated = f"{text}\n{criteria_line(text, CRITERIA)}"
     return f"{stated}\n{FLAG_ANSWER}" if repo.asked else stated
 
@@ -1115,20 +1118,25 @@ def round_unit(repo: Repo) -> str:
     return f".scratch/formal-{repo.rounds}"
 
 
+def round_ticket_path(repo: Repo) -> str:
+    return f"{round_unit(repo)}/issues/01-r{repo.rounds}.md"
+
+
 @does(ActionName.AGENT_RUNS_A_ROUND)
 def _agent_runs_a_round(repo: Repo, change: Change) -> None:
     repo.rounds += 1
     tip = git(repo.root, "rev-parse", "main")
     checked = tip[: formal_model.SHORT]
-    if change.after.upkeep is Upkeep.TICKET:
+    if change.after.upkeep in {Upkeep.TICKET, Upkeep.UNSTATED}:
         kept = f"{formal_model.NAMESPACE}/kept-upkeep-{checked}"
         branch(repo.root, kept)
         write(repo.root, "formal/model.md", f"The model, updated at {checked}.\n")
         snapshot(repo.root, "chore(formal): the round's update, which the code breaks")
         git(repo.root, "switch", "-q", "main")
-        write(
-            repo.root, f"{round_unit(repo)}/issues/01-r{repo.rounds}.md", round_ticket(repo, kept)
-        )
+        text = ROUND_TICKET.format(k=repo.rounds, kept=kept)
+        if change.after.upkeep is Upkeep.TICKET:
+            text = stated_round_ticket(repo, text)
+        write(repo.root, round_ticket_path(repo), text)
         snapshot(repo.root, "docs(tracker): the bug the round found")
         return
     repo.waiting = f"{formal_model.UPKEEP}{checked}"
