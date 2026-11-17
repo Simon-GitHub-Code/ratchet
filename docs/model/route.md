@@ -14,7 +14,8 @@ The model covers one repository with:
 - one checkout: no other work tree holds the default branch;
 - one upgrade that ships ADR 0061 to a project the `Flag:` line is asked of and that is not deployed, from a plugin that already asks the architecture. A part of a split and a ticket on a forge's tracker are out of it, since the model has neither;
 - one kind of edit of the criteria a stated conjecture was drafted against: a ticket's `## Acceptance criteria` where it states its own conjecture, or the spec's `## User Stories` where its tickets inherit it, made on a clean default branch;
-- one steering unit at a time (ADR 0064): the local spec and its two tickets under `.scratch/<slug>/`, which the step that resolves its last ticket deletes, and one unit a plugin from before ADR 0064 left, which the upgrade that ships it finds at rest. The pipeline's feature spec under `docs/features/<slug>/` is out of it, since the model's build writes none.
+- one steering unit at a time (ADR 0064): the local spec and its two tickets under `.scratch/<slug>/`, which the step that resolves its last ticket deletes, and one unit a plugin from before ADR 0064 left, which the upgrade that ships it finds at rest. The pipeline's feature spec under `docs/features/<slug>/` is out of it, since the model's build writes none;
+- one formal model (ADR 0062), whose binding section the first change to the code it mirrors brings with it, and one kind its safeguard can find a defect in, state machines, whose row is `formal verification of state`.
 
 What it leaves out is listed [at the end](#left-out).
 
@@ -29,7 +30,7 @@ What it leaves out is listed [at the end](#left-out).
 | A records branch waits for the owner's merge: a local branch the default branch does not hold, whose change holds only records, that no run owns and no work tree has checked out | yes or no |
 | The glossary and the design brief | written, or not |
 | A spec not yet split | none; written; stating its conjecture |
-| Each of the two tickets | none; needs triage; agent-ready; agent-ready with a conjecture; agent-ready with a stale conjecture, one whose criteria changed after it was written; held by a blocked run's stash; parked by the drain for open questions, for guard edits, for an owed safeguard, or by a note older than the kinds of hold or than the base commit a guard hold needs; built on its branch; merged but open; resolved |
+| Each of the two tickets | none; needs triage; agent-ready; agent-ready with a conjecture; agent-ready with a stale conjecture, one whose criteria changed after it was written; held by a blocked run's stash; parked by the drain for open questions, for guard edits, for an owed safeguard, by a note older than the kinds of hold or than the base commit a guard hold needs, or, the defect ticket, for the row it owes itself; built on its branch; merged but open; resolved |
 | The tickets inherit the spec's conjecture | yes or no |
 | A safeguard is owed | yes or no |
 | An architecture review is owed | yes or no |
@@ -38,34 +39,40 @@ What it leaves out is listed [at the end](#left-out).
 | The `Flag:` line | not yet asked, as before the upgrade that ships ADR 0061, whose plugin asked it only once `deployed` was declared; missing from the spec in flight and its tickets, which state their conjecture; asked, the conjecture writing it on the spec |
 | The owner's `## Answers` lines | none; on the unit; carried to the brief by a records change not yet on the default branch; dropped, a unit deleted without them in the brief |
 | An expired unit is left in the tree | yes or no |
+| The formal model's upkeep | in sync, or no model; behind; a round's change waiting for the owner's merge, the model in sync beside it or behind again; a round's ticket open, the bug a round found, stating its conjecture or none; behind again once that ticket is fixed |
+| A defect ticket, filed by the safeguard where binding a formal row found the code breaks the model | none; open, its row owed; fixed, the kept model still to bind |
 
 A waiting records branch is known by what it holds, not by its name. A feature run owns a `feature/` branch, and the drain owns a branch its note names. `just merge --records` names its branch `records/<time>`, and an agent that commits tickets on a branch of its own names it as it likes. The tests leave it on a branch an agent named in about half the states where one waits, and on a `records/<time>` branch in the others.
 
-From an empty directory the model reaches 2802 states and 7692 steps. Nine of the states are at rest: adopted, nothing unfinished, nothing owed, and every ticket resolved or none written. In three the architecture is recorded, in three it was never asked, and in three it is recorded and the `Flag:` line is asked. At rest the route names the next spec.
+From an empty directory the model reaches 3040 states and 8128 steps. Nine of the states are at rest: adopted, nothing unfinished, nothing owed, and every ticket resolved or none written. In three the architecture is recorded, in three it was never asked, and in three it is recorded and the `Flag:` line is asked. At rest the route names the next spec.
 
 `/ratchet:adopt` writes the plugin pin in its step 11, since every tier runs the plugin-pin gate first, and proves the adoption in step 12. So it can stop in two places: before the pin, with the templates committed on its branch, and after it, before its proof, with its work uncommitted there. The pages name `/ratchet:adopt` to resume either. Resumed on its branch it merges, as before; resumed off it, it proves the adoption and changes nothing else. Where it stopped after the pin, the model takes only that resume and the step the real route names, so the run it shows is that of an owner who follows today's route. In 29 states the adoption stopped after its pin, and they are not at rest.
 
-A working branch the default branch already holds has no commit of its own to merge. A merge leaves it checked out when it is cut off before it switches, when it cannot switch, or when it is made from another checkout. A merge keeps the branch it merged, so it can be checked out again. A build that stops on the branch it cut, before it wrote anything, leaves one too: the branch is the default branch's tip. A commit on it makes it a working branch with work to merge again. In 336 states it is checked out clean, and in 9 with code uncommitted.
+A working branch the default branch already holds has no commit of its own to merge. A merge leaves it checked out when it is cut off before it switches, when it cannot switch, or when it is made from another checkout. A merge keeps the branch it merged, so it can be checked out again. A build that stops on the branch it cut, before it wrote anything, leaves one too: the branch is the default branch's tip. A commit on it makes it a working branch with work to merge again. In 342 states it is checked out clean, and in 9 with code uncommitted.
 
-The architecture takes three values because each opens other steps. `/ratchet:adopt` asks it and records it (ADR 0049), so it is recorded from the adoption on. An adoption by an older plugin asked nothing, and the route reads nothing of that: it says the same as where the architecture is recorded. They part at an upgrade, which owes the architecture where it was never asked and owes nothing more where it is recorded. While it is owed the route names `/ratchet:architecture`, and recording it is the only step that ends that. In 2004 states the architecture is recorded, in 564 it was never asked, and in 234 it is owed.
+The architecture takes three values because each opens other steps. `/ratchet:adopt` asks it and records it (ADR 0049), so it is recorded from the adoption on. An adoption by an older plugin asked nothing, and the route reads nothing of that: it says the same as where the architecture is recorded. They part at an upgrade, which owes the architecture where it was never asked and owes nothing more where it is recorded. While it is owed the route names `/ratchet:architecture`, and recording it is the only step that ends that. In 2242 states the architecture is recorded, in 564 it was never asked, and in 234 it is owed.
 
-The `Flag:` line takes three values (ADR 0061). Before the upgrade that ships the decision, the plugin asked the line only once `deployed` was declared, so in a project not yet deployed it waits, and nothing the route names turns on it. The upgrade moves no ticket. Where a record in flight states its conjecture and no line, the line is missing: the spec states its conjecture, a ticket inherits it, or a ticket states its own and is not yet built. A spec not yet split then reads as one with no conjecture, and the route names `/ratchet:conjecture` on the spec. A labelled ticket reads the same way. The route names `/ratchet:conjecture <ticket>`, and no feature run and no drain starts on it. The release of a hold, and the agreement of a ticket that inherits from the spec, lead there too. A built ticket goes on to its merge, since no preflight reads it again. The conjecture writes the answer and the line on the spec, which each ticket reads, so one conjecture lands the line for both tickets. Once it is on the spec, or every ticket that lacked it is closed, the line is asked: the conjecture writes it on every later spec. In 1824 states the line waits, in 368 it is missing, and in 610 it is asked.
+The `Flag:` line takes three values (ADR 0061). Before the upgrade that ships the decision, the plugin asked the line only once `deployed` was declared, so in a project not yet deployed it waits, and nothing the route names turns on it. The upgrade moves no ticket. Where a record in flight states its conjecture and no line, the line is missing: the spec states its conjecture, a ticket inherits it, or a ticket states its own and is not yet built. A spec not yet split then reads as one with no conjecture, and the route names `/ratchet:conjecture` on the spec. A labelled ticket reads the same way. The route names `/ratchet:conjecture <ticket>`, and no feature run and no drain starts on it. The release of a hold, and the agreement of a ticket that inherits from the spec, lead there too. A built ticket goes on to its merge, since no preflight reads it again. The conjecture writes the answer and the line on the spec, which each ticket reads, so one conjecture lands the line for both tickets. Once it is on the spec, or every ticket that lacked it is closed, the line is asked: the conjecture writes it on every later spec. In 1950 states the line waits, in 368 it is missing, and in 722 it is asked.
 
 ADR 0061 has the upgrade send each stated ticket back to agent-ready and stop the tickets inheriting until the spec states the line. The model keeps each ticket's state and reads the line beside it instead. A ticket sent back to agent-ready forgets whether it states its own conjecture, and that decides whether it is stated once the line lands on the spec. The route names the same step either way.
 
 The upgrade arrives only where the architecture is recorded. An upgrade from a plugin before ADR 0049 is the model's other upgrade, which arrives at rest and owes the architecture.
 
-A conjecture goes stale when the owner or an agent edits the criteria it was drafted against, after it was written. [The conjecture skill](../../skills/conjecture/SKILL.md) ends `## Conjecture` with a `- Criteria:` line, the criteria heading and a digest of that section, so one command tells whether they changed. A ticket that states its own conjecture is checked against its own `## Acceptance criteria`. A ticket that inherits the spec's is checked against the spec's `## User Stories`, so an edit of the stories makes both tickets stale at once, and a ticket agreed while the spec is stale is agreed stale. The edit moves nothing else. A stale ticket reads as one with no conjecture: the route names `/ratchet:conjecture <ticket>` where it would otherwise build it, and no feature run and no drain starts on it. The redraft, the same command, is the only step that clears it: it writes the `- Criteria:` line again on the body that holds the conjecture, for both tickets where they inherit it. A conjecture with no `- Criteria:` line is current, so a stated ticket is never stale until the edit. In 543 states a conjecture is stale: in 170 it is inherited, in 46 both tickets are stale, and in 101 the `Flag:` line is missing as well. The edit is 333 steps, 98 of them on the spec's stories. The route names the conjecture of the stale ticket in 40 states. In 5 more it names the conjecture of the other ticket first, and in 3 the build of the other ticket, whose conjecture is current. In the others something it names first comes before it: the checkout, a records branch, a fill, a review, a safeguard or the architecture, a merged ticket to resolve, a blocking ticket, or a hold.
+A conjecture goes stale when the owner or an agent edits the criteria it was drafted against, after it was written. [The conjecture skill](../../skills/conjecture/SKILL.md) ends `## Conjecture` with a `- Criteria:` line, the criteria heading and a digest of that section, so one command tells whether they changed. A ticket that states its own conjecture is checked against its own `## Acceptance criteria`. A ticket that inherits the spec's is checked against the spec's `## User Stories`, so an edit of the stories makes both tickets stale at once, and a ticket agreed while the spec is stale is agreed stale. The edit moves nothing else. A stale ticket reads as one with no conjecture: the route names `/ratchet:conjecture <ticket>` where it would otherwise build it, and no feature run and no drain starts on it. The redraft, the same command, is the only step that clears it: it writes the `- Criteria:` line again on the body that holds the conjecture, for both tickets where they inherit it. A conjecture with no `- Criteria:` line is current, so a stated ticket is never stale until the edit. In 546 states a conjecture is stale: in 170 it is inherited, in 46 both tickets are stale, and in 101 the `Flag:` line is missing as well. The edit is 336 steps, 98 of them on the spec's stories. The route names the conjecture of the stale ticket in 43 states. In 5 more it names the conjecture of the other ticket first, and in 3 the build of the other ticket, whose conjecture is current. In the others something it names first comes before it: the checkout, a records branch, a fill, a review, a safeguard or the architecture, a merged ticket to resolve, a blocking ticket, or a hold.
 
-A spec and its tickets are a steering unit ([ADR 0064](../adr/0064-a-document-has-a-kind-and-a-steering-document-leaves-with-its-feature.md)). The unit expires when its last ticket is resolved, and the step that resolves that ticket deletes it: the owner's mark of the merged ticket, or the owner finishing the ticket themself. Where the ticket it names is the unit's last open one, the route's `resolve` line puts `documents.py expire` in the same command as the mark, so the step is one paste. Its `blocked` line never does. The ticket it names to finish blocks an agent-ready ticket, which is open, so the finish leaves a ticket open that names it. In the model that ticket is of the same unit: in each of the 19 states where the route names `blocked`, the first ticket needs triage and the second is agent-ready. The real route reads another unit the same way, since a unit has not expired while an open ticket elsewhere names one of its files as its blocker (ADR 0064). The owner finishing the last open ticket is a step the route does not name: there it names the triage of that ticket, or something owed before it. `expire` deletes the unit and appends each of its `## Answers` lines, dated, to the brief's `## In the owner's words`. Every spec the world writes holds an answer, so that deletion always edits the brief. That edit is a records change (ADR 0064): the merge judge takes, in a records change, lines added to `## In the owner's words` that are each, its date set aside, an `## Answers` line of a file the same change deletes, and no other edit of the brief. So the mark of the last ticket leaves records uncommitted on the default branch, as any mark does, and the route names their landing. The owner who finishes the last ticket commits the deletion with it. In 41 steps the mark expires the unit, and in 60 the owner finishing a ticket does. No other step expires one: the drain's merge leaves its ticket open, as before. In 62 states the carried answers wait to land: uncommitted on the default branch in 21, on the branch of a landing run that stopped in 20, and on a records branch that waits for the owner in 21. Only the landing ends it, by an agent or by the owner's merge. The real route reads the deletion and the carried lines as records in each of them, as the pages do.
+A spec and its tickets are a steering unit ([ADR 0064](../adr/0064-a-document-has-a-kind-and-a-steering-document-leaves-with-its-feature.md)). The unit expires when its last ticket is resolved, and the step that resolves that ticket deletes it: the owner's mark of the merged ticket, or the owner finishing the ticket themself. Where the ticket it names is the unit's last open one, the route's `resolve` line puts `documents.py expire` in the same command as the mark, so the step is one paste. Its `blocked` line never does. The ticket it names to finish blocks an agent-ready ticket, which is open, so the finish leaves a ticket open that names it. In the model that ticket is of the same unit: in each of the 19 states where the route names `blocked`, the first ticket needs triage and the second is agent-ready. The real route reads another unit the same way, since a unit has not expired while an open ticket elsewhere names one of its files as its blocker (ADR 0064). The owner finishing the last open ticket is a step the route does not name: there it names the triage of that ticket, or something owed before it. `expire` deletes the unit and appends each of its `## Answers` lines, dated, to the brief's `## In the owner's words`. Every spec the world writes holds an answer, so that deletion always edits the brief. That edit is a records change (ADR 0064): the merge judge takes, in a records change, lines added to `## In the owner's words` that are each, its date set aside, an `## Answers` line of a file the same change deletes, and no other edit of the brief. So the mark of the last ticket leaves records uncommitted on the default branch, as any mark does, and the route names their landing. The owner who finishes the last ticket commits the deletion with it. In 52 steps the mark expires the unit, and in 60 the owner finishing a ticket does. No other step expires one: the drain's merge leaves its ticket open, as before. The defect ticket's unit holds no spec, so its mark carries only what the owner wrote on the ticket: the `Flag:` answer its conjecture writes there where the line is asked, or an answer to a hold. That is 3 of the 52 marks, 2 of which carry answers. In 82 states the carried answers wait to land: uncommitted on the default branch in 31, on the branch of a landing run that stopped in 20, and on a records branch that waits for the owner in 31. Only the landing ends it, by an agent or by the owner's merge. The real route reads the deletion and the carried lines as records in each of them, as the pages do.
 
 A unit left in the tree after it expired comes from a plugin from before ADR 0064, which deleted nothing. The upgrade that ships the decision finds one at rest, once a feature is finished, in 6 steps. The route then names its deletion, `expire`, after the owed architecture and before the glossary and any spec or ticket. The world's older unit holds no answer, so its deletion edits no brief: it leaves the unit's files deleted, records alone uncommitted, and the route names their landing. While a unit is left the model takes no new spec. In the 6 states where one is left the route names its deletion, and so does the real route.
 
-The deleter is what keeps the unit's rules, and the tests walk the model twice more without it. Where the step that makes the unit expired leaves it in the tree, the model reaches 2921 states and 7935 steps, and `NoStepLeavesTheUnitItExpires` breaks in 101 steps: the 41 marks and the 60 times the owner finishes a ticket. Its shortest run is 13 steps: `/ratchet:init`, the tracker, `/ratchet:adopt`, the hooks, the glossary and brief committed and merged, a spec written and landed, split and landed, and the owner finishing both tickets. Every other rule holds there, since the route names the deletion before any work and following it reaches rest. Where the step deletes the unit and drops its answers, the model reaches 2870 states and 7858 steps, and `TheOwnersAnswersOutliveTheUnit` breaks in 131 states, first after the same 13 steps. `ExpiredUnitBeforeTheWork` breaks without the deleter in no run, and the real route keeps it.
+The deleter is what keeps the unit's rules, and the tests walk the model twice more without it. Where the step that makes the unit expired leaves it in the tree, the model reaches 3184 states and 8412 steps, and `NoStepLeavesTheUnitItExpires` breaks in 112 steps: the 52 marks and the 60 times the owner finishes a ticket. Its shortest run is 13 steps: `/ratchet:init`, the tracker, `/ratchet:adopt`, the hooks, the glossary and brief committed and merged, a spec written and landed, split and landed, and the owner finishing both tickets. Every other rule holds there, since the route names the deletion before any work and following it reaches rest. Where the step deletes the unit and drops its answers, the model reaches 3159 states and 8407 steps, and `TheOwnersAnswersOutliveTheUnit` breaks in 203 states, first after the same 13 steps. `ExpiredUnitBeforeTheWork` breaks without the deleter in no run, and the real route keeps it.
+
+The formal model (ADR 0062) adds two parts. Its upkeep reads three signs: the binding's `- Synced:` line against the default branch, an unmerged `formal/upkeep-` branch, and an open ticket whose `Formal model:` line says `round`. It is behind when code the model mirrors landed after the commit that line names. The safeguard's round then either changes the model, on a `formal/upkeep-` branch that waits for the owner's merge since it touches guard paths, or finds a bug, which it files as a ticket and keeps its update on a `formal/kept-` branch. A ticket open comes before a round waiting, and a round waiting before behind. Behind is never red: where it is the first thing open the route names `/ratchet:safeguard` and offers beside it, in `then:`, the step it would otherwise name, as it does for the owed architecture. So do a round waiting and a round's ticket. A round may file its ticket with no conjecture. The route's step for a round's ticket is `/ratchet:feature`, which the preflight refuses without one, so there the route leaves the ticket to the ordinary chain: it names `/ratchet:conjecture <ticket>`, as for any agent-ready ticket that states none, and once it is stated, the fix. The model's upkeep arrives at rest, where the architecture is recorded, and under it the model takes only the step the route names, the work beside it, and more mirrored code. Mirrored code that lands while a round waits leaves it waiting and behind again, and its merge leads to behind. The fix of a round's ticket leads to behind, since the fix is mirrored code; the round after it changes the model and waits, and finds no second bug. In 46 states the model is behind, in 46 a round waits, in 46 a round waits and the model is behind again, in 4 a round's ticket is open, in 4 a round's ticket states no conjecture, and in 46 the model is behind after the fix. The route names the round's ticket in 4 states, its conjecture in 4, the round's merge in 44 and a round in 44. In the others unfinished work in the checkout comes first.
+
+Binding a formal row can find a defect: the code breaks the model the safeguard wrote. The safeguard then leaves the row owed as `later:`, keeps the model on a `formal/kept-` branch, and files a defect ticket whose `Formal model:` line names the row. The route's safeguard step passes over a row a defect ticket names, so where that row is the only one owed the route names the ticket's work instead: its conjecture, its build, the merge, the mark. The drain can park it for the row it owes itself, since its change adds an instance of the kind the row waits on; the real `triggers.py` prints that for the parked change, and the route names a change to the ticket to meet it. Once the ticket is closed the safeguard is named again, and binding the row from the kept model is green. The model's safeguard finds a defect only where the architecture is recorded and the row is the only thing owed, and finds one once. In 38 states a defect ticket is open, and in 8 it is fixed with its row still to bind. The route names the safeguard in each of those 8 where nothing comes before it.
 
 ## What the route names
 
-The route asks in this order, and the first case that applies is its answer. Each answer is a label. There are 29 labels; `safeguard` is named in two places.
+The route asks in this order, and the first case that applies is its answer. Each answer is a label. There are 32 labels; `safeguard`, `change-ticket` and `conjecture` are each named in two places.
 
 | Label | When | What it names |
 | --- | --- | --- |
@@ -81,10 +88,14 @@ The route asks in this order, and the first case that applies is its answer. Eac
 | `merge-records` | a records branch waits, whatever its name | the owner's merge of it |
 | `fill` | an upgrade left rows an agent writes from the repository | `/ratchet:fill` |
 | `review` | an architecture review is owed | `/ratchet:architecture` |
-| `safeguard` | a safeguard is owed | `/ratchet:safeguard` |
+| `safeguard` | a safeguard is owed, of a row no defect ticket names | `/ratchet:safeguard` |
 | `architecture` | an upgrade left the architecture owed | `/ratchet:architecture`, offering beside it the step it would otherwise name |
+| `formal-ticket` | a ticket a formal round filed is open, and states its conjecture | `/ratchet:feature <ticket>`, offering beside it the step it would otherwise name |
+| `formal-round` | a round's change waits on its `formal/upkeep-` branch | the owner's merge of it, offering beside it the step it would otherwise name |
+| `formal-upkeep` | the formal model is behind the code it mirrors | `/ratchet:safeguard`, offering beside it the step it would otherwise name |
 | `expire` | an expired unit is left in the tree | `documents.py expire` on the default branch, whose deletion lands as records |
 | `grill` | no glossary or design brief | `/mattpocock-skills:grill-with-docs` |
+| `conjecture` | a ticket a formal round filed states no conjecture | `/ratchet:conjecture <ticket>` |
 | `triage` | no agent-ready ticket, and an unblocked one needs triage | agree that ticket |
 | `conjecture-spec` | no agent-ready ticket, and a spec with no conjecture, or with no `Flag:` line where it is asked | `/ratchet:conjecture` on the spec |
 | `split` | no agent-ready ticket, and a spec with its conjecture, and its `Flag:` line where it is asked | `/mattpocock-skills:to-tickets` |
@@ -96,13 +107,14 @@ The route asks in this order, and the first case that applies is its answer. Eac
 | `land-guard` | ... parked for guard edits | land the guard edits on the default branch |
 | `safeguard` | ... parked for an owed safeguard | `/ratchet:safeguard` |
 | `change-ticket` | ... parked by a note older than the kinds of hold or the base commit | change the ticket |
+| `change-ticket` | ... the defect ticket, parked for the row it owes itself | change the ticket to meet what the drain parked it for |
 | `drain` | an unblocked ticket states a current conjecture, and so does another, each with its `Flag:` line where it is asked | `/ratchet:feature` with no ticket |
 | `build` | an unblocked ticket states a current conjecture, and its `Flag:` line where it is asked | `/ratchet:feature <ticket>` |
 | `conjecture` | any other case, a labelled ticket whose `Flag:` line is missing or whose conjecture is stale among them | `/ratchet:conjecture <ticket>` |
 
 ## Steps
 
-45 steps change the state, and one of them can also leave it as it was. The owner's and an agent's steps each follow one label. The others are things that happen: a command that stops part-way, a run that blocks, a park, an edit.
+49 steps change the state, and one of them can also leave it as it was. The owner's and an agent's steps each follow one label. The others are things that happen: a command that stops part-way, a run that blocks, a park, an edit.
 
 | Step | Follows |
 | --- | --- |
@@ -119,18 +131,18 @@ The route asks in this order, and the first case that applies is its answer. Eac
 | you split the spec into the two tickets | `split` |
 | you agree a ticket | `triage` |
 | you finish a ticket yourself; the finish of the last one, a step the route never names, deletes the unit with it | `blocked` |
-| you state the ticket's conjecture, or draft a stale one again, and the `Flag:` line on the spec where it is asked | `conjecture` |
+| you state the ticket's conjecture, a round's ticket's among them, or draft a stale one again, and the `Flag:` line on the spec where it is asked | `conjecture` |
 | you or an agent edit the criteria a stated conjecture was drafted against: the ticket's, or the spec's it inherits | |
 | an agent builds the ticket on its branch | `build` |
 | the build stops part-way: its code uncommitted on the branch, or on the branch it cut before it wrote anything | |
 | the build run blocks and leaves its stash | |
 | you answer the blocked run | `blocked-run` |
 | the drain builds and merges a ticket | `drain` |
-| the drain parks a ticket for open questions, for guard edits, or with an older note | |
+| the drain parks a ticket for open questions, for guard edits, or with an older note; the defect ticket, for the row it owes itself | |
 | the drain merges the first ticket, which brings a new kind of code, and parks the second for the safeguard | |
 | you answer on the ticket | `answer` |
 | you land the guard edits | `land-guard` |
-| you change the ticket | `change-ticket` |
+| you change the ticket, the defect ticket's among them | `change-ticket` |
 | you mark the merged ticket resolved; the last one deletes the unit and carries its answers to the brief, records uncommitted | `resolve` |
 | a new kind of code arrives, and a safeguard is owed | |
 | an upgrade leaves rows for an agent to fill, and the architecture owed where it was never asked | |
@@ -138,7 +150,7 @@ The route asks in this order, and the first case that applies is its answer. Eac
 | an agent fills the rows | `fill` |
 | a kind of code that reopens the architecture arrives, and a review is owed | |
 | an agent lands the architecture review | `review` |
-| an agent binds the safeguard | `safeguard` |
+| an agent binds the safeguard; or binding a formal row finds a defect, and the safeguard leaves the row owed and files the defect ticket | `safeguard` |
 | you run `/ratchet:architecture`: the record and the parts on a branch, whose merge is yours | `architecture` |
 | an upgrade finds a unit a plugin from before ADR 0064 left, at rest | |
 | an agent runs `documents.py expire`: the unit deleted, uncommitted | `expire` |
@@ -151,17 +163,21 @@ The route asks in this order, and the first case that applies is its answer. Eac
 | an agent lands the records: merged, or on a branch that waits for you | `land-records`, `finish-records` |
 | the landing run stops on its branch | |
 | you merge the records branch | `merge-records` |
+| code the formal model mirrors lands, at rest or while a round waits | |
+| an agent runs the formal model's round: its change waits for your merge, or it files a ticket for the bug it found, with its conjecture or with none | `formal-upkeep` |
+| you merge the round | `formal-round` |
+| an agent fixes the bug the round found, and the fix merges | `formal-ticket` |
 
 ## Rules
 
-A rule whose name starts `Real` is on what the real route names; the others are on what the pages say. Four are on the architecture an upgrade leaves owed, five on the `Flag:` line (ADR 0061), two on the adoption's proof, five on a stale conjecture, and the last four on the steering unit (ADR 0064). Each rule on the pages holds in Python and in TLC, on every state. Four rules on the real route break, each only in states of [a divergence](#divergences) that names it. The other four on the real route hold: it names what the pages name everywhere but where an adoption stopped after its pin or a conjecture is stale.
+A rule whose name starts `Real` is on what the real route names; the others are on what the pages say. Four are on the architecture an upgrade leaves owed, five on the `Flag:` line (ADR 0061), two on the adoption's proof, five on a stale conjecture, four on the steering unit (ADR 0064), and the last five on the formal model (ADR 0062). Each rule on the pages holds in Python and in TLC, on every state. Four rules on the real route break, each only in states of [a divergence](#divergences) that names it. The other six on the real route hold: it names what the pages name everywhere but where an adoption stopped after its pin or a conjecture is stale.
 
 | Rule | Says | On the model |
 | --- | --- | --- |
 | `AdviceCanBeFollowed` | The step the route names can be taken. | holds |
 | `AdviceReachesRest` | Following the route's advice reaches a state with nothing left to finish. | holds |
 | `FollowingAdviceLowersRank` | Each step the route names gets nearer to having nothing left to finish. | holds |
-| `RealAdviceCanBeFollowed` | The step the real route names can be taken. | breaks in 30 states |
+| `RealAdviceCanBeFollowed` | The step the real route names can be taken. | breaks in 33 states |
 | `FollowingRealAdviceLowersRank` | Each step the real route names gets nearer to having nothing left to finish. | breaks in 4 states |
 | `AdviceChangesTheState` | Taking the step the route names changes the state: its effect has not already happened. | holds |
 | `RealAdviceChangesTheState` | Taking the step the real route names changes the state: its effect has not already happened. | holds |
@@ -179,7 +195,7 @@ A rule whose name starts `Real` is on what the real route names; the others are 
 | `UnprovedAdoptionNeverBuilds` | A repository whose adoption stopped before its proof is never told to build. | holds |
 | `RealUnprovedAdoptionNeverBuilds` | The real route never tells a repository whose adoption stopped before its proof to build. | breaks in 2 states |
 | `StaleConjectureBeforeTheBuild` | Where a ticket's conjecture is stale, the route names no drain, and no build but of a ticket whose conjecture is current. | holds |
-| `RealStaleConjectureBeforeTheBuild` | Where a ticket's conjecture is stale, the real route names no drain, and no build but of a ticket whose conjecture is current. | breaks in 33 states |
+| `RealStaleConjectureBeforeTheBuild` | Where a ticket's conjecture is stale, the real route names no drain, and no build but of a ticket whose conjecture is current. | breaks in 36 states |
 | `NoRunStartsOnAStaleConjecture` | No feature run and no drain starts on a ticket whose conjecture is stale. | holds |
 | `OnlyTheRedraftClearsAStaleConjecture` | Only `/ratchet:conjecture` ends a stale conjecture, and it leaves the ticket stated. | holds |
 | `TheCriteriaEditMovesNothingElse` | An edit of the criteria makes a stated conjecture stale and changes nothing else. | holds |
@@ -187,12 +203,19 @@ A rule whose name starts `Real` is on what the real route names; the others are 
 | `ExpiredUnitBeforeTheWork` | Where an expired unit is left in the tree, the route names no spec, ticket, build or drain. | holds |
 | `RealExpiredUnitBeforeTheWork` | Where an expired unit is left in the tree, the real route names no spec, ticket, build or drain. | holds |
 | `TheOwnersAnswersOutliveTheUnit` | No unit is deleted with the owner's `## Answers` lines left out of the brief. | holds |
+| `DefectTicketBeforeTheSafeguard` | Where a defect ticket is open, the route never names the safeguard: it is never offered the row the ticket names. | holds |
+| `RealDefectTicketBeforeTheSafeguard` | Where a defect ticket is open, the real route never names the safeguard. | holds |
+| `RoundBeforeBehind` | Where a round's ticket is open, or a round waits for the owner's merge, the route never names the round that behind asks for. | holds |
+| `RealRoundBeforeBehind` | Where a round's ticket is open, or a round waits for the owner's merge, the real route never names the round that behind asks for. | holds |
+| `UpkeepNeverHidesTheWork` | Where the route names a round or its merge, the step it would otherwise name can be taken: behind is never red. | holds |
 
 The rank of a state is the longest run of advised steps from it to rest. The highest rank is 23.
 
-On a branch the default branch already holds, the merge can still be run, and it changes nothing: the merge judge refuses the branch, as behind a merge commit that holds it, or as a change with nothing in it to judge. The model has that step, from each of the 336 states. So a route that named the merge there would name a step that can be taken, and `RealAdviceCanBeFollowed` would hold. That is how the defect this model once missed got past it: with no forge, after the merge left the checkout on the branch, the route named the same merge again, for ever. `RealAdviceChangesTheState` breaks there. TLA+ cannot see a step that leaves every variable as it was, so the rule is a fact of each state: no way of taking the step named leads back to the same state.
+On a branch the default branch already holds, the merge can still be run, and it changes nothing: the merge judge refuses the branch, as behind a merge commit that holds it, or as a change with nothing in it to judge. The model has that step, from each of the 342 states. So a route that named the merge there would name a step that can be taken, and `RealAdviceCanBeFollowed` would hold. That is how the defect this model once missed got past it: with no forge, after the merge left the checkout on the branch, the route named the same merge again, for ever. `RealAdviceChangesTheState` breaks there. TLA+ cannot see a step that leaves every variable as it was, so the rule is a fact of each state: no way of taking the step named leads back to the same state.
 
-`ArchitectureNamedExactlyWhenOwed` names what comes before the architecture field by field, apart from the order the model asks in: the setup, the hooks, the checkout, a records branch, rows to fill, a review and a safeguard. So a change of that order breaks it. In 92 states the route names the owed architecture, and the step it would otherwise name is a build in 8 of them and the drain in 2.
+`ArchitectureNamedExactlyWhenOwed` names what comes before the architecture field by field, apart from the order the model asks in: the setup, the hooks, the checkout, a records branch, rows to fill, a review and a safeguard of a row no defect ticket names. So a change of that order breaks it. In 92 states the route names the owed architecture, and the step it would otherwise name is a build in 8 of them and the drain in 2.
+
+Each rule on the formal model is kept by one step of the model, and the tests walk the model once without each, from an empty directory, and pin the shortest run that breaks it and every rule that breaks with it. Without the safeguard's pass over the defect's row, the model reaches 3040 states and `DefectTicketBeforeTheSafeguard` breaks in 26 of them, as does `AdviceCanBeFollowed`, since binding the row is red while the ticket is open, and `AdviceReachesRest` in 54. The shortest run is 15 steps: `/ratchet:init`, the tracker, `/ratchet:adopt`, the hooks, the glossary and brief committed and merged, a spec written and landed, split and landed, the owner finishing both tickets, a new kind of code, and the safeguard finding a defect. Read as an owed safeguard, the drain's park of the defect ticket breaks the same three rules in 3 states, first after 17 steps: those 15, the ticket's conjecture, and the drain's park. With behind asked before a round's ticket, the model reaches 2994 states and `RoundBeforeBehind` breaks in 30, `AdviceCanBeFollowed` in 30, `AdviceReachesRest` in 62 and `UpkeepNeverHidesTheWork` in 4, first after 15 steps: the 13 to rest, mirrored code, and the round that files a ticket. With behind made red, so that no feature step is taken while it holds, the model reaches 3018 states and `UpkeepNeverHidesTheWork` alone breaks, in 8, first after 21 steps: the 13 to rest, mirrored code, a spec written and landed, its conjecture stated and landed, split and landed, and a ticket agreed, whose build behind then hides. With a round's ticket that states no conjecture named for its fix, the model reaches 3040 states and `AdviceCanBeFollowed` breaks in 4 of them, since the preflight refuses the run, and `AdviceReachesRest` in 20, first after 15 steps: the 13 to rest, mirrored code, and the round that files a ticket with no conjecture.
 
 The upgrade that asks the `Flag:` line arrives in 358 steps, and in 275 it leaves the line missing. 30 of the 358 arrive beside a built ticket's branch, and 12 of those leave the line missing; the built ticket goes on to its merge. In 23 of the 368 states where the line is missing the route names a conjecture: the ticket's in 22, and the spec's in 1. In the others something it names first comes before it: the checkout, a records branch, a fill, a review or a safeguard, a hold, triage, a merged ticket to resolve, or a blocking ticket. Three steps end a missing line: the ticket's conjecture, in 192 steps, the spec's conjecture, in 4, and the owner finishing the last ticket that lacked it, in 11.
 
@@ -203,13 +226,16 @@ The tests also check that:
 - each kind of hold is released by the one step the route names for it, and by no other: a ticket parked for guard edits stays parked when another ticket is agreed or the binding changes, and a note older than the kinds of hold, or a guard hold with no base commit, waits for a change to the ticket;
 - the edit makes a conjecture stale on a ticket and on the spec, both tickets at once there; from every state where the route names the conjecture and a conjecture is stale, the redraft clears one; and where the stale ticket is the one the route would otherwise build, the route names the conjecture while the real route names a build or the drain;
 - on a real repository, every ticket the world writes has `## Acceptance criteria` and every spec `## User Stories`, and each conjecture it writes ends with a `- Criteria:` line whose digest is what the conjecture skill's own command prints, read from the skill page; the edit adds a criterion, and the redraft writes the line again;
-- on a real repository, the real route names what the model says after every one of the 7692 steps, each taken from its source state as the shortest path from an empty directory builds it; where the drain parks a ticket for the safeguard, it parks on what the real `triggers.py` printed for the ticket's change; where it names `resolve` or `blocked`, its command names `documents.py expire` exactly where the step it names expires the unit;
+- on a real repository, the real route names what the model says after every one of the 8128 steps, each taken from its source state as the shortest path from an empty directory builds it; where the drain parks a ticket for the safeguard, it parks on what the real `triggers.py` printed for the ticket's change; where it names `resolve` or `blocked`, its command names `documents.py expire` exactly where the step it names expires the unit;
 - on a real repository whose binding runs `merge.py`, the merge the route names, of the adoption's branch before its proof or of a working branch, leaves the default branch checked out and keeps the branch, and the route names what the model says after it; checked out again, the branch is named for the switch, a second merge of it changes nothing, and the switch goes back;
 - on such a repository, a merge with a dirty tree, or with the default branch checked out elsewhere, leaves HEAD on the branch and its `next:` line names the switch first, and a merge run from the default branch leaves HEAD there; the route then names what the model says;
 - on a real repository, a build that stops on the branch it cut is left by the switch and built again, and following the route from there never comes back to it;
 - the walk leaves records waiting on branches of both kinds of name, and on a real repository, records waiting on a branch an agent named are named for their merge, those of a spec and those of the two tickets;
 - where the real route names the owed architecture, its `then:` names the step it names once the architecture is no longer owed, and its `why:` offers carrying on with it; that step is the one the model gives beneath, read as the real route reads the state;
 - where the real route names a safeguard, its `then:` names the step it names once the rows are bound, which is the owed architecture exactly where the model owes one, and its `why:` still offers carrying on with the work;
+- where the real route names a round's ticket, a round's merge or a round, its `then:` names the step it names once the formal model is in sync, which is the one the model gives beneath, and its `why:` offers carrying on with it, since nothing is red for it;
+- on a real repository, the first mirrored code brings the formal model and the binding's `## Formal verification` section, synced to the default branch's tip; a round that changes the model writes the `- Synced:` line on a `formal/upkeep-` branch the owner merges, and a round that finds a bug keeps its update on a `formal/kept-` branch and files a ticket with the `Formal model: round` line, with its conjecture or with none, which is named for its conjecture before its fix; the defect ticket names `formal verification of state`, the row the binding leaves `later:`, and the drain parks it on what the real `triggers.py` printed for its change;
+- each rule on the formal model breaks without the step that keeps it, with the rules and the shortest run above;
 - on a real repository, a commit on the default branch that a guard hold did not name leaves the ticket held, and landing the guard edits releases it;
 - on a real repository, the architecture check finds nothing after `/ratchet:adopt`, and the real `upgrade.py --apply` then owes no architecture;
 - on a real repository an older plugin adopted, the real upgrade owes exactly what the architecture check finds, the route names the fill, which the real upgrade settles once the rows are written, then `/ratchet:architecture`, then its branch's merge, and the check finds nothing after;
@@ -241,7 +267,7 @@ The real route reads a state through every divergence that holds there, as the s
 There are two.
 
 - `adoption-proved-by-its-pin`. [The adopt skill](../../skills/adopt/SKILL.md) says of its proof: "Done when `check` is green in a fresh worktree of the commit, `conformance` and `check-deep` exit 0, no rehearsal worktree is left, and the rehearsal passed, or its second round ended with the edits it still needs named." `scripts/route.py`, `adoption_step`, reads a binding with no plugin pin as an adoption that stopped, and one with a pin as adopted. The pin is written in step 11 and the proof run in step 12, so where the adoption stopped between them the real route reads it as finished. The shortest run: `/ratchet:init`, the tracker, the adoption stopped after its pin, the hooks, its work committed and merged as the route names, the glossary and brief committed and merged, a spec written and landed, its conjecture stated and landed, split and landed, the first ticket agreed. The model names `/ratchet:adopt`. The real route names the ticket's build. In the 29 states where the adoption stopped after its pin, the real route names what it names once the adoption is done. In 2 that is a build, so `RealUnprovedAdoptionNeverBuilds` breaks. In 4 it is the commit or the merge of the adoption's own branch, or the next spec, before the first feature and after it, each a step that leads further from rest, so `FollowingRealAdviceLowersRank` breaks. The sweep holds the real route to what it names today, and a strict expected failure replays the shortest run and expects `/ratchet:adopt`.
-- `stale-conjecture-read-as-stated`. [The records page](../../skills/method/records.md) says of a conjecture gone stale: "When the criteria change after it, `/ratchet:conjecture <ticket>` finds another digest, drafts the three sections again, keeps every line under `## Answers`, asks only the forks the change opened, and prints what changed in the conjecture." No script reads the `- Criteria:` line. `scripts/feature_preflight.py`, `conjecture_failure`, asks only that `## Conjecture` states something, and `scripts/route.py`, `unstated`, asks the preflight. So the real route reads a stale ticket as stated, and the rule the route page gives, a build for one ticket that states a conjecture and the drain for more, sends it to a build. The shortest run, 14 steps: `/ratchet:init`, the tracker, `/ratchet:adopt`, the hooks, the glossary and brief committed and merged, a spec written and landed, split and landed, the first ticket agreed and its own conjecture stated, then an edit of its acceptance criteria. The model names `/ratchet:conjecture` on the first ticket. The real route names its build. In 33 states a stale conjecture is where the real route names a build or the drain. In 30 of them the pages name the conjecture, and the step the real route names is a run no preflight should start, so `RealAdviceCanBeFollowed` breaks there. In all 33 `RealStaleConjectureBeforeTheBuild` breaks: 21 builds of the stale ticket and 12 drains, 3 of them where the pages name the build of the other ticket, whose conjecture is current, and the drain would build the stale one after it. The same reading reaches the step the route offers beside the owed architecture: in 11 of the 92 states that name it, the real route's `then:` offers a build or the drain where the pages offer the conjecture or the build of the other ticket. The sweep holds the real route to what it names today, and a strict expected failure replays the shortest run and expects the conjecture.
+- `stale-conjecture-read-as-stated`. [The records page](../../skills/method/records.md) says of a conjecture gone stale: "When the criteria change after it, `/ratchet:conjecture <ticket>` finds another digest, drafts the three sections again, keeps every line under `## Answers`, asks only the forks the change opened, and prints what changed in the conjecture." No script reads the `- Criteria:` line. `scripts/feature_preflight.py`, `conjecture_failure`, asks only that `## Conjecture` states something, and `scripts/route.py`, `unstated`, asks the preflight. So the real route reads a stale ticket as stated, and the rule the route page gives, a build for one ticket that states a conjecture and the drain for more, sends it to a build. The shortest run, 14 steps: `/ratchet:init`, the tracker, `/ratchet:adopt`, the hooks, the glossary and brief committed and merged, a spec written and landed, split and landed, the first ticket agreed and its own conjecture stated, then an edit of its acceptance criteria. The model names `/ratchet:conjecture` on the first ticket. The real route names its build. In 36 states a stale conjecture is where the real route names a build or the drain. In 33 of them the pages name the conjecture, and the step the real route names is a run no preflight should start, so `RealAdviceCanBeFollowed` breaks there. In all 36 `RealStaleConjectureBeforeTheBuild` breaks: 24 builds of the stale ticket and 12 drains, 3 of them where the pages name the build of the other ticket, whose conjecture is current, and the drain would build the stale one after it. The same reading reaches the step the route offers beside the owed architecture: in 11 of the 92 states that name it, the real route's `then:` offers a build or the drain where the pages offer the conjecture or the build of the other ticket. The sweep holds the real route to what it names today, and a strict expected failure replays the shortest run and expects the conjecture.
 
 Four more were deleted. `flag-line-waits-for-deployed` went when the preflight began to ask the `Flag:` line of every declared type the catalogue asks it of, whatever the life events. The model was written with another, a guard hold that outlived the edits it asked for. It went when the drain's note began to record the paths a run named as its cause, and the default branch's commit when it parked. Landing those paths releases the hold. `expired-unit-unread` went when `scripts/route.py` began to name `documents.py expire` where an expired unit is left, at the stage `expire`. `carried-answers-read-as-code` went when the merge judge began to take, in a records change, the lines `expire` carries to the brief beside the files it deletes, and to read a ticket as closed where the same change deletes its whole unit, so the mark of the last ticket and its deletion land as records.
 
@@ -262,13 +288,13 @@ Each item below flips the pins it names. Delete each pin in the same change.
 
 ## Charts
 
-The rules were checked on `Route.tla`, SHA-256 `3b72b73f0531343f8f0a8bb6502f60263231b4057d50af2225e2a87e015410c0`. Run with the 25 rules that hold, TLC reached 2802 states, and its last line counts 7693 states generated: the start and 7692 steps. Nothing deadlocks. Run once for each of the four rules that break, with one worker, TLC stops at the shortest run that breaks it. For `RealAdviceCanBeFollowed` and `RealStaleConjectureBeforeTheBuild` that is the shortest run of the stale conjecture's divergence, 14 steps from an empty directory, the last of them the edit of the criteria. For `RealUnprovedAdoptionNeverBuilds` it is the shortest run of the adoption's, 16 steps. `FollowingRealAdviceLowersRank` breaks after 5: `/ratchet:init`, the tracker, the adoption stopped after its pin, the hooks, and the commit the real route names on the adoption's branch, where the pages name `/ratchet:adopt`.
+The rules were checked on `Route.tla`, SHA-256 `dc4ff3203ed4b7487443224c1a070b5ddecb19590c8f8eb5c1a8752114966d9c`. Run with the 30 rules that hold, TLC reached 3040 states, and its last line counts 8129 states generated: the start and 8128 steps. Nothing deadlocks. Run once for each of the Four rules that break, with one worker, TLC stops at the shortest run that breaks it. For `RealAdviceCanBeFollowed` and `RealStaleConjectureBeforeTheBuild` that is the shortest run of the stale conjecture's divergence, 14 steps from an empty directory, the last of them the edit of the criteria. For `RealUnprovedAdoptionNeverBuilds` it is the shortest run of the adoption's, 16 steps. `FollowingRealAdviceLowersRank` breaks after 5: `/ratchet:init`, the tracker, the adoption stopped after its pin, the hooks, and the commit the real route names on the adoption's branch, where the pages name `/ratchet:adopt`.
 
 Each of the two walks without the deleter was exported the same way and run with its one rule and one worker. TLC stops at the 13 steps the tests pin, the owner finishing the second ticket last.
 
-That module is too large for the statechart tool to draw. The charts are drawn from `RouteShown.tla`, SHA-256 `72db09083386886b7ac13c83f7718658cc855a9d69ac4a6866dd554c0a86a9fd`: the same graph seen through what the charts show, which is what the route names, what it would name beneath, the checkout, what is owed, and whether the `Flag:` line is missing. Each chart's report says that TLC reached 482 states and 1704 steps there, and that nothing deadlocks.
+That module is too large for the statechart tool to draw. The charts are drawn from `RouteShown.tla`, SHA-256 `426846963305065c98618fcfb1fffbad6132131c5427f0dddd919383b1b2543d`: the same graph seen through what the charts show, which is what the route names, what it would name beneath, the checkout, what is owed, whether the `Flag:` line is missing, the formal model's upkeep as the route reads it, and whether a defect ticket is open. It shows the four kinds of park as one release beneath, and the build and the drain as one build, so that it stays within what the tool draws. Each chart's report says that TLC reached 486 states and 1608 steps there, and that nothing deadlocks.
 
-A stale conjecture has no chart of its own. Seen with whether a conjecture is stale, the summary has 663 states, past the 500 the statechart tool draws. The work chart shows it: the edit of the criteria leads from "Build the agent-ready tickets" to the conjecture, which the real route reads as the build.
+A stale conjecture has no chart of its own. Seen with whether a conjecture is stale, the summary has 647 states, past the 500 the statechart tool draws. The work chart shows it: the edit of the criteria leads from "Build the agent-ready tickets" to the conjecture, which the real route reads as the build.
 
 An expired unit needs no state of the summary of its own: where one is left the route names `expire`, which no other state names. The work chart shows the older unit's arrival and its deletion. The checkout's chart shows the mark of the last ticket leaving records uncommitted, and the records branch their landing can leave waiting, each read by the real route as the pages read it.
 
@@ -276,9 +302,9 @@ Each chart gives each of those states one label, and draws an arrow where a step
 
 ### The work
 
-What the route names once nothing in the checkout is unfinished, no records branch waits and no rows to fill, safeguard, review or architecture is owed. Four labels share one state: the drain's three kinds of park and the park for a safeguard are "Release the ticket the drain parked". `build` and `drain` are "Build the agent-ready tickets". A state where the real route names something else says so after "yet the route names". Two do. Where an adoption stopped after its pin, the pages name `/ratchet:adopt` and the real route names what follows it, whatever the checkout and the tickets hold; that is one state here, and the resume leaves it for wherever the work stands. Where a ticket's conjecture is stale, the pages name its conjecture, and the real route names the build. Where the pages name the build of one ticket and the real route the drain, which would build a stale ticket after it, the chart shows the build alone, since both are "Build the agent-ready tickets".
+What the route names once nothing in the checkout is unfinished, no records branch waits and no rows to fill, safeguard, review or architecture is owed. Where the route names the formal model's upkeep, this chart shows the work it offers beside it. Four labels share one state: the drain's three kinds of park and the park for a safeguard are "Release the ticket the drain parked", and so is the defect ticket's park for its own row. `build` and `drain` are "Build the agent-ready tickets". A state where the real route names something else says so after "yet the route names". Two do. Where an adoption stopped after its pin, the pages name `/ratchet:adopt` and the real route names what follows it, whatever the checkout and the tickets hold; that is one state here, and the resume leaves it for wherever the work stands. Where a ticket's conjecture is stale, the pages name its conjecture, and the real route names the build. Where the pages name the build of one ticket and the real route the drain, which would build a stale ticket after it, the chart shows the build alone, since both are "Build the agent-ready tickets".
 
-19 states and 50 arrows. It does not draw the 1175 steps that keep the label, which are most of the checkout's steps.
+19 states and 53 arrows. It does not draw the 1122 steps that keep the label, which are most of the checkout's steps. A round that files a ticket leads from the next spec to a build, or to the ticket's conjecture where it states none, and the safeguard that files a defect ticket leads to its conjecture.
 
 ```mermaid
 ---
@@ -296,9 +322,9 @@ stateDiagram-v2
   s8: Split the spec into tickets
   s9: Agree a ticket for agents
   s10: Delete the expired unit
-  s11: State the ticket's conjecture
-  s12: Finish the blocking ticket first
-  s13: Build the agent-ready tickets
+  s11: Build the agent-ready tickets
+  s12: State the ticket's conjecture
+  s13: Finish the blocking ticket first
   s14: State the ticket's conjecture, yet the route names: Build the agent-ready tickets
   s15: The ticket is built on its branch
   s16: Answer what the blocked run asked
@@ -320,40 +346,43 @@ stateDiagram-v2
   s4 --> s8: you run /ratchet:adopt
   s4 --> s9: you run /ratchet:adopt
   s10 --> s6: an agent deletes the expired unit
+  s6 --> s11: an agent runs the formal model's round
+  s6 --> s12: an agent runs the formal model's round or an agent binds the safeguard
+  s11 --> s6: an agent fixes the bug the round found
+  s12 --> s11: you state the ticket's conjecture
+  s4 --> s11: you run /ratchet:adopt
   s4 --> s13: you run /ratchet:adopt
-  s4 --> s12: you run /ratchet:adopt
   s7 --> s8: you state the spec's conjecture
   s7 --> s9: you split the spec
   s8 --> s9: you split the spec
   s8 --> s7: an upgrade asks the Flag: line before deployment
   s9 --> s6: you finish a ticket yourself
-  s9 --> s11: you agree a ticket
   s9 --> s12: you agree a ticket
   s9 --> s13: you agree a ticket
+  s9 --> s11: you agree a ticket
   s4 --> s15: you run /ratchet:adopt
-  s11 --> s13: you state the ticket's conjecture
-  s12 --> s11: you agree a ticket or you finish a ticket yourself
-  s12 --> s13: you finish a ticket yourself or you agree a ticket
-  s12 --> s14: you agree a ticket or you finish a ticket yourself
-  s13 --> s14: you edit the criteria
-  s13 --> s15: an agent builds the ticket or the build stops part-way
-  s13 --> s16: the build run blocks
-  s13 --> s17: the drain builds and merges a ticket or the drain merges one and parks the next for a safeguard
-  s13 --> s18: the drain parks a ticket
-  s13 --> s11: an upgrade asks the Flag: line before deployment or you edit the criteria
-  s14 --> s13: you state the ticket's conjecture
-  s14 --> s11: an upgrade asks the Flag: line before deployment
+  s13 --> s12: you agree a ticket or you finish a ticket yourself
+  s13 --> s11: you finish a ticket yourself or you agree a ticket
+  s13 --> s14: you agree a ticket or you finish a ticket yourself
+  s11 --> s14: you edit the criteria
+  s11 --> s15: an agent builds the ticket or the build stops part-way
+  s11 --> s16: the build run blocks
+  s11 --> s17: the drain builds and merges a ticket or the drain merges one and parks the next for a safeguard
+  s11 --> s18: the drain parks a ticket
+  s11 --> s12: an upgrade asks the Flag: line before deployment or you edit the criteria
+  s14 --> s11: you state the ticket's conjecture
+  s14 --> s12: an upgrade asks the Flag: line before deployment
   s4 --> s17: you run /ratchet:adopt
   s15 --> s17: the branch merges or the merge leaves the branch checked out
-  s16 --> s13: you answer the blocked run
+  s16 --> s11: you answer the blocked run
   s17 --> s6: you mark the ticket resolved
   s17 --> s9: you mark the ticket resolved
+  s17 --> s12: you mark the ticket resolved
   s17 --> s11: you mark the ticket resolved
-  s17 --> s13: you mark the ticket resolved
-  s18 --> s13: you answer on the ticket or you land the guard edits or you change the ticket or an agent binds the safeguard
-  s11 --> s14: you state the ticket's conjecture or an agent lands the records or you merge the records branch or an agent fills the rows or an agent lands the architecture review or an agent binds the safeguard or the branch merges or an agent switches to the default branch
-  s16 --> s11: you answer the blocked run
   s18 --> s11: you answer on the ticket or you land the guard edits or you change the ticket or an agent binds the safeguard
+  s12 --> s14: you state the ticket's conjecture or an agent lands the records or you merge the records branch or an agent fills the rows or an agent lands the architecture review or an agent binds the safeguard or the branch merges or an agent switches to the default branch
+  s18 --> s12: you change the ticket or you answer on the ticket or you land the guard edits or an agent binds the safeguard
+  s16 --> s12: you answer the blocked run
   s17 --> s18: you mark the ticket resolved
 ```
 
@@ -361,7 +390,7 @@ stateDiagram-v2
 
 What is unfinished in the checkout, which the route names before any work. A merged branch still checked out is left by a switch, never merged again. The merge of it, which changes nothing, keeps the label and is not drawn. The real route names the same as the pages in every state here, the records the mark of the last ticket leaves among them.
 
-8 states and 19 arrows. It does not draw the 942 steps that keep the label: the setup, the tickets, and what is owed.
+8 states and 19 arrows. It does not draw the 836 steps that keep the label: the setup, the tickets, and what is owed.
 
 ```mermaid
 ---
@@ -400,9 +429,9 @@ stateDiagram-v2
 
 ### Fills, safeguards and reviews
 
-Rows an upgrade left for an agent to fill are named first of these, and no feature or drain starts until they are written (ADR 0050); the model takes the feature run and the drain away while they are owed. A safeguard or an architecture review that is owed is named before the next feature, and after anything unfinished in the checkout. A review comes before a safeguard (ADR 0052): with both owed, landing the review leaves the safeguard named.
+Rows an upgrade left for an agent to fill are named first of these, and no feature or drain starts until they are written (ADR 0050); the model takes the feature run and the drain away while they are owed. A safeguard or an architecture review that is owed is named before the next feature, and after anything unfinished in the checkout. A review comes before a safeguard (ADR 0052): with both owed, landing the review leaves the safeguard named. A safeguard whose only row a defect ticket names waits on that ticket, whose work the route names until it is marked resolved.
 
-7 states and 13 arrows. It does not draw the 1323 steps that keep the label.
+8 states and 15 arrows. It does not draw the 1245 steps that keep the label.
 
 ```mermaid
 ---
@@ -416,6 +445,7 @@ stateDiagram-v2
   s4: Rows to fill: unfinished work comes first
   s5: Review owed: unfinished work comes first
   s6: Owed: unfinished work comes first
+  s7: Owed: the defect ticket comes first
   [*] --> s0
   s0 --> s1: an upgrade leaves rows for an agent to fill
   s0 --> s2: a kind that reopens the architecture arrives
@@ -426,9 +456,11 @@ stateDiagram-v2
   s2 --> s5: you write a spec or you state the spec's conjecture or you split the spec or an agent builds the ticket or the build stops part-way or you mark the ticket resolved
   s3 --> s0: an agent binds the safeguard
   s3 --> s6: you write a spec or you state the spec's conjecture or you split the spec or you mark the ticket resolved or an agent builds the ticket or the build stops part-way or you run /ratchet:architecture
+  s3 --> s7: an agent binds the safeguard
   s4 --> s1: an agent lands the records or the branch merges or you merge the records branch or an agent switches to the default branch
   s5 --> s2: an agent lands the records or you merge the records branch or the branch merges or an agent switches to the default branch
   s6 --> s3: an agent lands the records or you merge the records branch or the branch merges or an agent switches to the default branch
+  s7 --> s6: you mark the ticket resolved
   s2 --> s3: an agent lands the architecture review
 ```
 
@@ -436,7 +468,7 @@ stateDiagram-v2
 
 `/ratchet:adopt` records the architecture, and an adoption by an older plugin never asked it. An upgrade owes it where it was never asked (ADR 0049). The route names it after the rows to fill, a review and a safeguard, and offers beside it the step it would otherwise name, so it never hides a build or the drain. `/ratchet:architecture` leaves the record on a branch whose merge is the owner's: this chart draws that as recorded, and the checkout's chart draws the merge.
 
-7 states and 15 arrows. It does not draw the 1591 steps that keep the label.
+7 states and 15 arrows. It does not draw the 1504 steps that keep the label.
 
 ```mermaid
 ---
@@ -472,7 +504,7 @@ stateDiagram-v2
 
 The upgrade that ships ADR 0061 leaves the line missing where a record in flight states its conjecture. The route then names a conjecture once nothing it names first is open: the spec's, where the spec is not yet split, and the ticket's otherwise. That conjecture lands the line on the spec for both tickets. A held ticket is released first, and then needs its conjecture. A ticket the owner finishes themself closes without it. The real route names the same in every state here.
 
-5 states and 13 arrows. It does not draw the 1586 steps that keep the label.
+5 states and 13 arrows. It does not draw the 1505 steps that keep the label.
 
 ```mermaid
 ---
@@ -495,9 +527,45 @@ stateDiagram-v2
   s0 --> s4: an upgrade asks the Flag: line before deployment
   s3 --> s0: you state the ticket's conjecture
   s4 --> s0: you state the ticket's conjecture
-  s4 --> s3: you answer the blocked run or you answer on the ticket or you land the guard edits or you change the ticket
+  s4 --> s3: you change the ticket or you answer the blocked run or you answer on the ticket or you land the guard edits
   s2 --> s1: an agent fills the rows or an agent lands the architecture review or an agent binds the safeguard
   s2 --> s4: an agent lands the architecture review or an agent binds the safeguard
+```
+
+### The formal model
+
+Mirrored code that lands puts the model behind, and the route then offers a round beside the work, never instead of it. A round either waits for the owner's merge, which leads back to in sync, or behind where more mirrored code landed meanwhile, or files a ticket for the bug it found, whose fix is mirrored code and leads to behind. A ticket filed with no conjecture is named for its conjecture first. Unfinished work in the checkout comes first of each. Binding a formal row that finds a defect leads to a defect ticket, which the safeguard's row waits on until it is marked resolved. The real route names the same as the pages in every state here.
+
+8 states and 14 arrows. It does not draw the 1550 steps that keep the label.
+
+```mermaid
+---
+title: "The formal model: behind is offered beside the work, a round and its ticket come first"
+---
+stateDiagram-v2
+  s0: In sync, or no model
+  s1: Behind: the route offers a round beside the work
+  s2: Behind: unfinished work comes first
+  s3: A round waits for your merge
+  s4: A round's ticket: the route names it
+  s5: A round's ticket states no conjecture: the route names its conjecture
+  s6: A defect ticket: the safeguard's row waits on it
+  s7: A round waits: unfinished work comes first
+  [*] --> s0
+  s0 --> s1: code the formal model mirrors lands
+  s1 --> s2: you write a spec or you state the spec's conjecture or you split the spec or an agent builds the ticket or you mark the ticket resolved
+  s1 --> s3: an agent runs the formal model's round
+  s1 --> s4: an agent runs the formal model's round
+  s1 --> s5: an agent runs the formal model's round
+  s0 --> s6: an agent binds the safeguard
+  s2 --> s1: an agent lands the records or you merge the records branch or the branch merges
+  s3 --> s0: you merge the round
+  s3 --> s1: you merge the round
+  s3 --> s7: you write a spec or you state the spec's conjecture or you split the spec or an agent builds the ticket or you mark the ticket resolved
+  s4 --> s1: an agent fixes the bug the round found
+  s5 --> s4: you state the ticket's conjecture
+  s7 --> s3: an agent lands the records or you merge the records branch or the branch merges
+  s6 --> s0: you mark the ticket resolved
 ```
 
 ## Left out
@@ -533,3 +601,5 @@ stateDiagram-v2
 - A change that renames a file of a unit or deletes part of one, which the judge reads as deleting a record, and one that moves a whole unit, which it reads as the unit's deletion beside new tickets. The model's only deletion is of the whole unit, by `expire` or with the step that resolves its last ticket.
 - A unit with no answer that its own feature expires, and an older unit with answers. Every spec the world writes holds one, and the older unit holds none.
 - The change description as a marked commit (ADR 0064). It changes the words of the merge step, and no state.
+- The formal model's upkeep where the architecture is not recorded, or that arrives anywhere but at rest; more than one round's ticket or kept branch at once; a round's change closed unmerged; a round's ticket the drain parks or the owner finishes; and a second bug found by the round after a fix.
+- A defect in more than one kind, a defect found where something else is owed too, the safeguard finding a defect twice, an upgrade that asks the `Flag:` line while a defect ticket is open, and a fix that binds the row in its own change. An upgrade that adds a formal row whose kind has fired, which the upgrade writes `later:` so that it is owed at once (`dropped_row`), is out of it too: the model's upgrades come before any formal row's kind.

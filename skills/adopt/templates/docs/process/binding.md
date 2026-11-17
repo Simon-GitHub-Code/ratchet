@@ -157,6 +157,9 @@ Every question also has a trigger in the same file (ADR 0028): `always`, `code:<
 | no flag past its removal date | `ratchet` plugin `scripts/flags.py --expired` | 2 | `flags.toml` | `just flags-expired` |
 | accessibility | | 2 | | `just a11y` |
 | formal verification | | 2 | the project-local verification skill | `just formal` |
+| formal verification of concurrency | | 2 | the project-local verification skill | `just formal` |
+| formal verification of untrusted input | | 2 | the project-local verification skill | `just formal` |
+| formal verification of state | | 2 | the project-local verification skill | `just formal` |
 | every gate bites | `ratchet` plugin `scripts/bite.py` and `scripts/project_bite.py` | 2 | `quality/bites.toml` | `just bite-all` |
 | backup restores | | weekly | | `just restore-drill` |
 | production answers | | weekly | | `just prod-probe` |
@@ -246,6 +249,14 @@ One row per kind of file. `Files` are globs over tracked files, each in backtick
 | Files | Comments |
 | --- | --- |
 | <`globs` of one kind of file> | <`listed`, or `none: <reason>`> |
+
+## Formal verification
+
+The formal model of this project's concurrent code, parsers or state machines, and the code it describes (ADR 0062 in the `ratchet` plugin). `/ratchet:safeguard` writes these lines when it binds the first model, and each round of its upkeep moves `- Synced:`. Until a `formal verification` row is bound they keep the placeholders. The route reads the model as behind when a commit on the default branch that `- Synced:` cannot reach touches a `- Mirrors:` path. Every `- Model:` path belongs in the `formal` group of `guards/manifest.toml`, so a change to the model is the owner's merge.
+
+- Model: <globs of the models, their harness and the project-local skill, each in backticks>
+- Mirrors: <globs of the code the models describe, each in backticks>
+- Synced: <the default-branch commit the last round checked the model against>
 
 ## Documents
 

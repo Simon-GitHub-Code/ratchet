@@ -96,6 +96,7 @@ class Ticket(StrEnum):
     GUARDED = "guarded"
     OWED = "owed"
     PARKED = "parked"
+    OWES_ITS_ROW = "owes-its-row"
     BUILT = "built"
     MERGED = "merged"
     RESOLVED = "resolved"
@@ -128,6 +129,22 @@ class Flag(StrEnum):
     ASKED = "asked"
 
 
+class Upkeep(StrEnum):
+    CLEAR = "clear"
+    BEHIND = "behind"
+    WAITING = "waiting"
+    WAITING_BEHIND = "waiting-behind"
+    TICKET = "ticket"
+    UNSTATED = "unstated"
+    FIXED = "fixed"
+
+
+class Defect(StrEnum):
+    NONE = "none"
+    OPEN = "open"
+    KEPT = "kept"
+
+
 class Answers(StrEnum):
     NONE = "none"
     ON_THE_UNIT = "on-the-unit"
@@ -152,6 +169,9 @@ class Advice(StrEnum):
     REVIEW = "review"
     SAFEGUARD = "safeguard"
     ARCHITECTURE = "architecture"
+    FORMAL_TICKET = "formal-ticket"
+    FORMAL_ROUND = "formal-round"
+    FORMAL_UPKEEP = "formal-upkeep"
     EXPIRE = "expire"
     GRILL = "grill"
     TRIAGE = "triage"
@@ -217,11 +237,17 @@ class ActionName(StrEnum):
     AGENT_LANDS_RECORDS = "AgentLandsRecords"
     RECORDS_RUN_STOPS = "RecordsRunStops"
     OWNER_MERGES_RECORDS = "OwnerMergesRecords"
+    MIRRORED_CODE_LANDS = "MirroredCodeLands"
+    AGENT_RUNS_A_ROUND = "AgentRunsARound"
+    OWNER_MERGES_THE_ROUND = "OwnerMergesTheRound"
+    AGENT_FIXES_THE_ROUND_TICKET = "AgentFixesTheRoundTicket"
 
 
 Slots = tuple[Ticket, Ticket]
 BLOCKED_BY: Final = {1: 0}
-HOLDS: Final = frozenset({Ticket.HELD, Ticket.ASKED, Ticket.GUARDED, Ticket.OWED, Ticket.PARKED})
+HOLDS: Final = frozenset(
+    {Ticket.HELD, Ticket.ASKED, Ticket.GUARDED, Ticket.OWED, Ticket.PARKED, Ticket.OWES_ITS_ROW}
+)
 STATED: Final = frozenset({Ticket.STATED})
 LABELLED: Final = (
     HOLDS | STATED | frozenset({Ticket.READY, Ticket.STALE, Ticket.BUILT, Ticket.MERGED})
@@ -260,6 +286,8 @@ class World:
     flag: Flag = Flag.WAITS
     answers: Answers = Answers.NONE
     left: bool = False
+    upkeep: Upkeep = Upkeep.CLEAR
+    defect: Defect = Defect.NONE
 
 
 def adopted(world: World) -> bool:
@@ -297,6 +325,8 @@ def rest(world: World) -> bool:
         and world.architecture is not Architecture.OWED
         and all(ticket in CLOSED for ticket in world.tickets)
         and not world.left
+        and world.upkeep is Upkeep.CLEAR
+        and world.defect is Defect.NONE
     )
 
 
@@ -396,10 +426,24 @@ def _spec_unstated(world: World) -> bool:
     return world.spec is Spec.BARE or (world.spec is Spec.STATED and world.flag is Flag.MISSING)
 
 
+def defect_open(world: World) -> bool:
+    return world.defect is Defect.OPEN
+
+
+BEHIND: Final = frozenset({Upkeep.BEHIND, Upkeep.FIXED})
+WAITING: Final = frozenset({Upkeep.WAITING, Upkeep.WAITING_BEHIND})
+SAFEGUARD_OWED: Final = Rule(Advice.SAFEGUARD, lambda w: w.owes and not defect_open(w))
+ROUND_TICKETS: Final = {Upkeep.TICKET: Advice.BUILD, Upkeep.UNSTATED: Advice.CONJECTURE}
+ROUND_TICKET: Final = Rule(Advice.FORMAL_TICKET, lambda w: w.upkeep is Upkeep.TICKET)
+ROUND_WAITING: Final = Rule(Advice.FORMAL_ROUND, lambda w: w.upkeep in WAITING)
+MODEL_BEHIND: Final = Rule(Advice.FORMAL_UPKEEP, lambda w: w.upkeep in BEHIND)
+MEET: Final = Rule(Advice.CHANGE_TICKET, lambda w: held_for(w, Ticket.OWES_ITS_ROW))
+
+
 # The order is the order ``route.decide`` asks: setup, an unfinished change, the records, the rows
 # an upgrade left for an agent to fill, the architecture review, the safeguard, the architecture an
-# upgrade left owed, then the glossary and the tickets. The last rule holds for any world, so the
-# chain is total.
+# upgrade left owed, the formal model's upkeep, then the glossary and the tickets. The last rule
+# holds for any world, so the chain is total.
 CHAIN: Final = (
     Rule(Advice.INIT, lambda w: w.setup in {Setup.BARE, Setup.STARTED}),
     Rule(Advice.TRACKER, lambda w: w.setup is Setup.NAMED),
@@ -413,10 +457,14 @@ CHAIN: Final = (
     Rule(Advice.MERGE_RECORDS, lambda w: w.parked),
     Rule(Advice.FILL, lambda w: w.fills),
     Rule(Advice.REVIEW, lambda w: w.reviews),
-    Rule(Advice.SAFEGUARD, lambda w: w.owes),
+    SAFEGUARD_OWED,
     Rule(Advice.ARCHITECTURE, lambda w: w.architecture is Architecture.OWED),
+    ROUND_TICKET,
+    ROUND_WAITING,
+    MODEL_BEHIND,
     Rule(Advice.EXPIRE, lambda w: w.left),
     Rule(Advice.GRILL, lambda w: not w.foundation),
+    Rule(Advice.CONJECTURE, lambda w: w.upkeep is Upkeep.UNSTATED),
     Rule(Advice.TRIAGE, lambda w: _no_ticket(w) and triage_waits(w)),
     Rule(Advice.CONJECTURE_SPEC, lambda w: _no_ticket(w) and _spec_unstated(w)),
     Rule(Advice.SPLIT, lambda w: _no_ticket(w) and w.spec is Spec.STATED),
@@ -427,6 +475,7 @@ CHAIN: Final = (
     Rule(Advice.ANSWER, lambda w: held_for(w, Ticket.ASKED)),
     Rule(Advice.LAND_GUARD, lambda w: held_for(w, Ticket.GUARDED)),
     Rule(Advice.SAFEGUARD, lambda w: held_for(w, Ticket.OWED)),
+    MEET,
     Rule(Advice.CHANGE_TICKET, lambda w: held_for(w, Ticket.PARKED)),
     Rule(Advice.DRAIN, lambda w: queue_builds(w) and len(stated(w)) > 1),
     Rule(Advice.BUILD, queue_builds),
@@ -434,21 +483,32 @@ CHAIN: Final = (
 )
 
 
-def advice(world: World) -> Advice:
+Chain = tuple[Rule, ...]
+
+
+def advice(world: World, chain: Chain = CHAIN) -> Advice:
     """What the method's pages say the route names in ``world``: the first rule that holds."""
-    return next(rule.advice for rule in CHAIN if rule.holds(world))
+    return next(rule.advice for rule in chain if rule.holds(world))
 
 
-def beneath(world: World) -> str:
+def swapped(rule: Rule, *by: Rule) -> Chain:
+    index = CHAIN.index(rule)
+    return (*CHAIN[:index], *by, *CHAIN[index + 1 :])
+
+
+def beneath(world: World, chain: Chain = CHAIN) -> str:
     """The advice once nothing is unfinished in the checkout and nothing is owed.
 
     A ticket built on its branch is ``building``: its merge is what the checkout shows.
     """
     if Ticket.BUILT in world.tickets:
         return "building"
+    if world.upkeep in ROUND_TICKETS:
+        return ROUND_TICKETS[world.upkeep]
     clean = replace(world, head=Head.MAIN, tree=Tree.CLEAN, parked=False)
     recorded = replace(clean, architecture=Architecture.RECORDED)
-    return advice(replace(recorded, owes=False, reviews=False, fills=False))
+    owed = replace(recorded, owes=False, reviews=False, fills=False)
+    return advice(replace(owed, upkeep=Upkeep.CLEAR), chain)
 
 
 @dataclass(frozen=True)
@@ -538,9 +598,9 @@ def divergences(world: World) -> tuple[Divergence, ...]:
     return tuple(entry for entry in DIVERGENCES if entry.holds(world))
 
 
-def real_advice(world: World) -> Advice:
+def real_advice(world: World, chain: Chain = CHAIN) -> Advice:
     """What the real route names in ``world``: the specification, with the divergences applied."""
-    return advice(as_the_route_reads(world))
+    return advice(as_the_route_reads(world), chain)
 
 
 Successors = Callable[[World], Iterator[World]]
@@ -565,6 +625,19 @@ def drops_the_answers(before: World, after: World) -> World:
 
 
 @dataclass(frozen=True)
+class Variant:
+    deleter: Deleter = deletes
+    chain: Chain = CHAIN
+    refused_behind: frozenset[ActionName] = frozenset()
+
+    def advice(self, world: World) -> Advice:
+        return advice(world, self.chain)
+
+
+PAGES: Final = Variant()
+
+
+@dataclass(frozen=True)
 class Action:
     """A way the world changes: its name, the advice it follows if any, and its outcomes."""
 
@@ -572,14 +645,40 @@ class Action:
     follows: tuple[Advice, ...]
     outcomes: Successors
 
-    def successors(self, world: World, deleter: Deleter = deletes) -> Iterator[World]:
-        if world.setup is Setup.PINNED and self.name not in following_today(world):
+    def successors(self, world: World, variant: Variant = PAGES) -> Iterator[World]:
+        allowed = allowed_steps(world, variant.chain)
+        if allowed is not None and self.name not in allowed:
             return iter(())
-        return (lined(deleter(world, after)) for after in self.outcomes(world))
+        if self.name in variant.refused_behind and world.upkeep in BEHIND:
+            return iter(())
+        return (
+            lined(kept(variant.deleter(world, answered(self.name, world, after))))
+            for after in self.outcomes(world)
+        )
 
 
 ACTIONS: Final[dict[ActionName, Action]] = {}
 ADVISED: Final[dict[Advice, ActionName]] = {}
+
+
+ANSWERING: Final = frozenset(
+    {ActionName.OWNER_ANSWERS_ON_THE_TICKET, ActionName.OWNER_ANSWERS_BLOCKED_RUN}
+)
+
+
+def answered(name: ActionName, world: World, after: World) -> World:
+    if not defect_open(world) or after.answers is not Answers.NONE:
+        return after
+    flagged = name is ActionName.OWNER_STATES_CONJECTURE and after.flag is Flag.ASKED
+    if name in ANSWERING or flagged:
+        return replace(after, answers=Answers.ON_THE_UNIT)
+    return after
+
+
+def kept(world: World) -> World:
+    if world.defect is Defect.OPEN and world.tickets[0] in CLOSED:
+        return replace(world, defect=Defect.KEPT)
+    return world
 
 
 def lined(world: World) -> World:
@@ -589,13 +688,34 @@ def lined(world: World) -> World:
     return world
 
 
-def following_today(world: World) -> frozenset[ActionName]:
+def following_today(world: World, chain: Chain = CHAIN) -> frozenset[ActionName]:
     """The steps taken where an adoption stopped after its pin: its resume, and the real advice.
 
     Why no other: the model shows where an owner who follows today's route is led from there,
     and an arrival of its own beside that run would only grow the graph.
     """
-    return frozenset({ActionName.OWNER_ADOPTS, ADVISED[real_advice(world)]})
+    return frozenset({ActionName.OWNER_ADOPTS, ADVISED[real_advice(world, chain)]})
+
+
+OFFERED: Final = frozenset({Advice.FORMAL_ROUND, Advice.FORMAL_UPKEEP})
+LABELS: Final = frozenset(Advice)
+
+
+def beside_the_upkeep(world: World, chain: Chain) -> frozenset[ActionName]:
+    named = advice(world, chain)
+    under = beneath(world, chain)
+    offered = {ADVISED[Advice(under)]} if named in OFFERED and under in LABELS else set()
+    return frozenset({ADVISED[named], ActionName.MIRRORED_CODE_LANDS, *offered})
+
+
+def allowed_steps(world: World, chain: Chain) -> frozenset[ActionName] | None:
+    if world.setup is Setup.PINNED:
+        return following_today(world, chain)
+    if world.defect is Defect.KEPT:
+        return frozenset({ADVISED[advice(world, chain)]})
+    if world.upkeep is not Upkeep.CLEAR:
+        return beside_the_upkeep(world, chain)
+    return None
 
 
 def action(name: ActionName, *follows: Advice) -> Callable[[Successors], Successors]:
@@ -812,6 +932,8 @@ def _owner_states_conjecture(world: World) -> Iterator[World]:
         yield from (replace(w, flag=flag) for w in redrafted(world, redraft))
     if calm(world) and world.flag is Flag.MISSING and STATED & set(world.tickets):
         yield replace(world, flag=flag)
+    if calm(world) and world.upkeep is Upkeep.UNSTATED:
+        yield replace(world, upkeep=Upkeep.TICKET)
 
 
 def redrafted(world: World, slots: Iterable[int]) -> Iterator[World]:
@@ -879,6 +1001,10 @@ per_ticket(
 def _drain_parks_ticket(world: World) -> Iterator[World]:
     for kind in (Ticket.ASKED, Ticket.GUARDED, Ticket.PARKED):
         yield from moves(world, Move(one(Ticket.STATED), kind, needs_free=True))
+    if defect_open(world):
+        for parked in moves(world, Move(one(Ticket.STATED), Ticket.OWES_ITS_ROW, needs_free=True)):
+            if parked.tickets[0] is Ticket.OWES_ITS_ROW:
+                yield parked
 
 
 @action(ActionName.DRAIN_PARKS_FOR_A_SAFEGUARD)
@@ -906,7 +1032,7 @@ per_ticket(
 per_ticket(
     ActionName.OWNER_CHANGES_TICKET,
     (Advice.CHANGE_TICKET,),
-    Move(one(Ticket.PARKED), Ticket.STATED),
+    Move(frozenset({Ticket.PARKED, Ticket.OWES_ITS_ROW}), Ticket.STATED),
 )
 per_ticket(
     ActionName.OWNER_RESOLVES_TICKET,
@@ -941,6 +1067,7 @@ def _upgrade_asks_the_flag_line(world: World) -> Iterator[World]:
         (calm(world) or (building and world.foundation and not world.parked))
         and world.flag is Flag.WAITS
         and world.architecture is Architecture.RECORDED
+        and world.defect is Defect.NONE
     ):
         yield replace(world, flag=Flag.MISSING if lacks_the_line(world) else Flag.ASKED)
 
@@ -977,9 +1104,20 @@ def _agent_lands_the_review(world: World) -> Iterator[World]:
 
 @action(ActionName.AGENT_BINDS_SAFEGUARD, Advice.SAFEGUARD)
 def _agent_binds_safeguard(world: World) -> Iterator[World]:
-    if calm(world) and world.owes:
+    if calm(world) and world.owes and not defect_open(world):
         first, second = (Ticket.STATED if t is Ticket.OWED else t for t in world.tickets)
-        yield replace(world, owes=False, tickets=(first, second))
+        yield replace(world, owes=False, defect=Defect.NONE, tickets=(first, second))
+        if (
+            world.defect is Defect.NONE
+            and world.architecture is Architecture.RECORDED
+            and rest(replace(world, owes=False))
+        ):
+            yield replace(
+                world,
+                defect=Defect.OPEN,
+                tickets=(Ticket.READY, Ticket.RESOLVED),
+                inherits=False,
+            )
 
 
 @action(ActionName.OWNER_RECORDS_ARCHITECTURE, Advice.ARCHITECTURE)
@@ -1102,6 +1240,43 @@ def _owner_merges_records(world: World) -> Iterator[World]:
         yield landed(replace(world, parked=False))
 
 
+def at_rest_but_the_upkeep(world: World) -> bool:
+    return rest(replace(world, upkeep=Upkeep.CLEAR)) and Ticket.RESOLVED in world.tickets
+
+
+@action(ActionName.MIRRORED_CODE_LANDS)
+def _mirrored_code_lands(world: World) -> Iterator[World]:
+    landing = {Upkeep.CLEAR: Upkeep.BEHIND, Upkeep.WAITING: Upkeep.WAITING_BEHIND}
+    if (
+        world.upkeep in landing
+        and world.architecture is Architecture.RECORDED
+        and at_rest_but_the_upkeep(world)
+    ):
+        yield replace(world, upkeep=landing[world.upkeep])
+
+
+@action(ActionName.AGENT_RUNS_A_ROUND, Advice.FORMAL_UPKEEP)
+def _agent_runs_a_round(world: World) -> Iterator[World]:
+    if calm(world) and world.upkeep in BEHIND:
+        yield replace(world, upkeep=Upkeep.WAITING)
+        if world.upkeep is Upkeep.BEHIND and at_rest_but_the_upkeep(world):
+            yield replace(world, upkeep=Upkeep.TICKET)
+            yield replace(world, upkeep=Upkeep.UNSTATED)
+
+
+@action(ActionName.OWNER_MERGES_THE_ROUND, Advice.FORMAL_ROUND)
+def _owner_merges_the_round(world: World) -> Iterator[World]:
+    merged = {Upkeep.WAITING: Upkeep.CLEAR, Upkeep.WAITING_BEHIND: Upkeep.BEHIND}
+    if calm(world) and world.upkeep in merged:
+        yield replace(world, upkeep=merged[world.upkeep])
+
+
+@action(ActionName.AGENT_FIXES_THE_ROUND_TICKET, Advice.FORMAL_TICKET)
+def _agent_fixes_the_round_ticket(world: World) -> Iterator[World]:
+    if calm(world) and world.upkeep is Upkeep.TICKET:
+        yield replace(world, upkeep=Upkeep.FIXED)
+
+
 class Edge(NamedTuple):
     """One way an action takes ``source`` to ``target``."""
 
@@ -1116,6 +1291,7 @@ class Graph:
 
     states: tuple[World, ...]
     edges: tuple[Edge, ...]
+    variant: Variant = PAGES
 
     def followed(self, label: Callable[[World], Advice]) -> dict[World, tuple[World, ...]]:
         """For each world, the worlds the action that ``label`` names there can lead to."""
@@ -1127,7 +1303,7 @@ class Graph:
 
 
 @functools.cache
-def graph(start: World = World(), deleter: Deleter = deletes) -> Graph:  # noqa: B008 # -- World is frozen
+def graph(start: World = World(), variant: Variant = PAGES) -> Graph:  # noqa: B008 # -- World is frozen
     """The reachable worlds and the edges between them, from ``start``."""
     seen = {start: None}
     edges: list[Edge] = []
@@ -1135,12 +1311,12 @@ def graph(start: World = World(), deleter: Deleter = deletes) -> Graph:  # noqa:
     while todo:
         source = todo.popleft()
         for name, act in ACTIONS.items():
-            for target in act.successors(source, deleter):
+            for target in act.successors(source, variant):
                 edges.append(Edge(source, name, target))
                 if target not in seen:
                     seen[target] = None
                     todo.append(target)
-    return Graph(tuple(seen), tuple(edges))
+    return Graph(tuple(seen), tuple(edges), variant)
 
 
 LOOPS: Final = -1
@@ -1153,7 +1329,7 @@ def ranks(of: Graph) -> dict[World, int]:
     A world is ``LOOPS`` when following advice can return to a world already passed (resting is
     the one place a run may start again) or has no advised step to take.
     """
-    advised = of.followed(advice)
+    advised = of.followed(of.variant.advice)
     found: dict[World, int] = {}
 
     def rank(world: World, path: frozenset[World]) -> int:
@@ -1211,22 +1387,35 @@ def above_architecture_open(world: World) -> bool:
     return not (
         adopted(world)
         and (world.head, world.tree, world.parked) == (Head.MAIN, Tree.CLEAN, False)
-        and not (world.fills or world.reviews or world.owes)
+        and not (world.fills or world.reviews or (world.owes and not defect_open(world)))
     )
 
 
 ABOVE_ARCHITECTURE_CLEAR: Final = (
     'setup = "bound" /\\ hooks /\\ head = "main" /\\ tree = "clean" /\\ ~parked'
-    " /\\ ~fills /\\ ~reviews /\\ ~owes"
+    f' /\\ ~fills /\\ ~reviews /\\ (~owes \\/ defect = "{Defect.OPEN}")'
 )
 
 
-def beside_architecture() -> str:
-    """TLA+ text: where the owed architecture is named, the step beneath it can be taken."""
+def beside(*named: Advice) -> str:
+    """TLA+ text: where one of ``named`` is named, the step beneath it can be taken."""
+    names = ", ".join(f'"{label}"' for label in named)
     return "\n".join(
-        f'  /\\ (advice = "{Advice.ARCHITECTURE}" /\\ beneath = "{a}" => ENABLED {act})'
+        f'  /\\ (advice \\in {{{names}}} /\\ beneath = "{a}" => ENABLED {act})'
         for a, act in ADVISED.items()
     )
+
+
+def defect_before_the_safeguard(label: str) -> str:
+    return f'defect = "{Defect.OPEN}" => {label} # "{Advice.SAFEGUARD}"'
+
+
+AHEAD_OF_BEHIND: Final = frozenset({Upkeep.TICKET, Upkeep.UNSTATED, Upkeep.WAITING_BEHIND})
+
+
+def round_before_behind(label: str) -> str:
+    ahead = ", ".join(f'"{upkeep}"' for upkeep in sorted(AHEAD_OF_BEHIND))
+    return f'upkeep \\in {{{ahead}}} => {label} # "{Advice.FORMAL_UPKEEP}"'
 
 
 def only(action_name: ActionName, before: str, after: str) -> str:
@@ -1391,7 +1580,7 @@ RULES: Final[dict[str, model_tla.Rule]] = {
     "OwedArchitectureNeverHidesTheWork": model_tla.Invariant(
         "Where the owed architecture is named, the step the route would otherwise name can be"
         " taken.",
-        beside_architecture(),
+        beside(Advice.ARCHITECTURE),
     ),
     "OnlyAnUpgradeOwesTheArchitecture": model_tla.Property(
         "Only an upgrade leaves the architecture owed; an adoption never does.",
@@ -1473,6 +1662,31 @@ RULES: Final[dict[str, model_tla.Rule]] = {
         "No unit is deleted with the owner's `## Answers` lines left out of the brief.",
         f'answers # "{Answers.DROPPED}"',
     ),
+    "DefectTicketBeforeTheSafeguard": model_tla.Invariant(
+        "Where a defect ticket names the owed row, the route never names `/ratchet:safeguard`:"
+        " the ticket is the work.",
+        defect_before_the_safeguard("advice"),
+    ),
+    "RealDefectTicketBeforeTheSafeguard": model_tla.Invariant(
+        "Where a defect ticket names the owed row, the real route never names"
+        " `/ratchet:safeguard`: the ticket is the work.",
+        defect_before_the_safeguard("real_advice"),
+    ),
+    "RoundBeforeBehind": model_tla.Invariant(
+        "Where a round's ticket is open or its change waits for the owner's merge, the route"
+        " names that, not another round, though mirrored code changed since.",
+        round_before_behind("advice"),
+    ),
+    "RealRoundBeforeBehind": model_tla.Invariant(
+        "Where a round's ticket is open or its change waits for the owner's merge, the real route"
+        " names that, not another round, though mirrored code changed since.",
+        round_before_behind("real_advice"),
+    ),
+    "UpkeepNeverHidesTheWork": model_tla.Invariant(
+        "Where the route names a round waiting for the owner or a model behind, the step it would"
+        " otherwise name can be taken: neither is red.",
+        beside(Advice.FORMAL_ROUND, Advice.FORMAL_UPKEEP),
+    ),
 }
 
 
@@ -1493,6 +1707,20 @@ class Shown(NamedTuple):
     owes: bool
     architecture: str
     missing: bool
+    upkeep: str
+    defect: bool
+
+
+RELEASED: Final = frozenset(
+    {Advice.ANSWER, Advice.LAND_GUARD, Advice.CHANGE_TICKET, Advice.SAFEGUARD}
+)
+READ_AS: Final = {Upkeep.FIXED: Upkeep.BEHIND, Upkeep.WAITING_BEHIND: Upkeep.WAITING}
+
+
+def charted(label: str) -> str:
+    if label in RELEASED:
+        return "release"
+    return Advice.BUILD if label in BUILDS else label
 
 
 def shown(world: World) -> Shown:
@@ -1500,7 +1728,7 @@ def shown(world: World) -> Shown:
     return Shown(
         advice(world),
         real_advice(world),
-        beneath(world),
+        charted(beneath(world)),
         world.head,
         world.tree,
         world.parked,
@@ -1509,6 +1737,8 @@ def shown(world: World) -> Shown:
         world.owes,
         world.architecture,
         world.flag is Flag.MISSING,
+        READ_AS.get(world.upkeep, world.upkeep),
+        defect_open(world),
     )
 
 

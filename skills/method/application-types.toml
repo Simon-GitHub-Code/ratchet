@@ -23,6 +23,7 @@ doc-example = "a code example in the documentation"
 flag = "a feature flag in flags.toml"
 layer = "a declared part in the binding's Architecture section"
 formal-model = "a formal model or proof the project keeps"
+state-machine = "a fixed set of named states that something moves between: a status, a phase, a lifecycle, the steps of a protocol"
 scheduled-work = "work a clock starts rather than a caller: a timer, a recurring task, a schedule entry"
 access-control = "a check of who is acting or what they may see or do: a sign-in, a session, a role"
 
@@ -131,6 +132,7 @@ guarded-crash = "a crash reached only when the input holds an exact value of fou
 related-fields = "a crash reached only when two fields of the input satisfy an arithmetic relation, such as one equal to the sum of the others"
 prose-comment = "a prose comment in a file of a `listed` row of the binding's Comments table"
 doc-comment = "a doc comment in a file outside the published interface"
+code-departs-from-model = "a change to the code the model mirrors that breaks a property the model holds, with the model left as it was"
 
 [[question]]
 name = "lint, near-all rules"
@@ -315,6 +317,21 @@ proofs = ["related-fields"]
 [[question]]
 name = "formal verification"
 trigger = "code:formal-model"
+
+[[question]]
+name = "formal verification of concurrency"
+trigger = "code:concurrency"
+proofs = ["code-departs-from-model"]
+
+[[question]]
+name = "formal verification of untrusted input"
+trigger = "code:untrusted-input"
+proofs = ["code-departs-from-model"]
+
+[[question]]
+name = "formal verification of state"
+trigger = "code:state-machine"
+proofs = ["code-departs-from-model"]
 
 [[question]]
 name = "reproducible build"

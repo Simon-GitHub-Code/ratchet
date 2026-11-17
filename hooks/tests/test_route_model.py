@@ -51,11 +51,13 @@ from tests.route_model import (
     Advice,
     Answers,
     Architecture,
+    Defect,
     Flag,
     Head,
     Setup,
     Ticket,
     Tree,
+    Upkeep,
     World,
 )
 from tests.support import PLUGIN_ROOT
@@ -291,6 +293,37 @@ def answers_dropped(graph: model.Graph) -> set[World]:
     return {s for s in graph.states if s.answers is Answers.DROPPED}
 
 
+def offers_the_defects_row(label: Label, graph: model.Graph) -> set[World]:
+    return {s for s in graph.states if model.defect_open(s) and label(s) is Advice.SAFEGUARD}
+
+
+def behind_before_the_round(label: Label, graph: model.Graph) -> set[World]:
+    return {
+        s
+        for s in graph.states
+        if s.upkeep in model.AHEAD_OF_BEHIND and label(s) is Advice.FORMAL_UPKEEP
+    }
+
+
+def upkeep_hides_the_work(label: Label, graph: model.Graph) -> set[World]:
+    taken = defaultdict(set)
+    for edge in graph.edges:
+        taken[edge.source].add(edge.action)
+    return {
+        s
+        for s in graph.states
+        if label(s) in model.OFFERED
+        and model.ADVISED.get(Advice(model.beneath(s, graph.variant.chain))) not in taken[s]
+    }
+
+
+def unfollowable(label: Label, graph: model.Graph) -> set[World]:
+    taken = defaultdict(set)
+    for edge in graph.edges:
+        taken[edge.source].add(edge.action)
+    return {s for s in graph.states if model.ADVISED[label(s)] not in taken[s]}
+
+
 CHECKS: dict[str, tuple[Callable[[Label], set[World]], Label]] = {
     "AdviceCanBeFollowed": (cannot_be_followed, model.advice),
     "AdviceReachesRest": (never_rests, model.advice),
@@ -333,6 +366,26 @@ CHECKS: dict[str, tuple[Callable[[Label], set[World]], Label]] = {
         model.real_advice,
     ),
     "TheOwnersAnswersOutliveTheUnit": (lambda _label: answers_dropped(model.graph()), model.advice),
+    "DefectTicketBeforeTheSafeguard": (
+        lambda label: offers_the_defects_row(label, model.graph()),
+        model.advice,
+    ),
+    "RealDefectTicketBeforeTheSafeguard": (
+        lambda label: offers_the_defects_row(label, model.graph()),
+        model.real_advice,
+    ),
+    "RoundBeforeBehind": (
+        lambda label: behind_before_the_round(label, model.graph()),
+        model.advice,
+    ),
+    "RealRoundBeforeBehind": (
+        lambda label: behind_before_the_round(label, model.graph()),
+        model.real_advice,
+    ),
+    "UpkeepNeverHidesTheWork": (
+        lambda label: upkeep_hides_the_work(label, model.graph()),
+        model.advice,
+    ),
 }
 
 
@@ -447,10 +500,151 @@ def test_without_the_deleter_the_rule_breaks_after_both_tickets_are_finished_by_
     rule: str,
 ) -> None:
     deleter, breaks = WITHOUT_THE_DELETER[rule]
-    graph = model.graph(World(), deleter)
+    graph = model.graph(World(), model.Variant(deleter=deleter))
     assert shortest_run_that_breaks(graph, breaks) == BOTH_FINISHED_BY_HAND
     assert not breaks_in(model.graph())[rule]
     assert {name for name, broken in breaks_in(graph).items() if broken} == {rule}
+
+
+TO_A_KIND_OWED = [*BOTH_FINISHED_BY_HAND, ActionName.KIND_OF_CODE_ARRIVES]
+TO_MIRRORED_CODE = [*BOTH_FINISHED_BY_HAND, ActionName.MIRRORED_CODE_LANDS]
+TO_A_DEFECT = [*TO_A_KIND_OWED, ActionName.AGENT_BINDS_SAFEGUARD]
+WITHOUT_THE_STEP: dict[str, tuple[model.Variant, str, frozenset[str], list[ActionName]]] = {
+    "the safeguard's filter of the defect's row": (
+        model.Variant(
+            chain=model.swapped(
+                model.SAFEGUARD_OWED, model.Rule(Advice.SAFEGUARD, lambda w: w.owes)
+            )
+        ),
+        "DefectTicketBeforeTheSafeguard",
+        frozenset({"AdviceCanBeFollowed", "AdviceReachesRest"}),
+        TO_A_DEFECT,
+    ),
+    "the step that frees the defect's own hold": (
+        model.Variant(
+            chain=model.swapped(
+                model.MEET,
+                model.Rule(Advice.SAFEGUARD, lambda w: model.held_for(w, Ticket.OWES_ITS_ROW)),
+            )
+        ),
+        "DefectTicketBeforeTheSafeguard",
+        frozenset({"AdviceCanBeFollowed", "AdviceReachesRest"}),
+        [*TO_A_DEFECT, ActionName.OWNER_STATES_CONJECTURE, ActionName.DRAIN_PARKS_TICKET],
+    ),
+    "the round asked before behind": (
+        model.Variant(
+            chain=model.swapped(
+                model.ROUND_TICKET,
+                model.Rule(
+                    Advice.FORMAL_UPKEEP,
+                    lambda w: w.upkeep in model.BEHIND | model.AHEAD_OF_BEHIND,
+                ),
+                model.ROUND_TICKET,
+            )
+        ),
+        "RoundBeforeBehind",
+        frozenset({"AdviceCanBeFollowed", "AdviceReachesRest", "UpkeepNeverHidesTheWork"}),
+        [*TO_MIRRORED_CODE, ActionName.AGENT_RUNS_A_ROUND],
+    ),
+    "the conjecture of a round's ticket that states none": (
+        model.Variant(
+            chain=model.swapped(
+                model.ROUND_TICKET,
+                model.Rule(Advice.FORMAL_TICKET, lambda w: w.upkeep in model.ROUND_TICKETS),
+            )
+        ),
+        "AdviceCanBeFollowed",
+        frozenset({"AdviceReachesRest"}),
+        [*TO_MIRRORED_CODE, ActionName.AGENT_RUNS_A_ROUND],
+    ),
+    "the work offered beside behind": (
+        model.Variant(refused_behind=frozenset(model.RUNS)),
+        "UpkeepNeverHidesTheWork",
+        frozenset(),
+        [
+            *TO_MIRRORED_CODE,
+            ActionName.OWNER_WRITES_SPEC,
+            ActionName.AGENT_LANDS_RECORDS,
+            ActionName.OWNER_STATES_SPEC_CONJECTURE,
+            ActionName.AGENT_LANDS_RECORDS,
+            ActionName.OWNER_SPLITS_SPEC,
+            ActionName.AGENT_LANDS_RECORDS,
+            ActionName.OWNER_AGREES_TICKET,
+        ],
+    ),
+}
+
+
+def broken_by(graph: model.Graph) -> dict[str, set[World]]:
+    label = graph.variant.advice
+    found = {
+        "AdviceCanBeFollowed": unfollowable(label, graph),
+        "AdviceReachesRest": {s for s, r in model.ranks(graph).items() if r == model.LOOPS},
+        "DefectTicketBeforeTheSafeguard": offers_the_defects_row(label, graph),
+        "RoundBeforeBehind": behind_before_the_round(label, graph),
+        "UpkeepNeverHidesTheWork": upkeep_hides_the_work(label, graph),
+    }
+    return {name: states for name, states in found.items() if states}
+
+
+@pytest.mark.parametrize("dropped", list(WITHOUT_THE_STEP))
+def test_without_the_step_that_keeps_it_the_rule_breaks(dropped: str) -> None:
+    variant, rule, also, run = WITHOUT_THE_STEP[dropped]
+    graph = model.graph(World(), variant)
+    broken = broken_by(graph)
+    assert set(broken) == {rule, *also}
+    assert broken_by(model.graph()) == {}
+    assert shortest_run_that_breaks(graph, lambda edge: edge.target in broken[rule]) == run
+
+
+def test_the_formal_rules_are_met_where_they_bite() -> None:
+    graph = model.graph()
+    defects = [s for s in graph.states if model.defect_open(s)]
+    assert all(s.owes for s in defects)
+    assert {model.advice(s) for s in defects} >= {
+        Advice.CONJECTURE,
+        Advice.BUILD,
+        Advice.CHANGE_TICKET,
+        Advice.MERGE,
+        Advice.RESOLVE,
+    }
+    kept = {model.advice(s) for s in graph.states if s.defect is Defect.KEPT and model.calm(s)}
+    assert kept == {Advice.SAFEGUARD}
+    named = {
+        (s.upkeep, model.advice(s))
+        for s in graph.states
+        if s.upkeep in model.AHEAD_OF_BEHIND and model.settled(s)
+    }
+    assert named == {
+        (Upkeep.TICKET, Advice.FORMAL_TICKET),
+        (Upkeep.UNSTATED, Advice.CONJECTURE),
+        (Upkeep.WAITING_BEHIND, Advice.FORMAL_ROUND),
+    }
+    stated = {
+        (a.upkeep, b.upkeep)
+        for a, act, b in graph.edges
+        if act is ActionName.OWNER_STATES_CONJECTURE and a.upkeep is not b.upkeep
+    }
+    assert stated == {(Upkeep.UNSTATED, Upkeep.TICKET)}
+    offered = {model.beneath(s) for s in graph.states if model.advice(s) in model.OFFERED}
+    assert offered == {
+        Advice.SPECIFY,
+        Advice.CONJECTURE_SPEC,
+        Advice.SPLIT,
+        Advice.TRIAGE,
+        Advice.BLOCKED,
+        Advice.BUILD,
+        Advice.RESOLVE,
+    }
+    rounds = {
+        (a.upkeep, b.upkeep) for a, act, b in graph.edges if act is ActionName.AGENT_RUNS_A_ROUND
+    }
+    assert rounds == {
+        (Upkeep.BEHIND, Upkeep.WAITING),
+        (Upkeep.BEHIND, Upkeep.TICKET),
+        (Upkeep.BEHIND, Upkeep.UNSTATED),
+        (Upkeep.FIXED, Upkeep.WAITING),
+    }
 
 
 def breaks_in(graph: model.Graph) -> dict[str, bool]:
@@ -496,11 +690,16 @@ def test_the_finish_the_blocked_line_names_never_expires_the_unit() -> None:
 def test_the_last_mark_leaves_the_answers_carried_in_records_and_names_their_landing() -> None:
     graph = model.graph()
     marks = [
-        b
+        (a, b)
         for a, act, b in graph.edges
         if model.expires(a, b) and act is ActionName.OWNER_RESOLVES_TICKET
     ]
-    assert {(b.tree, b.answers) for b in marks} == {(Tree.RECORDS, Answers.CARRIED)}
+    assert {(a.defect, b.tree, b.answers) for a, b in marks} == {
+        (Defect.NONE, Tree.RECORDS, Answers.CARRIED),
+        (Defect.OPEN, Tree.RECORDS, Answers.CARRIED),
+        (Defect.OPEN, Tree.RECORDS, Answers.NONE),
+    }
+    marks = [b for _a, b in marks]
     assert {model.advice(b) for b in marks if b.setup is Setup.BOUND} == {Advice.LAND_RECORDS}
     landings = {ActionName.AGENT_LANDS_RECORDS, ActionName.OWNER_MERGES_RECORDS}
     ends = {
@@ -609,6 +808,7 @@ RELEASED_BY = {
     Ticket.GUARDED: ActionName.OWNER_LANDS_GUARD_EDITS,
     Ticket.OWED: ActionName.AGENT_BINDS_SAFEGUARD,
     Ticket.PARKED: ActionName.OWNER_CHANGES_TICKET,
+    Ticket.OWES_ITS_ROW: ActionName.OWNER_CHANGES_TICKET,
 }
 
 
@@ -627,7 +827,7 @@ def test_a_hold_is_released_by_its_own_step_and_by_no_other(hold: Ticket) -> Non
             if ticket is hold:
                 (kept if target.tickets[slot] is hold else released).add(name)
     assert released == {RELEASED_BY[hold]}
-    assert kept
+    assert bool(kept) is (hold is not Ticket.OWES_ITS_ROW)
 
 
 def test_the_graph_is_the_same_every_time_it_is_walked() -> None:
@@ -818,15 +1018,25 @@ def ask(repo: real.Repo, world: World, path: list[str]) -> None:
             world, after, path
         )
         assert step.then == after.command, disagreement(world, step, path)
-        work = without(repo, "safeguard_step", "architecture_step")
+        work = without(repo, "safeguard_step", "architecture_step", "formal_step")
         assert f"Or carry on with {work.command}:" in step.why, disagreement(world, step, path)
+    if real.classify(step) in UPKEEP:
+        instead = without(repo, "formal_step")
+        under = model.beneath(model.as_the_route_reads(world))
+        assert real.classify(instead) is under, disagreement(world, instead, path)
+        assert step.then == instead.command, disagreement(world, step, path)
+        carry = f"Or carry on with {instead.command}: nothing is red for it"
+        assert carry in step.why, disagreement(world, step, path)
+
+
+UPKEEP = frozenset({Advice.FORMAL_TICKET, Advice.FORMAL_ROUND, Advice.FORMAL_UPKEEP})
 
 
 def without(repo: real.Repo, *steps: str) -> route.Step:
     """What the route names on ``repo`` once it no longer names each of ``steps`` owed there."""
     with pytest.MonkeyPatch.context() as patch:
         for name in steps:
-            patch.setattr(route, name, lambda _root, _instead: None)
+            patch.setattr(route, name, lambda *_args: None)
         return real.read(repo)
 
 
@@ -1437,6 +1647,9 @@ DETOURS = [
     Advice.CHANGE_TICKET,
     Advice.DRAIN,
     Advice.CONJECTURE,
+    Advice.FORMAL_TICKET,
+    Advice.FORMAL_ROUND,
+    Advice.FORMAL_UPKEEP,
 ]
 
 
