@@ -45,7 +45,11 @@ The stages, in order; the first that does not hold is the answer:
    decision record names it) is ``/ratchet:architecture``, with ``/ratchet:safeguard`` after it
    when rows are owed too, since the review may move where the safeguards go (ADR 0052). After
    the safeguard, an architecture an upgrade left owed (``quality/owed.toml`` entries of the
-   ``architecture`` check) is ``/ratchet:architecture``, offered the same way (ADR 0049).
+   ``architecture`` check) is ``/ratchet:architecture``, offered the same way (ADR 0049). Last
+   comes the upkeep of the formal model (``formal_model.py``, ADR 0062): a round's ticket, as
+   work; else a ``formal/upkeep-`` branch waiting for the owner's merge; else, when mirrored code
+   changed since ``- Synced:``, ``/ratchet:safeguard``, never red. A row an open ``Formal model:
+   defect`` ticket names is that ticket's to bring, so the safeguard is not named for it.
 
 After the three lines come the ``also:`` lines, when there are any: the upgrade, when the plugin
 in use is newer than the one the binding pins (ADR 0027); each question the owner has answered
@@ -72,6 +76,7 @@ from pathlib import Path
 import application_types
 import feature_preflight as preflight
 import flags
+import formal_model
 import gatelib
 import hooks_installed
 import merge
@@ -469,9 +474,29 @@ def releases(hold: queue_notes.Hold, ticket: preflight.Ticket, default_branch: s
         )
     if hold.reviews:
         steps.append(f"run {ARCHITECTURE} for {', '.join(hold.reviews)}")
-    if hold.owes:
+    meet = f"change ticket {ref} to meet what the drain parked it for"
+    defective = defect_kind(ticket)
+    if hold.owes and defective in hold.owes:
+        others = [kind for kind in hold.owes if kind != defective]
+        if others:
+            steps.append(f"run {SAFEGUARD} for {', '.join(others)}")
+        steps.append(meet)
+    elif hold.owes:
         steps.append(f"run {SAFEGUARD} for {', '.join(hold.owes)}")
-    return steps or [f"change ticket {ref} to meet what the drain parked it for"]
+    return steps or [meet]
+
+
+def defect_kind(ticket: preflight.Ticket) -> str | None:
+    """The kind of code a ``Formal model: defect`` ticket's row is asked of, or ``None``.
+
+    Why: ADR 0062. A ticket the drain parks for the kind it was filed to carry is told to change
+    its text, not to run the safeguard, which leaves that row owed until the fix lands.
+    """
+    line = ticket.formal_model
+    if line is None or line.defect is None:
+        return None
+    kinds = application_types.code_kinds(application_types.load().trigger_of(line.defect))
+    return kinds[0] if kinds else None
 
 
 def drain_hold(root: Path, ticket: preflight.Ticket) -> queue_notes.Hold | None:
@@ -860,10 +885,12 @@ def decide(root: Path, gh: preflight.Runner | None) -> Step:
         if missing
         else ticket_step(root, gh, checkout)
     )
+    formal = upkeep(root, gh, checkout)
     return (
-        review_step(root, step)
-        or safeguard_step(root, step)
+        review_step(root, step, formal.defects)
+        or safeguard_step(root, step, formal.defects)
         or architecture_step(root, step)
+        or formal_step(formal, checkout, step)
         or step
     )
 
@@ -892,7 +919,7 @@ def fill_step(root: Path) -> Step | None:
 # --- architecture reviews, safeguards and life events (ADR 0028, ADR 0052) -----------------
 
 
-def review_step(root: Path, instead: Step) -> Step | None:
+def review_step(root: Path, instead: Step, defects: frozenset[str]) -> Step | None:
     """``/ratchet:architecture`` when the repository owes a review, before any safeguard.
 
     Why: ADR 0052. The review decides where the new kind of code lives, and so where its
@@ -922,7 +949,9 @@ def review_step(root: Path, instead: Step) -> Step | None:
         if code
         else "a declared event is never red"
     )
-    then = (safeguard_step(root, instead) or architecture_step(root, instead) or instead).command
+    then = (
+        safeguard_step(root, instead, defects) or architecture_step(root, instead) or instead
+    ).command
     return Step(
         ARCHITECTURE,
         f"{'; '.join(said)}. Or carry on with {instead.command}: {cost}",
@@ -931,14 +960,16 @@ def review_step(root: Path, instead: Step) -> Step | None:
     )
 
 
-def safeguard_step(root: Path, instead: Step) -> Step | None:
+def safeguard_step(root: Path, instead: Step, defects: frozenset[str]) -> Step | None:
     """``/ratchet:safeguard`` when the repository owes a row, offering ``instead`` beside it.
+
+    A row an open defect ticket names (ADR 0062) is the ticket's to bring, not the safeguard's.
 
     Why: it comes before any build, since the next change that adds an instance of an owed kind
     is red; it never hides the build, since the owner may be mid-idea and the change that brings a
     kind is free.
     """
-    owing = triggers.owed(root)
+    owing = [row for row in triggers.owed(root) if row.question not in defects]
     if not owing:
         return None
     arrived: dict[str, list[triggers.Owed]] = {}
@@ -969,6 +1000,82 @@ def safeguard_step(root: Path, instead: Step) -> Step | None:
         f"{'; '.join(said)}. Or carry on with {instead.command}: {cost}",
         then,
         "safeguard",
+    )
+
+
+# --- the formal model's upkeep (ADR 0062) ------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Upkeep:
+    """What the route reads of the formal model: the rows tickets carry, and its one state.
+
+    ``defects`` are the rows an open ``Formal model: defect`` ticket names. At most one of the
+    round ticket, the waiting branch and the behind reason is set, in that order of precedence.
+    """
+
+    defects: frozenset[str] = frozenset()
+    ticket: preflight.Ticket | None = None
+    waiting: str | None = None
+    behind: str | None = None
+
+
+def formal_tickets(root: Path, gh: preflight.Runner | None) -> list[preflight.Ticket]:
+    """The open tickets that carry a ``Formal model:`` line."""
+    ready, local = agent_ready(root, gh)
+    unready = local_tickets(root, ready=False) if local else []
+    return [ticket for ticket in [*ready, *unready] if ticket.formal_model is not None]
+
+
+def upkeep(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> Upkeep:
+    """The formal model's state: ticket open, round waiting or behind, in that order, or none."""
+    formal = formal_model.read(gatelib.read_text(root / BINDING) or "")
+    if formal is None and not formal_model.started(root):
+        return Upkeep()
+    lines = [(ticket, ticket.formal_model) for ticket in formal_tickets(root, gh)]
+    defects = frozenset(line.defect for _, line in lines if line and line.defect)
+    for ticket, line in lines:
+        if line and line.round:
+            return Upkeep(defects, ticket=ticket)
+    branch = formal_model.waiting(root, checkout.default_branch)
+    if branch is not None or formal is None:
+        return Upkeep(defects, waiting=branch)
+    return Upkeep(defects, behind=formal_model.behind(root, checkout.default_branch, formal))
+
+
+def formal_step(upkeeping: Upkeep, checkout: Checkout, instead: Step) -> Step | None:
+    """The step for the formal model's state; ``None`` in sync, or with no model.
+
+    Why: ADR 0062. Behind is never red, so the safeguard's upkeep is offered beside the build.
+    A round that found something is a ticket, as work; one that changed the model waits for the
+    owner's merge.
+    """
+    carry = f"Or carry on with {instead.command}: nothing is red for it"
+    if upkeeping.ticket is not None:
+        ticket = upkeeping.ticket
+        return Step(
+            f"{FEATURE} {ticket.ref}",
+            f'ticket {ticket.ref} "{ticket.title}" carries what the formal model\'s last round'
+            f" found. {carry}",
+            instead.command,
+            "formal-ticket",
+        )
+    if upkeeping.waiting is not None:
+        return Step(
+            f"`git switch {checkout.default_branch} && git merge --no-ff {upkeeping.waiting}`,"
+            " typed by the owner",
+            f"branch `{upkeeping.waiting}` holds a round of the formal model's upkeep and waits"
+            f" for your merge. {carry}",
+            instead.command,
+            "formal-round",
+        )
+    if upkeeping.behind is None:
+        return None
+    return Step(
+        SAFEGUARD,
+        f"the formal model is behind the code it mirrors: {upkeeping.behind}. {carry}",
+        instead.command,
+        "formal-upkeep",
     )
 
 

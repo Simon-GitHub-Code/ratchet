@@ -245,7 +245,7 @@ def touched(root: Path, base: str) -> tuple[tuple[str, str], ...]:
     read once per commit. ``base`` is a commit, never a name that moves.
     """
     listed = gatelib.git(
-        root, "log", "-m", "--first-parent", "--name-only", "--format=%x00%H", base
+        root, "log", "-m", "--first-parent", "--no-renames", "--name-only", "--format=%x00%H", base
     )
     blocks = (block.partition("\n") for block in (listed or "").split("\0")[1:])
     return tuple((commit, names_text) for commit, _, names_text in blocks)

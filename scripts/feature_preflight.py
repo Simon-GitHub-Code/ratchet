@@ -113,6 +113,12 @@ SECTION_REF = re.compile(r"(?:#|/issues/)(\d+)|([^`\s()\[\]]+\.md)")
 BLOCKED_LINE = re.compile(r"^\*{0,2}blocked by:?\*{0,2}:?[ \t]*(.*)$", re.IGNORECASE | re.MULTILINE)
 BLOCKED_SECTION = "## Blocked by"
 BLOCKER_REF = re.compile(r"[^`\s,()]+\.md|#?\d+")
+FORMAL_LINE = re.compile(
+    r"^\*{0,2}formal model:?\*{0,2}:?[ \t]*(.*)$", re.IGNORECASE | re.MULTILINE
+)
+FORMAL_DEFECT = re.compile(r"defect\s+`([^`\n]+)`", re.IGNORECASE)
+FORMAL_ROUND = re.compile(r"round\b", re.IGNORECASE)
+FORMAL_KEPT = re.compile(r"kept on\s+`([^`\n]+)`", re.IGNORECASE)
 Runner = Callable[[Sequence[str]], str | None]
 
 PRODUCES = {
@@ -143,6 +149,19 @@ PRODUCES = {
     "clean": "commit or stash the working tree; the pipeline's agents leave their work uncommitted",
     "branch": "`git switch -c <branch> <base>`; the `/ratchet:feature` skill does this",
 }
+
+
+@dataclass(frozen=True)
+class FormalModel:
+    """A ticket's ``Formal model:`` line (ADR 0062): a defect of one row, or a round's finding."""
+
+    defect: str | None
+    kept: str | None
+
+    @property
+    def round(self) -> bool:
+        """Whether the line is a round's, not a defect found at binding."""
+        return self.defect is None
 
 
 @dataclass(frozen=True)
@@ -181,6 +200,21 @@ class Ticket:
             return tuple(refs)
         # Why: on a forge only `#N` names an issue; a bare number is part of a title.
         return tuple(ref for ref in refs if ref.startswith("#"))
+
+    @property
+    def formal_model(self) -> FormalModel | None:
+        """The ticket's ``Formal model:`` line, read as ``Status:`` is; ``None`` without one."""
+        match = FORMAL_LINE.search(self.body)
+        if match is None:
+            return None
+        text = match.group(1)
+        kept = FORMAL_KEPT.search(text)
+        defect = FORMAL_DEFECT.match(text)
+        if defect is None and FORMAL_ROUND.match(text) is None:
+            return None
+        return FormalModel(
+            defect.group(1).strip() if defect else None, kept.group(1).strip() if kept else None
+        )
 
     @property
     def conjecture(self) -> str | None:
