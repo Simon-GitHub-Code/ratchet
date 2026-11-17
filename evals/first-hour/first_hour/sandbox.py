@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import tempfile
 from dataclasses import dataclass, field
@@ -64,6 +65,7 @@ class Layout:
     """Where one run keeps everything. The sessions write to ``writable`` and nowhere else."""
 
     root: Path
+    toolchains: tuple[Path, ...] = ()
 
     @property
     def app(self) -> Path:
@@ -160,9 +162,17 @@ def environment(layout: Layout, inherited: Mapping[str, str]) -> dict[str, str]:
     or ``CLAUDECODE`` of the session that started the harness, no token, no agent socket.
     """
     env = {k: v for k in KEEP if (v := inherited.get(k))}
+    gems = layout.home / ".gem"
     env.update(
         {
-            "PATH": f"{layout.bin}:{SYSTEM_PATH}",
+            "PATH": ":".join(
+                [
+                    str(layout.bin),
+                    *map(str, map(_on_path, layout.toolchains)),
+                    str(gems / "bin"),
+                    SYSTEM_PATH,
+                ]
+            ),
             "HOME": str(layout.home),
             "SHELL": "/bin/sh",
             "TMPDIR": str(layout.tmp),
@@ -173,6 +183,7 @@ def environment(layout: Layout, inherited: Mapping[str, str]) -> dict[str, str]:
             "XDG_RUNTIME_DIR": str(layout.runtime),
             "RATCHET_PLUGIN": str(layout.pinned),
             "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0",
+            "GEM_HOME": str(gems),
             "DISABLE_AUTOUPDATER": "1",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
             "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
@@ -207,6 +218,10 @@ def session_env(layout: Layout) -> dict[str, str]:
     }
 
 
+def _on_path(tree: Path) -> Path:
+    return tree / "bin" if (tree / "bin").is_dir() else tree
+
+
 def toolchain(found: Mapping[str, str | None]) -> dict[str, Path]:
     """Each toolchain program found on the operator's ``PATH``, by its real file."""
     return {name: Path(path).resolve() for name, path in found.items() if path}
@@ -227,17 +242,31 @@ def argv(
     """
     trees = layout.writable if writable is None else tuple(writable)
     args = ["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
+    args += ["--ro-bind", str(_passwd(layout)), "/etc/passwd"]
     args += ["--tmpfs", "/home", "--tmpfs", "/run/user"]
     args += ["--bind", str(layout.tmp), "/tmp", "--bind", str(layout.tmp), "/var/tmp"]
     args += ["--ro-bind", str(layout.root), str(layout.root)]
     for tree in trees:
         args += ["--bind", str(tree), str(tree)]
     args += ["--ro-bind", str(layout.plugins), str(layout.plugins)]
-    for tool in sorted(set(tools)):
+    for tool in sorted({*tools, *layout.toolchains}):
         args += ["--ro-bind", str(tool), str(tool)]
     args += ["--remount-ro", "/home"]
+    args += ["--unsetenv", "XDG_RUNTIME_DIR"]
     args += ["--unshare-pid", "--unshare-ipc", "--die-with-parent", "--new-session"]
     return [*args, "--", *command]
+
+
+def _passwd(layout: Layout) -> Path:
+    return layout.root / "passwd"
+
+
+def _with_home(passwd: str, uid: int, home: Path) -> str:
+    entries = [line.split(":") for line in passwd.splitlines()]
+    for entry in entries:
+        if entry[2:3] == [str(uid)] and entry[5:6]:
+            entry[5] = str(home)
+    return "".join(":".join(entry) + "\n" for entry in entries)
 
 
 def shell_prefix(layout: Layout, tools: Mapping[str, Path]) -> str:
@@ -337,6 +366,8 @@ def prepare(layout: Layout, tools: Mapping[str, Path], plugins: Sequence[Plugin]
     layout.appcheck.mkdir(exist_ok=True)
     layout.runtime.mkdir(mode=0o700, exist_ok=True)
     (layout.home / ".gitconfig").write_text(GITCONFIG, encoding="utf-8")
+    system = Path("/etc/passwd").read_text(encoding="utf-8")
+    _passwd(layout).write_text(_with_home(system, os.getuid(), layout.home), encoding="utf-8")
     layout.shell.write_text(shell_prefix(layout, tools), encoding="utf-8")
     layout.shell.chmod(0o755)
     for name, path in tools.items():

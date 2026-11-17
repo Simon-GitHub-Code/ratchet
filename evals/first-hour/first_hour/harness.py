@@ -81,6 +81,7 @@ class Config:
     budget: steps.Budget
     model: str = "opus"
     owner_model: str = "haiku"
+    toolchains: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -658,7 +659,7 @@ def under_test(layout: sandbox.Layout, meta: Mapping[str, object]) -> sandbox.Pl
 
 def setup(config: Config, operator: Operator, environ: Mapping[str, str]) -> Run:
     """The run's directory, home and environment, ready for its first process."""
-    layout = sandbox.Layout(config.root)
+    layout = sandbox.Layout(config.root, config.toolchains)
     layout.root.mkdir(parents=True, exist_ok=True)
     plugin = _pin(config, layout)
     sandbox.prepare(layout, operator.tools, [*operator.plugins, under_test(layout, plugin)])
@@ -678,6 +679,7 @@ def setup(config: Config, operator: Operator, environ: Mapping[str, str]) -> Run
             for p in operator.plugins
         },
         claude=operator.claude,
+        toolchains=[str(t) for t in config.toolchains],
         harness=_harness(),
         load_avg=os.getloadavg(),
     )
