@@ -7,8 +7,8 @@ one line: how long the ticket took, how many ``check`` runs it held and their se
 of them ran on a tree an earlier green ``check`` run had covered. It reports and never stops a run.
 
 A ``check`` run is a tier line whose gate set is the project's ``check`` gate set: the gates of the
-justfile's ``tier0_gates`` and ``tier1_gates``. When the start stamp holds a run id, only lines of
-that run count.
+justfile's ``tier0_gates`` and ``tier1_gates``. The window between the two stamps, in the
+ticket's own work tree, bounds the lines.
 
 Usage: ``run_time.py end|line [--root DIR]``.
 """
@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,7 +25,6 @@ import conformance
 import gatelib
 import justfile_text
 import queue_notes
-import report
 import runrecord
 
 STAMPS = "run-time.json"
@@ -55,9 +53,6 @@ def stamp_start(root: Path, branch: str) -> None:
     if held.get("branch") == branch and "start" in held and "end" not in held:
         return
     data: dict[str, object] = {"branch": branch, "start": now()}
-    run = os.environ.get(report.RUN)
-    if run:
-        data["run"] = run
     write(root, data)
 
 
@@ -94,7 +89,6 @@ def tier_lines(root: Path) -> list[dict[str, object]]:
 def check_runs(
     root: Path, held: dict[str, object], gates: frozenset[str]
 ) -> list[dict[str, object]]:
-    run = held.get("run")
     return [
         row
         for row in tier_lines(root)
@@ -102,7 +96,6 @@ def check_runs(
         and isinstance(row.get("at"), str)
         and str(held["start"]) <= str(row["at"]) <= str(held["end"])
         and isinstance(row.get("seconds"), int | float)
-        and (run is None or row.get("run") == run)
     ]
 
 
@@ -143,7 +136,10 @@ def line(root: Path) -> str:
     took = spell((ended - begun).total_seconds())
     gates = check_gates(root)
     if not gates:
-        return f"run time: {took}; check runs not counted, since the justfile names no check gates"
+        return (
+            f"run time: {took}; check runs not counted,"
+            " since the justfile names no gates for `check`"
+        )
     return f"run time: {took}; {checks_said(check_runs(root, held, gates))}"
 
 

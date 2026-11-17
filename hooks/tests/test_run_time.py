@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 import gatelib
-import report
 import run_time
 import runrecord
 from tests import repos
@@ -131,15 +130,21 @@ def test_a_run_at_the_same_second_or_on_an_unread_tree_is_no_cover(work: Path) -
     assert "4 times, 4m 0s in all; none ran on a tree" in run_time.line(work)
 
 
-def test_lines_of_another_run_are_ignored_once_the_start_names_a_run(work: Path) -> None:
-    stamped(work, start=START, end=END, run="mine")
+def test_lines_of_other_runs_count_when_they_fall_in_the_window_and_not_outside_it(
+    work: Path,
+) -> None:
+    stamped(work, start=START, end=END)
     timed(
         work,
-        tier("2026-11-17T10:05:00Z", "same", run="mine"),
-        tier("2026-11-17T10:06:00Z", "same", run="other"),
-        tier("2026-11-17T10:07:00Z", "same", run="other"),
+        tier("2026-11-17T10:05:00Z", "same", run="one"),
+        tier("2026-11-17T10:06:00Z", "same", run="two"),
+        tier("2026-11-17T10:07:00Z", "same", run="three"),
+        tier("2026-11-17T09:00:00Z", "same", run="old"),
+        tier("2026-11-17T11:00:00Z", "same", run="late"),
     )
-    assert run_time.line(work).endswith("check ran once, 1m 0s")
+    assert run_time.line(work).endswith(
+        "check ran 3 times, 3m 0s in all; 2 of them ran on a tree a green check had already covered"
+    )
 
 
 def test_only_a_tier_run_of_the_checks_own_gates_inside_the_stamps_is_a_check_run(
@@ -172,7 +177,7 @@ def test_check_is_read_from_the_justfile_never_guessed(tmp_path: Path) -> None:
     stamped(root, start=START, end=END)
     timed(root, tier("2026-11-17T10:05:00Z", "a"))
     assert run_time.line(root) == (
-        "run time: 41m 12s; check runs not counted, since the justfile names no check gates"
+        "run time: 41m 12s; check runs not counted, since the justfile names no gates for `check`"
     )
 
 
@@ -184,24 +189,17 @@ def test_the_end_stamp_keeps_the_start(work: Path) -> None:
     assert run_time.moment(held["end"]) is not None
 
 
-def test_the_start_stamp_is_utc_and_names_the_branch_and_the_run(
+def test_the_start_stamp_is_utc_and_names_the_branch_and_no_run(
     work: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv(report.RUN, "r9")
+    monkeypatch.setenv("RATCHET_RUN", "r9")
     run_time.stamp_start(work, "feature/1-a")
     held = run_time.stamps(work)
-    assert (held["branch"], held["run"]) == ("feature/1-a", "r9")
+    assert held["branch"] == "feature/1-a"
+    assert "run" not in held
     assert run_time.moment(held["start"]) is not None
     assert str(held["start"]).endswith("Z")
     assert (work / gatelib.STATE / run_time.STAMPS).is_file()
-
-
-def test_the_start_stamp_names_no_run_when_none_is_set(
-    work: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv(report.RUN, raising=False)
-    run_time.stamp_start(work, "feature/1-a")
-    assert "run" not in run_time.stamps(work)
 
 
 def test_a_second_preflight_of_the_same_unfinished_run_keeps_the_first_start(work: Path) -> None:

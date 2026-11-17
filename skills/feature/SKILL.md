@@ -54,7 +54,7 @@ Pick the mode from what the owner typed:
 
    **The run errors instead of returning** (an agent died): resume it once. If it errors again, tell the owner which stage died and stop.
 
-   **The run's time, when it returns and before step 4 clears the work:** run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/run_time.py" end --root .`, then the same command with `line` in place of `end`. State the line it prints with the result.
+   **The run's time, when it returns and before step 4 clears the work:** run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/run_time.py" end --root .`, then the same command with `line` in place of `end`. State the line it prints with the result.
 
    Done when the workflow has returned a result and the publish check is green, or you have stopped as the check or a second error says.
 
