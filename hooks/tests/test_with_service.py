@@ -316,6 +316,19 @@ STOPPING = (
 SENDS_THEN_WAITS = (
     "import os, time\nopen(os.environ['RATCHET_SENDING'], 'w').close()\ntime.sleep(1)"
 )
+STOPS_AT_ONCE = (
+    "import os, signal, threading, http.server as h\n"
+    "class Handler(h.BaseHTTPRequestHandler):\n"
+    "    def log_message(self, *args): pass\n"
+    "    def do_GET(self):\n"
+    "        self.send_response(200)\n"
+    "        self.send_header('Content-Length', '2')\n"
+    "        self.end_headers()\n"
+    "        self.wfile.write(b'ok')\n"
+    "server = h.ThreadingHTTPServer(('127.0.0.1', int(os.environ['PORT'])), Handler)\n"
+    "signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown).start())\n"
+    "server.serve_forever()"
+)
 DROPPED = re.compile(r"^\d+ x GET http://127\.0\.0\.1:\d+/work: (\w+)$", re.MULTILINE)
 
 
@@ -435,6 +448,19 @@ def test_a_smoke_slow_to_start_still_has_requests_in_flight_at_the_signal(
     # timed from the command's start then stops the service before one request is sent, and the
     # smoke is red under its request floor although the service drained correctly.
     code, out = graceful("drain", capsys=capsys, command=smoke(starts_after="1"))
+    assert out.endswith("with_service: green\n"), out
+    assert code == 0
+
+
+def test_the_signal_is_timed_from_the_command_sending_for_a_service_that_stops_at_once(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code, out = run(
+        *("--boot", f"exec {python(STOPS_AT_ONCE)}", "--ready", READY),
+        *("--graceful", "60", "--signal-after", "0.5"),
+        *("--", *smoke(starts_after="1")),
+        capsys=capsys,
+    )
     assert out.endswith("with_service: green\n"), out
     assert code == 0
 

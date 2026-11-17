@@ -1,5 +1,6 @@
 """The acceptance proxy: each request passes through unchanged and is logged; the log is sealed."""
 
+import fcntl
 import hashlib
 import http.client
 import http.server
@@ -133,6 +134,28 @@ def test_the_host_reaches_the_product_and_headers_about_one_connection_do_not(
     assert "Proxy-Authorization" not in seen
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Connection",
+        "Keep-Alive",
+        "Proxy-Authenticate",
+        "Proxy-Authorization",
+        "Proxy-Connection",
+        "TE",
+        "Trailer",
+        "Upgrade",
+    ],
+)
+def test_a_header_about_the_connection_to_the_proxy_is_not_passed_to_the_product(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    with products.serving(tmp_path) as upstream, proxied(tmp_path, upstream, monkeypatch) as url:
+        seen = json.loads(exchange(url, "GET", "/echo", headers={name: "x", "X-Kept": "y"}).body)
+    assert seen["X-Kept"] == "y"
+    assert name.lower() not in {key.lower() for key in seen}
+
+
 def test_the_product_is_asked_for_an_answer_the_log_can_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -244,6 +267,50 @@ def test_an_answer_whose_line_could_not_be_written_is_counted_in_the_seal(
         assert products.request(url)[0] == 200
     seal = json.loads((directory / "seal.json").read_text(encoding="utf-8"))
     assert (seal["requests"], seal["unlogged"]) == (0, 2)
+
+
+@pytest.mark.skipif(not Path("/dev/full").exists(), reason="no /dev/full to fill the disk")
+def test_a_line_the_disk_refuses_fails_its_own_write_and_is_counted_unlogged(
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "session"
+    directory.mkdir()
+    (directory / "requests.jsonl").symlink_to("/dev/full")
+    log = acceptance_proxy.Log(directory, "x")
+    ident = log.issue()
+    assert log.answer()
+    log.finish({"id": ident}, answered=True)
+    log.seal({"session": SESSION})
+    seal = json.loads((directory / "seal.json").read_text(encoding="utf-8"))
+    assert (seal["requests"], seal["unlogged"]) == (0, 1)
+
+
+def test_the_seal_waits_for_an_answer_still_going_out_and_counts_its_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(acceptance_proxy, "SETTLE", 10.0)
+    log = acceptance_proxy.Log(tmp_path / "session", "x")
+    ident = log.issue()
+    assert log.answer()
+    late = threading.Timer(0.3, log.finish, [{"id": ident}], {"answered": True})
+    late.start()
+    log.seal({"session": SESSION})
+    late.join()
+    seal = json.loads((tmp_path / "session" / "seal.json").read_text(encoding="utf-8"))
+    assert (seal["requests"], seal["unlogged"]) == (1, 0)
+
+
+def test_a_session_is_abandoned_only_when_its_lock_is_there_and_nothing_holds_it(
+    tmp_path: Path,
+) -> None:
+    assert not acceptance_proxy.abandoned(tmp_path)
+    lock = tmp_path / "live.lock"
+    lock.write_text("1", encoding="utf-8")
+    assert acceptance_proxy.abandoned(tmp_path)
+    with lock.open("rb") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        assert not acceptance_proxy.abandoned(tmp_path)
+    assert acceptance_proxy.abandoned(tmp_path)
 
 
 def run_proxy(tmp_path: Path, *args: str, env: dict[str, str]) -> subprocess.Popen[bytes]:
