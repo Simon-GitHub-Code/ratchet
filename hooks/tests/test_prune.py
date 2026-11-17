@@ -191,21 +191,23 @@ def test_a_pass_merged_from_its_branch_restarts_the_count(tmp_path: Path) -> Non
     assert route.decide(root, None).command == route.SPEC
 
 
-def test_a_merge_message_that_carries_the_subject_marks_the_pass(tmp_path: Path) -> None:
+def test_a_commit_whose_body_names_a_pass_does_not_mark_one(tmp_path: Path) -> None:
     root = stale_world(tmp_path)
-    git(root, "switch", "-q", "-c", "chore/x")
-    commit(root, "docs: cut")
-    git(root, "switch", "-q", "main")
-    git(
-        root,
-        "merge",
-        "-q",
-        "--no-ff",
-        "chore/x",
-        "-m",
-        "Merge pull request #7 from o/x\n\ndocs(prune): cut",
-    )
-    assert documents.landed_since_pass(root, "main") == 0
+    before = documents.landed_since_pass(root, "main")
+    commit(root, "feat: a thing\n\ndocs(prune): cut")
+    assert before is not None
+    assert documents.landed_since_pass(root, "main") == before + 1
+    assert route.decide(root, None).command == "/ratchet:prune pages"
+
+
+def test_a_pass_recorded_where_nothing_ignores_the_state_leaves_the_tree_clean(
+    tmp_path: Path,
+) -> None:
+    root = stale_world(tmp_path)
+    (root / ".gitignore").write_text("", encoding="utf-8")
+    git(root, "commit", "-q", "-am", "chore: no ignores")
+    assert documents.main(["documents.py", "passed", "--root", str(root)]) == 0
+    assert git(root, "status", "--porcelain") == ""
 
 
 def test_a_pass_that_cut_nothing_is_recorded_and_restarts_the_count(tmp_path: Path) -> None:

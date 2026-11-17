@@ -38,7 +38,7 @@ MARKERS = ("<<<<<<<", "|||||||", "=======", ">>>>>>>")
 PRUNE = re.compile(rf"`?({NEVER}|{CUT})`?(?:\s+keeping\s+(.+))?")
 PRUNE_AFTER = "Prune after"
 PRUNE_AFTER_DEFAULT = 10
-DOCS_PRUNE = r"^docs\(prune\)!?: "
+DOCS_PRUNE = re.compile(r"docs\(prune\)!?: ")
 PASSED = gatelib.STATE / "prune-pass"
 CITED = re.compile(r"(?P<path>[\w.@+-]+(?:/[\w.@+-]+)+)(?::(?P<symbol>[A-Za-z_][\w.]*))?")
 LINK = re.compile(r"\[[^\]\n]*\]\(([^)\s#]+)(?:#[^)\s]*)?\)")
@@ -482,7 +482,9 @@ def count_after(root: Path, ref: str, commit: str) -> int | None:
 
 def landed_since_pass(root: Path, ref: str) -> int | None:
     counts = []
-    mark = gatelib.git(root, "log", "-1", "-E", f"--grep={DOCS_PRUNE}", "--format=%H", ref)
+    logged = (gatelib.git(root, "log", "--format=%H %s", ref) or "").splitlines()
+    marks = (line.split(" ", 1) for line in logged)
+    mark = next((pair[0] for pair in marks if DOCS_PRUNE.match(pair[-1])), None)
     if mark:
         counts.append(landed_after(root, ref, mark))
     recorded = (gatelib.read_text(root / PASSED) or "").strip()
@@ -514,8 +516,7 @@ def passed(root: Path) -> str | None:
     commit = gatelib.git(root, "rev-parse", tip) if tip else None
     if not commit:
         return None
-    (root / PASSED).parent.mkdir(parents=True, exist_ok=True)
-    (root / PASSED).write_text(f"{commit}\n", encoding="utf-8")
+    (gatelib.state_dir(root) / PASSED.name).write_text(f"{commit}\n", encoding="utf-8")
     return commit
 
 
