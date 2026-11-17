@@ -245,9 +245,9 @@ def test_the_ci_template_s_later_tier_marker_is_red_until_the_project_answers_it
     shutil.copytree(pristine(), scratch, symlinks=True)
     path = scratch / CI
     marker = (
-        "      # bind: the setup each later-tier suite needs, pinned, in steps under"
-        " `if: matrix.gate == 'tests-changed'`, as deep.yml sets up the whole suite; delete this"
-        " line where no suite sits in a later tier\n"
+        '      - { name: "bind: the setup each later-tier suite needs, pinned, in steps under'
+        " if: matrix.gate == 'tests-changed', as deep.yml sets up the whole suite\","
+        " run: exit 1 }\n"
     )
     assert marker in template
     text = path.read_text(encoding="utf-8")
@@ -257,5 +257,5 @@ def test_the_ci_template_s_later_tier_marker_is_red_until_the_project_answers_it
     path.write_text(text.replace(anchor, marker + anchor, 1), encoding="utf-8")
     found = [line for line in red(scratch) if "toolchain" in line]
     assert len(found) == 1
-    assert "in job `tier1` still says '# bind: the setup each later-tier suite needs'" in found[0]
+    assert "in job `tier1` still says 'bind: the setup each later-tier suite needs'" in found[0]
     shutil.rmtree(scratch)

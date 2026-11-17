@@ -222,11 +222,11 @@ Tell the owner this before step 1. It is not a question.
     - Have each long gate hand `{{shard}}` and `{{shards}}` to its tool.
     - Add a gate to its tier's list at the top of the `justfile` and nowhere else: CI reads the same lists.
     - Run `tier0-tree` and `tier1` three times each. A gate red in parallel and green alone shares state, which tiers.md says how to separate.
-    - Fill each `bind:` cache line of the CI templates with this stack's caches, a compiled stack's content-addressed compiler cache outside the tree included, keyed on its lockfiles and tool configs, and keep their shape.
+    - Fill each cache of the CI templates with this stack's caches, and keep their shape. Its `path` names, in place of `.cache`, the dependency directory and every tool cache its job writes: in `deep.yml` the mutation cache and the fuzz corpus too, and for a compiled stack the content-addressed compiler cache outside the tree. Its `key` hashes this stack's lockfiles and tool configs in place of `**/*.lock`.
     - Fill the binding's Speed section, one line per concept, saying how this stack will meet it where nothing is bound yet. Leave `- Shards: 1`.
     - Run `just budget tier0 --set` and `just budget tier1 --set` once. Take those readings on a quiet machine or the CI runner, and vet each with `pstack:benchmark-checklist`. On a shared machine, cap the gates with `RATCHET_JOBS`.
 
-    Done when the parallel modes are on, no CI cache line is left at `bind:`, the Speed section has no placeholder, three runs of each are green, and `[ceilings.seconds]` has a key per tier.
+    Done when the parallel modes are on, every CI cache names this stack's paths and lockfiles, the Speed section has no placeholder, three runs of each are green, and `[ceilings.seconds]` has a key per tier.
 
 11. **Records and CI.**
     - Write `docs/design-brief.md` from step 3's answers, dated, and under `## In the owner's words` each question the owner answered here with the answer word for word, after init's answers as `AGENTS.md` and `PRODUCT.md` hold them.
@@ -235,11 +235,11 @@ Tell the owner this before step 1. It is not a question.
     - **It has none:** do not create `DESIGN.md`. Write under slice one that the first surface is built with `impeccable shape`, and that an agent runs `impeccable document` once it merges.
     - Write the plugin's version (from `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`) and its commit (`git -C "${CLAUDE_PLUGIN_ROOT}" rev-parse HEAD` when that is a checkout, else the latest commit of `Simon-GitHub-Code/ratchet` that changed that file) and the tree id of that commit (`<commit>^{tree}`; for a copy with no history, the id the template justfile computes) into the binding's `- Ratchet plugin: <version> at <commit> tree <tree id>` line.
     - Write the same commit into every `ref: "<ratchet-sha>"` of `ci.yml`, `deep.yml`, `weekly.yml` and `merge.yml`, so CI and every local tier run the plugin's gates at one version, which `just plugin-pin` and the conformance gate hold.
-    - Add the toolchain setup, pinned by commit SHA with the version in a trailing comment, so `just pins` stays green.
-    - Where a suite's gate sits in a later tier, set up what that suite needs in the `tier1` job of `ci.yml`, under `if: matrix.gate == 'tests-changed'`, as `deep.yml` sets up the whole suite, then delete the bind line there. Delete it as well where no suite sits in a later tier.
-    - Set the nightly hour in `deep.yml`.
+    - Replace each `bind: toolchain setup` step with the toolchain setup, pinned by commit SHA with the version in a trailing comment and the setup action's own cache on, so `just pins` stays green. A `bind:` step exits 1, so CI is red while one stands.
+    - Where a suite's gate sits in a later tier, replace the `bind:` step for later-tier suites in the `tier1` job of `ci.yml` with the setup that suite needs, under `if: matrix.gate == 'tests-changed'`, as `deep.yml` sets up the whole suite. Delete that step where no suite sits in a later tier.
+    - Set the nightly hour in `deep.yml` to one when nobody works on the repository. Cron reads it in UTC.
 
-    Done when the brief is dated and holds the owner's words, the ADRs and glossary entries are written and the glossary names the project, with user-interface surfaces `DESIGN.md` exists, with none there is no `DESIGN.md` and slice one says the first surface is built with `impeccable shape` and that an agent runs `impeccable document` once it merges, the binding names the plugin's version and commit, and the workflows name no placeholder.
+    Done when the brief is dated and holds the owner's words, the ADRs and glossary entries are written and the glossary names the project, with user-interface surfaces `DESIGN.md` exists, with none there is no `DESIGN.md` and slice one says the first surface is built with `impeccable shape` and that an agent runs `impeccable document` once it merges, the binding names the plugin's version and commit, and the workflows name no placeholder and hold no `bind:` step.
 
 12. **Prove it.**
     - Commit first: the change-size gate knows the adoption by its subjects, and in a bite the change is what the tree holds beyond `HEAD`.

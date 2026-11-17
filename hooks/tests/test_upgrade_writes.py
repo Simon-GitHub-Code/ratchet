@@ -31,10 +31,7 @@ JUSTFILE = "justfile"
 CI = ".github/workflows/ci.yml"
 DEEP = ".github/workflows/deep.yml"
 OVER = ' --over "$OVER"'
-OVER_LINES = (
-    "  # Why: runners vary, so a ceiling reports on a pull request and blocks on the default"
-    " branch.\n  OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}\n"
-)
+OVER_LINES = "  OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}\n"
 FLAG_ROW = "| flag | `flags.toml` | `^\\[\\[flag\\]\\]` |"
 FLAG = (
     '[[flag]]\nkey = "{}"\nowner = "the owner"\ndefault = false\nremove-by = 2099-01-01\n'

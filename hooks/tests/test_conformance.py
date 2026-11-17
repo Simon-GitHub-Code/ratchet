@@ -896,12 +896,26 @@ def test_a_workflow_with_the_toolchain_placeholder_in_front_of_the_template_s_st
     replace(WEEKLY, conformance.TOOLCHAIN_STEP, conformance.TOOLCHAIN_PLACEHOLDER)(repo)
     [found] = conformance.findings(repo)
     assert found.path == WEEKLY
-    assert found.problem.startswith("line 39 in job `weekly` still says '# bind: toolchain setup'")
+    assert found.problem.startswith(
+        "line 36 in job `weekly` still says 'bind: toolchain setup', so no step sets up"
+    )
     assert isinstance(found.fix, conformance.Agent)
 
 
-def test_a_toolchain_the_project_bound_is_not_asked_for_again(repo: Path) -> None:
-    marker = conformance.TOOLCHAIN_PLACEHOLDER
+def test_the_placeholder_step_is_red_wherever_it_stands_since_it_exits_non_zero(
+    repo: Path,
+) -> None:
+    project = "      - uses: actions/setup-node@v5"
+    placeholder = conformance.TOOLCHAIN_PLACEHOLDER
+    replace(WEEKLY, conformance.TOOLCHAIN_STEP, f"{placeholder}\n{project}")(repo)
+    [found] = conformance.findings(repo)
+    assert "still says 'bind: toolchain setup'" in found.problem
+
+
+def test_a_toolchain_the_project_bound_below_an_older_template_s_comment_is_not_asked_again(
+    repo: Path,
+) -> None:
+    marker = f"      # {conformance.TOOLCHAIN_MARKER}, pinned, with the setup action's own cache on"
     project = "      - uses: actions/setup-node@v5"
     replace(WEEKLY, conformance.TOOLCHAIN_STEP, f"{marker}\n{project}")(repo)
     assert red(repo) == [], "the comment may stay above the project's own step"
@@ -910,6 +924,15 @@ def test_a_toolchain_the_project_bound_is_not_asked_for_again(repo: Path) -> Non
     assert red(repo) == [], "a marker with nothing after it has no template line to match"
     write(".github/workflows/release.yml", f"concurrency: cache\n{marker}\n- run: x\n")(repo)
     assert red(repo) == [], "a workflow the template lacks has no unbound toolchain to compare"
+
+
+def test_an_older_template_s_comment_in_front_of_the_template_s_step_is_red(repo: Path) -> None:
+    marker = f"      # {conformance.TOOLCHAIN_MARKER}, pinned, with the setup action's own cache on"
+    replace(WEEKLY, conformance.TOOLCHAIN_STEP, marker)(repo)
+    [found] = conformance.findings(repo)
+    assert "still says '# bind: toolchain setup' and the next line is the template's" in (
+        found.problem
+    )
 
 
 def test_a_question_the_catalogue_asks_is_not_asked_twice_of_a_binding_without_types(

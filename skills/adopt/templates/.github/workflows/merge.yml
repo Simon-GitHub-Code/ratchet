@@ -1,18 +1,10 @@
 name: merge
-# Why: ADR 0021 of the ratchet plugin. A pull request merges itself when `ci` is green on it and
-# the merge judge finds nothing the owner must see; everything else gets one comment saying why.
-# `workflow_run` runs this file as the default branch holds it, with the default branch checked
-# out, so a pull request cannot change the judge, the manifest it reads or this job. The job never
-# checks out or runs anything a pull request holds: it fetches each head commit and reads it.
 on:
   workflow_run:
     workflows: [ci]
     types: [completed]
 permissions:
   contents: read
-# Why: one merge at a time, each judged against the default branch the last one left. A run in
-# flight finishes; of the runs waiting behind it GitHub keeps the newest and cancels the rest. A
-# cancelled run loses nothing: every run judges every pull request whose `ci` is green.
 concurrency:
   group: merge
   cancel-in-progress: false
@@ -20,8 +12,6 @@ env:
   RATCHET_PLUGIN: ${{ github.workspace }}/ratchet
 jobs:
   merge:
-    # Why: only a green `ci` run of this repository's own `ci.yml`, on a pull request from a
-    # branch of this repository. A fork's pull request is the owner's to merge.
     if: >-
       github.event.workflow_run.event == 'pull_request'
       && github.event.workflow_run.conclusion == 'success'
@@ -41,16 +31,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with: { fetch-depth: 0 }
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with: { repository: Simon-GitHub-Code/ratchet, ref: "<ratchet-sha>", path: ratchet } # the plugin at the commit the binding pins; adopt fills it
-      # Why: `sha` makes the forge refuse the merge when the branch moved after the judge read it.
-      # A merge commit, never a squash: the route reads a finished feature from one. The token's
-      # push starts no workflow, so tier 2 on the default branch is started here. The default
-      # branch is fetched again before each judgement, so a pull request behind what the one
-      # before it merged is told so. Which runs count is `forge_runs.py`'s to say (ADR 0024): a
-      # `ci` run counts for a pull request only when it tested that one against the default
-      # branch, and a `deep` run only on a commit of the default branch. It also says which
-      # reasons a run does not count are the owner's, and the job writes those as the same
-      # comment; a `ci` that is red or still running is the pull request's own checks' to say.
+        with: { repository: Simon-GitHub-Code/ratchet, ref: "<ratchet-sha>", path: ratchet }
       - name: Judge every green pull request, say what was found, merge what passed
         run: |
           fetch() { git fetch --no-tags -q origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH" "$@"; }
@@ -101,7 +82,6 @@ jobs:
                   gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/$issue" -f state=closed -f state_reason=completed --silent \
                     || echo "::warning::#$number: issue #$issue it closes stays open"
                 done
-                # Why: the name goes into a URL, so one with a character a URL reads is left.
                 case "$branch" in
                   *[!A-Za-z0-9._/-]*) echo "branch $branch stays" ;;
                   *) gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch" --silent || echo "branch $branch stays" ;;
