@@ -183,6 +183,8 @@ tier2_sharded := "mutation e2e test-stability"
 #   - two more gates whose tools each start a worker for every core, when a run shows one starving
 #     the other or a timed run is faster with them grouped. A group runs its gates one after
 #     another, so keep its chain shorter than the slowest gate outside it; the runner says when not.
+#     A group acts only where a tier runs in one process, never in CI's job per gate, so
+#     time a local `check`.
 # Giving each gate an output of its own is better than a group. A gate that is red in parallel
 # and green alone shares state with another.
 serial0 := ""

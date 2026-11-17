@@ -39,6 +39,7 @@ import pins
 import plugin_pin
 import project_bite
 import report
+import runrecord
 import settings_rules
 import suites
 import suppressions
@@ -1906,6 +1907,21 @@ def check_speed_parts(body: str) -> Iterable[Finding]:
             yield agent(f"{BINDING_PATH}: the Speed section does not say how '{part}' is met")
 
 
+def check_local_caches(root: Path) -> Iterable[Finding]:
+    """The optional ``Local caches`` bullet of ``## Speed`` holds only paths, each a code span."""
+    body = markdown_text.section(read(root / BINDING_PATH) or "", SPEED_SECTION)
+    value = markdown_text.bullets(body).get(runrecord.LOCAL_CACHES)
+    if value is None or value.startswith("<"):
+        return
+    spans = markdown_text.ticked(value)
+    if not spans or any(" " in span for span in spans):
+        yield agent(
+            f"{BINDING_PATH}: the Local caches bullet of the Speed section is not a list of paths,"
+            " each as a code span with no space in it",
+            then=("name each path the tools write locally as a code span, or take the bullet out",),
+        )
+
+
 INCREMENTAL_VARIABLE = "mutation_incremental"
 INCREMENTAL_RECIPE = "mutation-changed"
 CI_SWITCH = ('env_var_or_default("CI"', 'env_var_or_default("RATCHET_BITING"')
@@ -3266,6 +3282,33 @@ def check_bite_all_ceiling(root: Path) -> Iterable[Finding]:
         )
 
 
+def check_cache_written(root: Path) -> Iterable[Finding]:
+    """The last tier run's record names a Local caches path that did not exist after the run."""
+    lines = (gatelib.read_text(root / gatelib.STATE / "timing.jsonl") or "").splitlines()
+    records = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict):
+            records.append(record)
+    tiers = [at for at, record in enumerate(records) if record.get("kind") == runrecord.TIER]
+    after = records[tiers[-1] + 1 :] if tiers else []
+    for record in after:
+        if record.get("kind") == runrecord.CACHE_MISSING:
+            yield agent(
+                f"{BINDING_PATH}: the Local caches bullet names {record.get('path')}, which did not"
+                " exist after the last tier run",
+                then=(
+                    (
+                        "make the recipe that owns the cache write it, or take the path off the"
+                        " Local caches bullet, then run the tier again"
+                    ),
+                ),
+            )
+
+
 def full_proof_problem(root: Path, text: str) -> str:
     """What the missing ``bite-all`` ceiling costs: the tier 2 ceiling it falls to, the last run."""
     tier = budget.ceiling_of(text, "tier2")
@@ -3419,6 +3462,8 @@ CHECKS: tuple[Check, ...] = (
     check_installs,
     check_quality,
     check_bite_all_ceiling,
+    check_cache_written,
+    check_local_caches,
     check_gate_reads,
     check_bites,
     check_incidents,
@@ -4361,7 +4406,7 @@ EMPTY_TOOL_CELL = re.compile(r"^(\| [^|\n]+ \|) \|", re.MULTILINE)
 TEST_PATHS_PLACEHOLDER = re.compile(r"^- Tests: <[^\n]*>$", re.MULTILINE)
 TRIGGERS_PLACEHOLDER = re.compile(r"^\| <kind> \|[^\n]*$", re.MULTILINE)
 INCREMENTAL_PLACEHOLDER = re.compile(r'"bind: the mutation tool\'s option[^"]*"')
-SPEED_PLACEHOLDER = re.compile(r"^(- [A-Z][a-z ]+: )<[^\n]*>$", re.MULTILINE)
+SPEED_PLACEHOLDER = re.compile(r"^(- (?!Local caches)[A-Z][a-z ]+: )<[^\n]*>$", re.MULTILINE)
 INSTALL_PLACEHOLDER = re.compile(r"^- Install: <[^\n]*>$", re.MULTILINE)
 DEPENDENCY_PLACEHOLDER = re.compile(
     r"^- (Manifests|Lockfiles|Entry point): <[^\n]*>$", re.MULTILINE
