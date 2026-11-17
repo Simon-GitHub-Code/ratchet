@@ -120,3 +120,16 @@ def test_main_runs_in_a_scratch_directory(
     monkeypatch.setattr(bite, "SERVICE_SCENARIOS", [])
     assert bite.main(["bite"]) == 0
     assert "bite: markers: bites" in capsys.readouterr().out
+
+
+def test_run_inside_a_scratch_copy_the_script_still_bites_the_project_bite_gate(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario = next(
+        entry for entry in bite.SCENARIOS if entry[0].startswith("project-bite: a gate green")
+    )
+    monkeypatch.setattr(bite, "SCENARIOS", [scenario])
+    monkeypatch.setattr(bite, "SERVICE_SCENARIOS", [])
+    monkeypatch.setenv("RATCHET_BITING", "1")
+    assert bite.main(["bite"]) == 0
+    assert "bites" in capsys.readouterr().out
