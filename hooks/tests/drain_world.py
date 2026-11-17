@@ -137,9 +137,6 @@ def cut_off(where, *args):
 
 
 def let_go(name):
-    # Why: a test run that is killed never writes the file; the wait ends with its directory, or
-    # in time, so no process is left running on a machine other work shares. `go` before the
-    # merge is the test's end: the merge does not run.
     until = time.monotonic() + {hold_for!r}
     while Path(HOLD).is_dir() and time.monotonic() < until:
         if (Path(HOLD) / name).exists():
@@ -184,7 +181,6 @@ if HOLD:
     (Path(HOLD) / "merging").touch()
     if not let_go("merge"):
         raise SystemExit(2)
-    # Why: a merge whose land is gone prints into a pipe nobody reads; the test reads it here.
     said = io.StringIO()
     with contextlib.redirect_stdout(said):
         code = merge.main(sys.argv)

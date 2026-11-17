@@ -116,8 +116,8 @@ class Locator:
                 continue
             expanded = self.filesystem.expand(word)
             path = cwd / expanded
-            wild = _GLOB_CHARS & set(expanded)  # pragma: no mutate # -- see the Why above
-            found = self.filesystem.glob(path) if wild else []  # pragma: no mutate # -- see the Why
+            wild = _GLOB_CHARS & set(expanded)  # pragma: no mutate # -- globbed or not, same paths
+            found = self.filesystem.glob(path) if wild else []  # pragma: no mutate # -- same paths
             paths += found or [path]
         return paths
 

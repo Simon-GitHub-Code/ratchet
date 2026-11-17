@@ -235,8 +235,6 @@ function scan(label, prompt) {
   for (const found of [...prompt.matchAll(COMMAND)].map(m => m[1])) commands[role].add(found)
   for (const found of prompt.match(PUBLISHING) || []) commands[role].add(found)
 }
-// Why: a canned answer stands for one the agent could give, so it must be one the schema the
-// workflow passed allows. A keyword this does not check fails too, so none is skipped unread.
 const CHECKED = new Set([
   'type', 'properties', 'required', 'items', 'enum', 'pattern', 'minItems', 'anyOf',
   'additionalProperties', 'description',
