@@ -17,6 +17,7 @@ import feature_preflight as preflight
 import owed
 import publish_check
 import route
+import run_time
 from tests.repos import git, install_hooks, repository, snapshot, write
 
 Out = pytest.CaptureFixture[str]
@@ -336,10 +337,12 @@ def test_on_its_branch_the_report_carries_the_start_the_publish_check_reads(
     root = repository(tmp_path, {"docs/agents/triage-labels.md": RECORD})
     gh = gh_returning(issue())
     assert run(root, "4", gh).start is None
+    assert run_time.stamps(root) == {}
     git(root, "switch", "-q", "-c", "feature/4-x")
     report = run(root, "4", gh, branch="feature/4-x")
     head = git(root, "rev-parse", "HEAD").strip()
     assert report.start == publish_check.Start("feature/4-x", head, None)
+    assert run_time.stamps(root)["branch"] == "feature/4-x"
     saved = tmp_path / "start.json"
     saved.write_text(json.dumps(asdict(report)), encoding="utf-8")
     assert publish_check.read_start(saved) == report.start
@@ -370,6 +373,7 @@ def test_a_forge_that_cannot_be_read_turns_the_start_red(tmp_path: Path) -> None
     report = run(root, "4", gh_returning(issue()), branch="feature/4-x")
     assert checks(report) == ["start"]
     assert report.start is None
+    assert run_time.stamps(root) == {}
 
 
 def test_outside_a_checkout_the_tree_cannot_be_clean(tmp_path: Path) -> None:

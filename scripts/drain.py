@@ -129,6 +129,7 @@ import merge_ready
 import publish_check
 import queue_notes
 import route
+import run_time
 import split
 
 # Why: the additive-record check the hook and the judge share lives under hooks/.
@@ -1245,6 +1246,8 @@ def settle(
     tree = tree_of(root, branch)
     change = change_of(root, merge_ready.default_ref(root), branch)
     gates = timings(tree)
+    if tree.is_dir():
+        run_time.stamp_end(tree)
     note = {
         **{
             k: v
@@ -1259,6 +1262,7 @@ def settle(
         "assumptions": assumptions(change),
         "additions": additions(change),
         "gates": gates,
+        "run_time": run_time.line(tree),
         "closed": now().isoformat(timespec="seconds"),
         "owes": owed_kinds(result or {}),
         "reviews": owed_kinds(result or {}, REVIEW_RED),
@@ -1625,6 +1629,8 @@ def minutes(note: dict[str, object]) -> str:
     if timed:
         slowest = ", ".join(f"{name} {seconds:.1f}s" for seconds, name in timed[:SLOWEST])
         parts.append(f"slowest gates of its last check: {slowest}")
+    if "run_time" in note:
+        parts.append(str(note["run_time"]))
     return "; ".join(parts) or "not timed"
 
 

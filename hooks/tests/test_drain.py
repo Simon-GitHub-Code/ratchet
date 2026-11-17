@@ -34,6 +34,7 @@ CONJECTURE = (
 ALPHA, BETA, GAMMA = (f".scratch/f/issues/0{n}-{name}.md" for n, name in enumerate("abc", 1))
 BRANCH_A, BRANCH_B, BRANCH_C = "feature/1-alpha", "feature/2-beta", "feature/3-gamma"
 STAMP = datetime(2026, 11, 12, 9, 30, 5, tzinfo=UTC)
+UNSTAMPED = "run time: not measured, since the run has no start stamp"
 REAL_NOW = drain.now
 ASSUMED = {"question": "Which case?", "assumed": "Lower.", "refuter": "A user types upper."}
 
@@ -466,6 +467,7 @@ def test_land_merges_what_the_judge_passes_and_removes_the_work_tree(
     }
     tree = build(root, BRANCH_A, change, record=approval("alpha"))
     write(tree, ".ratchet/timing.jsonl", '{"key": "test", "seconds": 4.25}\nnot json\n{"key": 1}\n')
+    write(tree, ".ratchet/run-time.json", '{"start": "2026-11-17T10:00:00Z"}')
     capsys.readouterr()
     assert run(root, "land", ALPHA) == 0
     out = capsys.readouterr().out
@@ -480,6 +482,8 @@ def test_land_merges_what_the_judge_passes_and_removes_the_work_tree(
     assert kept["assumptions"] == [ASSUMED]
     assert kept["additions"] == ["GLOSSARY.md: term Order (avoid: basket)"]
     assert kept["gates"] == {"test": 4.25}
+    assert str(kept["run_time"]).startswith("run time: ")
+    assert "not measured" not in str(kept["run_time"])
     assert states(root) == {BRANCH_B: "buildable", BRANCH_C: "buildable"}, (
         "the merge resolved the ticket, so what waited on it is buildable"
     )
@@ -804,9 +808,9 @@ def test_the_report_says_what_merged_what_waits_and_every_assumption(
         "",
         "## Timings",
         "",
-        f"- `{ALPHA}`: 42 min in the queue",
-        f"- `{GAMMA}`: 42 min in the queue",
-        "- `.scratch/f/issues/05-eps.md`: 42 min in the queue",
+        f"- `{ALPHA}`: 42 min in the queue; {UNSTAMPED}",
+        f"- `{GAMMA}`: 42 min in the queue; {UNSTAMPED}",
+        f"- `.scratch/f/issues/05-eps.md`: 42 min in the queue; {UNSTAMPED}",
     ]
     assert text.endswith("\n")
     assert git(root, "status", "--porcelain") == "", "the report is no commit's"
@@ -830,6 +834,7 @@ def test_the_report_leaves_out_a_ticket_still_building_and_times_what_it_can(
         "slowest gates of its last check: b 9.0s, c 3.2s, a 1.5s"
     )
     assert drain.minutes({"opened": "yesterday"}) == "not timed"
+    assert drain.minutes({"opened": "yesterday", "run_time": "run time: 9s"}) == "run time: 9s"
 
 
 # --- the small readers -----------------------------------------------------------------------
