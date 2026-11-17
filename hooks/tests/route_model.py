@@ -533,47 +533,6 @@ DIVERGENCES: Final[tuple[Divergence, ...]] = (
             answers=Answers.ON_THE_UNIT,
         ),
     ),
-    Divergence(
-        name="expired-unit-unread",
-        holds=lambda world: world.left,
-        reads=lambda world: replace(world, left=False),
-        contradicts=(
-            "The route names a records change that deletes it, and the records check allows the"
-            " deletion of a file `expire` lists, where today a record may not be deleted"
-            " (`merge_ready.py:1115-1116`)."
-        ),
-        source="docs/adr/0064-a-document-has-a-kind-and-a-steering-document-leaves-with-its-feature.md",
-        breaks=frozenset({"RealAdviceCanBeFollowed", "RealExpiredUnitBeforeTheWork"}),
-        example=World(
-            setup=Setup.BOUND,
-            hooks=True,
-            foundation=True,
-            tickets=(Ticket.RESOLVED, Ticket.RESOLVED),
-            architecture=Architecture.RECORDED,
-            left=True,
-        ),
-    ),
-    Divergence(
-        name="carried-answers-read-as-code",
-        holds=lambda world: world.answers is Answers.CARRIED,
-        reads=as_its_carried_answers_unread,
-        contradicts=(
-            "Such a change may also append to the brief's `## In the owner's words` the lines"
-            " `expire` carries, and nothing else: each added line is a dated `## Answers` line of"
-            " a file the same change deletes."
-        ),
-        source="docs/adr/0064-a-document-has-a-kind-and-a-steering-document-leaves-with-its-feature.md",
-        breaks=frozenset({"RealAdviceCanBeFollowed"}),
-        example=World(
-            setup=Setup.BOUND,
-            hooks=True,
-            tree=Tree.RECORDS,
-            foundation=True,
-            tickets=(Ticket.RESOLVED, Ticket.RESOLVED),
-            architecture=Architecture.RECORDED,
-            answers=Answers.CARRIED,
-        ),
-    ),
 )
 
 

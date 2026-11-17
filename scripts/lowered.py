@@ -42,7 +42,9 @@ from collections import Counter
 from pathlib import Path
 
 import comments
+import documents
 import gatelib
+import markdown_text
 import owed
 import plugin_pin
 
@@ -193,7 +195,7 @@ def main(argv: list[str]) -> int:
     if base is None:
         print(f"ratchet-lowered: no base commit yet; {options.file} accepted as is")
         return 0
-    problems = owed_grown(root, base)
+    problems = [*dropped_answers(root, base), *owed_grown(root, base)]
     previous = gatelib.show(root, base, options.file)
     if previous is None:
         print(f"ratchet-lowered: {options.file} is new at {base[:12]}; accepted as is")
@@ -211,6 +213,27 @@ def main(argv: list[str]) -> int:
         else:
             print(f"{message}, relaxed by {adr}")
     return gatelib.report("ratchet-lowered", problems, base)
+
+
+def dropped_answers(root: Path, base: str) -> list[str]:
+    """Each ``## Answers`` line of a ticket or spec the change deletes that the brief lacks.
+
+    Why: ADR 0064. ``expire`` carries those lines to the brief's ``## In the owner's words``, and
+    the owner's words survive a deletion only there.
+    """
+    gone = gatelib.git(root, "diff", "--name-only", "--diff-filter=D", "-M", base, "HEAD") or ""
+    brief = gatelib.read_text(root / documents.BRIEF) or ""
+    held = {
+        documents.parts(row)[1]
+        for row in markdown_text.section(brief, documents.OWNERS_WORDS).split("\n")
+    }
+    return [
+        f"{path}: its answer `{line}` is not in {documents.BRIEF} under {documents.OWNERS_WORDS}"
+        for path in gone.split("\n")
+        if documents.is_steering(path)
+        for line in documents.answers_of(gatelib.show(root, base, path) or "")
+        if documents.parts(line)[1] not in held
+    ]
 
 
 def owed_grown(root: Path, base: str) -> list[str]:

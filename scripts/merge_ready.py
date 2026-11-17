@@ -68,6 +68,7 @@ import contextlib
 import functools
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -79,6 +80,7 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 import application_types
+import documents
 import feature_preflight as preflight
 import flags as registry
 import gatelib
@@ -195,6 +197,19 @@ class Change:
     def kept(self, path: str) -> bool:
         """Whether the head still holds ``path``."""
         return git(self.root, "cat-file", "-e", f"{self.head}:{path}") is not None
+
+
+@dataclass(frozen=True)
+class Uncommitted(Change):
+    """The work tree read as a change from ``HEAD``: what ``after`` and ``kept`` say is on disk."""
+
+    def after(self, path: str) -> str | None:
+        """``path`` in the work tree, or ``None`` when it is not there or is not text."""
+        return gatelib.read_text(self.root / path)
+
+    def kept(self, path: str) -> bool:
+        """Whether the work tree still holds ``path``."""
+        return (self.root / path).is_file()
 
 
 def git(root: Path, *args: str, env: dict[str, str] | None = None) -> str | None:
@@ -1037,6 +1052,98 @@ def nothing(_change: Change, _path: str) -> None:
     return None
 
 
+STATUS_LINE = re.compile(r"^Status:.*$", re.MULTILINE)
+
+
+@functools.cache
+def expiring(change: Change) -> frozenset[str]:
+    """The files ``documents.py expire`` lists in the tree of the merge base.
+
+    A ticket counts as closed where the change deletes its whole unit: the mark and the deletion
+    come in one paste.
+    """
+    held = gatelib.tracked_paths(change.root, change.fork)
+    units = {
+        documents.unit_of(path) for path in (*held, *change.paths) if documents.is_steering(path)
+    }
+    gone = {
+        unit
+        for unit in units
+        if not any(
+            change.kept(path)
+            for path in (*held, *change.paths)
+            if documents.is_steering(path) and documents.unit_of(path) == unit
+        )
+    }
+
+    def read(path: str) -> str | None:
+        text = change.before(path)
+        if text is None or not documents.is_ticket(path) or documents.unit_of(path) not in gone:
+            return text
+        return STATUS_LINE.sub("Status: resolved", text)
+
+    return documents.listed(documents.snapshot(held, read))
+
+
+def spent(change: Change, path: str) -> bool:
+    """Whether the ticket at ``path`` is closed at the merge base and its build left its record."""
+    ticket = preflight.local_ticket(path, change.before(path) or "")
+    slug = preflight.slug_of(ticket.title, ticket.number)
+    return not ticket.is_open and change.held(f"docs/features/{slug}/verdict.json")
+
+
+def inheriting(change: Change, spec: str) -> list[str]:
+    """The labelled tickets that take their approach from ``spec``, as the merge base holds them."""
+    found = []
+    with tracker_names(change, change.fork) as names:
+        for path in sorted(labelled(change)):
+            ticket = preflight.local_ticket(path, change.before(path) or "")
+            parent = preflight.parent_of(ticket, names)
+            if parent is not None and posixpath.normpath(parent) == spec:
+                found.append(path)
+    return found
+
+
+def agreed(change: Change, path: str) -> list[str]:
+    """The labelled tickets whose agreement a deleted file holds: itself, or those it informs."""
+    if documents.is_ticket(path):
+        return [path] if path in labelled(change) else []
+    return inheriting(change, path)
+
+
+def deletion(change: Change, path: str) -> str | None:
+    """Why the deletion of record ``path`` is more than a record takes, or ``None`` when it is not.
+
+    Why: ADR 0064. A file ``expire`` lists may go, and a labelled ticket or the spec it informs
+    only once each such ticket is closed with the record of its build in the tree.
+    """
+    if path not in expiring(change):
+        return "deletes a record"
+    if all(spent(change, ticket) for ticket in agreed(change, path)):
+        return None
+    return "is a ticket the owner agreed to build, whose build left no record: only they delete it"
+
+
+def only_deleted(_change: Change, _path: str) -> str | None:
+    return "is a feature spec, which a records change only deletes"
+
+
+def carried_words(change: Change, path: str) -> str | None:
+    """Why a change of the brief is more than a record takes: it is not the carried lines alone."""
+    gone = [other for other in change.paths if not change.kept(other) and other in expiring(change)]
+    answers = {
+        documents.parts(line)[1]
+        for other in gone
+        for line in documents.answers_of(change.before(other) or "")
+    }
+    if documents.carried(change.before(path), change.after(path), answers):
+        return None
+    return (
+        f"adds or drops more than the dated `## Answers` lines of the files the change deletes,"
+        f" under {documents.OWNERS_WORDS}"
+    )
+
+
 def not_an_addition(change: Change, path: str) -> str | None:
     note = addition(change, path)
     return None if note is None else f"is {note}"
@@ -1057,6 +1164,7 @@ class RecordKind:
     refuses: Callable[[Change, str], str | None]
     appended: bool = False
     decides: bool = False
+    strict: bool = False
 
 
 # Why closed: a file no skill writes is no record, so a name the judge was never told of, an
@@ -1073,6 +1181,8 @@ RECORDS = (
     RecordKind(re.compile(r"GLOSSARY\.md"), not_an_addition, appended=True),
     # a decision record domain-modeling writes: the owner's to agree, so --records can land it
     RecordKind(re.compile(rf"docs/adr/\d{{4}}-{SLUG}\.md"), nothing, appended=True, decides=True),
+    RecordKind(re.compile(rf"docs/features/{SLUG}/spec\.md"), only_deleted, strict=True),
+    RecordKind(re.compile(re.escape(documents.BRIEF)), carried_words, strict=True),
 )
 
 
@@ -1112,13 +1222,13 @@ def refusal(change: Change, path: str, *, kind: RecordKind, sides: tuple[str, st
     odd = [mode for mode in sides if mode not in RECORD_MODES]
     if odd:
         return f"is {IRREGULAR.get(odd[0], f'of mode {odd[0]}')}, where a record is a plain file"
-    if not change.kept(path):
-        return "deletes a record"
     if change.tip(path) != change.before(path):
         return (
             "changed on the default branch after the change forked, so the merge holds text the"
             " judge did not read; bring the change up to date"
         )
+    if not change.kept(path):
+        return deletion(change, path)
     return (
         twin(change, path)
         or unreadable(change, path)
@@ -1167,14 +1277,33 @@ def records_alone(change: Change, manifest: Manifest) -> list[Reason]:
     ]
 
 
-def not_records(root: Path, base_ref: str, paths: Iterable[str]) -> list[str]:
-    """The paths that are no kind of record by the manifest ``base_ref`` holds: all, with none."""
+def shaped(change: Change, manifest: Manifest, path: str) -> bool:
+    """Whether ``path`` reads as a record: its kind, and for a strict kind what the change does."""
+    kind = record_kind(manifest, path)
+    if kind is None:
+        return False
+    if not kind.strict:
+        return True
+    if not change.kept(path):
+        return path in expiring(change)
+    return kind.refuses(change, path) is None
+
+
+def not_records(
+    root: Path, base_ref: str, paths: Iterable[str], *, change: Change | None = None
+) -> list[str]:
+    """The paths that are no kind of record by the manifest ``base_ref`` holds: all, with none.
+
+    ``change`` is the commits the paths come from; without one they are the work tree's, read as
+    a change from ``HEAD``.
+    """
     manifest = manifest_at(root, base_ref)
-    return [
-        path
-        for path in paths
-        if isinstance(manifest, Reason) or record_kind(manifest, path) is None
-    ]
+    listed_paths = tuple(paths)
+    if isinstance(manifest, Reason):
+        return list(listed_paths)
+    head = commit(root, "HEAD") or ""
+    seen = change or Uncommitted(root, head, head, head, listed_paths)
+    return [path for path in listed_paths if not shaped(seen, manifest, path)]
 
 
 # --- the verdict record ----------------------------------------------------------------------
@@ -1326,6 +1455,20 @@ def waiting(
     return []
 
 
+def expiry_reasons(change: Change) -> list[Reason]:
+    """Each unit the change makes expired and leaves in the tree; one already expired is not."""
+    before = documents.snapshot(gatelib.tracked_paths(change.root, change.fork), change.before)
+    after = documents.snapshot(gatelib.tracked_paths(change.root, change.head), change.after)
+    return [
+        Reason(
+            "expired",
+            f"{unit} has expired and the change leaves it in the tree: run `documents.py expire`"
+            " and commit what it deletes",
+        )
+        for unit in documents.left(before, after)
+    ]
+
+
 def judge(
     root: Path,
     base_ref: str,
@@ -1380,6 +1523,7 @@ def judge(
             what="new surface with no flag that is off",
         ),
         *dispute_reasons(change),
+        *expiry_reasons(change),
         *record_reasons(change, manifest),
     ]
 

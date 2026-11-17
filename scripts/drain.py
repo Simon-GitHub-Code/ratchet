@@ -122,6 +122,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import application_types
+import documents
 import feature_preflight as preflight
 import gatelib
 import merge
@@ -184,6 +185,8 @@ MERGE = "merge"
 SLOWEST = 3
 LOCKED = frozenset({"open", "update", "check", "close", "clean", "report", "split"})
 # Why: the triggers gate's red line; the kind it names is what the safeguard binds (ADR 0028).
+EXPIRED = "docs: delete what has expired and keep its answers"
+SIDES = {frozenset({1, 2}): "--ours", frozenset({1, 3}): "--theirs"}
 OWED_RED = re.compile(r"triggers: '([^']+)' gained \d+ instance")
 # Why: ADR 0052. The red line of a kind whose architecture review is owed; the review releases it.
 REVIEW_RED = re.compile(r"triggers: architecture review owed: '([^']+)' gained \d+ instance")
@@ -1147,7 +1150,7 @@ def rebase(drain: Drain, ticket: preflight.Ticket) -> int:
             # Why: the run was killed after the rebase; its record is still on top. The record is
             # dropped before the mark is cleared: a run killed between the two is told again by
             # the mark, and one that cleared it first would leave the outdated record to land.
-            drop_record(tree)
+            after_rebase(tree)
             queue_notes.write_note(path, restarted(drain, tree, note, branch=branch))
             print(json.dumps({"moved": True, "conflicts": []}))
             return 0
@@ -1164,15 +1167,69 @@ def rebase(drain: Drain, ticket: preflight.Ticket) -> int:
     return rebase_tree(drain, tree, note, branch=branch)
 
 
+def unmerged(tree: Path) -> dict[str, frozenset[int]]:
+    """The paths a stopped rebase leaves unmerged, each with the stages the index holds of it."""
+    found: dict[str, set[int]] = {}
+    for line in (gatelib.git(tree, "ls-files", "--unmerged") or "").splitlines():
+        head, _, name = line.partition("\t")
+        found.setdefault(name, set()).add(int(head.split()[2]))
+    return {name: frozenset(stages) for name, stages in found.items()}
+
+
+def settled_stop(tree: Path, stages: dict[str, frozenset[int]]) -> bool:
+    """Settle a stop whose every conflict is a file of an expired unit or the owner's words.
+
+    A file one side deleted and the other changed keeps the side that holds it, and is deleted
+    again by ``expire`` once the rebase is done, after its answers are carried. A conflict of the
+    brief confined to the owner's words keeps every line either side holds.
+    """
+    deleted = [name for name, held in stages.items() if held in SIDES]
+    words = [name for name, held in stages.items() if name == documents.BRIEF and held >= {2, 3}]
+    if not stages or len(deleted) + len(words) != len(stages):
+        return False
+    if not all(documents.is_steering(name) for name in deleted):
+        return False
+    for name in deleted:
+        gatelib.git(tree, "checkout", SIDES[stages[name]], "--", name)
+    for name in words:
+        text = documents.settled(gatelib.read_text(tree / name) or "")
+        if text is None:
+            return False
+        (tree / name).write_text(text, encoding="utf-8")
+    gatelib.git(tree, "add", "--", *stages)
+    return set(deleted) <= documents.listed(documents.work_tree(tree))
+
+
+def carry_on(tree: Path) -> list[str] | None:
+    """Finish a stopped rebase stop by stop; the conflicts of the stop it cannot settle, if any."""
+    while True:
+        stages = unmerged(tree)
+        if not settled_stop(tree, stages):
+            return sorted(stages)
+        if gatelib.git(tree, "-c", "core.editor=true", "rebase", "--continue") is not None:
+            return None
+
+
+def after_rebase(tree: Path) -> None:
+    """Drop the outdated verdict record, then delete what has expired in a commit of its own."""
+    drop_record(tree)
+    done = documents.expire(tree, now().date())
+    if done.problem is not None:
+        print(f"update: {done.problem}", file=sys.stderr)
+    elif done.deleted:
+        gatelib.git(tree, "add", "--all")
+        gatelib.git(tree, "commit", "--quiet", "--no-verify", "-m", EXPIRED)
+
+
 def rebase_tree(drain: Drain, tree: Path, note: dict[str, object], *, branch: str) -> int:
     base = merge_ready.default_ref(drain.root)
     path = queue_notes.note_path(drain.root, branch)
-    if gatelib.git(tree, "rebase", "--quiet", base) is not None:
-        drop_record(tree)
+    conflicts = None if gatelib.git(tree, "rebase", "--quiet", base) is not None else carry_on(tree)
+    if conflicts is None:
+        after_rebase(tree)
         print(json.dumps({"moved": True, "conflicts": []}))
         queue_notes.write_note(path, restarted(drain, tree, note, branch=branch))
         return 0
-    conflicts = (gatelib.git(tree, "diff", "--name-only", "--diff-filter=U") or "").splitlines()
     gatelib.git(tree, "rebase", "--abort")
     queue_notes.write_note(path, restarted(drain, tree, note, branch=branch, rebase_onto=base))
     print(json.dumps({"moved": False, "conflicts": conflicts}))
@@ -1741,9 +1798,29 @@ def report(drain: Drain, token: str = "") -> int:
     return 0
 
 
+def noted(root: Path, ref: str) -> preflight.Ticket | None:
+    """The ticket ``ref`` names as the note written when it opened keeps it, its file being gone.
+
+    Why: the merge that lands a ticket's build may delete its file (ADR 0064), and a ``land`` run
+    again after a kill must still find the ticket to record that merge.
+    """
+    for path in sorted((gatelib.state_dir(root) / queue_notes.QUEUE / "tickets").glob("*.json")):
+        note = queue_notes.loaded(gatelib.read_text(path))
+        named, title = note.get("ref"), note.get("title")
+        if isinstance(named, str) and isinstance(title, str) and named.endswith(".md"):
+            number = re.match(r"\d+", Path(named).name)
+            if key(named) == key(ref) or (
+                number and ref.isdigit() and int(number.group()) == int(ref)
+            ):
+                return preflight.local_ticket(named, f"# {title}\n")
+    return None
+
+
 def on_ticket(drain: Drain, options: argparse.Namespace) -> int:
     """The actions on one ticket's work tree: update it, land it, close it."""
-    ticket = preflight.fetch(options.ref or "", drain.root, drain.tracker)
+    ticket = preflight.fetch(options.ref or "", drain.root, drain.tracker) or noted(
+        drain.root, options.ref or ""
+    )
     if ticket is None:
         candidates = preflight.numbered_locally(options.ref or "", drain.root)
         if candidates:

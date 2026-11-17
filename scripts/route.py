@@ -70,6 +70,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import application_types
+import documents
 import feature_preflight as preflight
 import flags
 import gatelib
@@ -93,6 +94,7 @@ LOCAL_TICKETS = ".scratch/*/issues/*.md"
 LOCAL_SPECS = ".scratch/*/spec.md"
 PURPOSE_PLACEHOLDER = "<One paragraph"
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
+EXPIRE = f'python3 "{PLUGIN_ROOT / "scripts/documents.py"}" expire'
 CHECK_FALLBACK = "the binding's `check` entry point"
 
 INIT = "/ratchet:init"
@@ -304,14 +306,36 @@ def unstated(ticket: preflight.Ticket, root: Path, gh: preflight.Runner) -> str 
     return None
 
 
+def then_expire(root: Path, ref: str, line: str) -> str:
+    """``line`` with the deletion named in the same command, where ``ref`` is its unit's last."""
+    last = documents.closes(documents.work_tree(root), ref)
+    return f"{line}, then run `{EXPIRE}`" if last else line
+
+
+def expire_step(root: Path) -> Step | None:
+    """A unit left expired in the tree: ``expire`` deletes it and carries its answers."""
+    left = sorted(documents.listed(documents.work_tree(root)))
+    if not left:
+        return None
+    return Step(
+        EXPIRE,
+        f"{len(left)} steering document(s) have expired and are still in the tree"
+        f" ({', '.join(left[:SHOWN])}{' ...' if len(left) > SHOWN else ''}): this deletes them and"
+        " appends their `## Answers` lines to the design brief",
+        NEXT,
+        "expire",
+    )
+
+
 def blocking(tickets: list[preflight.Ticket], root: Path, gh: preflight.Runner) -> Step | None:
     """When every agent-ready ticket waits on an open blocker: the blocker to finish first."""
     for ticket in tickets:
         for ref in ticket.blockers:
             blocker = preflight.fetch(preflight.blocker_ref(ticket, ref, root), root, gh)
             if blocker is not None and blocker.is_open:
+                finish = f'finish ticket {blocker.ref} "{blocker.title}", then mark it resolved'
                 return Step(
-                    f'finish ticket {blocker.ref} "{blocker.title}", then mark it resolved',
+                    finish,
                     f"every agent-ready ticket waits on an open blocker; {ticket.ref} waits on it",
                     NEXT,
                     "blocked",
@@ -339,14 +363,17 @@ def merged_features(root: Path, default_branch: str) -> list[str]:
     return [name for name, tip in pairs if tip in merged]
 
 
-def finished(tickets: list[preflight.Ticket], merged: list[str]) -> Step | None:
+def finished(root: Path, tickets: list[preflight.Ticket], merged: list[str]) -> Step | None:
     """An open ticket whose branch is already merged: it is done, so it is resolved, not rebuilt."""
     for ticket in tickets:
         branch = own_branch(ticket)
         if branch in merged:
-            return Step(
+            mark = (
                 f"mark ticket {ticket.ref} resolved (`Status: resolved` on a local ticket;"
-                " close the issue on a forge)",
+                " close the issue on a forge)"
+            )
+            return Step(
+                then_expire(root, ticket.ref, mark),
                 f"branch `{branch}` is merged, yet {ticket.ref} is still open",
                 NEXT,
                 "resolve",
@@ -533,7 +560,7 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
             f"{TICKETS}, then {CONJECTURE} <ticket>",
             "specify",
         )
-    done = finished(tickets, merged_features(root, checkout.default_branch))
+    done = finished(root, tickets, merged_features(root, checkout.default_branch))
     if done is not None:
         return done
     offline_gh = gh or (lambda _args: None)
@@ -855,7 +882,7 @@ def decide(root: Path, gh: preflight.Runner | None) -> Step:
     if waiting is not None:
         return waiting
     missing = records_missing(root)
-    step = (
+    step = expire_step(root) or (
         Step(GRILL, missing, f"{SPEC}, then {TICKETS}", "records")
         if missing
         else ticket_step(root, gh, checkout)

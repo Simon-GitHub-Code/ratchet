@@ -225,7 +225,8 @@ Both modes make these commits in this order ([pipeline.md](../method/pipeline.md
    - **The drain:** run `ratchet` when it is bound, and commit the raised `quality/` files.
 2. Write the ADR the result suggests under the next free number.
 3. **With no forge:** write the change description at `.scratch/changes/<branch>.md` (the branch's `/` written as `-`) and set the local ticket's `Status:` line to `resolved` in the same commit.
-4. Last and alone, the verdict record: the result's `verdictRecord` on stdin of `just merge-ready record`, its file committed.
+4. Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/documents.py" expire --root .` and commit what it deletes, in a commit of its own.
+5. Last and alone, the verdict record: the result's `verdictRecord` on stdin of `just merge-ready record`, its file committed.
 
 ## The pull request
 
