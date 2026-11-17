@@ -32,8 +32,14 @@ const STOP = {
   "the preflight is red": "Stopped, no ticket or the ticket is not ready",
   "a question for the owner": "Stopped for you, a question or a guard path to change",
   "a guard path the owner must change": "Stopped for you, a question or a guard path to change",
+  "a departure from the spec the owner decides": "Stopped for you, a question or a guard path to change",
+  "a question for the owner after a role that builds or judges":
+    "Stopped for you, a question or a guard path to change",
   "too large": "Stopped too large, split the ticket",
 };
+
+const CARRIED =
+  "a critic finding still owed after the fix round it was given, parked with no review";
 
 const DIED = "Stopped on an error, resume the run";
 const MISSING = "Stopped on an error, an input is missing";
@@ -52,11 +58,18 @@ export const answer = (from, to) => {
   const now = where(to);
   if (now === DIED) return "the agent dies";
   if (now === MISSING) return "it is ready but names no slug";
+  if (to.stop === "a departure from the spec the owner decides")
+    return "it departs from a criterion, or from an assumption that is yours";
+  if (to.stop === "a question for the owner after a role that builds or judges")
+    return from.waits === "critique"
+      ? "it finds a case no record states, which is yours"
+      : "it finds a case that is yours, or leaves you a finding no quote holds";
   if (now.startsWith("Stopped for you")) return "it asks you, or needs a guard path changed";
   if (now.startsWith("Stopped too large"))
     return from.waits.startsWith("spec")
       ? "it measures or estimates the change over a ceiling"
       : "it measures the change over a ceiling";
+  if (to.stop === CARRIED) return "it finds again the major it was fixed for, and no review runs";
   if (now === "Approved") return "it approves, and nothing stands against the change";
   if (now === "Changes requested") return "it requests changes, or something stands against the change";
   const ANSWER = {
