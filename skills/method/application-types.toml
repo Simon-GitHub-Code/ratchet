@@ -113,6 +113,12 @@ lifetime = "standing"
 prune = "pass"
 
 [[documents]]
+name = "change description"
+paths = [".scratch/changes/*.md"]
+lifetime = "standing"
+prune = "never"
+
+[[documents]]
 name = "local feature"
 paths = [".scratch/*/spec.md", ".scratch/*/issues/*.md"]
 lifetime = "steering"

@@ -18,6 +18,11 @@ PRODUCT_CUT = (
     "prune: `PRODUCT.md` is a product and design page, which a prune pass does not cut,"
     " so the merge is the owner's"
 )
+CHANGE = ".scratch/changes/feature-4-thing.md"
+CHANGE_CUT = (
+    f"prune: `{CHANGE}` is a change description page, which a prune pass does not cut,"
+    " so the merge is the owner's"
+)
 DELETED = (
     "document: `docs/design-brief.md` is deleted, and a brief page keeps `## Purpose`, so the"
     " merge is the owner's"
@@ -64,6 +69,25 @@ def test_a_prune_subject_alone_adds_the_page_a_pass_does_not_cut(tmp_path: Path)
     commit(root, "docs(prune)!: cut a product page")
     stamp(root)
     assert judged(root) == [PRODUCT_CUT]
+
+
+def test_a_prune_pass_adding_its_change_description_is_judged_on_its_cuts(
+    tmp_path: Path,
+) -> None:
+    root = held(tmp_path)
+    write(root, BRIEF, FULL.replace("More text.", "Less."))
+    write(root, CHANGE, "# Prune\n\n- The brief's extra text.\n")
+    commit(root, "docs(prune): cut the brief")
+    stamp(root, PRUNE_RECORD)
+    assert judged(root) == []
+
+
+def test_a_prune_pass_editing_a_change_description_is_the_owners(tmp_path: Path) -> None:
+    root = held(tmp_path, **{CHANGE: "# Thing\n\n## Why\n\nA longer reason.\n"})
+    write(root, CHANGE, "# Thing\n\n## Why\n\nA reason.\n")
+    commit(root, "docs(prune): cut a change description")
+    stamp(root, PRUNE_RECORD)
+    assert judged(root) == [CHANGE_CUT]
 
 
 def test_a_page_cut_in_a_prune_pass_keeping_its_headings_is_the_agents(tmp_path: Path) -> None:

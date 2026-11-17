@@ -1242,7 +1242,9 @@ def prune_reasons(change: Change) -> list[Reason]:
             " merge is the owner's",
         )
         for path in pages(change)
-        if (kind := documents.kind_of(path, kinds)) and kind.prune != documents.CUT
+        if change.before(path) is not None
+        and (kind := documents.kind_of(path, kinds))
+        and kind.prune != documents.CUT
     ]
 
 
