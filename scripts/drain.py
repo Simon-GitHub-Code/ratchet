@@ -1159,7 +1159,7 @@ def rebase(drain: Drain, ticket: preflight.Ticket) -> int:
     if refusal is not None:
         print(f"update: {ticket.ref} is not rebased: {refusal}")
         return 1
-    queue_notes.write_note(path, {**note, "rebasing": head})
+    queue_notes.write_note(path, {**note, "rebasing": head, "passed": False})
     return rebase_tree(drain, tree, note, branch=branch)
 
 
