@@ -98,7 +98,7 @@ A `records/<time>` branch checked out (step 2) is a run that stopped before it s
 
 **A branch already merged (step 5).** A working branch whose every commit the default branch already holds is left, never merged again: the route names `git switch <default>`, then `/ratchet:next`. `just merge` leaves a clean checkout on the default branch itself once it has merged the branch it was on. So this state follows a merge cut off before that switch, or a merge by hand. With no forge, it also follows a branch cut and never built on.
 
-**Rows an upgrade left owed that an agent writes from the repository alone (step 8).** They are the binding's Life event signs, Image pins, Suppressions, Install and Dependencies sections and a mutation recipe the plugin no longer reads. The route names `/ratchet:fill`, which reads the tree and its tools, proposes each row and writes it. The owner is asked nothing. The feature preflight and the drain refuse to start work while one is owed, and the refusal names the step, so the window after an upgrade is that one agent step.
+**Rows an upgrade left owed that an agent writes from the repository alone (step 8).** They are the rows `owed.py --fill-first` lists: binding sections an upgrade added that the tree and its tools answer, such as Suppressions, Comments, Documents and Triggers, and a mutation recipe the plugin no longer reads. The route names `/ratchet:fill`, which reads the tree and its tools, proposes each row and writes it. The owner is asked nothing. The feature preflight and the drain refuse to start work while one is owed, and the refusal names the step, so the window after an upgrade is that one agent step.
 
 **An owed architecture review (step 9).** Two things trigger one:
 
@@ -115,7 +115,7 @@ While no decision record names that trigger, the route names `/ratchet:architect
 While a row one of them fires is still `later:`, the route names `/ratchet:safeguard` and what is owed. An agent chooses the tool, writes the recipe and the fault, and binds the row.
 
 - **It sits after steps 1 to 7,** since a safeguard is its own branch off a clean default branch.
-- **It sits before steps 12 to 19,** since the next change that adds another instance of an owed kind is red, and binding first keeps that build from stalling.
+- **It sits before steps 13 to 19,** since the next change that adds another instance of an owed kind is red, and binding first keeps that build from stalling.
 
 The change that brought the kind was free, however many files it touched. The next one that adds another instance waits for the safeguard, so carrying on costs nothing until the owner adds another. A declared event is never red.
 
