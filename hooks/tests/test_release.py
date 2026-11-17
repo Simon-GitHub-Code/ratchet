@@ -404,3 +404,11 @@ def test_the_marketplace_installs_the_tag_of_the_version() -> None:
         "url": "https://github.com/Simon-GitHub-Code/ratchet.git",
         "ref": f"v{version}",
     }
+
+
+def test_help_prints_the_whole_description(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        release.main(["release.py", "--help"])
+    shown = capsys.readouterr().out
+    assert "Cutting a release:" in shown
+    assert "install the plugin at the previous" in shown

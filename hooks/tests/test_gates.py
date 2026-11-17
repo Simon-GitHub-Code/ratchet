@@ -599,6 +599,18 @@ def test_change_size_counts_tests_apart_when_the_binding_names_them(tmp_path: Pa
     assert run(change_size, root) == 0
 
 
+def test_a_change_cannot_widen_what_it_exempts_by_writing_the_test_paths_row_itself(
+    tmp_path: Path,
+) -> None:
+    root = sized(tmp_path, None)
+    write(
+        root,
+        "docs/process/binding.md",
+        BINDING_WITH_ROW.format(row="`tests/**`, `**/*.test.ts`"),
+    )
+    assert change_size.test_globs(root, "main") is None
+
+
 def test_change_size_is_red_on_product_lines_and_on_a_runaway_of_tests_alone(
     tmp_path: Path, capsys: Out
 ) -> None:

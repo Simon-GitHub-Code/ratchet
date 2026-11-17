@@ -309,7 +309,9 @@ def given_records(root: Path, pairs: list[str]) -> Records:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="quotes.py", description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        prog="quotes.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("findings", type=Path, help="a JSON list of findings, each with `breaks`")
     parser.add_argument("--root", default=".")
     parser.add_argument("--record", action="append", default=[], metavar="NAME=PATH")

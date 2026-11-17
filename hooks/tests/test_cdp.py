@@ -161,3 +161,7 @@ def test_the_browser_is_the_one_named_or_the_first_usual_name_on_the_path(
     found.write_text("#!/bin/sh\n", encoding="utf-8")
     found.chmod(0o755)
     assert cdp.executable() == str(found)
+
+
+def test_the_pipe_ends_the_browser_is_given_are_above_the_descriptors_it_maps_them_to() -> None:
+    assert cdp.HIGH_FD > 4

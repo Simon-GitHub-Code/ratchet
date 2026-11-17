@@ -61,6 +61,10 @@ Look at the ledger's size over time, the dead-code gate's findings and the incid
 
 - **Licence notices.** A one-line licence identifier is a `kept` directive. A project whose licence needs a full header lists that header's lines as a `kept` kind in its binding, which the owner merges. Exempting full headers by default was declined: it leaves a door for prose.
 
+## Settled by the owner, 2026-11-17
+
+- **Docstrings the plugin's code reads.** The plugin keeps a docstring only where its own code reads it through `__doc__`: a script's module docstring that becomes its `--help`, and a model rule's docstring that becomes the rule's sentence in the exported model and on its page. Every other docstring goes. Adopted projects keep the library-only rule: the owner declined to widen it to wherever a bound documentation generator reads.
+
 ## Defaults accepted by the owner, 2026-11-15
 
 Each item was a default taken overnight. The owner accepted every one as written on 2026-11-15.

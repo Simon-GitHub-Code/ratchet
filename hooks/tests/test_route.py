@@ -1139,6 +1139,18 @@ def test_a_guard_hold_with_no_base_commit_is_released_by_the_ticket_and_not_by_l
     assert route.decide(root, None).command == f"{route.FEATURE} {HELD}"
 
 
+def test_a_guard_hold_with_no_base_commit_says_landing_the_edits_frees_nothing(
+    tmp_path: Path,
+) -> None:
+    root = held_root(tmp_path)
+    parked(root, GUARD_BLOCK, stash=False)
+    path = queue_notes.note_path(root, "feature/2-b")
+    note = queue_notes.loaded(path.read_text(encoding="utf-8"))
+    assert isinstance(note.pop("base"), str)
+    queue_notes.write_note(path, note)
+    assert "so landing frees nothing" in route.decide(root, None).command
+
+
 @pytest.mark.parametrize(
     ("result", "named", "absent"),
     [

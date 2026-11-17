@@ -81,7 +81,11 @@ def report(log: str, lines: int = LINES) -> str | None:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="red_gates.py", description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        prog="red_gates.py",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("log", type=Path)
     parser.add_argument("--lines", type=int, default=LINES)
     options = parser.parse_args(argv[1:])

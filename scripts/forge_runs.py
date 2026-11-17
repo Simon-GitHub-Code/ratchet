@@ -252,7 +252,9 @@ def read(path: str) -> str | None:
 
 
 def main(argv: list[str] | None = None, runs: str | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     one = commands.add_parser("ci")
     one.add_argument("--pulls", required=True)

@@ -1651,6 +1651,15 @@ def test_a_ticket_that_is_not_there_to_read_is_no_link_edit(linked: Path) -> Non
     assert not merge_ready.link_only(read, ".scratch/thing/issues/09-none.md")
 
 
+def test_a_ref_rewritten_but_still_naming_a_symbolic_link_is_no_link_edit(tmp_path: Path) -> None:
+    through = WITH_LINKS.replace("Parent: ../spec.md", "Parent: ../alias.md")
+    root = linked_by(tmp_path, through)
+    change(root, {TICKET: through.replace("../alias.md", "./../alias.md")}, record=False)
+    read = merge_ready.read(root, "main", "HEAD")
+    assert isinstance(read, merge_ready.Change)
+    assert not merge_ready.link_only(read, TICKET)
+
+
 def test_a_link_edit_does_not_free_the_spec_beside_it(linked: Path) -> None:
     files = {**edited("Parent: ../spec.md", "Parent: ../../thing/spec.md"), SPEC: "# Thing!\n"}
     change(linked, files, record=False)
