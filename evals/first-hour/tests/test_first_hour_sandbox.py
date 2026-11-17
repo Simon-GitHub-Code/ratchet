@@ -62,6 +62,7 @@ def test_the_environment_is_built_from_nothing_but_the_locale(layout: sandbox.La
     assert "/operator/bin" not in env["PATH"]
     assert env["LANG"] == "C.UTF-8"
     assert env["ENABLE_CLAUDEAI_MCP_SERVERS"] == "false"
+    assert Path(env["GEM_HOME"]).parent == layout.home
     # Why: a longer socket path sends Claude Code's messaging socket to the shared /tmp/cc-socks,
     # so the runtime directory sits at the top of the temp location under a short name.
     assert env["XDG_RUNTIME_DIR"] == str(layout.runtime)
@@ -85,6 +86,7 @@ def test_a_given_toolchain_is_bound_read_only_and_on_path_after_the_runs_tools(
         str(layout.bin),
         str(with_bin / "bin"),
         str(without_bin),
+        str(layout.home / ".gem" / "bin"),
         *sandbox.SYSTEM_PATH.split(":"),
     ]
     words = sandbox.argv(layout, ["true"])

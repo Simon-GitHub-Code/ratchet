@@ -162,10 +162,16 @@ def environment(layout: Layout, inherited: Mapping[str, str]) -> dict[str, str]:
     or ``CLAUDECODE`` of the session that started the harness, no token, no agent socket.
     """
     env = {k: v for k in KEEP if (v := inherited.get(k))}
+    gems = layout.home / ".gem"
     env.update(
         {
             "PATH": ":".join(
-                [str(layout.bin), *map(str, map(_on_path, layout.toolchains)), SYSTEM_PATH]
+                [
+                    str(layout.bin),
+                    *map(str, map(_on_path, layout.toolchains)),
+                    str(gems / "bin"),
+                    SYSTEM_PATH,
+                ]
             ),
             "HOME": str(layout.home),
             "SHELL": "/bin/sh",
@@ -177,6 +183,7 @@ def environment(layout: Layout, inherited: Mapping[str, str]) -> dict[str, str]:
             "XDG_RUNTIME_DIR": str(layout.runtime),
             "RATCHET_PLUGIN": str(layout.pinned),
             "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0",
+            "GEM_HOME": str(gems),
             "DISABLE_AUTOUPDATER": "1",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
             "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
