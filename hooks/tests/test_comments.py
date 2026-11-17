@@ -183,6 +183,19 @@ def test_a_doc_comment_is_allowed_only_in_the_published_interface_of_a_library(
     assert run(root, output, path, monkeypatch=monkeypatch) == verdict
 
 
+DOC_WITH_SUPPRESSION = "/// Parses. SILENCE-IT\n"
+
+
+@pytest.mark.parametrize(("path", "verdict"), [("src/inner.txt", 1), ("api.txt", 0)])
+def test_a_doc_comment_is_judged_by_the_published_interface_alone_whatever_its_line_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, path: str, verdict: int
+) -> None:
+    root = project(tmp_path, LIBRARY_BINDING)
+    write(root, path, DOC_WITH_SUPPRESSION)
+    output = f"{path}\t1\tdoc\tParses. SILENCE-IT\n"
+    assert run(root, output, path, monkeypatch=monkeypatch) == verdict
+
+
 def test_a_doc_comment_outside_the_interface_is_named_as_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
 ) -> None:
