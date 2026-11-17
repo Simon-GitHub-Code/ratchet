@@ -141,14 +141,18 @@ def test_a_write_killed_midway_leaves_the_old_note_and_the_commit_refused(
 
 
 def test_a_start_outside_a_repository_writes_no_note(tmp_path: Path) -> None:
-    queue_notes.record_feature_start(tmp_path, BRANCH_A, {"head": "0" * 40})
-    assert queue_notes.feature_start_path(tmp_path, BRANCH_A) is None
-    assert list(tmp_path.iterdir()) == []
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    queue_notes.record_feature_start(outside, BRANCH_A, {"head": "0" * 40})
+    assert queue_notes.feature_start_path(outside, BRANCH_A) is None
+    assert list(outside.iterdir()) == []
 
 
 def test_a_pass_with_no_start_recorded_writes_no_note(tmp_path: Path) -> None:
-    queue_notes.pass_feature_start(tmp_path, BRANCH_A)
-    assert list(tmp_path.iterdir()) == []
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    queue_notes.pass_feature_start(outside, BRANCH_A)
+    assert list(outside.iterdir()) == []
     root = project(tmp_path / "repo")
     queue_notes.pass_feature_start(root, BRANCH_A)
     path = queue_notes.feature_start_path(root, BRANCH_A)
