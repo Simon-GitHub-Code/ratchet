@@ -384,16 +384,13 @@ class Played:
     ending: Ending
     raw: dict[str, Any]
     told: tuple[tuple[str, int], ...]
-    """Each fix agent's label with the rounds its prompt says its loop has."""
 
 
 @dataclass(frozen=True)
 class Batch:
     played: list[Played]
     effects: dict[Role, frozenset[str]]
-    """Per role, every git or forge command any of its prompts named."""
     results: list[dict[str, Any]]
-    """One whole result for each distinct set of members a run returned."""
 
 
 def expected_calls(actions: list[Action]) -> tuple[tuple[str, str], ...]:

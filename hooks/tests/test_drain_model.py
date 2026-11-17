@@ -149,12 +149,8 @@ KILL_CUTS = [
 
 class Search(NamedTuple):
     breaks: dict[str, list[str]]
-    """Each rule's shortest break."""
     taken: frozenset[str]
-    """Every action taken."""
     cuts: dict[tuple[str, bool], list[str]]
-    """For each kind of kill, on a landed ticket or not, the shortest path to one that leaves
-    what neither the whole command nor none of it leaves."""
 
 
 @functools.cache
@@ -163,7 +159,6 @@ def main_graph(*, gate: bool) -> tuple[frozenset[model.State], list[model.Edge]]
 
 
 RULE_PARTS = tuple(tuple(sorted(model.RULES))[part::3] for part in range(3))
-"""The rules in three parts, each searched in a test of its own so no shard carries every rule."""
 
 
 @functools.cache
@@ -296,7 +291,6 @@ class Play:
         self.state = model.INITIAL
         self.path: list[str] = []
         self.answers: set[bool] = set()
-        """What the real guard answered at the commit steps it was asked about: allowed or not."""
 
     def says(self, what: str) -> str:
         lines = [what, "path:", *(f"  {name}" for name in self.path)]
@@ -1959,7 +1953,6 @@ def test_an_owners_hand_merge_is_seen_as_a_merge_running_and_one_merge_lands(
 
 
 LEFT = "left"
-"""The file a check or a shell that leaves a process behind writes that process's pid to."""
 
 
 @pytest.mark.parametrize(

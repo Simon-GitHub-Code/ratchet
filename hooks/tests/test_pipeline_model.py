@@ -269,9 +269,7 @@ Case = tuple[list[model.Action], model.Ending | None, world.Played]
 
 
 REPLAYED = pytest.mark.shard_slot(9)
-"""The shard every test that reads ``played()`` runs in, so one shard pays for the replay."""
 SHARED: list[Path] = []
-"""The folder this run's workers share, when the run is spread over workers."""
 
 
 @pytest.fixture(scope="session", autouse=True)
