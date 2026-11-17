@@ -58,7 +58,8 @@ def test_adopt_provisions_what_the_first_slice_needs_and_rehearses_it() -> None:
     assert "**A key a declared type needs is never removed to quiet a gate.**" in ADOPT
     assert 'no rule leaves a config to "the change that brings" something' in ADOPT
     assert "`just start` and the address it prints" in ADOPT
-    assert "python3 -m ratchet_guards.diff --root . --base HEAD" in ADOPT
+    assert "from ratchet_guards import diff; sys.exit(diff.main())'" in ADOPT
+    assert "--root . --base HEAD` lists no guard path" in ADOPT
     assert 'Set the four to "none"' not in ADOPT
     assert "Slice one is the one step 11's design brief names. When the brief names none" in ADOPT
     assert "Rehearse at most twice" in ADOPT
@@ -170,11 +171,13 @@ def test_a_split_plan_is_checked_before_drain_split_runs_it() -> None:
     too_large = FEATURE.split("## Too large: the agent splits it", 1)[1].split(" ## ", 1)[0]
     checked = (
         (
-            'run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/split.py" check <ticket> --plan <file>'
+            "run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode"
+            ' "${CLAUDE_PLUGIN_ROOT}/scripts/split.py" check <ticket> --plan <file>'
             " --root .`. It judges the plan as `split` will and files nothing."
         ),
         (
-            'run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py" split <ticket> --plan <file>'
+            "run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode"
+            ' "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py" split <ticket> --plan <file>'
             " --root .`, only with a plan the check passed."
         ),
     )

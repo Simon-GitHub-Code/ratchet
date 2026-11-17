@@ -1859,6 +1859,19 @@ def test_no_role_prompt_runs_a_plugin_script_with_a_bare_python3() -> None:
     assert f"{PLUGIN_PY} `/plugin/scripts/feature_preflight.py`" in ran["prompts"]["preflight"]
 
 
+def test_no_skill_runs_a_plugin_script_with_a_bare_python3() -> None:
+    pages = sorted((PLUGIN_ROOT / "skills").glob("*/SKILL.md"))
+    assert pages
+    runs = 0
+    for page in pages:
+        for number, line in enumerate(page.read_text(encoding="utf-8").splitlines(), 1):
+            assert not re.search(r"python3 (?!-E -s )\S*scripts/", line), (page.name, number)
+            assert "PYTHONPATH=" not in line, (page.name, number)
+            assert not re.search(r"python3 (?:\S+ )*-m ", line), (page.name, number)
+            runs += line.count(f'{PLUGIN_PY} "${{CLAUDE_PLUGIN_ROOT}}/scripts/')
+    assert runs
+
+
 def test_the_plugin_interpreter_the_prompts_use_is_the_one_the_templates_fall_back_to() -> None:
     justfile = (PLUGIN_ROOT / "skills/adopt/templates/justfile").read_text(encoding="utf-8")
     assert f'plugin_py := if plugin_pyc_ok == "" {{ "{PLUGIN_PY}" }}' in justfile

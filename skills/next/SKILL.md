@@ -13,8 +13,8 @@ disable-model-invocation: true
 1. **Run the route.** Run both commands in one Bash call:
 
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/owed.py" --root .
+   python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .
+   python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/owed.py" --root .
    ```
 
    - `route.py` prints three lines: `next:` the command, `why:` the state of the checkout or tracker that decides it, `then:` the step after. It reads the tracker through `gh` when there is one, and local tickets under `.scratch/` otherwise. `also:` lines may follow the three.
@@ -45,7 +45,7 @@ disable-model-invocation: true
      - **Ask** `event.irreplaceable-data`: "Does it now hold anything that could not be got back if it were lost?"
      - **Ask** `event.depended-on`: "Do people other than you now rely on it?"
 
-     **On yes:** the next command is `/ratchet:safeguard <event>`, which they type. **On not yet:** run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root . --decline <event>` in one Bash call. The line stays away until a new sign appears.
+     **On yes:** the next command is `/ratchet:safeguard <event>`, which they type. **On not yet:** run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root . --decline <event>` in one Bash call. The line stays away until a new sign appears.
 
    Done when each `also:` line is relayed or asked, and the upgrade's, if there is one, has its sentence.
 

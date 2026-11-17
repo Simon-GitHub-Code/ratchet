@@ -65,7 +65,7 @@ Tell the owner this before step 1. It is not a question.
 ## Steps
 
 1. **Check the ground.**
-   - Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root . --offline` in one Bash call.
+   - Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root . --offline` in one Bash call.
    - When it names `/ratchet:init` or `/mattpocock-skills:setup-matt-pocock-skills`, print its lines and stop: both are the owner's keystrokes, and adoption needs what they write.
    - Check that later steps can run:
      - `git` 2.36 or later;
@@ -88,7 +88,7 @@ Tell the owner this before step 1. It is not a question.
 
 3. **Recognise the repository.**
    - Read `## Stack` from `PRODUCT.md`, else from `AGENTS.md`, then the tree: the language, the package manager and its lockfile, the task runner, the forge (`git remote`), what the deliverable is and how it starts.
-   - Choose the types to recommend and run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/application_types.py" <type>...`. It prints each question the types narrow, with `applies` or the `none: not a <type>` cell to write. Every other question applies.
+   - Choose the types to recommend and run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/application_types.py" <type>...`. It prints each question the types narrow, with `applies` or the `none: not a <type>` cell to write. Every other question applies.
    - Draft the architecture options and their tool sets as [architecture.md](../method/architecture.md) says, each tool looked up as step 5 says.
    - Draft the design brief from the records.
    - Ask the questions of [What the owner is asked](#what-the-owner-is-asked) as that section says: nothing after this step asks the owner anything.
@@ -101,8 +101,8 @@ Tell the owner this before step 1. It is not a question.
    3. In the Gates table, write every row whose question's trigger in `application-types.toml` is not `always` as `later: <trigger>`, copied exactly, or `none: not a <type>` where step 3 printed that.
    4. Fill `## Life event signs` (the files of this stack that mark `deployed` and `irreplaceable-data`, or `none: <reason>`) and `## Image pins` (the files that name a container image and the pattern that finds the reference, or `none: <reason>`), from what you know of the tools chosen at step 3.
    5. Fill `## Triggers`: one row per kind of code the declared types are asked about, and one per kind whose arrival reopens the architecture whatever the types (the `conformance` entry point names each kind missing), with this stack's Paths and a Pattern where a path is not enough, or `none: <reason>` for a kind this project will never have. `flag` is `flags.toml` with the pattern of a flag's table, and `layer` is the parts table of the binding's `## Architecture` section, so `dependency direction` is owed now and bound with the rest.
-   6. Prove each row with `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --count`: it prints what each row finds. A row that finds nothing in a tree that has the kind is wrong. For a kind with no instance yet, write one line of it in a scratch file the Paths match, see it counted, and delete it.
-   7. Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --json`. It lists the rows owed now: those, with the floor, are the rows this adoption binds.
+   6. Prove each row with `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --count`: it prints what each row finds. A row that finds nothing in a tree that has the kind is wrong. For a kind with no instance yet, write one line of it in a scratch file the Paths match, see it counted, and delete it.
+   7. Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --json`. It lists the rows owed now: those, with the floor, are the rows this adoption binds.
 
    Done when the `## Architecture` section, the `- Application types:` and `- Life events:` lines, `## Life event signs` and `## Image pins` are written, every row whose trigger is not `always` reads `later: <trigger>` or `none: not a <type>`, every kind asked has a row, each count is what the tree holds, and you know the rows to bind.
 
@@ -259,7 +259,7 @@ Tell the owner this before step 1. It is not a question.
        - `check` is red on nothing but `triggers`;
        - the tests fail or pass on their assertions and not on a configuration or an import;
        - the deliverable answers `ready` or its run exits 0;
-       - and `PYTHONPATH="${CLAUDE_PLUGIN_ROOT}/hooks" python3 -m ratchet_guards.diff --root . --base HEAD` lists no guard path but the dependency manifest, its lockfile and their snapshots.
+       - and `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode -P -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from ratchet_guards import diff; sys.exit(diff.main())' "${CLAUDE_PLUGIN_ROOT}/hooks" --root . --base HEAD` lists no guard path but the dependency manifest, its lockfile and their snapshots.
     7. **Fix in the adoption.** Any other edit the rehearsal needed is a config the adoption owes, or a key it removed: make it in the adoption, commit, run `check`, and rehearse once more in a fresh worktree. Rehearse at most twice: an edit the second round still needs is not chased, but named with its file for the hand-over.
 
     The rehearsal may reuse that compiler cache and nothing else; it still cannot supply a missing config or tool. Remove each worktree when its round ends.
@@ -290,6 +290,6 @@ Tell the owner this before step 1. It is not a question.
 
     One plain line each, with what changing it later costs (what changes, roughly how much work, and whether anything built is redone) and what the owner can say to change it, such as ``Secrets check: <the tool you chose>, current and it reads every file here; <the one you passed over> was the other choice. Changing later: a change of its own that an agent makes while you are away (the other tool installed and set up, the check rewired and shown to catch a planted mistake again, a decision record). It touches protected files: the package list and its lock file, the tool's settings and their saved copy, the list of checks, the list of planted mistakes and the record of which tool runs each check. The agent puts the new settings file on the protected list in place of the old one, and the merge is yours. Nothing built is redone. Say "use <the other>" to switch.``, with the real names in place of the brackets. The block is for the owner: no question key, type name or other method term in it. Then the number of questions the owner answered.
 
-    The last lines are the route: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines as they are. Close with `/ratchet:next` on its own line.
+    The last lines are the route: run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines as they are. Close with `/ratchet:next` on its own line.
 
     Done when what the proof changed is committed, the pull request, or with no forge the change description, has every template section filled, with the `tier0` tail and the guard paths the rehearsal changed under Gates and each item above under Criticism, you have said how to start the product and which rows wait for which trigger, and the reply ends with **You chose**, the **Assumed** block, the number of questions the owner answered and the route's lines, then `/ratchet:next`.

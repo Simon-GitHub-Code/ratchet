@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 Choose how an adopted repository is built, record it and declare its parts, or review that choice when the project's shape has changed. Load the `ratchet:method` skill first, then read its [architecture.md](../method/architecture.md): it says what an option states, how fit is judged, what the record holds and what the binding declares.
 
-- **Review:** run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --root . --reviews` in one Bash call. When it lists an owed review, and the owner did not ask to revisit the choice, follow [Review the architecture](#review-the-architecture).
+- **Review:** run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --root . --reviews` in one Bash call. When it lists an owed review, and the owner did not ask to revisit the choice, follow [Review the architecture](#review-the-architecture).
 - **Choose:** for a repository adopted before the architecture was asked, which the route sends here while `quality/owed.toml` lists an `architecture` entry, and for an owner who wants to revisit the choice, follow [Choose the architecture](#choose-the-architecture). Adoption does this at its step 3 on a new repository.
 - **Both are owed:** review first. The review reads what is here as the decision, and its record states it in full. The choice follows as its own change.
 
@@ -70,7 +70,7 @@ Skip a question whose choice the owner's words already make. Assume everything e
 6. **Hand over.**
    - Under **You chose**: the system and the tools, one plain line each with what changing it later costs, or "I took my recommendation, as you left it to me".
    - Then the **Assumed** block for anything else you chose, and the number of questions the owner answered.
-   - The last lines are the route: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines as they are.
+   - The last lines are the route: run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines as they are.
 
    Done when the reply holds **You chose**, the **Assumed** block and the number of questions answered, and ends with the route's lines.
 
@@ -98,7 +98,7 @@ At most one message, and only when the review finds that the architecture should
 
 1. **Check the ground.**
    - Start on the default branch with a clean tree.
-   - Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --root . --reviews` in one Bash call. It lists each owed review: its trigger, the kind or event, how many instances, and what the arrival reopens.
+   - Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --root . --reviews` in one Bash call. It lists each owed review: its trigger, the kind or event, how many instances, and what the arrival reopens.
    - When it lists nothing, say so, print the route as step 6 does, and stop.
    - Make the branch `docs/architecture-<what>`, where `<what>` is the kinds or the events in a word or two.
 
@@ -113,7 +113,7 @@ At most one message, and only when the review finds that the architecture should
    Done when you can say the decision in three sentences and name each part's job.
 
 3. **Read the code as it now is.**
-   - Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --root . --count`. It lists the instances of each kind.
+   - Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --root . --count`. It lists the instances of each kind.
    - For each owed trigger, open every instance and say which part it sits in, what it reaches and what reaches it.
    - Use `mattpocock-skills:codebase-design` on the boundary the new kind sits at.
    - **For an event:** read what the event changes for the people it brings: who reaches the project and from where, what must survive, which surfaces are now promises.
@@ -162,6 +162,6 @@ At most one message, and only when the review finds that the architecture should
    - what arrived, what the review found, and what now holds: the decision kept, or the option the owner chose and what follows from it;
    - **The decision holds:** list it under **Assumed**, one line per trigger: what arrived, what you concluded and why in a clause, what changing it later costs, and that saying "rethink how it is built for <the thing that arrived>" reopens it.
 
-   The last lines are the route: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines as they are. When safeguards are owed, it names `/ratchet:safeguard` next.
+   The last lines are the route: run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines as they are. When safeguards are owed, it names `/ratchet:safeguard` next.
 
    Done when the reply says what arrived, what the review found and what now holds, lists a decision that holds under **Assumed**, and ends with the route's lines.
