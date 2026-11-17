@@ -107,6 +107,7 @@ TIER1_FLAG = "--tier1"
 TIER1_ARGUMENT = '--tier1 "$tier1"'
 TIER2_FLAG = '--tier2 "$tier2"'
 RUN_VARIABLE = "RATCHET_RUN"
+RUN_UNEXPORTED = re.compile(rf"{RUN_VARIABLE}[ \t]*:=")
 MERGE_SHAPE = (
     ("workflow_run:", "runs it after `ci`, as the default branch holds it"),
     ("merge_ready.py", "asks the merge judge"),
@@ -2136,10 +2137,15 @@ def with_tier1(name: str) -> gatelib.Want:
         text = current or ""
         lines = text.split("\n")
         at = next((i for i, line in enumerate(lines) if line.lstrip().startswith("tier2=")), None)
-        if read_line is None or TIER1_FLAG in text or at is None or TIER2_FLAG not in text:
+        call = next(
+            (i for i, line in enumerate(lines) if "--target" in line and TIER2_FLAG in line), None
+        )
+        if read_line is None or TIER1_FLAG in text or at is None or call is None:
             return text
-        lines[at:at] = [read_line]
-        return "\n".join(lines).replace(TIER2_FLAG, f"{TIER1_ARGUMENT} {TIER2_FLAG}", 1)
+        lines[call] = lines[call].replace(TIER2_FLAG, f"{TIER1_ARGUMENT} {TIER2_FLAG}", 1)
+        anchor = lines[at]
+        lines[at:at] = [anchor[: len(anchor) - len(anchor.lstrip())] + read_line.lstrip()]
+        return "\n".join(lines)
 
     return want
 
@@ -2505,6 +2511,10 @@ def check_jobs_line(root: Path) -> Iterable[Finding]:
     yield Finding("justfile", problem, fix, identity="jobs does not read ratchet.jobs")
 
 
+def exports_run(justfile: str) -> bool:
+    return re.search(rf"^export[ \t]+{RUN_VARIABLE}[ \t]*:=", justfile, re.MULTILINE) is not None
+
+
 def with_run_id(declaration: str) -> gatelib.Want:
     def want(current: str | None) -> str:
         text = current or ""
@@ -2512,9 +2522,13 @@ def with_run_id(declaration: str) -> gatelib.Want:
         anchor = next(
             (i for i, line in enumerate(lines) if line.startswith("ratchet_plugin :=")), None
         )
-        if anchor is None or justfile_text.defines_variable(text, RUN_VARIABLE):
+        bare = next((i for i, line in enumerate(lines) if RUN_UNEXPORTED.match(line)), None)
+        if exports_run(text):
             return text
-        lines.insert(anchor + 1, declaration)
+        if bare is not None:
+            lines[bare] = f"export {lines[bare]}"
+        elif anchor is not None:
+            lines.insert(anchor + 1, declaration)
         return "\n".join(lines)
 
     return want
@@ -2530,17 +2544,13 @@ def check_run_id(root: Path) -> Iterable[Finding]:
         ),
         "",
     )
-    if (
-        justfile is None
-        or not declaration
-        or justfile_text.defines_variable(justfile, RUN_VARIABLE)
-    ):
+    if justfile is None or not declaration or exports_run(justfile):
         return
     problem = (
         f"nothing exports `{RUN_VARIABLE}`, so each reader of the shared suite report starts its"
         " own run and the suite runs once per reader (ADR 0071); add the template's line"
     )
-    does = f"export `{RUN_VARIABLE}` as the template does, after `ratchet_plugin`"
+    does = f"export `{RUN_VARIABLE}` as the template does"
     fix = Edit(does, with_run_id(declaration), Agent(start=(declaration,)))
     yield Finding("justfile", problem, fix, identity=f"no {RUN_VARIABLE} export")
 
