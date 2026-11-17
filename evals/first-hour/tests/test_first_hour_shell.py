@@ -50,6 +50,10 @@ NOT_PATHS = [
     f"cd {WORK}; cd ..; ls ..",
     "cd src && ls ../..",
     "cd -P src && cat ../notes.txt",
+    "awk -v h='## User Stories' '/^## /{f=($0==h)} f && NF' spec.md",
+    "tr -d '\\r' < spec.md | awk -v h='## A' '/^## /{f=($0==h)} f && NF' | head -3",
+    "printf '//go:build tools\\n\\npackage testdeps\\n' > tools/testdeps.go",
+    "python3 -I - <<'EOF'\np='a.md'\nEOF\nawk -v h='## U' '/^## /{f=($0==h)} f && NF' a.md",
     "echo ok > /dev/null 2>&1",
     "ls | xargs cat notes.txt",
     "FOO=bar env BAZ=1 ls notes.txt",
@@ -106,6 +110,14 @@ REACHES = [
     "ls ${HOME}/../../x",
     'echo "unclosed /home/someone/x',
     "echo 'unclosed /ratchet:safeguard",
+    'cd "/home/someone/x" && ls',
+    'cp notes.txt "/home/someone/y"',
+    'echo hi > "/home/someone/z"',
+    'echo hi >> "/home/someone/z"',
+    "awk -v h=x '{print}' /srv/x",
+    "printf '%s' x > /srv/x",
+    "printf '%s' /home/someone/x",
+    "python3 - <<EOF\nopen('/home/someone/x')\nEOF",
 ]
 
 

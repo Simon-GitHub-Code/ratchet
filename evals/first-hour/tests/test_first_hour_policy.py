@@ -101,6 +101,22 @@ FORGE_AND_NETWORK = [
     ("echo x; claude --dangerously-skip-permissions", "Claude Code"),
     ("cat ~/.claude/.credentials.json", "credential"),
     ("cat /proc/1/environ", "credential"),
+    ("curl -s https://api.github.com/repos/$r/releases/latest", "names a forge"),
+    ("git clone git@github.com:a/b.git", "names a forge"),
+    ("echo https://gitlab.com/a/b", "names a forge"),
+    ("rsync -a src/ me@example.com:dst/", "network"),
+    ("rsync -a src/ example.com:/dst", "network"),
+    ("rsync -a src/ rsync://example.com/mod", "network"),
+    ("rsync -a example.com:dst/ src/", "network"),
+    ("cat > x.patch <<'EOF'\nhi\nEOF\ngh pr create", "calls a forge"),
+    ("bash <<EOF\ngh pr create\nEOF", "calls a forge"),
+    ("bash <<EOF\ngit push origin main\nEOF", "pushes"),
+    ("python3 - <<EOF\nimport socket\nEOF", "inline code"),
+    ("ssh host <<EOF\nls\nEOF", "network"),
+    ("cat <<'EOF' | bash\ngh pr create --fill\nEOF", "calls a forge"),
+    ("cat <<'EOF' | sh\ngit push origin main\nEOF", "pushes to a remote"),
+    ("tee x.sh <<'EOF' | bash\ngh pr create\nEOF", "calls a forge"),
+    ("cat > x.sh <<'EOF'\ngh pr create\nEOF\nbash x.sh", "calls a forge"),
 ]
 
 
@@ -150,6 +166,15 @@ ALLOWED = [
     "just check",
     "uv run pytest -q",
     "npm view vite version",
+    (
+        "python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "
+        '"/tmp/fh-run/plugin/scripts/route.py" --root . --offline'
+    ),
+    "go get -tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest",
+    "go -C /tmp/fh-run/p get -tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest",
+    "go list -m -f '{{.Path}}' github.com/rhysd/actionlint@latest",
+    "for m in github.com/rhysd/actionlint; do curl -s https://proxy.golang.org/$m/@latest; done",
+    "rsync -a --ignore-existing --itemize-changes /tmp/fh-run/plugin/t/ /tmp/fh-run/app/",
 ]
 
 
