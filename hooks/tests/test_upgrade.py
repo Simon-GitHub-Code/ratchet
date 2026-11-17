@@ -14,6 +14,7 @@ import pytest
 import budget
 import comments
 import conformance
+import documents
 import gatelib
 import justfile_text
 import markdown_text
@@ -642,7 +643,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert first.startswith(f"upgrade: {root} from 0.8.2 at {adopted.RELEASES['0.8.2'][:12]} (CI")
     assert f"to {plugin_pin.in_use(PLUGIN_ROOT)}." in first
     assert "Would write 13 files (run with --apply):" in out
-    assert "  quality/owed.toml\n    - write down 98 things owed since " in out
+    assert "  quality/owed.toml\n    - write down 102 things owed since " in out
     assert "  .claude/settings.json\n    - regenerate the permission rules" in out
     assert f"    - pinned: {plugin_pin.line_for(PLUGIN_ROOT)}" in out
     assert out.index("\n  docs/process/binding.md\n") > out.index("\n  justfile\n")
@@ -654,7 +655,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert "        settled by the owner's answer to: Which of these has already happened" in out
     assert "        seen: no file in the tree is a sign of a life event" in out
     assert "        then: `deployed` owes the Gates rows " in out
-    assert verdict(out).startswith("upgrade: would write 79 edits in 13 files. 98 items are owed")
+    assert verdict(out).startswith("upgrade: would write 80 edits in 13 files. 102 items are owed")
     assert "and 0 red; 4 of them hold an assumption" in verdict(out)
     assert "The change touches guard paths" in verdict(out)
     assert plain(out) == "\n".join(
@@ -662,8 +663,8 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
             "In plain words:",
             (
                 "This project would move from Ratchet 0.8.2 to"
-                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 79 changes in 13"
-                " files. The project owes 98 things since the upgrade. None of them turns a check"
+                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 80 changes in 13"
+                " files. The project owes 102 things since the upgrade. None of them turns a check"
                 " red or stops a merge, and between upgrades the list only gets shorter. Nothing"
                 " fixes them by itself: ask an agent to. Each is in a guard path: an agent can"
                 " make all the fixes in one change on a branch, and you decide at that one merge."
@@ -999,3 +1000,21 @@ def test_an_upgrade_owes_the_comments_section_and_is_never_red_for_a_comment_tha
     monkeypatch.setattr("sys.stdin", io.StringIO(""))
     assert comments.main(["comments", "--root", str(root), "--changed"]) == 0
     assert "the lister is not bound yet, so nothing is judged" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("name", ["0.8.2", "0.9.2"])
+def test_an_upgrade_owes_the_documents_section_and_is_never_red_for_a_file_of_no_kind(
+    name: str, tmp_path: Path
+) -> None:
+    root = fixture(name, tmp_path)
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    red, _ = conformance.owed_split(root, conformance.findings(root))
+    assert red == []
+    owing = [e for e in owed.read(root).entries if e.rule == "documents"]
+    assert owing
+    assert {e.path for e in owing} == {"docs/process/binding.md"}
+    assert all(e.rule in owed.FILL_FIRST for e in owing)
+    binding = (root / "docs/process/binding.md").read_text(encoding="utf-8")
+    assert "## Documents" in binding
+    stray = documents.unkinded(gatelib.tracked_paths(root), documents.kinds_of(root))
+    assert [e.problem.split("`")[1] for e in owing if "of no kind" in e.problem] == stray

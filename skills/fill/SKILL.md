@@ -27,6 +27,7 @@ An upgrade adds sections to the binding whose rows state what this project's own
    - **Image pins:** the files that name a container image, and the pattern that finds the reference.
    - **Suppressions:** the directives the bound tools read, including the kinds that silence the coverage question.
    - **Comments:** the Comments table, one row per kind of tracked file other than Markdown, `listed` or `none: <reason>`, and the `comments-list` recipe as the section says. Every directive the files carry goes into Suppressions, `kept` where it silences no gate. Then run `just comments --record`: this change binds the lister, so it reads every file a `listed` row matches and records what it finds as owed. No later change may record.
+   - **Documents:** one row of `## Documents` per kind of tracked Markdown file that no kind matches yet, `never` or `pass`; `conformance` lists each such file. Give the `depended-on` row of `## Life event signs` the forge's files a maintainer writes for strangers.
    - **Install:** whether an install comes first.
    - **Dependencies:** how dependencies are read.
    - **Suites:** the suites table under `## Tests`, one row per suite: the gate that runs it whole, the globs of its test files, and the recipe that runs given files of it, or `none: <reason>`. In the same pass, bind the Gates row `changed tests run` to `just tests-changed` and add `tests-changed` to the justfile's `tier1_gates`. A Gates row bound before its table exists turns tier 1 red.

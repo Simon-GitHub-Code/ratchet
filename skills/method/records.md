@@ -240,3 +240,12 @@ What the pipeline concluded, for the merge judge to read: the slug, the ticket, 
 The orchestrator writes it from the result's `verdictRecord` with the `merge-ready` entry point's `record` form, which adds the tree. It commits the record alone, as the last commit of the change. The tree is the head's with the record set aside, so the record cannot name itself and a commit after it shows.
 
 An agent writes this record and an agent can forge it. [guards.md](guards.md) says what the judge reads that does not depend on it.
+
+## Document kinds
+
+A plan written to steer an agent toward a feature is worse context than the code once the feature exists, and it keeps steering the next agent after it has gone stale. So every tracked Markdown file has a kind, and a steering kind leaves the tree with its feature.
+
+- **Standing** documents stay. A kind marked `pass` may be cut by `/ratchet:prune pages` where it only repeats what the code now says. One marked `never` is not cut.
+- **Steering** documents, the local spec and tickets under `.scratch/<slug>/` and the pipeline's `docs/features/<slug>/spec.md`, are deleted by the change that makes them spent: run `documents.py expire` after the content commit and before the verdict record, and commit what it deletes on its own. It is safe to run again.
+- **The owner's words survive.** `expire` moves each `## Answers` line of a deleted ticket or spec, dated, to the brief's `## In the owner's words`, which the spec role reads. Never drop one: `ratchet-lowered` is red on a change that does.
+- **A file of no kind** is red in `conformance`. Give it a kind in the binding's `## Documents`, or move it under a kind's paths.

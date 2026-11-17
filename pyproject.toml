@@ -85,6 +85,7 @@ ignore = [
     "INP001", # standalone scripts, deliberately not a package
 ]
 "scripts/comments.py" = ["D100", "D101"]
+"scripts/documents.py" = ["D100", "D101", "D102"]
 "evals/first-hour/run.py" = [
     "T201",   # the command prints the table by design
     "S603",   # subprocess runs the resolved `claude` with a literal argv list
