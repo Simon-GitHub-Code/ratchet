@@ -414,6 +414,20 @@ def test_tier_2_that_cannot_be_read_is_red(
     assert deep(tmp_path, capsys, runs) == "red"
 
 
+def test_more_runs_than_one_page_holds_still_read_the_newest_page(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    at = history(tmp_path)
+
+    def state(*runs: object) -> str:
+        return deep(tmp_path, capsys, json.dumps({"total_count": 250, "workflow_runs": runs}))
+
+    assert state(tier2(at["tip"]), tier2(at["second"], "failure")) == "green"
+    assert state(tier2(at["tip"], "failure"), tier2(at["second"])) == "red"
+    assert state(tier2(at["tip"], "cancelled")) == "red"
+    assert state() == "red"
+
+
 def test_help_prints_the_whole_description(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit):
         forge_runs.main(["--help"])

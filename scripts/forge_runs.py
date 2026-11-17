@@ -22,7 +22,8 @@ written.
 ``red`` or ``none``: the result on the commit nearest the default branch's tip, among the runs of
 this repository that an event of the template started on a commit of the default branch. A run
 on a tag named like the branch, or an old run started again, does not change the answer.
-Unreadable input is ``red``.
+Unreadable input is ``red``. Where more runs match than one page holds, the newest page decides,
+and is ``red`` when no run in it counts.
 
 Usage: ``forge_runs.py ci --pulls FILE --events FILE --number N --sha SHA --branch NAME --base
 NAME --repository OWNER/NAME [--report FILE]`` and ``forge_runs.py deep --tip REF --repository
@@ -87,12 +88,19 @@ def rows(text: str | None) -> list[object] | None:
     return [item for page in pages if isinstance(page, list) for item in page]
 
 
-def listed(text: str) -> list[object] | None:
-    """The runs in one page of the runs API, or ``None`` when unreadable or not all there are."""
+def newest_page(text: str) -> tuple[list[object], bool] | None:
     pages = documents(text) or []
     page = pages[0] if len(pages) == 1 else None
-    runs = at(page, "workflow_runs")
-    return runs if isinstance(runs, list) and at(page, "total_count") == len(runs) else None
+    runs, total = at(page, "workflow_runs"), at(page, "total_count")
+    if not isinstance(runs, list) or not isinstance(total, int) or total < len(runs):
+        return None
+    return runs, total == len(runs)
+
+
+def listed(text: str) -> list[object] | None:
+    """The runs in one page of the runs API, or ``None`` when unreadable or not all there are."""
+    page = newest_page(text)
+    return page[0] if page is not None and page[1] else None
 
 
 def newest(runs: list[object]) -> object:
@@ -230,9 +238,10 @@ def _distance(root: Path, sha: object, tip: str) -> int | None:
 
 def deep(runs: str, *, root: Path, tip: str, repository: str) -> str:
     """Tier 2's state on the default branch: ``green``, ``red`` or ``none``."""
-    ran = listed(runs)
-    if ran is None:
+    page = newest_page(runs)
+    if page is None:
         return RED
+    ran, whole = page
     nearest: dict[int, list[object]] = {}
     for run in ran:
         ours = at(run, "head_repository", "full_name") == repository
@@ -243,7 +252,7 @@ def deep(runs: str, *, root: Path, tip: str, repository: str) -> str:
         if distance is not None:
             nearest.setdefault(distance, []).append(run)
     if not nearest:
-        return NONE
+        return NONE if whole else RED
     return GREEN if at(newest(nearest[min(nearest)]), "conclusion") == "success" else RED
 
 
