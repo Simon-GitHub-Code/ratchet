@@ -1,8 +1,5 @@
 import * as c from "./view_common.mjs";
 
-// Drawn from DrainLeaseShown. A kill of land alone: before its merge.py probes the land's private
-// lock, or after. Before, no lock is held and the merge.py can only stop; after, the merge lock
-// keeps it seen until it ends. Once the ticket is merged this chart says no more.
 export const title = "A land killed alone, before its merge.py probes it and after";
 export const state = (v) => {
   if (v.merge !== "none") return "Merged";

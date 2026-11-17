@@ -1,9 +1,3 @@
-"""``drain.py``: the queue's plan, its work trees, its merges and its one report.
-
-Every test runs on a real repository with local tickets, since the plan is read from git, the
-ticket files and the notes, and a work tree is only proved gone by asking git.
-"""
-
 import json
 import os
 import re
@@ -68,7 +62,6 @@ FILES = {
 
 @pytest.fixture(autouse=True)
 def scratch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The hooks are installed, the temp directory is the test's own, and the clock stands still."""
     monkeypatch.setattr(hooks_installed, "check", lambda _root: None)
     (tmp_path / "tmp").mkdir()
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "tmp"))
@@ -97,7 +90,6 @@ def run(root: Path, *argv: str) -> int:
 def build(
     root: Path, branch: str, files: dict[str, str], *, record: dict[str, object] | None = None
 ) -> Path:
-    """Commit ``files`` in the ticket's work tree as the pipeline's orchestrator would."""
     tree = drain.tree_of(root, branch)
     checked = note(root, branch)
     if "start" in checked:
@@ -127,9 +119,6 @@ LIFE_DEPENDED_ON = "\n- Life events: depended-on\n"
 
 def note(root: Path, branch: str) -> dict[str, object]:
     return queue_notes.read_note(root, branch)
-
-
-# --- the plan --------------------------------------------------------------------------------
 
 
 def test_the_plan_orders_tickets_by_their_blockers_and_starts_the_buildable(tmp_path: Path) -> None:
@@ -264,8 +253,6 @@ def test_a_ticket_waiting_on_one_the_drain_cannot_merge_is_refused(tmp_path: Pat
 
 
 class FakeGh:
-    """Answers ``issue list`` and ``issue view`` from a table."""
-
     def __init__(self, **issues: str) -> None:
         self.issues = issues
 
@@ -300,9 +287,6 @@ def test_tracker_tickets_wait_on_each_other_by_number(tmp_path: Path) -> None:
         ("3", "buildable", ()),
         ("4", "waiting", ("3",)),
     ]
-
-
-# --- opening and the states a work tree gives ------------------------------------------------
 
 
 def test_open_makes_the_work_tree_outside_the_repository_and_the_plan_sees_it(
@@ -353,11 +337,7 @@ def test_open_says_so_when_the_branch_is_checked_out_elsewhere(tmp_path: Path, c
     assert not drain.queue_home(root).exists(), "nothing is left behind"
 
 
-# --- update ----------------------------------------------------------------------------------
-
-
 def moved(root: Path, path: str = "src/m.py", text: str = "M = 1\n") -> None:
-    """Another change lands on the default branch."""
     write(root, path, text)
     commit(root, "feat(core): merged meanwhile")
 
@@ -521,7 +501,6 @@ def test_a_role_s_commit_after_a_completed_update_still_parks_the_ticket(
 def test_a_built_branch_behind_the_default_branch_does_not_land_on_its_old_review(
     tmp_path: Path, capsys: Out
 ) -> None:
-    """Another ticket moved main after this one was approved: the verdict is of another tree."""
     root = project(tmp_path)
     run(root, "open", ALPHA)
     run(root, "open", GAMMA)
@@ -547,9 +526,6 @@ def test_a_built_branch_behind_the_default_branch_does_not_land_on_its_old_revie
     assert run(root, "land", ALPHA) == 1
     assert "behind: the branch does not hold the tip of `main`" in capsys.readouterr().out
     assert git(root, "rev-parse", "main") == base, "nothing landed"
-
-
-# --- landing and closing ---------------------------------------------------------------------
 
 
 def test_land_merges_what_the_judge_passes_and_removes_the_work_tree(
@@ -731,7 +707,6 @@ def test_a_refused_reviews_issues_are_read_with_their_quotes_too() -> None:
 
 
 def test_a_number_names_the_one_local_ticket_it_starts(tmp_path: Path, capsys: Out) -> None:
-    # Why: issue 26. With no tracker `03`, `#3` and `3` all mean the file `03-...`.
     root = project(tmp_path, **{".scratch/f/issues/30-other.md": ticket(3, "Other")})
     for spelling in ("01", "#1", "1"):
         assert run(root, "close", spelling, "--outcome", "parked") == 0
@@ -759,9 +734,6 @@ def test_close_without_a_result_and_an_unknown_ticket(tmp_path: Path, capsys: Ou
     kept = note(root, BRANCH_A)
     assert (kept["outcome"], kept["reasons"], kept["assumptions"]) == ("waits", [], [])
     assert (kept["additions"], kept["gates"]) == ([], {}), "a branch that was never made holds none"
-
-
-# --- clean -----------------------------------------------------------------------------------
 
 
 def test_clean_removes_merged_and_gone_work_trees_and_keeps_work_in_progress(
@@ -822,9 +794,6 @@ def test_clean_all_ends_an_interrupted_drain_and_keeps_its_uncommitted_work(
     assert states(root) == {BRANCH_A: "buildable", BRANCH_C: "buildable", BRANCH_B: "waiting"}
     assert run(root, "clean", "--all") == 0, "a second clean finds nothing and says nothing"
     assert capsys.readouterr().out == ""
-
-
-# --- the report ------------------------------------------------------------------------------
 
 
 def test_the_report_says_what_merged_what_waits_and_every_assumption(
@@ -934,9 +903,6 @@ def test_the_report_leaves_out_a_ticket_still_building_and_times_what_it_can(
     assert drain.minutes({"opened": "yesterday", "run_time": "run time: 9s"}) == "run time: 9s"
 
 
-# --- the small readers -----------------------------------------------------------------------
-
-
 def test_what_is_not_the_expected_json_reads_as_nothing(tmp_path: Path) -> None:
     assert queue_notes.loaded("[1]") == queue_notes.loaded("{") == queue_notes.loaded(None) == {}
     assert queue_notes.texts("a") == queue_notes.tables({"a": 1}) == []
@@ -966,7 +932,6 @@ def test_what_a_branch_holds_is_read_from_its_commits(tmp_path: Path) -> None:
 
 
 def planted(tmp_path: Path) -> Path:
-    """A directory of the owner's that the queue must never empty."""
     precious = tmp_path / "precious"
     write(precious, "kept/notes.txt", "the owner's\n")
     return precious
@@ -976,8 +941,6 @@ def planted(tmp_path: Path) -> Path:
 def test_a_queue_directory_that_is_a_link_is_refused_and_what_it_points_at_is_kept(
     tmp_path: Path, capsys: Out, level: str
 ) -> None:
-    # Why: the temp directory is shared and the name is predictable. A link planted there made
-    # `clean` empty the directory it pointed at.
     root = project(tmp_path)
     precious = planted(tmp_path)
     home = drain.queue_home(root) if level == "repository" else drain.users_home()
@@ -1107,8 +1070,6 @@ OWED_BINDING = (
 def test_a_ticket_red_on_an_owed_safeguard_is_held_until_the_safeguard_is_bound(
     tmp_path: Path, capsys: Out
 ) -> None:
-    # Why: ADR 0028. A second outbound call while its safeguard is owed is red, and no rewrite of
-    # the ticket fixes that; binding the safeguard on the default branch does.
     files = {
         "docs/process/binding.md": binding(MERGE) + OWED_BINDING,
         "src/b.py": "requests.get(1)\n",
@@ -1283,7 +1244,6 @@ def test_a_mechanical_reason_is_retried_twice_and_the_third_time_it_is_the_owner
 def test_a_run_that_keeps_erroring_is_retried_and_then_the_owners(
     tmp_path: Path, capsys: Out
 ) -> None:
-    # Why: ADR 0055. A run that errors has no result; the skill closes the ticket with this code.
     root = project(tmp_path)
     run(root, "open", ALPHA)
     crashed = "errored: the pipeline run errored twice: implement agent returned no result"
@@ -1311,8 +1271,6 @@ def test_a_run_that_keeps_erroring_is_retried_and_then_the_owners(
     assert entry.why[1] == crashed
     capsys.readouterr()
 
-
-# --- a ticket too large is split by the agent (ADR 0046) -------------------------------------
 
 PROMISES = "\n## Acceptance criteria\n\n- [ ] It saves a link.\n- [ ] It lists the links.\n"
 WHOLE = {ALPHA: ticket(1, "Alpha", "") + PROMISES}

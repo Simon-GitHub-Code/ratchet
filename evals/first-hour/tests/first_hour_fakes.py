@@ -1,12 +1,3 @@
-"""A plugin checkout, a product session and an owner model small enough to read, for driving a run.
-
-The plugin's route reads the owner's project: no repository yet asks for ``/ratchet:init``; an
-unmerged ``feature/1-save`` asks the owner to merge it by hand; after that it names
-``/ratchet:next`` until the run stops. The session's ``/ratchet:init`` writes an app whose page
-does not yet save a link, merges one branch itself and leaves ``feature/1-save``, which makes the
-page save, for the owner.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -87,7 +78,6 @@ GIT_ENV = {
 
 
 def bwrap_works() -> bool:
-    """Whether ``bwrap`` can make a sandbox on this machine (CI runners often cannot)."""
     if shutil.which("bwrap") is None:
         return False
     done = subprocess.run(
@@ -105,7 +95,6 @@ def git(repo: Path, *args: str) -> str:
 
 
 def plugin(where: Path) -> Path:
-    """A plugin checkout with a manifest and the fake route, committed."""
     (where / ".claude-plugin").mkdir(parents=True)
     (where / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "9.9.9"}))
     (where / "scripts").mkdir()
@@ -117,7 +106,6 @@ def plugin(where: Path) -> Path:
 
 
 def operator(where: Path) -> harness.Operator:
-    """An operator with no companions and one watched file."""
     where.mkdir(parents=True, exist_ok=True)
     watched = where / "settings.json"
     watched.write_text("{}")
@@ -133,8 +121,6 @@ def config(plugin_dir: Path, root: Path, **budget: float) -> harness.Config:
 
 
 class Owner:
-    """Answers a life event with ``pick``, and replies to the first ``replies`` turns that ask."""
-
     def __init__(self, run: harness.Run, *, pick: str = "Not yet", replies: int = 1) -> None:
         self.run = run
         self.usd = 0.25
@@ -162,11 +148,6 @@ class Owner:
 
 
 class Session:
-    """Builds the app on ``/ratchet:init``; with ``ready``, hangs on the next slash command.
-
-    The hang is the way a stuck session looks: a CLI process runs behind it and the turn never ends.
-    """
-
     def __init__(self, run: harness.Run, ready: Path | None = None) -> None:
         self.run = run
         self.costs: dict[str, float] = {"s1": 0.0}
@@ -238,12 +219,6 @@ class Models:
 
 
 def main(argv: list[str]) -> None:
-    """One run in this process, for the kill tests.
-
-    ``argv`` is the plugin checkout, the run directory, the operator's home, the file that says
-    the run is ready to be stopped, ``1`` to sandbox it, and a command to paste (or nothing). The
-    run waits to be stopped in the session or, when there is a command, in that pasted command.
-    """
     plugin_dir, root, home, ready, sandboxed, paste = argv
     config_ = config(Path(plugin_dir), Path(root), minutes=10.0)
     operator_ = operator(Path(home))

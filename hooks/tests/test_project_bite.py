@@ -1,5 +1,3 @@
-"""``project_bite.py``: every gate a repository bound goes red on its planted fault."""
-
 import json
 import os
 import re
@@ -22,12 +20,9 @@ from tests.repos import branch, commit, git, repository, write
 from tests.servers import gone
 
 TABLE = "| Question | Tool | Tier | Threshold source | Entry point |\n|---|---|---|---|---|\n"
-# A gate is a case of one shell script: red when a file under src/ holds the word `planted`.
 LINT = 'if grep -rl planted src; then echo "L001 a planted fault"; exit 1; fi'
 TESTS = 'ls tests/*.t >/dev/null 2>&1 || { echo "no test to run"; exit 1; }'
 PLANT = 'write = { path = "src/_bite.txt", content = "planted\\n" }'
-# Seconds from a signal to the end of the proof, on a shared machine: the runner wakes every tenth
-# of a second, and the gate's group ends at once on SIGTERM.
 STOPS_WITHIN = 3
 MANIFEST = (
     '[[group]]\nname = "tool-config"\nreason = "The rules of a gate."\npaths = ["lint.cfg"]\n'
@@ -45,7 +40,6 @@ def row(name: str, tier: str = "0", tool: str = "a tool") -> str:
 def project(
     root: Path, gates: dict[str, str], registry: str | None, *, rows: str | None = None
 ) -> Path:
-    """A repository whose binding binds each gate of ``gates``, a shell body, to a tool."""
     cases = "".join(f"{name})\n{body}\n;;\n" for name, body in gates.items())
     table = TABLE + (rows if rows is not None else "".join(row(name) for name in gates))
     files = {
@@ -80,10 +74,9 @@ def state(root: Path) -> tuple[str, str, list[str]]:
 
 @pytest.fixture(autouse=True)
 def scratch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Scratch copies land in a directory the test can look into, and no outer bite is running."""
     directory = tmp_path / "scratch"
     directory.mkdir()
-    repos.skeleton()  # made once per process, in the real temp directory, before it is redirected
+    repos.skeleton()
     monkeypatch.setattr(tempfile, "tempdir", str(directory))
     monkeypatch.delenv(project_bite.BITING, raising=False)
     return directory
@@ -211,8 +204,6 @@ def test_a_patch_and_a_new_file_are_changes_git_sees(
 def test_a_replace_keeps_biting_after_an_unrelated_edit_breaks_the_same_patch(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Why: observed in a dogfood run, 2026-11-13: a package added to package.json broke both
-    # context patches of the pins gate, and the owner was stopped to repair them.
     lines = "".join(f"line {n}\n" for n in range(8))
     patch = "--- a/src/code.txt\n+++ b/src/code.txt\n@@ -1,4 +1,4 @@\n line 0\n-line 1\n+planted\n"
     patch += " line 2\n line 3\n"
@@ -425,7 +416,6 @@ def test_one_gate_is_proven_alone_before_the_registry_is_whole(
 
 
 def changed(root: Path) -> Path:
-    """A branch off the project's ``main``, which holds a manifest."""
     write(root, "guards/manifest.toml", MANIFEST)
     write(root, "lint.cfg", "rules = all\n")
     commit(root, "feat(core): a manifest")
@@ -485,7 +475,6 @@ def targeted(
     files: dict[str, str] | None = None,
     inserts: str = "",
 ) -> Path:
-    """A branch off a ``main`` that holds the manifest, the registry and ``files``."""
     root = project(tmp_path / "repo", GATES, registry or registry_of(), rows=rows)
     if inserts:
         replaced(root, BINDING, "## Speed", f"{inserts}\n## Speed")
@@ -509,7 +498,6 @@ def replaced(root: Path, path: str, *edit: str) -> None:
 
 
 def proved(out: list[str]) -> list[str]:
-    """The gate of each fault the run proved, in order."""
     return [line.split(":")[1].strip() for line in out if line.endswith(": bites")]
 
 
@@ -606,7 +594,6 @@ SUITES = (
 
 
 def suited(tmp_path: Path) -> Path:
-    """A branch off a ``main`` whose binding holds the suites table and a `tests-changed` row."""
     gates = {**GATES, "tests-changed": LINT}
     rows = GATE_ROWS + row("tests-changed", "1")
     registry = registry_of(bite("tests-changed", WORD))
@@ -1143,13 +1130,7 @@ def lanes() -> list[threading.Thread]:
 def test_an_interrupt_stops_the_gates_promptly_whichever_thread_receives_it(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], receiver: str
 ) -> None:
-    # Why: the kernel hands a process-directed signal to any thread. One handed to a lane's
-    # thread waited for the gate to finish, while the main thread slept in a blocking call.
     started, stopped = tmp_path / "started", tmp_path / "stopped"
-    # Why: a shell runs a trap only between commands, so the gate waits in short sleeps; one
-    # long sleep forked just after the signal would hold the trap back for its whole length. The
-    # wait ends by itself a minute on: a test run killed first leaves nothing running for good,
-    # and a runner that misses the signal fails this test instead of hanging the suite.
     until = int(time.time()) + 60
     slow = (
         f"trap 'echo ended by the runner > {stopped}; exit 143' TERM\n"
@@ -1180,12 +1161,8 @@ def test_an_interrupt_stops_the_gates_promptly_whichever_thread_receives_it(
 def test_after_an_interrupt_the_gate_it_stopped_runs_no_other_bite_and_prints_no_verdict(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Why: a stopped lane still walked its gate's other bites, restoring the copy after each and
-    # printing a verdict for it, for seconds after the stop with hundreds of bites.
     started = tmp_path / "started"
     registry = "".join(bite("slow", f"bite {n}") for n in range(1000))
-    # Why: a runner that misses the signal gets a gate that waits a minute at most and is then
-    # red before every fault, so the test fails in seconds more instead of hanging the suite.
     until = int(time.time()) + 60
     slow = (
         f'[ "$(date +%s)" -ge {until} ] && exit 1\ntouch {started}\n'
@@ -1209,8 +1186,6 @@ def test_after_an_interrupt_the_gate_it_stopped_runs_no_other_bite_and_prints_no
 def test_an_interrupt_while_the_lanes_start_waits_for_every_lane_before_the_copies_go(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Why: a signal between a lane's start and the pool recording it left a lane the pool did not
-    # wait for, writing into a copy that was being removed.
     gates = {"one": LINT, "two": LINT}
     registry = bite("one", "a planted word") + bite("two", "a planted word")
     root = project(tmp_path / "repo", gates, registry)
@@ -1258,7 +1233,6 @@ def test_the_first_copy_is_set_up_alone_so_the_others_find_what_it_cached(
 def test_in_a_copy_the_change_is_what_the_tree_holds_beyond_head(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Why: a gate over the change would otherwise judge the whole branch again for every bite.
     gates = {
         "changed": "git symbolic-ref -q HEAD && exit 1\n"
         'test "$(git merge-base HEAD main)" = "$(git rev-parse HEAD)" || exit 1\n'
@@ -1724,8 +1698,6 @@ def test_a_run_around_the_copy_hands_its_run_id_to_no_gate_in_it(
 def test_a_write_fault_does_not_follow_a_tracked_link_out_of_the_copy(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], path: str
 ) -> None:
-    # Why: the copy carries a tracked link as a link, and a write through it landed outside the
-    # copy, where restoring the copy does not reach.
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "kept.txt").write_text("the owner's\n", encoding="utf-8")
@@ -1772,9 +1744,7 @@ def test_an_include_that_leaves_the_repository_through_a_link_is_red(
     assert "bites" not in out
 
 
-# A gate that reads one file git ignores: red when it holds the word `planted`.
 READS_IGNORED = 'if grep -l planted x.secret 2>/dev/null; then echo "L001 planted"; exit 1; fi'
-# A fault this gate cannot see: it bites only if something else left the gate red.
 BLIND = 'write = { path = "docs/n.txt", content = "nothing the gate reads\\n" }'
 
 
@@ -1878,15 +1848,12 @@ def test_a_fault_is_planted_only_in_a_file_git_sees_and_never_through_a_link(
     case: tuple[str, Callable[[Path], None] | None, str],
 ) -> None:
     fault, prepare, says = case
-    # Why: a write through a tracked link to an ignored file planted the fault where restoring the
-    # copy does not reach, and the next bite of the gate, a fault it cannot see, then bit.
     patches = {
         "new-secret": "--- /dev/null\n+++ b/x.secret\n@@ -0,0 +1 @@\n+planted\n",
         "edit-secret": "--- a/env.secret\n+++ b/env.secret\n@@ -1 +1 @@\n-clean\n+planted\n",
         "rename-secret": "diff --git a/env.secret b/x.txt\nsimilarity index 50%\n"
         "rename from env.secret\nrename to x.txt\n--- a/env.secret\n+++ b/x.txt\n"
         "@@ -1 +1 @@\n-clean\n+planted\n",
-        # Why: restoring the copy writes src/code.txt back by the attributes it then finds.
         "new-attributes": "--- /dev/null\n+++ b/.gitattributes\n@@ -0,0 +1 @@\n+* text eol=crlf\n"
         "--- a/src/code.txt\n+++ b/src/code.txt\n@@ -1 +1 @@\n-clean\n+planted\n",
     }
@@ -1927,7 +1894,6 @@ def test_a_fault_in_a_file_another_name_shares_stays_in_the_name_it_was_planted_
     assert "bite: lint: by write: DOES NOT BITE" in out
 
 
-# What a bite whose gate was red again with no fault planted says first.
 RETURNS = (
     "  the gate did not return to green once the fault was gone, so its red may come from what"
     " its own runs leave and not from the fault"
@@ -1937,9 +1903,6 @@ RETURNS = (
 def test_each_bite_is_judged_against_a_green_run_of_its_own_just_before_it(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Why: one green run served every bite of a gate, so a gate left red by the first fault
-    # (a cache, a mark in an ignored file) made every later fault bite. A gate that stays red
-    # after a fault is one red from its second run on, so the first fault is not proven either.
     gate = (
         "test -f ignored/seen && { echo L001 still red; exit 1; }\n"
         "grep -rl planted src && { mkdir -p ignored; touch ignored/seen; echo L001; exit 1; }\n"
@@ -1957,8 +1920,6 @@ def test_each_bite_is_judged_against_a_green_run_of_its_own_just_before_it(
 def test_a_gate_red_again_with_no_fault_planted_proves_no_bite_before_it(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], keeps: str
 ) -> None:
-    # Why: a gate red from its second run on, by a count it keeps, was red on every fault, and a
-    # fault it never reads bit.
     count = "ignored/runs" if keeps == "in a directory git ignores" else str(tmp_path / "runs")
     gate = (
         f"mkdir -p ignored; n=$(cat {count} 2>/dev/null || echo 0); echo $((n + 1)) > {count}\n"
@@ -1984,7 +1945,6 @@ def test_every_kind_of_fault_that_cannot_be_planted_says_so_and_nothing_else(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], case: tuple[str, str]
 ) -> None:
     fault, says = case
-    # Why: a replace naming a tracked file deleted in the work tree crashed with a traceback.
     patch = "--- a/src/code.txt\n+++ b/src/code.txt\n@@ -1 +1 @@\n-clean\n+planted\n"
     write(tmp_path / "repo", "quality/bites/p.patch", patch)
     root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "gone", fault))
@@ -2013,7 +1973,6 @@ def test_a_file_a_gate_hid_from_git_is_gone_before_the_next_run(
 def test_a_copy_that_cannot_be_put_back_as_it_stood_makes_the_run_red(
     tmp_path: Path, scratch: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Why: a later fault would be judged in a copy that holds what an earlier run left.
     gate = f"mkdir -p locked; echo planted > locked/f; chmod 555 locked\n{LINT}"
     root = project(tmp_path / "repo", {"lint": gate}, bite("lint", "first"))
     try:
@@ -2026,7 +1985,6 @@ def test_a_copy_that_cannot_be_put_back_as_it_stood_makes_the_run_red(
     assert "bites" not in out
 
 
-# A gate that caches its verdict in an ignored directory, by a checksum of what it reads.
 CACHING = (
     'h=$(cat src/* | cksum | cut -d" " -f1); mkdir -p ignored\n'
     "test -f ignored/$h && { cat ignored/$h; test ! -s ignored/$h; exit; }\n"
@@ -2079,8 +2037,6 @@ def skips_an_absent_file(root: Path) -> None:
 
 
 def deletes_a_tracked_ignored_file(root: Path) -> None:
-    # Why: the index tracks it, so git calls it not ignored there; restoring cleans by the
-    # snapshot, which never held it, and keeps it as a file an ignore rule matches.
     tracks_an_ignored_file(root)
     (root / "kept.secret").unlink()
 
@@ -2108,8 +2064,6 @@ def test_the_first_green_run_judges_the_copy_as_every_later_run_does(
     capsys: pytest.CaptureFixture[str],
     case: tuple[str, str, Callable[[Path], None] | None, str],
 ) -> None:
-    # Why: the first green run judged the copy as setup left it, and every later run the copy as
-    # restoring leaves it. Where the two differed, a fault the gate never reads bit.
     setup, gate, prepare, verdict = case
     root = project(
         tmp_path / "repo", {"lint": f"{gate}\nexit 0"}, setup + bite("lint", "blind", BLIND)
@@ -2188,7 +2142,6 @@ def test_what_a_fault_or_its_run_changed_is_put_back_before_the_next_bite(
 def test_a_fault_inside_a_repository_setup_made_is_not_planted(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Why: restoring the copy cleans no file inside another repository, so the fault stayed.
     nest = (
         "git init -q vendor/x && echo a > vendor/x/a && git -C vendor/x add a\n"
         "git -C vendor/x -c user.name=a -c user.email=a@example.invalid commit -qm a\n"
@@ -2208,7 +2161,6 @@ def test_a_fault_inside_a_repository_setup_made_is_not_planted(
 
 
 def fingerprint(root: Path) -> list[tuple[str, int, bytes]]:
-    """Every entry of a work tree but ``.git``: its path, its mode, and what it holds."""
     entries = []
     for path in sorted(root.rglob("*")):
         if ".git" in path.relative_to(root).parts:
@@ -2248,9 +2200,6 @@ def test_a_path_swapped_for_a_link_between_the_check_and_the_plant_is_refused(
     case: tuple[str, str],
 ) -> None:
     kind, swapped = case
-    # Why: a process setup left running swapped a directory of the copy for a link to the real
-    # tree after the fault's path was checked and before it was written, and the fault landed in
-    # the real tree. The swap is made at that seam here, so no race decides the test.
     patch = "--- a/src/deep/inner.txt\n+++ b/src/deep/inner.txt\n@@ -1 +1 @@\n-clean\n+planted\n"
     write(tmp_path / "repo", "quality/bites/inner.patch", patch)
     write(tmp_path / "repo", "src/deep/inner.txt", "clean\n")
@@ -2282,8 +2231,6 @@ def test_a_directory_swapped_once_the_walk_holds_it_still_takes_the_fault(
     monkeypatch: pytest.MonkeyPatch,
     case: tuple[str, str],
 ) -> None:
-    # Why: the walk holds the directory open, so the act goes to the copy's own directory even
-    # when its name points at the real tree by then. An act by path would follow the link.
     kind, swapped = case
     write(tmp_path / "repo", INNER, "clean\n")
     root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "swapped", SWAPPED[kind]))
@@ -2321,7 +2268,6 @@ def test_a_directory_swapped_once_the_walk_holds_it_still_takes_the_fault(
 def test_a_setup_that_leaves_a_link_leading_out_of_the_copy_is_unsafe_and_red(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], link: str
 ) -> None:
-    # Why: the snapshot taken mid-swap, replayed with no timing: setup ends with src a link out.
     root = project(tmp_path / "repo", {"lint": "exit 0"}, "")
     setup = f"mv src aside && {link.format(root=root)}"
     (root / "quality/bites.toml").write_text(
@@ -2351,7 +2297,6 @@ def test_a_setup_that_leaves_a_link_leading_out_of_the_copy_is_unsafe_and_red(
 def test_a_setup_link_that_stays_inside_the_copy_is_accepted_and_the_proof_goes_green(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], link: str
 ) -> None:
-    # Why: green end to end with a link present shows the link was accepted, not refused.
     root = project(tmp_path / "repo", {"lint": LINT}, "")
     (root / "quality/bites.toml").write_text(
         f"setup = [{json.dumps('sh -c ' + shlex.quote(link))}]\n" + bite("lint", "a planted word"),
@@ -2367,9 +2312,6 @@ def test_a_setup_link_that_stays_inside_the_copy_is_accepted_and_the_proof_goes_
 def test_a_link_the_snapshot_holds_is_judged_though_the_directory_is_back_by_the_time_it_looks(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Why: the race run for real, made certain. Setup leaves src a link out as the snapshot is
-    # taken, and a process of its own puts the directory back before the check looks. Judged by
-    # the copy as it stands, the link was accepted and the next restore wrote it, live.
     root = project(tmp_path / "repo", {"lint": "exit 0"}, "")
     setup = f"mv src aside && ln -s {root / 'src'} src"
     (root / "quality/bites.toml").write_text(
@@ -2396,9 +2338,6 @@ def test_a_link_the_snapshot_holds_is_judged_though_the_directory_is_back_by_the
 def test_a_link_reached_back_up_through_another_link_is_judged_by_where_the_first_leads(
     tmp_path: Path, *, capsys: pytest.CaptureFixture[str], committed: bool
 ) -> None:
-    # Why: `L/../x` is not `x` when L leads out: the link M that names it ends outside the copy,
-    # though the path as written, collapsed, stays inside. L is the repository's own link or one
-    # git ignores, so it is never judged itself and only the walk through it can refuse M.
     outside = tmp_path / "outside" / "sub"
     outside.mkdir(parents=True)
     root = project(tmp_path / "repo", {"lint": "exit 0"}, "")
@@ -2640,8 +2579,6 @@ def test_a_patch_deletes_a_file_and_a_patch_that_makes_a_link_is_not_planted(
 def test_the_closing_run_runs_once_for_each_set_of_args_among_the_bites_that_bit(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Why: a closing run with no args proves nothing of a bite whose command had args, and one
-    # for the last set alone proves nothing of the others.
     log = tmp_path / "runs"
     gate = f'echo "${{2:-none}}" >> {log}\n{LINT}'
     registry = (
@@ -2694,8 +2631,6 @@ def test_a_gate_stopped_during_its_closing_run_prints_no_verdict(
 def test_a_rules_file_that_exists_may_be_changed_or_removed(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], case: tuple[str, str]
 ) -> None:
-    # Why: only a new rules file decides how the copy is put back; one the snapshot holds is put
-    # back as it stood, like any other file.
     fault, red = case
     write(tmp_path / "repo", "src/.gitattributes", "*.txt text\n")
     gate = f'{red} && {{ echo "L001 rules changed"; exit 1; }}; exit 0'
@@ -2713,7 +2648,6 @@ def test_a_rules_file_that_exists_may_be_changed_or_removed(
 def test_a_copy_its_directories_cannot_reach_is_red_and_says_why(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Why: an error the system gave on the way to a file of the copy ended the run in a traceback.
     registry = "setup = [\"sh -c 'rm -r .git/info && echo x > .git/info'\"]\n" + bite("lint", "a")
     root = project(tmp_path / "repo", {"lint": LINT}, registry)
     assert prove(root) == 1

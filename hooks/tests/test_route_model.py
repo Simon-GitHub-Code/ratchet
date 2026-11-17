@@ -1,14 +1,3 @@
-"""The route against its reference model: the next command is what the model says it should be.
-
-``route_model`` is the machine, pure. ``advice`` is what the method's pages say the route names,
-and these tests hold it to every rule. ``real_advice`` is that with the named divergences applied:
-it may break a rule only where a divergence says, and the real ``route.decide`` must give it in
-every state. A sweep takes every step of the model on a real repository; a stateful test takes
-long runs of actions there; tests run the real merge entry point, which the sweep never does;
-each divergence keeps a strict expected failure that passes the day the route is fixed. The
-exporter is held to a stable output, and the charts to the export.
-"""
-
 import itertools
 import json
 import os
@@ -65,11 +54,9 @@ from tests.test_drain import approval
 
 HOOKS_DIRECTORY = Path(__file__).resolve().parents[1]
 CHARTS = PLUGIN_ROOT / "docs/model/route.md"
-HOOKS_EVERY = 7  # the steps between the times a run takes the commit hooks away
+HOOKS_EVERY = 7
 SWEEP_CHUNKS = 32
 
-# Why no shrinking: every step runs real git, and the message names the whole path to the first
-# disagreement, so a red run ends in seconds, not in the minutes Hypothesis spends shrinking.
 STEPS = settings(
     max_examples=4,
     stateful_step_count=28,
@@ -98,7 +85,6 @@ Label = Callable[[World], Advice]
 
 
 def cannot_be_followed(label: Label) -> set[World]:
-    """The states where the action ``label`` names has no step to take."""
     taken = defaultdict(set)
     for edge in model.graph().edges:
         taken[edge.source].add(edge.action)
@@ -106,12 +92,10 @@ def cannot_be_followed(label: Label) -> set[World]:
 
 
 def never_rests(_label: Label) -> set[World]:
-    """The states from which following the specification's advice never reaches rest."""
     return {s for s, rank in model.ranks(model.graph()).items() if rank == model.LOOPS}
 
 
 def rank_kept(label: Label) -> set[World]:
-    """The states with a step that follows ``label`` away from rest and does not lower the rank."""
     ranks = model.ranks(model.graph())
     return {
         source
@@ -121,7 +105,6 @@ def rank_kept(label: Label) -> set[World]:
 
 
 def stays(label: Label) -> set[World]:
-    """The states with a step that follows ``label`` and leaves the state as it was."""
     return {
         source
         for source, name, target in model.graph().edges
@@ -130,7 +113,6 @@ def stays(label: Label) -> set[World]:
 
 
 def merges_a_merged_branch(label: Label) -> set[World]:
-    """The states where ``label`` names the merge of a branch the default branch already holds."""
     return {s for s in model.graph().states if s.head is Head.MERGED and label(s) is Advice.MERGE}
 
 
@@ -139,10 +121,6 @@ def owes_architecture(world: World) -> bool:
 
 
 def architecture_misnamed(label: Label) -> set[World]:
-    """The states where ``label`` names the owed architecture other than exactly where it is owed.
-
-    Where it is owed is where nothing the route names before it is open.
-    """
     return {
         s
         for s in model.graph().states
@@ -152,7 +130,6 @@ def architecture_misnamed(label: Label) -> set[World]:
 
 
 def work_hidden(label: Label) -> set[World]:
-    """The states where ``label`` names the owed architecture and the step beneath it is shut."""
     taken = defaultdict(set)
     for edge in model.graph().edges:
         taken[edge.source].add(edge.action)
@@ -165,8 +142,6 @@ def work_hidden(label: Label) -> set[World]:
 
 
 def changed_by_another(name: ActionName, *, enters: bool) -> Callable[[Label], set[World]]:
-    """The states with a step other than ``name`` that makes the architecture owed, or ends it."""
-
     def check(_label: Label) -> set[World]:
         return {
             source
@@ -180,7 +155,6 @@ def changed_by_another(name: ActionName, *, enters: bool) -> Callable[[Label], s
 
 
 def builds_without_the_line(label: Label) -> set[World]:
-    """The states where a ticket's ``Flag:`` line is missing and ``label`` names a build."""
     return {
         s
         for s in model.graph().states
@@ -189,7 +163,6 @@ def builds_without_the_line(label: Label) -> set[World]:
 
 
 def builds_unproved(label: Label) -> set[World]:
-    """The states where the adoption stopped before its proof and ``label`` names a build."""
     return {
         s
         for s in model.graph().states
@@ -198,7 +171,6 @@ def builds_unproved(label: Label) -> set[World]:
 
 
 def runs_without_the_line(_label: Label) -> set[World]:
-    """The states with a feature run or a drain that starts while the line is missing."""
     return {
         source
         for source, act, _target in model.graph().edges
@@ -207,7 +179,6 @@ def runs_without_the_line(_label: Label) -> set[World]:
 
 
 def missing_by_another(_label: Label) -> set[World]:
-    """The states with a step other than the upgrade that leaves the line missing."""
     return {
         source
         for source, act, target in model.graph().edges
@@ -218,7 +189,6 @@ def missing_by_another(_label: Label) -> set[World]:
 
 
 def upgrade_moves_a_ticket(_label: Label) -> set[World]:
-    """The states where the upgrade that asks the line moves a ticket or the inheritance."""
     return {
         source
         for source, act, target in model.graph().edges
@@ -428,12 +398,6 @@ def test_every_rule_the_export_names_is_checked_here() -> None:
 
 @pytest.mark.parametrize("name", list(CHECKS))
 def test_a_rule_breaks_only_where_a_divergence_says_it_does(name: str) -> None:
-    """On ``advice`` every rule holds; on ``real_advice`` it fails only where an entry says.
-
-    Each entry that names the rule breaks it in some state of its own. Why not in each: an
-    adoption stopped after its pin is read as finished everywhere, and the route names a build
-    in only some of those states.
-    """
     check, label = CHECKS[name]
     broken = check(label)
     where: dict[str, set[World]] = defaultdict(set)
@@ -449,7 +413,6 @@ def test_a_rule_breaks_only_where_a_divergence_says_it_does(name: str) -> None:
 
 
 def test_the_architecture_rules_are_met_where_they_bite() -> None:
-    """The owed architecture is named beside a build and a drain, begun and ended by its steps."""
     graph = model.graph()
     named = [s for s in graph.states if model.advice(s) is Advice.ARCHITECTURE]
     assert {model.beneath(s) for s in named} >= {Advice.BUILD, Advice.DRAIN}
@@ -920,7 +883,6 @@ def test_the_step_that_resolves_the_last_ticket_deletes_the_unit_and_keeps_its_a
 
 
 def advice_loop(graph: model.Graph) -> list[World]:
-    """A run of advised steps that returns to a world it passed, resting aside; empty when none."""
     follows = {
         state: () if model.rest(state) else targets
         for state, targets in graph.followed(model.advice).items()
@@ -972,12 +934,6 @@ RELEASED_BY = {
 
 @pytest.mark.parametrize("hold", sorted(model.HOLDS))
 def test_a_hold_is_released_by_its_own_step_and_by_no_other(hold: Ticket) -> None:
-    """Each kind of hold has the one step the route names; any other change leaves it held.
-
-    So a ticket parked for guard edits stays parked when another ticket is agreed or the binding
-    changes, both commits on the default branch, and a note older than the kinds of hold is
-    released only by a change to the ticket.
-    """
     kept: set[ActionName] = set()
     released: set[ActionName] = set()
     for source, name, target in model.graph().edges:
@@ -1042,10 +998,6 @@ def test_the_charts_were_drawn_from_the_current_export() -> None:
 
 
 def follow(repo: real.Repo, world: World, outcome: int) -> tuple[World, list[Advice]]:
-    """Take the advised action, its ``outcome``-th outcome, until rest; the advice at each stop.
-
-    The route is asked at every stop, rest included, and must name what the model says it names.
-    """
     labels: list[Advice] = []
     while not labels or not model.rest(world):
         expected = model.real_advice(world)
@@ -1099,8 +1051,6 @@ def test_following_the_advice_through_a_whole_feature_returns_to_rest(
 
 
 class Spanning(NamedTuple):
-    """The graph's shortest-path tree, its states in the order a depth-first walk visits them."""
-
     order: tuple[World, ...]
     place: dict[World, int]
     parent: dict[World, model.Edge]
@@ -1108,7 +1058,6 @@ class Spanning(NamedTuple):
     size: dict[World, int]
 
     def trail(self, world: World) -> list[str]:
-        """The actions on the tree's path from the start to ``world``."""
         names: list[str] = []
         while world in self.parent:
             names.insert(0, str(self.parent[world].action))
@@ -1118,7 +1067,6 @@ class Spanning(NamedTuple):
 
 @cache
 def spanning() -> Spanning:
-    """The tree, each state with its edge from its parent and the size of the tree below it."""
     graph = model.graph()
     parent: dict[World, model.Edge] = {}
     children: dict[World, list[World]] = defaultdict(list)
@@ -1141,7 +1089,6 @@ def spanning() -> Spanning:
 
 @cache
 def leaving() -> dict[World, list[model.Edge]]:
-    """Each state's steps, in the order the graph lists them."""
     out: dict[World, list[model.Edge]] = defaultdict(list)
     for edge in model.graph().edges:
         out[edge.source].append(edge)
@@ -1149,13 +1096,6 @@ def leaving() -> dict[World, list[model.Edge]]:
 
 
 def ask(repo: real.Repo, world: World, path: list[str]) -> None:
-    """The route on ``repo`` names what the model says it names in ``world``.
-
-    Where that is the owed architecture, the route also offers the step it would otherwise name,
-    and that step is the one the model gives beneath it, read as the real route reads it. Where it
-    is a safeguard, ``then:`` names what the route names once the rows are bound, the owed
-    architecture where there is one, and the route still offers the work.
-    """
     step = real.read(repo)
     assert real.classify(step) is model.real_advice(world), disagreement(world, step, path)
     if real.classify(step) in {Advice.RESOLVE, Advice.BLOCKED}:
@@ -1198,7 +1138,6 @@ UPKEEP = frozenset({Advice.FORMAL_TICKET, Advice.FORMAL_ROUND, Advice.FORMAL_UPK
 
 
 def without(repo: real.Repo, *steps: str) -> route.Step:
-    """What the route names on ``repo`` once it no longer names each of ``steps`` owed there."""
     with pytest.MonkeyPatch.context() as patch:
         for name in steps:
             patch.setattr(route, name, lambda *_args: None)
@@ -1206,13 +1145,6 @@ def without(repo: real.Repo, *steps: str) -> route.Step:
 
 
 def sweep(repo: real.Repo, world: World, span: range, *, scratch: Path) -> int:
-    """Take every step out of each state below ``world`` whose place in the walk is in ``span``.
-
-    Each state is built once, from its parent in the walk. A step to a state the walk goes on
-    into is taken on the repository that state keeps; any other is taken on a copy, which is
-    asked and thrown away, except the last where the walk goes no further, which is taken on the
-    repository itself. The route is asked after every step. Returns the steps taken.
-    """
     tree = spanning()
     path = tree.trail(world)
     here = tree.place[world] in span
@@ -1248,7 +1180,6 @@ def sweep(repo: real.Repo, world: World, span: range, *, scratch: Path) -> int:
 
 @cache
 def spans() -> list[range]:
-    """The walk's places cut into chunks that each take about as many steps."""
     tree = spanning()
     steps = [len(leaving()[state]) for state in tree.order]
     total, bounds, done = sum(steps), [0], 0
@@ -1267,12 +1198,6 @@ def test_the_chunks_cover_every_state_once() -> None:
 
 @pytest.fixture
 def hooks_checked_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``hooks_installed.check`` run once for each set of hook files, its green verdict kept.
-
-    Why: it runs both hooks, a third of what a route call costs, and once they are installed every
-    repository the sweep builds holds the same hook files under the same git config. A red verdict
-    is never kept, so a repository without its hooks is checked again each time.
-    """
     check = hooks_installed.check
     green: set[tuple[bytes | None, ...]] = set()
 
@@ -1304,7 +1229,6 @@ def test_the_route_names_what_the_model_says_after_every_step(tmp_path: Path, ch
 
 
 def disagreement(world: World, step: route.Step, path: list[str]) -> str:
-    """The path taken, the world, what the model says the route names and what it said."""
     names = ", ".join(entry.name for entry in model.divergences(world))
     return "\n".join(
         [
@@ -1323,13 +1247,11 @@ def disagreement(world: World, step: route.Step, path: list[str]) -> str:
 
 
 def described(before: World, after: World) -> str:
-    """What an action changed, as the fields that differ."""
     fields = (f for f in World.__dataclass_fields__ if getattr(before, f) != getattr(after, f))
     return ", ".join(f"{f}={getattr(after, f)!s}" for f in fields)
 
 
 def toward(world: World, aim: Callable[[World], bool]) -> list[model.Edge]:
-    """The first steps of the shortest runs from ``world`` to a world ``aim`` picks."""
     out: dict[World, list[model.Edge]] = defaultdict(list)
     for edge in model.graph().edges:
         out[edge.source].append(edge)
@@ -1352,7 +1274,6 @@ def toward(world: World, aim: Callable[[World], bool]) -> list[model.Edge]:
 
 
 def path_to(target: World) -> list[model.Edge]:
-    """The edges of a shortest run from the start to ``target``."""
     path: list[model.Edge] = []
     world = World()
     while world != target:
@@ -1387,11 +1308,6 @@ def test_the_route_names_what_the_pages_say_where_it_diverges(
 def test_a_commit_the_hold_did_not_name_leaves_a_guard_hold_and_its_edits_release_it(
     tmp_path: Path,
 ) -> None:
-    """An agreed ticket commits on main under a guard hold; landing the edits then builds.
-
-    Why it stays beside the sweep, which takes both steps too: it also checks that each step moves
-    the default branch.
-    """
     parked = World(
         setup=Setup.BOUND,
         hooks=True,
@@ -1416,13 +1332,11 @@ def test_a_commit_the_hold_did_not_name_leaves_a_guard_hold_and_its_edits_releas
 
 
 def architecture_found(repo: real.Repo) -> list[conformance.Finding]:
-    """What the ``architecture`` check finds on ``repo``, named as an owed entry names it."""
     check = conformance.check_architecture
     return [replace(f, rule=conformance.rule_of(check)) for f in check(repo.root)]
 
 
 def built(tmp_path: Path, world: World) -> real.Repo:
-    """A repository the shortest run from an empty directory takes to ``world``."""
     repo = real.Repo.start(tmp_path)
     for source, name, target in path_to(world):
         real.apply(repo, name, real.Change(source, target))
@@ -1430,7 +1344,6 @@ def built(tmp_path: Path, world: World) -> real.Repo:
 
 
 def parked_by(world: World) -> real.Change:
-    """The landing on the walk's path to ``world`` that left its records branch waiting."""
     tree = spanning()
     edge = tree.parent[world]
     while edge.source.parked:
@@ -1449,7 +1362,6 @@ def test_the_walk_leaves_records_waiting_on_branches_of_both_kinds_of_name() -> 
 
 @cache
 def landings_on_a_branch_an_agent_named() -> list[model.Edge]:
-    """The landings that leave records on a branch an agent named, nearest the start first."""
     tree = spanning()
     landings = [
         edge
@@ -1482,7 +1394,6 @@ def test_records_waiting_on_a_branch_an_agent_named_are_named_for_its_merge(
 
 
 def upgraded(repo: real.Repo, world: World) -> World:
-    """``world`` after the upgrade, which ``repo`` takes too."""
     (after,) = model.ACTIONS[ActionName.UPGRADE_LEAVES_ROWS_TO_FILL].successors(world)
     real.apply(repo, ActionName.UPGRADE_LEAVES_ROWS_TO_FILL, real.Change(world, after))
     return after
@@ -1508,12 +1419,10 @@ FILLED_BY_THE_UPGRADE = frozenset(
 
 
 def owes(repo: real.Repo, rules: frozenset[str]) -> list[owed.Entry]:
-    """The ledger's entries of ``rules``."""
     return [entry for entry in owed.read(repo.root).entries if entry.rule in rules]
 
 
 def test_an_adoption_records_the_architecture_so_an_upgrade_owes_none(tmp_path: Path) -> None:
-    """The architecture check finds nothing after an adoption, and the real upgrade owes none."""
     world = replace(DONE, architecture=Architecture.RECORDED)
     repo = built(tmp_path, world)
     assert architecture_found(repo) == []
@@ -1529,7 +1438,6 @@ def test_an_adoption_records_the_architecture_so_an_upgrade_owes_none(tmp_path: 
 def test_an_older_adoption_owes_the_architecture_after_an_upgrade_until_it_is_recorded(
     tmp_path: Path,
 ) -> None:
-    """The real upgrade owes what the architecture check finds, named after the fill till merged."""
     world = replace(DONE, architecture=Architecture.UNASKED)
     repo = built(tmp_path, world)
     assert ActionName.OLDER_PLUGIN_ADOPTS in [step.action for step in path_to(world)]
@@ -1550,12 +1458,6 @@ def test_an_older_adoption_owes_the_architecture_after_an_upgrade_until_it_is_re
 def test_the_real_upgrade_owes_more_than_the_model_and_leaves_a_faithful_adoption_green(
     tmp_path: Path,
 ) -> None:
-    """What the real upgrade leaves on the world's older adoption beyond the model's two debts.
-
-    Why it is pinned: the model's upgrade leaves rows to fill and the architecture. The real one
-    also owes every other finding red at the merge base, which the route never names. The world's
-    adoption writes the quality files the templates hold, so nothing is left red.
-    """
     world = replace(DONE, architecture=Architecture.UNASKED)
     repo = built(tmp_path, world)
     upgraded(repo, world)
@@ -1581,11 +1483,6 @@ def test_the_real_upgrade_owes_more_than_the_model_and_leaves_a_faithful_adoptio
 def test_a_review_and_a_safeguard_owed_beside_the_architecture_come_before_it(
     tmp_path: Path,
 ) -> None:
-    """With a review, then a safeguard, owed beside the architecture, each is named before it.
-
-    Why it is walked here: the model's arrivals come at rest, so it never owes a review beside
-    the architecture; the chain names the order, and the real route gives it.
-    """
     world = replace(DONE, architecture=Architecture.OWED)
     repo = built(tmp_path, world)
     said = []
@@ -1616,7 +1513,6 @@ TIER_2_NEXT = "next: true on `main`: tier 2 runs after every merge, and a red on
 
 
 def typed(repo: real.Repo, command: str) -> subprocess.CompletedProcess[str]:
-    """``command`` run in ``repo`` as an agent types it, with no shell."""
     return subprocess.run(  # noqa: S603 # -- the binding's or the route's own command
         shlex.split(command.removeprefix("`").removesuffix("`")),
         cwd=repo.root,
@@ -1627,7 +1523,6 @@ def typed(repo: real.Repo, command: str) -> subprocess.CompletedProcess[str]:
 
 
 def unchanged(repo: real.Repo) -> tuple[str, str, str]:
-    """What a step that changes nothing leaves as it was: main's tip, HEAD, and the work tree."""
     return git(repo.root, "rev-parse", "main"), repo.head(), git(repo.root, "status", "--short")
 
 
@@ -1635,16 +1530,6 @@ def unchanged(repo: real.Repo) -> tuple[str, str, str]:
 def test_after_the_real_merge_the_route_never_names_that_merge_again(
     tmp_path: Path, case: str
 ) -> None:
-    """The binding's ``merge`` runs ``merge.py``; it merges a clean branch, and the route moves on.
-
-    Why the real entry point: the sweep writes its merges with git, so it cannot see a merge that
-    leaves the checkout on the branch it merged. The adoption's branch is judged by its own gates,
-    a working branch by its verdict record. The merge keeps the branch: checked out again, the
-    route names the switch, the merge run there changes nothing, as the model's merge does, and
-    the switch the route names goes back. The adoption's branch exists only before its proof,
-    where the model takes no step but the resume and the route's own, so its switch back is read
-    off the rules alone.
-    """
     world, steps = BRANCHES[case]
     repo = real.Repo.merging(tmp_path)
     for source, name, target in path_to(world):
@@ -1686,7 +1571,6 @@ def test_after_the_real_merge_the_route_never_names_that_merge_again(
 
 
 def on_a_working_branch(tmp_path: Path) -> tuple[real.Repo, World]:
-    """A repository at rest with a change committed on a branch, its verdict record last."""
     world, steps = BRANCHES["a working branch"]
     repo = real.Repo.merging(tmp_path)
     for source, name, target in path_to(world):
@@ -1724,12 +1608,6 @@ LEFT = {
 def test_a_merge_that_does_not_switch_says_so_and_the_route_names_what_the_model_says(
     tmp_path: Path, case: str
 ) -> None:
-    """``merge.py`` switches only from the branch it merged, clean, the default branch free.
-
-    Otherwise it leaves HEAD where it was and its ``next:`` line says whether to switch. The route
-    then names what the model names where the merge left the checkout: the commit of a dirty
-    tree, the switch, or what comes after the merge.
-    """
     before, said, head, tree = LEFT[case]
     repo, world = on_a_working_branch(tmp_path)
     branch = repo.head()
@@ -1748,12 +1626,6 @@ def test_a_merge_that_does_not_switch_says_so_and_the_route_names_what_the_model
 def test_the_switch_named_beside_another_checkout_of_the_default_branch_can_be_taken(
     tmp_path: Path,
 ) -> None:
-    """Out of the model's one checkout: the step the route names there cannot be taken.
-
-    Why it is kept: ``RealAdviceCanBeFollowed`` breaks here on a real repository, and the merge's
-    own ``next:`` line names the same refused switch. It turns red the day the route names a step
-    that can be taken there; then the expected failure goes.
-    """
     repo, _ = on_a_working_branch(tmp_path)
     branch = repo.head()
     default_elsewhere(repo)
@@ -1763,12 +1635,6 @@ def test_the_switch_named_beside_another_checkout_of_the_default_branch_can_be_t
 
 
 def test_a_build_stopped_on_the_branch_it_cut_is_left_and_built_again(tmp_path: Path) -> None:
-    """A branch cut from the default tip, nothing on it: the route switches back, then builds.
-
-    Why it is replayed apart from the sweep: following the route from there must not come back to
-    it. The stop is not a step the route names, so no rule of the advice breaks, and the build the
-    route names next commits on the branch.
-    """
     stated = replace(IN_FLIGHT, tickets=(Ticket.STATED, Ticket.TRIAGE))
     repo = built(tmp_path, stated)
     cut = replace(stated, head=Head.MERGED)
@@ -1782,7 +1648,6 @@ def test_a_build_stopped_on_the_branch_it_cut_is_left_and_built_again(tmp_path: 
 
 
 def first_outcomes_meet() -> set[Advice]:
-    """The advice met by following it, first outcome each time, to rest and through a feature."""
     world, met = World(), set()
     for _ in range(2):
         while True:
@@ -1794,8 +1659,6 @@ def first_outcomes_meet() -> set[Advice]:
     return met
 
 
-# The advice that walk never meets: each needs a step the advice does not name, or an outcome
-# other than the first. The stateful test goes to these.
 DETOURS = [
     Advice.FINISH_RECORDS,
     Advice.SWITCH,
@@ -1825,15 +1688,6 @@ def test_the_detours_are_the_advice_the_first_outcomes_never_reach() -> None:
 
 
 class RouteMachine(RuleBasedStateMachine):
-    """The model and a real repository take the same step; the route must name what the model says.
-
-    The setup commands are done at the start: the walk from an empty repository, which names each
-    of them, is its own test, and so is the walk through a whole feature. This one goes where those
-    do not. Each run is given an order for the detours, and a step heads for the first it has not
-    met, so a short run goes deep and runs differ; once it has met every detour it follows the
-    advice or takes any action.
-    """
-
     def __init__(self) -> None:
         super().__init__()
         self.scratch = Path(tempfile.mkdtemp(prefix="route-model-"))
@@ -1847,7 +1701,6 @@ class RouteMachine(RuleBasedStateMachine):
         shutil.rmtree(self.scratch, ignore_errors=True)
 
     def take(self, name: ActionName, after: World) -> None:
-        """Do ``name`` on the repository and in the model."""
         real.apply(self.repo, name, real.Change(self.world, after))
         self.path.append(f"{name} ({described(self.world, after)})")
         self.world = after
@@ -1892,7 +1745,6 @@ class RouteMachine(RuleBasedStateMachine):
     @precondition(lambda self: model.adopted(self.world) and len(self.path) % HOOKS_EVERY == 0)
     @invariant()
     def without_its_commit_hooks_the_repository_is_asked_for_them_first(self) -> None:
-        """Whatever else is true, a repository that lost its hooks is told to install them."""
         real.remove_hooks(self.repo)
         step = real.read(self.repo)
         real.reinstall_hooks(self.repo)
@@ -1914,7 +1766,6 @@ ROUTE = Path(route.__file__)
 
 
 def routed(repo: real.Repo) -> dict[str, object]:
-    """What ``route.py --offline --json`` prints for ``repo``: the step and its ``also:`` lines."""
     ran = subprocess.run(  # noqa: S603 # -- the plugin's own route, no shell
         [sys.executable, str(ROUTE), "--root", str(repo.root), "--offline", "--json"],
         capture_output=True,
@@ -1925,7 +1776,6 @@ def routed(repo: real.Repo) -> dict[str, object]:
 
 
 def with_an_expired_switch(repo: real.Repo, root: Path) -> real.Repo:
-    """A copy of ``repo`` whose default branch declares a switch past its removal date."""
     copy = repo.copy(root)
     (copy.root / "flags.toml").write_text(EXPIRED, encoding="utf-8")
     snapshot(copy.root, "feat: a switch past its removal date")
@@ -1933,13 +1783,6 @@ def with_an_expired_switch(repo: real.Repo, root: Path) -> real.Repo:
 
 
 def test_a_switch_past_its_removal_date_outranks_no_step(tmp_path: Path) -> None:
-    """With no forge and no safeguard bound, an expired switch changes no step the route names.
-
-    Why no state of the model holds it: an ``also:`` line comes after ``next:``, ``why:`` and
-    ``then:``, and the label is the ``next:`` line alone. So at every stop of a walk from an empty
-    directory through a whole feature where the default branch is checked out clean, the route
-    with the switch names what it names without it.
-    """
     repo, world, asked = real.Repo.start(tmp_path), World(), 0
     for _ in range(2):
         while True:
@@ -1961,12 +1804,6 @@ def test_a_switch_past_its_removal_date_outranks_no_step(tmp_path: Path) -> None
 
 
 def test_the_route_names_each_switch_past_its_removal_date(tmp_path: Path) -> None:
-    """ADR 0061: the route lists what ``flags.py --expired`` lists, as an ``also:`` line.
-
-    The shortest run: from an empty directory to the first state the model calls adopted, with
-    no forge and no safeguard bound, then a commit on the default branch that declares a switch
-    past its removal date.
-    """
     repo = built(tmp_path / "start", ADOPTED)
     also = routed(with_an_expired_switch(repo, tmp_path / "expired"))["also"]
     assert any(EXPIRED_SWITCH in line for line in also), also

@@ -1,36 +1,4 @@
 #!/usr/bin/env python3
-"""Permission rules: ``.claude/settings.json`` holds a fixed list of denies and asks nothing.
-
-The ``deny`` list is the same in every repository and does not read the manifest. It names what
-takes effect before any merge, as ``Edit`` rules: the harness's settings, hooks, workflows, agents,
-skills and commands (Claude Code reads them from the checkout a session runs in), the git hooks,
-config and the refs the guards read the default branch through (ADR 0016), the guard's own event log
-in the git directory (ADR 0060), and the user's settings and installed plugins. Beside them are the
-command rules the hook also denies: the gate bypasses, history rewrites and forge changes, and the
-commands that write the default branch's ref in their plain spellings. ``gh label create`` is not
-denied, because the hook lets a recorded label through and a settings deny would refuse that one too
-(ADR 0006).
-
-The ``ask`` list is empty. An edit of any other guard path meets no rule here: on a branch the
-merge judge reads it, and where it lands on the default branch the hook refuses it. The hook is
-the one layer that asks, on a merge and on the agent-ready label, so its prompt is the one the
-owner reads, with its reasons (ADR 0033). A repository-relative pattern becomes ``Edit(/pattern)``
-(Claude Code reads a leading ``/`` as the project root) and a home pattern stays as it is.
-
-The rules the plugin writes are the whole of what it owns. Earlier versions wrote one ``Edit`` rule
-per manifest pattern and ``gh pr merge`` as an ask; a rule no version writes is the project's own,
-and ``regenerated`` keeps it where it stood, so ``--check`` still reports it and no write removes
-it. A rule some version writes that the project holds in ``deny`` and this one does not is
-stricter than the plugin's: it stays in ``deny``, and neither list reports it. No regeneration
-takes a rule out of ``deny`` (ADR 0029).
-
-Usage: ``settings_rules.py [--root DIR] [--check | --write]``. ``--check`` (the default) prints
-one line per rule missing from or foreign to the lists and exits 1 on any. ``--write`` regenerates
-the two lists and keeps every other key and every rule of the project's own. It refuses while the
-repository has no readable manifest, while ``settings.json`` is not a JSON object, and while the
-plugin in use is not the one CI runs (``plugin_pin.write_refusal``).
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -51,15 +19,9 @@ if TYPE_CHECKING:
 
     import gatelib
 
-# Why: the settings belong to a repository that has adopted the method, and the patterns an
-# earlier version mirrored tell its rules from the project's own.
 MANIFEST = Path("guards/manifest.toml")
 SETTINGS = Path(".claude/settings.json")
 SCHEMA = "https://json.schemastore.org/claude-code-settings.json"
-# Why: a permission rule matches a command's words, so it can name only the plain spelling of a
-# command that writes a default branch, and only a command the hook refuses whole: `git branch`,
-# `update-ref`, `checkout` and `switch` are denied here only for a default branch's name. The hook
-# reads every spelling (ADR 0016); these rules are the second layer for the common ones.
 DEFAULT_BRANCHES = ("main", "master")
 DEFAULT_BRANCH_DENIES = (
     tuple(
@@ -115,7 +77,6 @@ COMMAND_DENIES = (
     *DEFAULT_BRANCH_DENIES,
     *OTHER_REF_DENIES,
 )
-# Why: each of these acts before a merge, so no merge judge reads a change to one.
 TAMPER = (
     ".claude/settings.json",
     ".claude/settings.local.json",
@@ -143,13 +104,11 @@ TAMPER = (
 
 
 def edit_rule(pattern: str) -> str:
-    """The ``Edit`` permission rule that covers one pattern."""
     return f"Edit({pattern})" if pattern.startswith("~/") else f"Edit(/{pattern})"
 
 
 DENY = [*map(edit_rule, TAMPER), *COMMAND_DENIES]
 ASK: list[str] = []
-# Why: an earlier version asked here; a repository that still holds it is regenerated.
 EARLIER_ASKS = ("Bash(gh pr merge:*)",)
 
 
@@ -164,7 +123,6 @@ def read_manifest(root: Path) -> dict[str, object] | None:
 
 
 def parse_settings(text: str | None) -> dict[str, object] | None:
-    """The settings file's JSON object; a new one for no file, ``None`` for text that is not one."""
     if text is None:
         return {"$schema": SCHEMA}
     try:
@@ -192,8 +150,6 @@ def listed(settings: dict[str, object], key: str) -> list[str]:
 
 
 class Fault(Enum):
-    """What kind of drift a line reports, which says who may settle it."""
-
     MANIFEST = "manifest"
     MISSING = "missing"
     MISPLACED = "misplaced"
@@ -201,14 +157,11 @@ class Fault(Enum):
 
 
 class Drift(NamedTuple):
-    """One line ``--check`` prints, and the kind of fault it is."""
-
     line: str
     fault: Fault
 
 
 def drifts(root: Path) -> list[Drift]:
-    """Each manifest fault, missing rule and foreign rule, with its kind; empty when they match."""
     manifest = read_manifest(root)
     if manifest is None:
         line = f"{MANIFEST}: missing or not TOML, so no permission rule can be derived"
@@ -217,11 +170,6 @@ def drifts(root: Path) -> list[Drift]:
 
 
 def stricter(settings: dict[str, object], manifest: dict[str, object]) -> list[str]:
-    """The rules the project denies that an earlier version wrote and this one does not: kept.
-
-    Why: ``deny`` is as strict as a rule gets. A rule the plugin could write that the project
-    holds there is the owner's choice, and taking it out of ``deny`` would loosen it.
-    """
     writes = plugin_writer(manifest)
     return [
         rule
@@ -231,7 +179,6 @@ def stricter(settings: dict[str, object], manifest: dict[str, object]) -> list[s
 
 
 def drifts_of(manifest: dict[str, object], settings: dict[str, object]) -> list[Drift]:
-    """The drift of ``settings`` from the fixed lists, read against ``manifest``."""
     kept = stricter(settings, manifest)
     writes = plugin_writer(manifest)
     found: list[Drift] = []
@@ -254,12 +201,10 @@ def drifts_of(manifest: dict[str, object], settings: dict[str, object]) -> list[
 
 
 def drift(root: Path) -> list[str]:
-    """One line per manifest fault, missing rule or foreign rule; empty when settings match."""
     return [found.line for found in drifts(root)]
 
 
 def plugin_writer(manifest: dict[str, object]) -> Callable[[str], bool]:
-    """Whether some version of the plugin writes a rule for this manifest, in either list."""
     groups = manifest.get("group")
     mirrored = {
         edit_rule(pattern)
@@ -272,12 +217,10 @@ def plugin_writer(manifest: dict[str, object]) -> Callable[[str], bool]:
 
 
 def plugin_writes(rule: str, manifest: dict[str, object]) -> bool:
-    """Whether some version of the plugin writes ``rule`` for this manifest, in either list."""
     return plugin_writer(manifest)(rule)
 
 
 def own_rules(settings: dict[str, object], manifest: dict[str, object]) -> list[tuple[str, str]]:
-    """The project's own rules, as (list, rule) in order: those no version of the plugin writes."""
     writes = plugin_writer(manifest)
     return [
         (key, rule) for key in ("deny", "ask") for rule in listed(settings, key) if not writes(rule)
@@ -285,8 +228,6 @@ def own_rules(settings: dict[str, object], manifest: dict[str, object]) -> list[
 
 
 def regenerated(manifest: dict[str, object]) -> gatelib.Want:
-    """The want over ``settings.json`` text, which leaves text that is not a JSON object alone."""
-
     def want(text: str | None) -> str:
         settings = parse_settings(text)
         if settings is None:
@@ -306,7 +247,6 @@ def regenerated(manifest: dict[str, object]) -> gatelib.Want:
 
 
 def regenerate(root: Path) -> None:
-    """Write ``.claude/settings.json`` as ``regenerated`` makes it for the root's manifest."""
     path = root / SETTINGS
     path.parent.mkdir(parents=True, exist_ok=True)
     want = regenerated(read_manifest(root) or {})
@@ -314,7 +254,6 @@ def regenerate(root: Path) -> None:
 
 
 def write_problems(root: Path, plugin: Path) -> list[str]:
-    """What stops ``--write`` from regenerating the file under ``plugin``; empty when nothing."""
     if read_manifest(root) is None:
         return [f"{MANIFEST}: missing or not TOML, so no permission rule can be derived"]
     problems: list[str] = []

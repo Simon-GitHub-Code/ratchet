@@ -1,7 +1,3 @@
-# One scripted owner: who they are, the idea they bring, and the first slice a person can use.
-# Add another file beside this one for another idea or application type; `--persona <stem>`
-# picks it. The slice's `kind` names a check in first_hour/appcheck.py's SLICES table.
-
 name = "read-later"
 
 idea = "A small read-later web app: I paste a link, it saves the title, I can mark it read and see what's left."

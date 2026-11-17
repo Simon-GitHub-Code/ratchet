@@ -1,5 +1,3 @@
-"""The companion lines of AGENTS.md: each is the plugin's name alone, and the edit migrates them."""
-
 import json
 import shutil
 from pathlib import Path

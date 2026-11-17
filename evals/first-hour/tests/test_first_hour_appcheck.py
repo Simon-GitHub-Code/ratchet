@@ -13,7 +13,6 @@ from first_hour.persona import Slice
 
 PIECE = Slice("html-form", "save a link", "https://example.com/a", "example.com/a")
 
-# A read-later app small enough to read: a form, a list, and a choice of how it misbehaves.
 SERVER = textwrap.dedent(
     """
     import os, sys, urllib.parse
@@ -312,7 +311,7 @@ def test_a_command_line_tool_runs_through_the_wrapper_and_the_slices_one_step_al
     result = appcheck.check(root, one, root / "app.log", launch=launch)
     assert result.start_command == "just run"
     assert seen == [["sh", "-c", "just run add buy oat milk"]]
-    assert not result.usable  # the add prints nothing, so the expected line is not in its output
+    assert not result.usable
 
 
 def test_a_readmes_example_run_is_cut_back_to_the_program_before_its_arguments() -> None:

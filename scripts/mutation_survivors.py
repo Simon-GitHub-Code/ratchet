@@ -81,11 +81,9 @@ import gatelib
 
 REGISTER = Path("quality/mutation-register.toml")
 MIN_REASON = 20
-# How a run ended for one mutant, in the words of the tool-neutral input.
 STATES = ("killed", "survived", "uncovered", "timeout", "undecided", "unviable", "skipped")
 KILLED, SURVIVED, UNCOVERED, TIMEOUT, UNDECIDED, UNVIABLE, SKIPPED = STATES
 LIVE = frozenset({SURVIVED, UNCOVERED})
-# A mutant a test met: only these say anything about the tests.
 TESTED = LIVE | {KILLED, TIMEOUT}
 POSITION = re.compile(r"@(?:\d+:\d+-\d+:\d+|\?)$")
 REPLACEMENT_WIDTH = 60
@@ -94,12 +92,6 @@ TEXTS = ("file", "mutator", "replacement", "status")
 
 @dataclass(frozen=True)
 class Mutant:
-    """One mutant with the identity and hash the register uses.
-
-    ``status`` is the tool's own word, for the messages; ``state`` is the neutral one, for the
-    verdict.
-    """
-
     identity: str
     status: str
     function_hash: str
@@ -108,8 +100,6 @@ class Mutant:
 
 @dataclass(frozen=True)
 class Record:
-    """One mutant in the tool-neutral form: where it is, what it does, how its run ended."""
-
     file: str
     mutator: str
     replacement: str
@@ -122,18 +112,12 @@ class Record:
 
 @dataclass(frozen=True)
 class Entry:
-    """One ``[[survivor]]`` of the register."""
-
     tool: str
     identity: str
     function_hash: str
 
 
-# --- the register ------------------------------------------------------------------------------
-
-
 def entries(root: Path) -> tuple[list[Entry], list[str]]:
-    """The register's entries and the problems with the malformed ones."""
     path = root / REGISTER
     if not path.is_file():
         return [], []
@@ -174,7 +158,6 @@ def _entry(table: object) -> tuple[Entry | None, list[str]]:
 
 
 def stanza(tool: str, mutant: Mutant) -> str:
-    """The register entry to paste for an unregistered survivor."""
     return (
         f"[[survivor]]\ntool = {json.dumps(tool)}\nidentity = {json.dumps(mutant.identity)}\n"
         f'function_hash = "{mutant.function_hash}"\n'
@@ -184,7 +167,6 @@ def stanza(tool: str, mutant: Mutant) -> str:
 
 
 def unit_bounds(lines: list[str], line: int) -> tuple[int, int]:
-    """Zero-based ``[start, end)`` rows of the top-level declaration enclosing 1-based ``line``."""
     if not lines:
         return 0, 0
     start = min(line, len(lines)) - 1
@@ -199,7 +181,6 @@ def unit_bounds(lines: list[str], line: int) -> tuple[int, int]:
 
 
 def unit_hash(lines: list[str], line: int) -> str:
-    """``sha256:`` of the top-level declaration enclosing ``line`` (1-based), trailing space cut."""
     if not lines:
         return "unknown"
     start, end = unit_bounds(lines, line)
@@ -208,10 +189,6 @@ def unit_hash(lines: list[str], line: int) -> str:
 
 
 def placed(record: Record, source: list[str]) -> Mutant:
-    """The identity and hash ADR 0018 gives a mutant whose tool numbers mutants per run.
-
-    The unit is the record's own when it names one, else the enclosing top-level declaration.
-    """
     start, end = (
         (record.unit[0] - 1, record.unit[1]) if record.unit else unit_bounds(source, record.line)
     )
@@ -224,11 +201,7 @@ def placed(record: Record, source: list[str]) -> Mutant:
     return Mutant(identity, record.status, digest, record.state)
 
 
-# --- the tool-neutral input ---------------------------------------------------------------------
-
-
 def neutral_mutants(text: str, root: Path) -> tuple[list[Mutant], list[str]]:
-    """Every mutant of the JSON lines, placed in the file it names, and the lines that hold none."""
     found, problems = [], []
     sources: dict[str, list[str]] = {}
     for number, line in enumerate(text.splitlines(), 1):
@@ -249,7 +222,6 @@ def neutral_mutants(text: str, root: Path) -> tuple[list[Mutant], list[str]]:
 
 
 def record_of(raw: object) -> Record | str:
-    """One object of the input as a record, or what is wrong with it."""
     if not isinstance(raw, dict):
         return "not a JSON object"
     texts = {key: raw.get(key, "" if key == "replacement" else None) for key in TEXTS}
@@ -281,7 +253,6 @@ def record_of(raw: object) -> Record | str:
 
 
 def _pair(value: object) -> tuple[int, int] | None:
-    """``[line, column]`` or ``[first, last]`` as two whole numbers, the first from 1."""
     if not isinstance(value, list) or [type(item) for item in value] != [int, int]:
         return None
     first, second = value
@@ -297,17 +268,12 @@ def _closes_unit(line: str) -> bool:
 
 
 def changed_files(root: Path, base: str | None) -> list[str]:
-    """Every file changed since the merge base that still exists; the whole tree with no base."""
     before = gatelib.base_commit(root, base)
     changed = gatelib.changed_paths(root, before) if before else gatelib.tracked_paths(root)
     return [path for path in changed if (root / path).is_file()]
 
 
-# --- the gate -----------------------------------------------------------------------------------
-
-
 def judge(tool: str, mutants: list[Mutant], found: list[Entry]) -> list[str]:
-    """Problems: unregistered survivors, stale entries, undecided mutants, an empty run."""
     if not mutants:
         return [f"{tool}: no mutant reported; the run did not happen or its results were not read"]
     problems = []
@@ -350,7 +316,6 @@ def _key(item: Mutant | Entry) -> tuple[str, str]:
 
 
 def _claim(unclaimed: Counter[tuple[str, str]], item: Mutant | Entry) -> bool:
-    """Take one register entry for ``item`` if one is left: an entry excuses one mutant."""
     if unclaimed[_key(item)] <= 0:
         return False
     unclaimed[_key(item)] -= 1
@@ -358,7 +323,6 @@ def _claim(unclaimed: Counter[tuple[str, str]], item: Mutant | Entry) -> bool:
 
 
 def _stale(entry: Entry, live: list[Mutant]) -> str:
-    """Why an entry that no mutant claimed is red: the old identity form, or stale as ever."""
     if POSITION.search(entry.identity) is None:
         matched = [
             m.identity
@@ -383,13 +347,10 @@ def _stale(entry: Entry, live: list[Mutant]) -> str:
 
 
 def in_scope(identity: str, *, mutants: list[Mutant]) -> bool:
-    """Whether a register entry is judged by this run: the files the run's mutants are in."""
     files = {m.identity.split(":", 1)[0] for m in mutants}
     return identity.split(":", 1)[0] in files
 
 
-# What a reader hands the judge: the run's mutants, or ``None`` when there is nothing to judge,
-# and what is wrong with the input.
 Run = tuple[list[Mutant] | None, list[str]]
 
 
@@ -406,7 +367,6 @@ def check(options: argparse.Namespace, root: Path) -> list[str]:
 
 
 def given_files(options: argparse.Namespace) -> list[str]:
-    """The files a scoped run says it was given: ``--only``, split at commas."""
     return [name for files in options.only or [] for name in files.split(",") if name]
 
 

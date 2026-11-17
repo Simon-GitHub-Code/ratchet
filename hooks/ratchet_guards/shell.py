@@ -1,42 +1,3 @@
-"""A small, conservative bash lexer for the guard: simple commands, redirects and nested scripts.
-
-It is not a shell. It finds what a guard needs, and says where it may have read a line apart
-from bash or sh (``Script.modelled``, ``Script.closed``):
-
-- quotes, backslash escapes and line continuations are honoured, and each word is unquoted
-  with ``shlex.split``; inside backticks, a backslash escapes only ``$``, a backtick or a
-  backslash, so an escaped backtick nests a substitution;
-- ``;``, ``&&``, ``||``, ``|``, ``&``, newlines and subshell parentheses separate commands; a
-  run of operator characters is read as the operators bash reads in it, so ``|<<E`` is a pipe and
-  a heredoc;
-- ``>``, ``>>``, ``>|``, ``&>`` and friends record their target word as a write; a numeric
-  file descriptor written against the operator (``2>``) is dropped;
-- ``$(...)`` and backticks, quoted or not, are lifted out as nested scripts and leave a
-  placeholder word behind; a ``case`` pattern's ``)`` does not end a ``$(...)``;
-- ``${ cmd; }`` and ``${| cmd; }``, quoted or not, run ``cmd`` in the shell itself (bash 5.3), so
-  its commands are read as commands of the line, just before the command that holds them. It
-  ends at the first ``}`` word at brace depth zero; one where no command starts may not be where
-  bash ends it;
-- any other ``${...}`` expansion, quoted or not, is read to its closing brace, and a ``$[...]``
-  arithmetic expansion to its closing bracket. Inside double quotes a ``'`` in a ``${...}`` is a
-  quote to bash but a plain character to posix mode and sh; the lexer reads it as the latter;
-- a ``$'...'`` with an escaped quote in it is one word to bash, but to sh a ``$`` and a quote
-  that the escaped one ends; the lexer reads it as sh does;
-- the word after ``<<<`` is kept as a here-string, to be read as the stdin of its command;
-- heredoc bodies are lifted out too, so prose in a commit message is never read as commands;
-  the operator leaves a numbered marker so a shell fed by the heredoc can be checked. A body
-  whose delimiter is not one plain word, or one opened on a line with ``((`` (where ``<<`` may
-  be a shift), is read as commands as well;
-- ``#`` at the start of a word begins a comment.
-
-``Script.modelled`` is false on a line that holds a construct the lexer knows it may read apart
-from bash: a heredoc, a ``case``, a ``${ cmd; }``, or a quote or substitution for which
-``Script.closed`` is false. Such a line is split with no subshell (``ratchet_guards.bash`` states
-the rule). ``Script.closed`` is false when a quote or a substitution runs to the end of the text,
-or where bash and sh may end it apart (the three cases above), since the lexer may then have read
-commands as quoted text.
-"""
-
 import re
 import shlex
 from dataclasses import dataclass, field, replace
@@ -44,7 +5,6 @@ from dataclasses import dataclass, field, replace
 PLACEHOLDER = "_substitution_"
 HEREDOC_MARK = "_heredoc_"
 _OPERATOR_CHARS = frozenset(";&|<>\n")
-# Why: bash splits a run of operator characters into its operators, longest first.
 _OPERATORS = (
     *(";;&", "&>>", "<<<"),
     *(";;", ";&", "&&", "||", "|&", "&>", ">>", ">&", "<&", ">|", "<>"),
@@ -55,17 +15,13 @@ _BLANKS = frozenset(" \t\r")
 _REDIRECT_CHARS = frozenset("<>")
 _DEPTH = {"(": 1, ")": -1}
 _CASE_NESTING = {"case": 1, "esac": -1}
-# Why: the delimiter is one shell word, so a quoted or escaped blank (`<<'E F'`, `<<E\ F`) is in it.
 _HEREDOC = re.compile(
     r"<<(?!<)(?P<strip>-?)[ \t\r]*"
     r"""(?P<delimiter>(?:'[^']*'|"(?:[^"\\]|\\.)*"|\\.|[^ \t\r;&|<>\n()'"\\])*)"""
 )
-# Why: a delimiter written as one plain word, bare, escaped or wholly quoted, is the one bash reads.
 _PLAIN_DELIMITER = re.compile(r"\\?[\w.+-]+|'[\w.+-]*'|\"[\w.+-]*\"")
-# Why: inside `((` or `$((`, `<<` is a shift, not a heredoc.
 _ARITHMETIC = "(("
 _FUNCTION_SUBSTITUTION = re.compile(r"\$\{[ \t\n|]")
-# Why: inside backticks a backslash escapes only `$`, a backtick or a backslash.
 _BACKTICK_ESCAPE = re.compile(r"\\([$`\\])")
 _BRACKETS = {"[": 1, "]": -1}
 _EXPANSIONS = {"${": "}", "$[": "]"}
@@ -74,13 +30,8 @@ _DELIMITER_QUOTING = str.maketrans("", "", "'\"\\")
 _PIPES = frozenset({"|", "|&"})
 _SUBSHELL = "subshell"
 _GROUP = "group"
-# Why: a `case` pattern ends in a `)` that no `(` opened, and a heredoc the lexer reads apart from
-# bash may show it a `)` that bash does not see; either would close a subshell early.
 _UNSURE_WORDS = frozenset({"case", "esac"})
-# Why: after these reserved words a command starts, so a `(` there opens a subshell.
 _OPENERS = frozenset({"{", "!", "if", "then", "else", "elif", "do", "while", "until"})
-# Why: around the commands of a `${ cmd; }`, which the splitter reads ahead of the command that
-# holds it. The lexer makes no other operator token of these texts.
 _HOIST = "${"
 _HOISTED = "}"
 _BRACES = {"{": 1, "}": -1}
@@ -88,24 +39,12 @@ _BRACES = {"{": 1, "}": -1}
 
 @dataclass(frozen=True, slots=True)
 class Token:
-    """A word (still quoted as written) or an operator."""
-
     text: str
     operator: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class SimpleCommand:
-    """One command: its unquoted words, the paths it redirects into, the heredocs it reads.
-
-    ``piped`` is true when its output feeds the next command through ``|`` or ``|&``;
-    ``herestrings`` are the words it reads through ``<<<``; ``then`` is the operator that ends
-    it (``&&``, ``;``, ``|``, a parenthesis, a newline), which says whether the next command
-    runs only when this one succeeded. ``opens`` counts the subshells that start just before it
-    and ``closes`` those that end just after it; when it closes one, ``then`` is the operator
-    after the closing parenthesis, which joins the subshell to what follows.
-    """
-
     words: tuple[str, ...]
     writes: tuple[str, ...] = ()
     heredocs: tuple[int, ...] = ()
@@ -118,11 +57,6 @@ class SimpleCommand:
 
 @dataclass(frozen=True, slots=True)
 class Script:
-    """A lexed command line: its simple commands and the scripts nested inside it.
-
-    ``modelled`` and ``closed`` say how far the lexer could read it as bash does (see the module).
-    """
-
     commands: tuple[SimpleCommand, ...]
     nested: tuple[str, ...]
     heredocs: tuple[str, ...]
@@ -140,8 +74,6 @@ class _Shared:
 
 
 class _Lexer:
-    """Reads ``text`` from ``start``; ``closer`` is the ``)`` or ``}`` that ends a substitution."""
-
     def __init__(self, text: str, start: int, shared: _Shared, *, closer: str = "") -> None:
         self.text = text
         self.at = start
@@ -173,9 +105,6 @@ class _Lexer:
             return char == ")" and self.depth == 0 and self.cases == 0
         if self.closer != "}" or char != "}" or self.word or self.braces:
             return False
-        # Why: `}` ends a `${ cmd; }` where a command could start, as it ends a `{ ...; }` group.
-        # Bash may also end it at a `}` word elsewhere (after a compound command or a redirect),
-        # so the lexer ends it at the first and says it cannot tell.
         self.shared.closed &= self._command_starts()
         return True
 
@@ -184,7 +113,6 @@ class _Lexer:
 
     def _step(self, char: str) -> None:
         if self.text.startswith("$$", self.at):
-            # Why: `$$` is the shell's process id, so a quote after it opens no `$'...'` word.
             self.word.append("$$")
             self.at += 2
         elif _FUNCTION_SUBSTITUTION.match(self.text, self.at):
@@ -228,7 +156,6 @@ class _Lexer:
             self.word = []
 
     def _find(self, needle: str, start: int) -> int:
-        """Where ``needle`` next occurs from ``start``, or the end of the text."""
         try:
             return self.text.index(needle, start)
         except ValueError:
@@ -241,11 +168,6 @@ class _Lexer:
         self.at = end + 1
 
     def _ansi(self) -> None:
-        r"""A ``$'...'`` word, where a backslash escapes the next character, the quote included.
-
-        sh reads ``$'a\\'`` as ``$`` and a quote that the escaped quote ends. Where the two
-        readings part, the lexer reads it as sh does and says it cannot tell.
-        """
         end = self.at + 2
         while end < len(self.text) and self.text[end] != "'":
             end += 2 if self.text[end] == "\\" else 1
@@ -261,12 +183,6 @@ class _Lexer:
         self.at = end
 
     def _expansion(self, opener: str, closer: str) -> None:
-        """A ``${...}`` or ``$[...]`` read to its close, so a ``)`` or blank in it ends nothing.
-
-        A substitution inside it is still lifted out, so the command it runs is checked. Inside
-        double quotes bash reads a ``'`` in a ``${...}`` as a quote, posix mode and sh as a plain
-        character; the lexer reads the latter and says it cannot tell.
-        """
         self.word.append(opener)
         self.at += len(opener)
         depth = 0
@@ -291,10 +207,6 @@ class _Lexer:
         self.at += 1
 
     def _function_substitution(self) -> None:
-        """A ``${ cmd; }`` or ``${| cmd; }``, whose ``cmd`` bash runs in the shell itself.
-
-        It runs before the command that holds it, so its commands go into the line there.
-        """
         self.shared.modelled = False
         child = _Lexer(self.text, self.at + 3, self.shared, closer=_HOISTED)
         child.run()
@@ -354,7 +266,6 @@ class _Lexer:
 
     def _paren(self, char: str) -> None:
         self._end_word()
-        # Why: a ")" with nothing open ends a case pattern; it must not unbalance the depth.
         if char == "(" or self.depth > 0:
             self.depth += _DEPTH[char]  # pragma: no mutate # -- negated, still returns to 0
         self.tokens.append(Token(char, operator=True))
@@ -401,7 +312,6 @@ class _Lexer:
                 body.append(line)
             self.shared.heredocs[index] = "\n".join(body)
             if not sure:
-                # Why: bash may end this body elsewhere, so its lines may be commands too.
                 reader = _Lexer(self.shared.heredocs[index] + "\n", 0, self.shared)
                 reader.run()
                 self.tokens += reader.tokens
@@ -409,7 +319,6 @@ class _Lexer:
 
 
 def lex(text: str) -> tuple[list[Token], tuple[str, ...], tuple[str, ...]]:
-    """Tokens of ``text`` plus the nested scripts and heredoc bodies lifted out of it."""
     tokens, shared = _lex(text)
     bodies = tuple(shared.heredocs.get(index, "") for index in range(shared.allocated))
     return tokens, tuple(shared.nested), bodies
@@ -423,7 +332,6 @@ def _lex(text: str) -> tuple[list[Token], _Shared]:
 
 
 def unquote(word: str) -> str:
-    """``word`` with shell quoting removed; quote characters are dropped if it will not parse."""
     try:
         return "".join(shlex.split(word))  # pragma: no mutate # -- one word is one shlex part
     except ValueError:
@@ -436,16 +344,6 @@ def _is_fd_target(operator: str, word: str) -> bool:
 
 @dataclass(slots=True)
 class _Splitter:
-    """Groups tokens into simple commands and tells a subshell's parentheses from the others.
-
-    A ``(`` where a command starts, alone or after a reserved word such as ``{`` or ``then``,
-    opens a subshell when ``subshells`` is set. One after another word (a definition, an array,
-    a process substitution) does not, nor does the ``)`` that closes
-    it. Without ``subshells`` no parenthesis is read as a subshell, which keeps a ``cd`` inside
-    one in force for what follows: the reading that protects. The commands of a ``${ cmd; }``
-    are set down ahead of the command whose words hold it, which waits in ``held``.
-    """
-
     commands: list[SimpleCommand] = field(default_factory=list)
     words: list[str] = field(default_factory=list)
     writes: list[str] = field(default_factory=list)
@@ -538,7 +436,6 @@ class _Splitter:
 
 
 def split(tokens: list[Token], *, subshells: bool = True) -> list[SimpleCommand]:
-    """Group tokens into simple commands, recording redirect targets and heredoc markers."""
     splitter = _Splitter(subshells=subshells)
     for token in tokens:
         if token.operator:
@@ -549,7 +446,6 @@ def split(tokens: list[Token], *, subshells: bool = True) -> list[SimpleCommand]
 
 
 def parse(text: str, *, subshells: bool = True) -> Script:
-    """Lex and split ``text``; a subshell is read only on a line the lexer models."""
     tokens, shared = _lex(text)
     words = {unquote(token.text) for token in tokens if not token.operator}
     modelled = shared.modelled and shared.closed and not words & _UNSURE_WORDS

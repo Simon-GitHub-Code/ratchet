@@ -25,6 +25,7 @@ pi reads frontmatter with a strict YAML parser. A `description` holding `: ` mus
 `adapters/pi/ratchet-guard.ts` is a pi extension.
 
 - **On `tool_call`** it maps pi's `bash`, `edit` and `write` to the guard's `Bash`, `Edit` and `Write`. It runs `hooks/guard.py` with the Claude-shaped JSON and the session's `cwd`, and returns `{ block: true, reason }` on `deny`. On `ask` it uses `ctx.ui.confirm` when the session has a UI, and blocks when it has none, since nobody can approve.
+- **A guard that cannot run** blocks too: fail closed, as in Claude Code.
 - **On `before_agent_start`** it appends `hooks/session.py`'s output to the system prompt, which is the stance in every session, as in Claude Code. Commands in that output are written Claude Code's way (`/ratchet:init`). The extension rewrites them to pi's `/skill:init` before appending.
 
 ## Names

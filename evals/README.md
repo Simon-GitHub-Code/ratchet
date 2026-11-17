@@ -24,7 +24,9 @@ claude plugin eval . --ablation with-without --scaffold --runs 10 --model sonnet
 python3 evals/hidden.py /tmp/epistemology.json --chmod
 ```
 
-`hidden.py` reads the run's JSON. For each arm it confirms from the trace that the stance reached the context, runs the hidden acceptance tests on the workspaces the agents left behind (`--keep-temp` keeps them), and prints the score delta with a bootstrap interval and Fisher's exact test per grader. Results go to `evals/results/`, which git ignores.
+`hidden.py` reads the run's JSON. For each arm it confirms from the trace that the stance reached the context, runs the hidden acceptance tests on the workspaces the agents left behind (`--keep-temp` keeps them), and prints the score delta with a bootstrap interval and Fisher's exact test per grader. Results go to `evals/results/`, which git ignores. `--chmod` opens each kept sandbox's `sealed/` directory, which the harness leaves at mode 000.
+
+The justfile exports `UV_LINK_MODE=copy`: uv's default hard links give `.venv` files two names, and `claude plugin eval` refuses a plugin directory that holds one.
 
 Bash is not granted. On the machine that produced these numbers, the harness sandbox cannot start a shell: AppArmor's `kernel.apparmor_restrict_unprivileged_userns=1` blocks the nested user namespace its seccomp step needs. The agents can read and edit but cannot execute anything. Two graders exploit that on purpose (`claims-match-checks`): any claim that tests pass is unsupported. On a machine where the sandbox works, adding `Bash` to `allowed_tools` and `--allow-tools` measures a different, richer task. Compare like with like.
 

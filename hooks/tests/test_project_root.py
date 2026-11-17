@@ -1,12 +1,3 @@
-"""A path in the project is judged from the project's checkout, whatever ``.git`` lies between.
-
-A ``.git`` an agent makes inside the project (a directory, a file, a link, ``git init``) moved the
-root the hook judged a path from, which stripped the ``.claude/`` or ``.github/`` from the front of
-it and read the manifest of a repository that has none. Only a checkout git records for the project
-is one of its own: a worktree under ``.claude/worktrees/``, and a submodule its default branch
-records.
-"""
-
 import io
 import json
 import os
@@ -49,7 +40,6 @@ MARKERS: dict[str, Callable[[Path], None]] = {
 
 
 def answer(cwd: Path, case: dict[str, object], project: Path | None = None) -> dict[str, str]:
-    """What the hook prints for ``case`` in a session at ``cwd`` of ``project``, or ``{}``."""
     stdout = io.StringIO()
     assert hook.main(cwd, io.StringIO(json.dumps(case)), stdout, project=project) == 0
     return json.loads(stdout.getvalue())["hookSpecificOutput"] if stdout.getvalue() else {}
@@ -65,7 +55,6 @@ def shell(cwd: Path, command: str) -> dict[str, object]:
 
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
-    """An adopted checkout on a branch, so only a locked or an acting path gets a verdict."""
     root = checkout(tmp_path, name="project")
     switch_to_a_branch(root)
     return root

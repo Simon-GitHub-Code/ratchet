@@ -1,43 +1,3 @@
-"""What a guard-path change does to dependencies, when that is all it does (ADR 0011, ADR 0044).
-
-A dependency manifest holds gate configuration beside the dependency list, so the whole file is a
-guard path, and so is its lockfile. ``guard-diff`` and the merge judge say, for each, what the
-change does to dependencies when that is all it does, so the owner reads the versions and the
-pipeline can match the added names against the ones its spec named.
-
-This module reads no manifest or lockfile format (ADR 0042). The binding's ``## Dependencies``
-section names the manifests and lockfiles of this stack, the registries it accepts and an entry
-point, ``just dependencies <dir>``, that whoever bound the stack wrote. Given a directory holding
-the changed files at their own paths, the entry point prints records, one per line, tab separated,
-in the format this module defines::
-
-    declared<TAB>file<TAB>table<TAB>name<TAB>spec<TAB>origin
-    locked<TAB>file<TAB>scope<TAB>name<TAB>version<TAB>order<TAB>origin<TAB>source<TAB>integrity<TAB>sides
-    rest<TAB>file<TAB>digest
-
-``declared`` is one dependency a manifest asks for: its table, the spec as the file writes it, and
-whether the spec fetches it from a registry by name and version range (``registry``) or by any
-other means (``other``). ``locked`` is one resolved package version of a lockfile: its scope (an
-inventory of its own, such as the one a tool keeps for itself), its version as written, ``order``
-(dot-separated non-negative integers that sort the versions of one name the way its registry
-does), where it comes from (``registry``, ``direct`` or ``local``), the source and an integrity
-value that identifies its contents, and whether versions of the name sit beside each other in the
-scope (``many``) or only one runs (``one``). ``rest`` is a digest of everything else in the file
-that can change what installs: the file less its dependency tables, resolved packages and the
-package's own version.
-
-The merge base's entry point reads the files at the merge base and at the head, so the change
-cannot rewrite the code that judges it, and this module compares the two outputs. A manifest
-change is dependency-only when its ``rest`` is equal and every entry that changed is a new one
-fetched from a registry by name and version range. A lockfile change is dependency-only when its
-``rest`` is equal, no artifact changed in place at the same version, every new artifact comes
-from a registry the lockfile already uses or the binding names, and no package's highest version
-falls. Each new version must also appear in a line the change added, so an entry point that
-reports what the file does not show is refused. Any other change returns the reason it is not:
-each is a way to swap a gate tool or roll it back. A change the contract cannot judge (no section,
-no entry point, a run that fails or prints what is not a record) is not dependency-only.
-"""
-
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -65,18 +25,11 @@ WIDTHS = {"declared": 6, "locked": 10, "rest": 3}
 Runner = Callable[[Mapping[str, str]], str]
 
 
-class NotDependencyOnlyError(ValueError):
-    """The change does more than change dependencies; the message says what."""
+class NotDependencyOnlyError(ValueError): ...
 
 
 @dataclass(frozen=True)
 class Contract:
-    """What a binding says about dependencies: the files, the registries, whether it has an entry.
-
-    ``manifests`` and ``lockfiles`` are globs over tracked files. ``entry`` is whether the binding
-    names the entry point. ``problems`` is what keeps the section from being read as written.
-    """
-
     manifests: tuple[str, ...] = ()
     lockfiles: tuple[str, ...] = ()
     registries: frozenset[str] = frozenset()
@@ -84,34 +37,28 @@ class Contract:
     problems: tuple[str, ...] = field(default=())
 
     def original(self, path: str) -> str | None:
-        """The declared file ``path`` is or copies (a snapshot is named after it), else ``None``."""
         name = path
         if path.startswith(SNAPSHOTS) and "/" not in path.removeprefix(SNAPSHOTS):
             name = path.removeprefix(SNAPSHOTS).replace(SNAPSHOT_SEPARATOR, "/")
-        # Why: the entry point is given the file at this path under a directory of its own.
         if ".." in name.split("/") or name.startswith("/"):
             return None
         return name if self.kind(name) else None
 
     def kind(self, path: str) -> str | None:
-        """``manifest`` or ``lockfile`` when a glob of the section matches ``path``."""
         for kind, patterns in ((MANIFEST, self.manifests), (LOCKFILE, self.lockfiles)):
             if any(globs.matches(path, pattern) for pattern in patterns):
                 return kind
         return None
 
     def is_lockfile(self, path: str) -> bool:
-        """Whether ``path`` is a declared lockfile, or a snapshot of one."""
         file = self.original(path)
         return file is not None and self.kind(file) == LOCKFILE
 
     def recognised(self, path: str) -> bool:
-        """Whether ``path`` is a declared manifest or lockfile, or a snapshot of one."""
         return self.original(path) is not None
 
 
 def _fields(binding: str) -> dict[str, str] | None:
-    """The ``- Label: value`` lines under the section's heading, or ``None`` without one."""
     lines = binding.split("\n")
     start = next((i for i, line in enumerate(lines) if line.rstrip() == SECTION), None)
     if start is None:
@@ -140,7 +87,6 @@ def _paths(label: str, value: str, problems: list[str]) -> tuple[str, ...]:
 
 
 def parse(binding: str | None) -> Contract | None:
-    """The binding's Dependencies section as a contract, or ``None`` when it has none."""
     fields = _fields(binding) if binding is not None else None
     if fields is None:
         return None
@@ -167,22 +113,17 @@ def parse(binding: str | None) -> Contract | None:
 
 @dataclass(frozen=True)
 class Change:
-    """One dependency added to a manifest, or one package's locked versions changed."""
-
     name: str
     table: str
     old: str | None
     new: str | None
 
     def __str__(self) -> str:
-        """``name (table) old -> new``, with ``(none)`` for a side that has no entry."""
         return f"{self.name} ({self.table}) {self.old or '(none)'} -> {self.new or '(none)'}"
 
 
 @dataclass(frozen=True)
 class Artifact:
-    """One locked package version: where it comes from and what identifies its contents."""
-
     origin: str
     source: str
     integrity: str
@@ -190,8 +131,6 @@ class Artifact:
 
 @dataclass(frozen=True)
 class Locked:
-    """One ``locked`` record, less the file it was read from."""
-
     scope: str
     name: str
     version: str
@@ -202,8 +141,6 @@ class Locked:
 
 @dataclass(frozen=True)
 class Declared:
-    """One ``declared`` record, less the file it was read from."""
-
     table: str
     name: str
     spec: str
@@ -212,8 +149,6 @@ class Declared:
 
 @dataclass
 class Output:
-    """The records an entry point printed, by the file they describe."""
-
     declared: dict[str, list[Declared]] = field(default_factory=dict)
     locked: dict[str, list[Locked]] = field(default_factory=dict)
     rest: dict[str, str] = field(default_factory=dict)
@@ -248,7 +183,6 @@ def _record(output: Output, fields: list[str], line: str) -> None:
 
 
 def read_output(text: str) -> Output:
-    """The records of an entry point's output; anything that is not one is refused."""
     output = Output()
     for line in text.split("\n"):
         if not line.strip():
@@ -301,7 +235,6 @@ def _manifest(file: str, before: Output, after: Output, *, added: str) -> list[C
 
 
 def _shown(text: str, name: str, added: str) -> None:
-    """Refuse an entry point that reports what no line of the change shows."""
     if text not in added:
         _refuse(f"the entry point reports '{text}' for {name}, which no added line shows")
 
@@ -326,11 +259,6 @@ def _inventory(output: Output, file: str) -> Inventory:
 def _package(
     name: str, versions: tuple[Versions, Versions], *, known: set[str], many: bool, added: str
 ) -> None:
-    """Raise unless ``name``'s locked versions only grow or rise, from a registry ``known``.
-
-    Where versions of a package sit beside each other (``many``), only the highest must not fall;
-    elsewhere any new version below the old highest is a rollback for some environment.
-    """
     old, new = versions
     for version in old.keys() & new.keys():
         before, after = old[version][0], new[version][0]
@@ -380,7 +308,6 @@ def _lockfile(
 
 
 def _added(before: str, after: str) -> str:
-    """The lines of ``after`` that ``before`` lacks."""
     seen = set(before.split("\n"))
     return "\n".join(line for line in after.split("\n") if line not in seen)
 
@@ -403,13 +330,6 @@ def _verdict(
 
 
 def judge(contract: Contract, changed: Texts, run: Runner) -> dict[str, Verdict]:
-    """What each changed path does to dependencies, for the paths the contract recognises.
-
-    ``changed`` maps a path to its text before and after (``None`` for a side where it is not
-    there). ``run`` is the merge base's entry point: given files by path, the text it prints. It is
-    called once for each side, and not at all when no path can be judged. A path with no verdict
-    is not a dependency file.
-    """
     verdicts: dict[str, Verdict] = {}
     pending: dict[str, tuple[str, str]] = {}
     owners: dict[str, list[str]] = {}

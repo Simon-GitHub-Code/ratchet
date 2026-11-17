@@ -47,6 +47,7 @@ For that role, the next unit must add one command to this harness: one that perf
 - A screenshot is a file the tester wrote. `check` holds that it is a PNG in the tester's directory, not what it shows.
 - A product that writes a file git does not ignore into its own work tree changes the tree while it runs, so each of its sessions ends stale and is refused.
 - Files git ignores are not part of the tree. A product that serves an ignored build output, such as `dist/`, is known by the sources it was built from, and a build that differs from those sources is not seen.
+- The browser runs with its sandbox off, because recent Ubuntu refuses the user namespaces a downloaded Chromium's sandbox needs. Its resolver rule keeps every host but the loopback unreachable.
 
 Decided 2026-11-13.
 

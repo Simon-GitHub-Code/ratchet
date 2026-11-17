@@ -1,37 +1,4 @@
 #!/usr/bin/env python3
-"""The flags gate: every feature flag is declared once, owned, off when new, and due for removal.
-
-``flags.toml`` at the repository root is the registry. One ``[[flag]]`` table per flag::
-
-    [[flag]]
-    key = "new-checkout"
-    owner = "payments"
-    default = false
-    remove-by = 2027-02-01
-    reason = "Ships the new checkout dark until the load gate has seen it."
-
-A flag that is meant to stay (a kill switch) says ``permanent = true`` instead of ``remove-by``.
-An empty file declares no flags; a missing one is red, since a repository on the method always
-has the registry. A flag the merge base lacks must default to ``false``: new behaviour ships off.
-``--used-in DIR`` (repeatable) also fails a declared key that no file under those directories
-names, so a flag whose code is gone leaves the registry with it.
-
-``--expired`` is the other question, asked on the default branch and nightly rather than on a
-pull request, since it goes red by the calendar: a flag past its ``remove-by`` date.
-
-``--changed`` judges nothing: it prints the key of every flag the change adds or edits, one per
-line, for the ``flag-states`` gate to run the suite with each of them off and on.
-
-``--temporary`` judges nothing either: it prints the key of every flag with a ``remove-by`` date,
-one per line. Those are the flags on their way to being on everywhere, and a gate that probes the
-running deliverable from outside boots it with each of them on, since new surface ships off and
-a probe of the defaults would reach none of it. A ``permanent`` flag is a switch and keeps its
-default.
-
-Usage: ``flags.py [--root DIR] [--base REF] [--used-in DIR]... [--expired [--today DATE]]
-[--changed] [--temporary]``.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -50,7 +17,6 @@ Flag = dict[str, object]
 
 
 def parse(text: str) -> tuple[list[Flag], list[str]]:
-    """The registry's flag tables and what is wrong with its shape."""
     try:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as error:
@@ -66,7 +32,6 @@ def name(flag: Flag) -> str:
 
 
 def shape(flag: Flag) -> list[str]:
-    """What one flag table lacks."""
     problems = []
     key = flag.get("key")
     if not isinstance(key, str) or not KEY.fullmatch(key):
@@ -95,7 +60,6 @@ def duplicates(flags: list[Flag]) -> list[str]:
 
 
 def born_on(flags: list[Flag], before: list[Flag]) -> list[str]:
-    """One line per flag the merge base lacks that does not default to off."""
     known = {name(flag) for flag in before}
     return [
         f"{REGISTRY}: flag '{name(flag)}': a new flag defaults to false, so the change ships off"
@@ -105,23 +69,19 @@ def born_on(flags: list[Flag], before: list[Flag]) -> list[str]:
 
 
 def changed(flags: list[Flag], before: list[Flag]) -> list[str]:
-    """The key of every flag whose table the merge base lacks or holds differently."""
     return sorted(name(flag) for flag in flags if flag not in before)
 
 
 def temporary(flags: list[Flag]) -> list[str]:
-    """The key of every flag due for removal: the ones a release turns on, never a switch."""
     return sorted(name(flag) for flag in flags if isinstance(flag.get("remove-by"), dt.date))
 
 
 def listing(keys: list[str], problems: list[str]) -> int:
-    """Print ``keys`` one per line; the exit code says whether the registry parsed."""
     print("\n".join(keys), end="\n" if keys else "")
     return 1 if problems else 0
 
 
 def unused(root: Path, flags: list[Flag], directories: list[str]) -> list[str]:
-    """One line per declared key that no file under ``directories`` names."""
     if not directories:
         return []
     prefixes = tuple(directory.rstrip("/") + "/" for directory in directories)
@@ -139,7 +99,6 @@ def unused(root: Path, flags: list[Flag], directories: list[str]) -> list[str]:
 
 
 def expired(flags: list[Flag], today: dt.date) -> list[str]:
-    """One line per flag whose removal date has passed."""
     return [
         f"{REGISTRY}: flag '{name(flag)}': remove-by {due} has passed; remove the flag and "
         "the branch it guards, or move the date in a change that says why"

@@ -61,7 +61,6 @@ def _reduce(directory: Path) -> None:
 
 
 def _prepare(options: argparse.Namespace) -> tuple[harness.Run, harness.Operator, str]:
-    """Read the operator's side once, make the run, and leave the process the run's environment."""
     if shutil.which("bwrap") is None:
         msg = "the run needs bubblewrap (`bwrap`) to sandbox its sessions; install it first"
         raise SystemExit(msg)
@@ -85,15 +84,12 @@ def _prepare(options: argparse.Namespace) -> tuple[harness.Run, harness.Operator
         toolchains=tuple(options.toolchains),
     )
     run = harness.setup(config, operator, os.environ)
-    # Why: the Agent SDK starts Claude Code with this process's environment under its own; the
-    # run's is the only one it may see.
     os.environ.clear()
     os.environ.update(run.env)
     return run, operator, token
 
 
 def _matrix(options: argparse.Namespace) -> int:
-    """Run each chosen persona in turn and print the table of the runs."""
     stems = options.personas.split(",") if options.personas else persona.names()
     chosen = [persona.load(stem) for stem in stems]
     if not options.personas:
@@ -120,7 +116,6 @@ def _matrix(options: argparse.Namespace) -> int:
 
 
 def _recorded(directory: Path) -> tuple[persona.Persona, Mapping[str, object]] | str:
-    """A recorded run's persona and measurements, or why the table cannot name it."""
     metrics = matrix.read_metrics(directory)
     if metrics is None:
         return "no readable metrics.json"
@@ -135,7 +130,6 @@ def _recorded(directory: Path) -> tuple[persona.Persona, Mapping[str, object]] |
 
 
 def _table(options: argparse.Namespace) -> int:
-    """Print the matrix table of runs already reduced, and write it under ``--dir`` when given."""
     found: dict[str, tuple[Path, persona.Persona, Mapping[str, object]]] = {}
     for directory in options.runs:
         run = _recorded(directory)
@@ -184,7 +178,6 @@ def _given_toolchains(parser: argparse.ArgumentParser) -> None:
 
 
 def _parser() -> argparse.ArgumentParser:
-    """The command line: one subcommand each for a run, a probe, a matrix and the readers."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
     for name, text in (("run", "drive one run"), ("probe", "show what a session can reach")):
@@ -226,7 +219,6 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str]) -> int:
-    """Run, probe, reduce, tabulate, or cross-check, as the subcommand says."""
     options = _parser().parse_args(argv[1:])
     if options.command == "personas":
         for stem in persona.names():

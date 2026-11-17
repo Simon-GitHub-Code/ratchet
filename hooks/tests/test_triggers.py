@@ -1,5 +1,3 @@
-"""The triggers gate: the change that brings a kind is free, the next one owes a bound safeguard."""
-
 import json
 from pathlib import Path
 
@@ -36,7 +34,6 @@ def binding(*rows: str, events: str = "none", table: str = TABLE) -> str:
 
 
 def project(tmp_path: Path, files: dict[str, str] | None = None, *rows: str, **kw: str) -> Path:
-    """A repository on ``main`` holding the binding, then a ``change`` branch."""
     root = repository(
         tmp_path,
         {"docs/process/binding.md": binding(*rows, **kw), "README.md": "# A\n", **(files or {})},
@@ -149,7 +146,6 @@ def test_json_prints_the_owed_rows_for_the_route(tmp_path: Path, capsys: Out) ->
 
 
 def test_count_prints_what_each_row_finds(tmp_path: Path, capsys: Out) -> None:
-    # Why: whoever writes a Triggers row proves its pattern on the tree before the gate trusts it.
     root = project(tmp_path, {"src/a.py": CALL * 2, "src/server.py": "serve()\n"})
     assert run(root, "--count") == 0
     assert capsys.readouterr().out.splitlines() == [
@@ -184,7 +180,6 @@ def test_the_first_instance_is_free_and_noted(tmp_path: Path, capsys: Out) -> No
 def test_the_change_that_brings_a_kind_is_free_however_many_files_it_touches(
     tmp_path: Path, capsys: Out
 ) -> None:
-    # Why: a first feature brings a kind in several files at once; one-file arrivals made it red.
     root = project(tmp_path, None, LATER_CALL, LATER_LISTENER)
     write(root, "src/a.py", CALL * 3)
     write(root, "src/b.py", CALL)
@@ -372,7 +367,6 @@ def test_a_compound_row_is_noted_by_its_kind_and_never_red_for_its_event(
 
 
 def land(root: Path, subject: str) -> None:
-    """Commit the work tree and make it the default branch, as a landed change does."""
     commit(root, subject)
     git(root, "branch", "-f", "main")
 
@@ -380,7 +374,6 @@ def land(root: Path, subject: str) -> None:
 def test_a_kind_that_went_back_to_none_and_returns_is_owed_not_arriving(
     tmp_path: Path, capsys: Out
 ) -> None:
-    # Why: ADR 0048. Arrive, remove, arrive again left the row `later:` and the kind unbounded.
     root = project(tmp_path, None, LATER_CALL)
     write(root, "src/a.py", CALL)
     assert run(root) == 0

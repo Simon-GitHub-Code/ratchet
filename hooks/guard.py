@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""Claude Code PreToolUse hook of the Ratchet plugin: delegates to ``ratchet_guards.hook``.
-
-Standard library only and run on the system ``python3`` (3.11 or later). The repository
-root is the hook input's ``cwd``, else ``$CLAUDE_PROJECT_DIR``, else the working directory. A
-path in the project ``$CLAUDE_PROJECT_DIR`` names is judged from the project's checkout.
-If the guard cannot even be loaded, the answer is ``ask``, so a broken guard stops at a
-human instead of letting the tool call through. Antigravity's input (it carries ``toolCall``)
-gets that answer in Antigravity's form, ``force_ask``.
-"""
-
 import io
 import json
 import os
@@ -22,7 +12,6 @@ ANTIGRAVITY_CALL = "toolCall"
 
 
 def payload_of(text: str) -> dict[str, object]:
-    """The hook input as a JSON object, or empty when it is not one."""
     try:
         payload = json.loads(text)
     except ValueError:
@@ -31,7 +20,6 @@ def payload_of(text: str) -> dict[str, object]:
 
 
 def fallback(problem: str, *, antigravity: bool = False) -> str:
-    """An ``ask`` decision for when the guard itself cannot run."""
     because = f"Ratchet guard could not run: {problem}."
     if antigravity:
         return json.dumps({"decision": "force_ask", "reason": because})
@@ -44,7 +32,6 @@ def fallback(problem: str, *, antigravity: bool = False) -> str:
 
 
 def root_of(text: str, environ: Mapping[str, str], default: Path) -> Path:
-    """The root: the payload's ``cwd``, else ``$CLAUDE_PROJECT_DIR``, else ``default``."""
     cwd = payload_of(text).get("cwd")
     if isinstance(cwd, str) and cwd:
         return Path(cwd)
@@ -53,7 +40,6 @@ def root_of(text: str, environ: Mapping[str, str], default: Path) -> Path:
 
 
 def main() -> int:
-    """Load the guard and answer one hook call."""
     text = sys.stdin.read()
     antigravity = ANTIGRAVITY_CALL in payload_of(text)
     if sys.version_info < MINIMUM_PYTHON:

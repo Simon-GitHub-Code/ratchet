@@ -1,5 +1,3 @@
-"""The plugin's own behaviour: the optional manifest, the locked plugin group, the shim's root."""
-
 import importlib.util
 import json
 import subprocess
@@ -42,7 +40,6 @@ def git(root: Path, *args: str) -> str:
 
 
 def checkout(tmp_path: Path, *, manifest: bool, state: str = "default") -> Path:
-    """A real repository on ``main``; the manifest ``untracked``, on a ``branch`` or ``default``."""
     root = tmp_path / "repo"
     root.mkdir(parents=True)
     git(root, "init", "-q", "-b", "main")
@@ -444,8 +441,6 @@ def test_apply_patch_on_a_branch_is_refused_only_for_the_paths_the_owner_changes
     assert verdict.rule == "guard-path-locked"
 
 
-# Grok reports its own tool names (captured from Grok 1.0.77's PreToolUse input); the Cursor
-# preset's tools name the file in `path`.
 @pytest.mark.parametrize(
     ("tool", "tool_input", "rule"),
     [
@@ -521,13 +516,10 @@ def test_an_edit_without_any_path_key_is_unreadable(tmp_path: Path) -> None:
 
 
 def agy(name: str, cwd: Path, **args: object) -> dict[str, object]:
-    """Antigravity's PreToolUse input (agy 1.5.6 hooks guide): CamelCase arguments."""
     call = {"id": "toolu_01", "name": name, "args": args}
     return {"toolCall": call, "stepIdx": 3, "hookEventName": "PreToolUse", "cwd": str(cwd)}
 
 
-# Antigravity's tools and argument keys, from its hooks guide and the matcher `agy plugin
-# install` stages for this plugin.
 @pytest.mark.parametrize(
     ("name", "args", "rule"),
     [

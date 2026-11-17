@@ -60,8 +60,7 @@ CHANGELOG = "CHANGELOG.md"
 DOTTED = re.compile(r"\d+(?:\.\d+)*")
 
 
-class StopError(Exception):
-    """A reason the release cannot go on, said on stderr."""
+class StopError(Exception): ...
 
 
 def stop(reason: str) -> NoReturn:
@@ -90,7 +89,6 @@ def git(repo: Path, *args: str, stdin: str | None = None, env: dict[str, str] | 
 
 
 def version_in(repo: Path, commit: str) -> str | None:
-    """The ``version`` of the manifest ``commit`` holds; ``None`` when it holds none."""
     try:
         manifest = json.loads(try_git(repo, "show", f"{commit}:{MANIFEST}") or "")
     except ValueError:
@@ -100,13 +98,6 @@ def version_in(repo: Path, commit: str) -> str | None:
 
 
 def bump_commit(repo: Path, ref: str, version: str) -> str | None:
-    """The first commit on ``ref``'s first-parent line where the version became ``version``.
-
-    The first-parent log of the manifest lists exactly the commits whose manifest differs from
-    their first parent, oldest last. Each is a change of the version or an edit of another field,
-    so the oldest that holds ``version`` is the one that changed it to ``version``. ``None`` when
-    no commit on the line holds it.
-    """
     listed = try_git(repo, "log", "--first-parent", "--format=%H", ref, "--", MANIFEST) or ""
     for commit in reversed(listed.splitlines()):
         if version_in(repo, commit) == version:

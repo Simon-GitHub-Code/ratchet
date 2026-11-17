@@ -1,5 +1,3 @@
-"""Markdown text, read and edited without a Markdown library: sections, tables and their rows."""
-
 from __future__ import annotations
 
 import re
@@ -22,21 +20,14 @@ MIN_TABLE_LINES = 2
 
 
 def _headings_at(lines: Sequence[str], heading: str) -> list[int]:
-    """Every line that is ``heading``: the whole line, less the whitespace after it, a CR too."""
     return [i for i, line in enumerate(lines) if line.rstrip() == heading]
 
 
 def has_section(text: str, heading: str) -> bool:
-    """Whether a line of the text is the heading, as every reader and writer here finds it."""
     return bool(_headings_at(text.split("\n"), heading))
 
 
 def section(text: str, heading: str) -> str:
-    """What the ``heading`` sections hold, from the end of each heading line to the next ``## ``.
-
-    Why: a text that repeats a heading holds the section's lines under every copy, so a reader
-    that took the first copy alone would miss the table an old edit left below another.
-    """
     lines = text.split("\n")
     bodies = [
         "\n".join(lines[at + 1 : _section_end(lines, at)]) for at in _headings_at(lines, heading)
@@ -45,17 +36,11 @@ def section(text: str, heading: str) -> str:
 
 
 def empty_body(text: str, heading: str) -> bool:
-    """Whether the section under ``heading`` says nothing: absent, blank, placeholder or short."""
     body = section(text, heading).strip()
     return body.lower().rstrip(".") in EMPTY_BODIES or len(body) < MIN_BODY
 
 
 def table_cells(body: str) -> list[tuple[str, str]]:
-    """The first two cells of every row of every table in ``body``; an empty second cell is kept.
-
-    A table's header is the row above its rule row, so a section that holds two tables gives the
-    rows of both and neither header.
-    """
     matches = [TABLE_ROW.match(line) for line in body.splitlines()]
     rules = [match is not None and set(match.group(1)) <= set("-: ") for match in matches]
     return [
@@ -67,8 +52,6 @@ def table_cells(body: str) -> list[tuple[str, str]]:
 
 @dataclass(frozen=True)
 class Table:
-    """The first table under a heading: its cells, its alignment and where its lines sit."""
-
     header: tuple[str, ...]
     aligns: tuple[str, ...]
     rows: tuple[tuple[str, ...], ...]
@@ -78,11 +61,9 @@ class Table:
 
     @property
     def padded(self) -> bool:
-        """Whether a formatter wrote it: rendering it padded gives its lines back exactly."""
         return tuple(self.render(self.rows)) == self.lines
 
     def render(self, rows: Sequence[Sequence[str]]) -> list[str]:
-        """The table as a formatter that pads every column to its widest cell writes it."""
         columns = range(len(self.header))
         widths = [
             max(MIN_WIDTH, len(self.header[i]), *(len(row[i]) for row in rows)) for i in columns
@@ -117,7 +98,6 @@ def _cells(line: str) -> tuple[str, ...]:
 
 
 def _clean(line: str) -> bool:
-    """Whether the line is one row: a pipe at each end, and the last one is not an escaped cell."""
     text = line.strip()
     return len(text) > 1 and text.startswith("|") and text.endswith("|") and text[-2] != "\\"
 
@@ -134,7 +114,6 @@ def _heading_at(lines: Sequence[str], heading: str) -> int | None:
 
 
 def _section_end(lines: Sequence[str], heading_index: int) -> int:
-    """The line of the next ``## `` heading, or the end of the text."""
     return next(
         (i for i in range(heading_index + 1, len(lines)) if lines[i].startswith(SECTION_START)),
         len(lines),
@@ -142,7 +121,6 @@ def _section_end(lines: Sequence[str], heading_index: int) -> int:
 
 
 def _table_at(lines: Sequence[str], first: int, end: int) -> Table | None:
-    """The table whose lines start at ``first``, or ``None`` when they do not split."""
     last = first
     while last < end and lines[last].startswith("|"):
         last += 1
@@ -158,7 +136,6 @@ def _table_at(lines: Sequence[str], first: int, end: int) -> Table | None:
 
 
 def table(text: str, heading: str) -> Table | None:
-    """The first table under ``heading``, or ``None`` when there is none or it does not split."""
     lines = text.split("\n")
     for at in _headings_at(lines, heading):
         end = _section_end(lines, at)
@@ -169,7 +146,6 @@ def table(text: str, heading: str) -> Table | None:
 
 
 def tables(text: str, heading: str) -> list[Table]:
-    """Every table under ``heading`` that splits, in the order the text holds them."""
     lines = text.split("\n")
     found: list[Table] = []
     for at in _headings_at(lines, heading):
@@ -191,7 +167,6 @@ TICKED = re.compile(r"`([^`\n]+)`")
 
 
 def bullets(body: str) -> dict[str, str]:
-    """The ``- Label: value`` lines of a section body, by label; the first line of a label wins."""
     found: dict[str, str] = {}
     for label, value in BULLET.findall(body):
         found.setdefault(label.strip(), value)
@@ -199,12 +174,10 @@ def bullets(body: str) -> dict[str, str]:
 
 
 def ticked(cell: str) -> list[str]:
-    """The backticked items of a cell or a bullet's value, in order."""
     return [item.strip() for item in TICKED.findall(cell) if item.strip()]
 
 
 def padded(text: str, heading: str) -> str:
-    """The text with the first table under ``heading`` padded, as a formatter writes it."""
     found = table(text, heading)
     if found is None:
         return text
@@ -214,7 +187,6 @@ def padded(text: str, heading: str) -> str:
 
 
 def padded_tables(text: str) -> str:
-    """The text with every table that splits padded, as a formatter writes it."""
     lines = text.split("\n")
     at = 0
     while at < len(lines):
@@ -232,14 +204,11 @@ def padded_tables(text: str) -> str:
 
 
 class _Neighbour(NamedTuple):
-    """The key a new key goes beside: its position among the keys, and whether it goes after."""
-
     beside: int
     after: bool
 
 
 def _place(keys: Sequence[str], key: str, rank: Mapping[str, int]) -> _Neighbour | None:
-    """Where ``key`` goes among ``keys``, a neighbour and whether it goes after it."""
     mine = rank[key]
     present = [(rank[k], i) for i, k in enumerate(keys) if k in rank]
     below = max(((r, i) for r, i in present if r < mine), default=None)
@@ -257,7 +226,6 @@ def _ranks(template_order: Sequence[str], key: str) -> dict[str, int]:
 
 
 def with_row(heading: str, row: str, template_order: Sequence[str]) -> Want:
-    """The want of a table with the template's ``row``, keyed by its first cell."""
     new = _cells(row)
     rank = _ranks(template_order, new[0])
 
@@ -283,8 +251,6 @@ def with_row(heading: str, row: str, template_order: Sequence[str]) -> Want:
 
 
 def with_cell(heading: str, key: str, *, column: int, value: str) -> Want:
-    """The want of a table whose row keyed by ``key`` holds ``value`` in ``column``."""
-
     def want(current: str | None) -> str:
         text = current or ""
         found = table(text, heading)
@@ -306,7 +272,6 @@ def with_cell(heading: str, key: str, *, column: int, value: str) -> Want:
 
 
 def with_section(heading: str, block: str, template_order: Sequence[str]) -> Want:
-    """The want of a file holding the template's ``## `` section ``block``, heading line first."""
     rank = _ranks(template_order, heading)
     lines_of_block = block.rstrip("\n").split("\n")
     if lines_of_block[0] != heading:

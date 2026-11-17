@@ -1,5 +1,3 @@
-"""The suites table is filled first: no feature and no drain starts until /ratchet:fill wrote it."""
-
 import tempfile
 from pathlib import Path
 

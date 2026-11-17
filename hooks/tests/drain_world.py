@@ -1,23 +1,3 @@
-"""The drain model's actions played on a real repository by the real ``drain.py`` and ``merge.py``.
-
-The repository is the one ``test_drain`` builds: three local tickets, ``Beta`` blocked by
-``Alpha``, a binding whose ``merge`` entry point runs ``merge.py`` and whose ``check`` is green.
-``merge.py`` runs as it does in a drain, in a process of its own, which a kill ends with SIGKILL.
-Each command runs as a session runs it, ``drain.main`` with no tracker; the agent's commits are
-the commits the feature skill makes, and the owner's edit is an answer on the default branch.
-``b`` and ``c`` state their ``Flag:`` line and ``a`` does not. The scripts under test ship ADR
-0061 already, so the upgrade is a commit on the default branch whose binding declares a type the
-catalogue asks the line of, as in the route's world.
-``Alpha`` carries two promises, so the agent can split it into ``Save`` and ``List``, the model's
-``d`` and ``e``; the owner closes a ticket by its status line.
-After each action ``seen`` reads the repository back in the model's terms.
-
-The publish check of ADR 0060 is ``publish_check.py``. ``drain.py open`` records the start in the
-note, and ``drain.py check`` runs the check against it; the world runs ``check --final``, the
-check that says the run is over, or ``check`` with no flag where the model's step is the check
-without it, and reads ``start`` and ``passed`` back from the note.
-"""
-
 from __future__ import annotations
 
 import contextlib
@@ -79,7 +59,6 @@ from tests.test_drain import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-# Why: `split` files the parts beside the parent, numbered on from it and named by their titles.
 REF = {
     Name.A: ALPHA,
     Name.B: BETA,
@@ -109,7 +88,6 @@ RECORD = "docs(core): the verdict record"
 PUBLISHED = "feat(core): a role's own commit"
 ROLE_FILE = "src/role.py"
 DRAFT = "src/draft.py"
-# Why: each ticket the agent builds records its verdict in a folder of its own, as a pipeline does.
 SLUG = {Name.A: "alpha", Name.D: "save", Name.E: "list"}
 STATUSES = {status.value: status for status in Status}
 COMMANDS = frozenset({Kind.OPEN, Kind.UPDATE, Kind.LAND, Kind.CLOSE})
@@ -121,15 +99,10 @@ HALTED_WHY = "conflict: the rebase onto `main` was left unfinished"
 """The conflict close's reason, which a check that finds only a rebase left unfinished writes."""
 
 
-def no_forge(_argv: list[str]) -> None:
-    """``gh`` for a checkout with no ``origin``: the check never asks it."""
+def no_forge(_argv: list[str]) -> None: ...
 
 
 KILL_AT = "DRAIN_MODEL_KILL_AT"
-# Why: the binding's `merge` entry point. It is merge.py, ended by a real SIGKILL at the point
-# the environment names, so that what a killed run leaves is what merge.py itself wrote. Mid
-# fast-forward it leaves what git does when killed there: files of the merge in the work tree,
-# the first written part-way, and the lock on the index.
 MERGE_KILLER = """\
 import contextlib, io, os, signal, subprocess, sys, time
 from pathlib import Path
@@ -164,9 +137,6 @@ def cut_off(where, *args):
 
 
 def let_go(name):
-    # Why: a test run that is killed never writes the file; the wait ends with its directory, or
-    # in time, so no process is left running on a machine other work shares. `go` before the
-    # merge is the test's end: the merge does not run.
     until = time.monotonic() + {hold_for!r}
     while Path(HOLD).is_dir() and time.monotonic() < until:
         if (Path(HOLD) / name).exists():
@@ -211,7 +181,6 @@ if HOLD:
     (Path(HOLD) / "merging").touch()
     if not let_go("merge"):
         raise SystemExit(2)
-    # Why: a merge whose land is gone prints into a pipe nobody reads; the test reads it here.
     said = io.StringIO()
     with contextlib.redirect_stdout(said):
         code = merge.main(sys.argv)
@@ -228,15 +197,8 @@ MERGE_KILLS = {
     Kind.KILL_BEFORE_FAST_FORWARD: "check",
     Kind.KILL_MID_FAST_FORWARD: "fast-forward",
 }
-# Why: with this set to a directory, the merge waits for a file `merge` there before it starts,
-# so before it takes its merge lock and probes its land; for `checked` before its check runs,
-# once judged and merged in its scratch tree; and once done for `go` before it exits, having
-# written what it printed and returned to `said` and `code`. With a file `hold-lock` there, it
-# also waits for `probe` once it holds its merge lock. So the `land` that runs it is held where it
-# holds no drain lock, its landing lock held: while its merge runs, and between its merge and
-# its close.
 HOLD_AT = "DRAIN_MODEL_HOLD_AT"
-LANDING_WAIT = 60  # seconds a held landing is given to finish its merge, or its close
+LANDING_WAIT = 60
 DRIVER = Path(__file__).with_name("drain_driver.py")
 
 
@@ -244,14 +206,11 @@ def digest(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-class Killed(BaseException):
-    """The command's process died here: nothing after this point of it runs."""
+class Killed(BaseException): ...
 
 
 @dataclass(frozen=True)
 class Seen:
-    """What the repository shows, in the model's terms."""
-
     statuses: dict[Name, Status]
     start: tuple[Name, ...]
     tickets: tuple[Ticket, ...]
@@ -260,10 +219,7 @@ class Seen:
 
 
 class World:
-    """A repository the drain runs on, with no forge, as a session's commands leave it."""
-
     def __init__(self, directory: Path, check: str = "true", before_merge: str = "") -> None:
-        """``before_merge``, when given, is a shell line the merge entry point runs before merge.py."""  # noqa: E501
         directory.mkdir(parents=True, exist_ok=True)
         killer = directory / "merge_killer.py"
         killer.write_text(
@@ -276,7 +232,6 @@ class World:
             stand_in = f"sh -c '{before_merge}; exec \"$@\"' merge {stand_in}"
         self.binding = binding(stand_in, check)
         self.root = repository(directory / "repo", {**TEXTS, BINDING: self.binding})
-        # Why: git's directory of a repository never moves, and each read-back would ask git again.
         self.landing_intent = merge.state_dir(self.root) / merge.LANDING
         self.token = ""
         self.printed = ""
@@ -285,13 +240,11 @@ class World:
         """Each ticket's text as filed, which its note's digest names until the owner edits it."""
 
     def upgrade(self) -> None:
-        """The project becomes one the ``Flag:`` line is asked of, not deployed: a type that asks it."""  # noqa: E501
         pin = "- Default branch: `main`\n"
         write(self.root, BINDING, self.binding.replace(pin, pin + ASKED_TYPES))
         snapshot(self.root, "chore(method): the project is a command, not yet deployed")
 
     def command(self, *argv: str) -> int:
-        """``drain.py argv`` as a session runs it; what it printed is kept."""
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             try:
@@ -309,7 +262,6 @@ class World:
         return drain.tree_of(self.root, BRANCH[name])
 
     def gitdir(self, name: Name) -> Path:
-        """Where git keeps the state of the ticket's linked work tree."""
         pointer = (self.tree(name) / ".git").read_text(encoding="utf-8")
         return Path(pointer.removeprefix("gitdir:").strip())
 
@@ -317,7 +269,6 @@ class World:
         return self.gitdir(name) / "index.lock"
 
     def argv(self, kind: Kind, ref: str) -> list[str]:
-        """The command line of a drain command; ``ref`` names the ticket of one that takes it."""
         drained = ["--drain", self.token] if self.token else []
         return {
             Kind.OPEN: ["open", ref],
@@ -330,11 +281,6 @@ class World:
         }[kind]
 
     def killer(self, kind: Kind, name: Name) -> contextlib.AbstractContextManager[object]:
-        """What stops the command at the point ``kind`` names, as SIGKILL would stop it there.
-
-        The command runs in this process, and an exception no ``except`` of the drain catches
-        stands for the kill. The drain lock it holds is freed either way, as the kernel frees it.
-        """
         real_git, real_write, real_discard = (
             gatelib.git,
             drain.queue_notes.write_note,
@@ -346,8 +292,6 @@ class World:
                 if args[:2] != stop:
                     return real_git(root, *args)
                 if stop[0] == "rebase":
-                    # Why: a rebase stopped at a `break` before its first pick is where git is
-                    # when the kill lands right after its first checkout: detached at the base.
                     git(root, "-c", "sequence.editor=sed -i 1ibreak", "rebase", "-i", *args[1:])
                 raise Killed
 
@@ -387,7 +331,6 @@ class World:
         return killers[kind]()
 
     def perform(self, action: model.Action) -> None:
-        """Do what ``action`` names."""
         kind, name = action.kind, action.ticket
         if kind is Kind.UPGRADE:
             self.upgrade()
@@ -409,19 +352,16 @@ class World:
             self.by_hand(kind, name)
 
     def noted_start(self, name: Name) -> publish_check.Start | None:
-        """The start the note records, if it holds one."""
         note = drain.queue_notes.read_note(self.root, BRANCH[name])
         if "start" not in note:
             return None
         return publish_check.parse(json.dumps({"start": note["start"]}))
 
     def unreadable(self) -> contextlib.AbstractContextManager[object]:
-        """The check of ADR 0060 meets a present state it cannot read."""
         refused = publish_check.UnreadableError(UNREADABLE)
         return mock.patch.object(publish_check, "branch_moves", side_effect=refused)
 
     def check(self, kind: Kind, name: Name) -> None:
-        """``drain.py check``, with ``--final`` but where the model's step is the check without it."""  # noqa: E501
         if kind in {Kind.CHECK_HALTED, Kind.CHECK_HALTED_NOT_FINAL}:
             self.halt(name)
         final = [] if kind in NOT_FINAL else ["--final"]
@@ -429,11 +369,6 @@ class World:
             self.command("check", REF[name], *final)
 
     def halt(self, name: Name) -> None:
-        """A rejudge whose rebase conflicted, and whose reconcile stopped halfway through it.
-
-        The model has no conflict, so the start is the one ``update`` records after one, and the
-        rebase is stopped before its first commit, as ``killer`` stops one.
-        """
         branch, tree = BRANCH[name], self.tree(name)
         start = publish_check.start_of(self.root, branch, no_forge, rebase_onto="main")
         path = drain.queue_notes.note_path(self.root, branch)
@@ -443,11 +378,6 @@ class World:
         git(tree, "-c", "sequence.editor=sed -i 1ibreak", "rebase", "-i", "main")
 
     def split(self, name: Name) -> None:
-        """``drain.py split`` as the feature skill runs it, then the parts committed.
-
-        The parts of a local ticket are files the checkout does not yet hold, and the plan starts
-        nothing while it holds work uncommitted.
-        """
         plan = self.root.parent / "plan.json"
         plan.write_text(json.dumps({"parts": HALVES}), encoding="utf-8")
         if self.command("split", REF[name], "--plan", str(plan)) != 0:
@@ -459,7 +389,6 @@ class World:
         self.printed = printed
 
     def by_hand(self, kind: Kind, name: Name) -> None:
-        """What the agent, the owner or git does, outside the drain."""
         ref, tree = REF[name], self.tree(name)
         if kind is Kind.WORK:
             write(tree, DRAFT, "half done\n")
@@ -491,7 +420,6 @@ class World:
             self.lock_of(name).unlink()
 
     def seen(self, ghost: model.State) -> Seen:
-        """The repository read back; ``ghost`` gives what no file holds (the reviews, a role's commit)."""  # noqa: E501
         drafted = drain.plan(drain.Drain(self.root, None, model.CAP))
         by_ref = {entry.ref: STATUSES[entry.state] for entry in drafted.tickets}
         statuses = {name: by_ref[ref] for name, ref in REF.items() if ref in by_ref}
@@ -548,7 +476,6 @@ class World:
         return Seen(statuses, start, tuple(tickets), scratch, half)
 
     def half(self) -> Name | None:
-        """The ticket whose fast-forward the landing intent says was cut off, if one was."""
         landing = self.landing_intent
         intent = merge.intent_of(landing.read_bytes() if landing.exists() else b"")
         if not intent:
@@ -566,7 +493,6 @@ class World:
     def branch_state(
         self, name: Name, listed: list[str] | None, *, landed: bool, was: Ticket
     ) -> tuple[Branch, bool]:
-        """The branch and whether it holds the default tip; one on its merge is as it landed."""
         if listed is None:
             return Branch.NONE, True
         if landed:
@@ -583,7 +509,6 @@ class World:
         return (Branch.JUDGED if certified == reviewed else Branch.STALE), behind == "0"
 
     def note(self, name: Name, *, merged: bool, was: Note | None) -> Note | None:
-        """The drain's note on the ticket; on a merged ticket its text is the model's."""
         held = drain.queue_notes.read_note(self.root, BRANCH[name])
         if not held:
             return None
@@ -609,15 +534,11 @@ class World:
         )
 
 
-# --- the lease ---------------------------------------------------------------------------------
-
 REAL_ANCESTRY = drain.ancestry
-# The lease steps that are a drain command on the ticket, as the main graph's actions name them.
 ON_THE_TICKET = {Step.OPEN: Kind.OPEN, Step.UPDATE: Kind.UPDATE, Step.PARK: Kind.CLOSE}
 
 
 def running(pid: int) -> bool:
-    """Whether process ``pid`` runs: one that has exited and waits to be reaped does not."""
     try:
         stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
     except OSError:
@@ -626,41 +547,24 @@ def running(pid: int) -> bool:
 
 
 def session() -> subprocess.Popen[bytes]:
-    """A process that stands for a drain's session: the agent that runs its commands."""
     return subprocess.Popen(["sleep", "600"])  # noqa: S607 # -- a sleep, no shell
 
 
 class LeaseWorld:
-    """Two drains on one repository: each session a real process, the program a real one too.
-
-    A drain's command runs in this process as its session would run it: ``drain.ancestry`` names
-    the session's process above the command, so the real ``drain.rival`` reads real processes.
-    A ``land`` runs in a process of its own and is held where it holds no drain lock: its merge
-    waits to start, or is done and has not exited. So the commands of either drain meet a live
-    landing and its lock, before its merge lands and after.
-    """
-
     def __init__(self, directory: Path, check: str = "true", before_merge: str = "") -> None:
         self.directory = directory
         self.world = World(directory, check, before_merge)
         root = self.world.root
-        # Why: the files of the lease and of the two locks never move, and each read-back would
-        # ask git for their directory again.
         self.lease_file = drain.state_dir(root) / drain.LEASE
         self.landing_lock = drain.landing_path(root, BRANCH[Name.A])
         self.merge_lock = drain.merge.merge_lock_path(root, BRANCH[Name.A])
         self.sessions: dict[Drain, subprocess.Popen[bytes]] = {}
         self.program: subprocess.Popen[bytes] | None = None
         self.tokens: dict[Drain, str] = {}
-        # The drain whose `land` is held, its process, and the directory its merge waits on.
         self.landing: tuple[Drain, subprocess.Popen[str], Path] | None = None
-        # The drain whose `land` was killed alone past its merge's probe; that merge's pid and gate.
         self.orphan: tuple[Drain, int, Path] | None = None
-        # The pid and gate of the merge of a `land` killed before its probe, still to start.
         self.doomed: tuple[int, Path] | None = None
-        # What the last merge to stop printed and returned, read from its gate.
         self.stopped: tuple[int, str] | None = None
-        # The owner's own runs of the merge entry point.
         self.hands: list[subprocess.Popen[bytes]] = []
 
     def chain(self, which: Drain) -> list[str]:
@@ -674,7 +578,6 @@ class LeaseWorld:
         return self.world.printed
 
     def land(self, which: Drain) -> None:
-        """The check, the agent's commits and its record, then ``land`` up to the merge it runs."""
         if not drain.ahead(self.world.root, "main", BRANCH[Name.A]):
             self.world.command("check", REF[Name.A], "--final")
             self.world.by_hand(Kind.COMMIT, Name.A)
@@ -686,7 +589,6 @@ class LeaseWorld:
         return [sys.executable, str(DRIVER), "land", REF[Name.A], "--root", root, "--offline"]
 
     def land_killed_at_discard(self) -> int:
-        """``land``, ended by SIGKILL where its close is about to remove the tree; its exit code."""
         return subprocess.run(  # noqa: S603 # -- this interpreter, no shell
             self.landing_argv(),
             capture_output=True,
@@ -697,12 +599,10 @@ class LeaseWorld:
         ).returncode
 
     def land_held(self, which: Drain) -> None:
-        """``land`` up to the end of its merge, whether the merge lands or is refused."""
         self.start_landing(which)
         self.merge_the_landing()
 
     def start_landing(self, which: Drain) -> None:
-        """``land`` past its checks, its landing lock held, and its merge waiting to start."""
         gate = Path(tempfile.mkdtemp(prefix="landing-", dir=self.directory))
         with (gate / "printed").open("w", encoding="utf-8") as printed:
             process = subprocess.Popen(  # noqa: S603 # -- this interpreter, no shell
@@ -716,14 +616,12 @@ class LeaseWorld:
         self.wait_for(gate / "merging", "the landing did not reach its merge")
 
     def merge_the_landing(self) -> None:
-        """The held landing's merge, run to its end, whether it lands or is refused."""
         assert self.landing is not None
         (self.landing[2] / "merge").touch()
         (self.landing[2] / "checked").touch()
         self.wait_for(self.landing[2] / "landed", "the landing's merge did not finish")
 
     def wait_for(self, mark: Path, why: str) -> None:
-        """Until the held landing's merge writes ``mark``, or the landing has exited."""
         assert self.landing is not None
         process = self.landing[1]
         deadline = time.monotonic() + LANDING_WAIT
@@ -732,11 +630,9 @@ class LeaseWorld:
             time.sleep(0.02)
 
     def close_the_landing(self) -> None:
-        """What ``land`` does once its merge has exited: its close, under the drain lock."""
         assert self.landing is not None
         _, process, gate = self.landing
         if not (gate / "landed").exists():
-            # Why: the merge of a killed land landed first; this one runs, and is refused.
             self.merge_the_landing()
         (gate / "go").touch()
         self.world.code = process.wait(timeout=LANDING_WAIT)
@@ -744,31 +640,22 @@ class LeaseWorld:
         self.landing = None
 
     def kill_the_landing(self) -> None:
-        """SIGKILL to the ``land`` held, and to its merge if that has not run; one done exits."""
         assert self.landing is not None
         _, process, gate = self.landing
         process.kill()
         process.wait()
         if (gate / "pid").exists() and not (gate / "landed").exists():
-            # Why: a kill of the land and its merge together, as a session's end or a shell's
-            # timeout ends them, so no merge lands after the land that ran it is gone.
             with contextlib.suppress(ProcessLookupError):
                 os.kill(int((gate / "pid").read_text(encoding="utf-8")), signal.SIGKILL)
         (gate / "go").touch()
         self.landing = None
 
     def past_the_probe(self) -> None:
-        """The held landing's merge, let on to its check: it holds its lock and has probed."""
         assert self.landing is not None
         (self.landing[2] / "merge").touch()
         self.wait_for(self.landing[2] / "checking", "the landing's merge did not reach its check")
 
     def hand_merge(self, *, hold: bool) -> tuple[int, Path]:
-        """The owner's own run of the merge entry point on the branch; its pid and its gate.
-
-        It sets no ``RATCHET_LANDING``. Held, it waits at its check, holding its merge lock;
-        otherwise it waits to start.
-        """
         gate = Path(tempfile.mkdtemp(prefix="landing-hand-", dir=self.directory))
         env = {key: value for key, value in os.environ.items() if key != merge.LANDING_VAR}
         killer = self.directory / "merge_killer.py"
@@ -787,14 +674,11 @@ class LeaseWorld:
         while not mark.exists():
             assert time.monotonic() < deadline, "the hand merge did not start"
             assert not (gate / "landed").exists(), (gate / "said").read_text(encoding="utf-8")
-            # Why: a merge that died before its mark never writes it; the mark is read again
-            # since it may have come just before the exit.
             assert process.poll() is None or mark.exists(), "the hand merge ended before its mark"
             time.sleep(0.02)
         return process.pid, gate
 
     def kill_the_land_alone(self) -> None:
-        """SIGKILL to the ``land`` held, by its pid alone, once its merge is judged and checking."""
         assert self.landing is not None
         which, process, gate = self.landing
         self.past_the_probe()
@@ -805,7 +689,6 @@ class LeaseWorld:
         self.orphan, self.landing = (which, pid, gate), None
 
     def let_the_orphan_run(self) -> None:
-        """The killed ``land``'s merge, run on from its check: it lands or is refused."""
         assert self.orphan is not None
         _, pid, gate = self.orphan
         (gate / "checked").touch()
@@ -817,7 +700,6 @@ class LeaseWorld:
         self.end_the_orphan()
 
     def end_the_orphan(self) -> None:
-        """SIGKILL to the merge of the killed ``land``, by its pid, if it still runs."""
         assert self.orphan is not None
         pid = self.orphan[1]
         with contextlib.suppress(ProcessLookupError):
@@ -829,7 +711,6 @@ class LeaseWorld:
         self.orphan = None
 
     def kill_the_land_at_start(self) -> None:
-        """SIGKILL to the ``land`` held, by its pid alone, while its merge waits to start."""
         assert self.landing is not None
         _, process, gate = self.landing
         pid = int((gate / "pid").read_text(encoding="utf-8"))
@@ -839,7 +720,6 @@ class LeaseWorld:
         self.doomed, self.landing = (pid, gate), None
 
     def run_out(self, pid: int, gate: Path) -> None:
-        """Let the merge held at ``gate`` run to its end; what it printed and returned."""
         for mark in ("merge", "checked", "probe"):
             (gate / mark).touch()
         deadline = time.monotonic() + LANDING_WAIT
@@ -858,18 +738,11 @@ class LeaseWorld:
         )
 
     def doomed_stops(self) -> None:
-        """The merge of a ``land`` killed before its probe, run: it finds its land gone."""
         assert self.doomed is not None
         self.run_out(*self.doomed)
         self.doomed = None
 
     def locked_out(self) -> None:
-        """The doomed merge holds its lock past the live landing's merge's tries; both stop.
-
-        The doomed merge is held once it has taken the merge lock and before it probes. The live
-        landing's merge then runs, finds the lock held, and stops; its ``land`` exits. Then the
-        doomed merge probes and stops.
-        """
         assert self.doomed is not None
         assert self.landing is not None
         pid, gate = self.doomed
@@ -884,7 +757,6 @@ class LeaseWorld:
         self.doomed_stops()
 
     def perform(self, said: str) -> None:
-        """Do what the lease step ``said`` names."""
         if said in {Step.SEPARATE.value, Step.SHARED.value}:
             first = session()
             self.sessions = {
@@ -907,8 +779,6 @@ class LeaseWorld:
         if step is Step.ORPHAN_ENDS:
             self.end_the_orphan()
             return
-        # Why: a `land` while a landing is seen is refused at once, so it runs as the other
-        # commands do.
         second = step is Step.LAND and (self.landing is not None or self.orphan is not None)
         if second or step in {*model.CLEANS, *model.REPORTS, *ON_THE_TICKET, Step.CLEAN}:
             self.drain_command(which, step)
@@ -930,7 +800,6 @@ class LeaseWorld:
             self.command(which, *self.world.argv(ON_THE_TICKET.get(step, Kind.LAND), REF[Name.A]))
 
     def by_hand(self, which: Drain, step: Step) -> None:
-        """What a drain's agent or its session does, and ``land`` cut where it holds no lock."""
         tree = self.world.tree(Name.A)
         landing = {
             Step.MERGES: self.merge_the_landing,
@@ -952,12 +821,10 @@ class LeaseWorld:
         elif step is Step.DIE:
             self.sessions[which].kill()
             self.sessions[which].wait()
-            # Why: a landing is a command of its session, and ends with it.
             if self.landing is not None and self.sessions[self.landing[0]].poll() is not None:
                 self.kill_the_landing()
 
     def seen(self, ghost: Lease) -> Lease:
-        """The repository and the processes read back; ``ghost`` gives what no file holds."""
         root, lease = self.world.root, self.lease_file
         held = json.loads(lease.read_text(encoding="utf-8")) if lease.exists() else {}
         holder = next((d for d, token in self.tokens.items() if token == held.get("token")), None)
@@ -983,8 +850,6 @@ class LeaseWorld:
             if note.get("reported") is False
             else Merge.PRINTED
         )
-        # Why: the landing the model names must hold its lock. It is read here and not by
-        # `drain.landing_running`, so a fault in that reading is not a fault in this one too.
         with drain.merge.locked(self.landing_lock) as free:
             live = self.landing is not None and free is None
         merging = lock_held(self.merge_lock)
@@ -1009,7 +874,6 @@ class LeaseWorld:
         )
 
     def close(self) -> None:
-        """End every process this world started, then let every merge held go, and wait for it."""
         if self.orphan is not None:
             self.end_the_orphan()
         held = [self.landing[1]] if self.landing else []
@@ -1029,7 +893,6 @@ class LeaseWorld:
 
 
 def stop(pid: int) -> None:
-    """Until process ``pid`` has ended: it is let go, and killed by its pid if it lingers."""
     deadline = time.monotonic() + 5
     while running(pid) and time.monotonic() < deadline:
         time.sleep(0.02)
@@ -1040,16 +903,11 @@ def stop(pid: int) -> None:
 
 
 def merged_tips(root: Path) -> set[str]:
-    """The tips merged into ``main``, as ``route.merged_features`` counts them.
-
-    Each is the second parent of a merge on the first-parent line of ``main``.
-    """
     merges = git(root, "rev-list", "--merges", "--first-parent", "--parents", "main")
     return {parent for line in merges.splitlines() for parent in line.split()[2:]}
 
 
 def lock_held(path: Path) -> bool:
-    """Whether a process holds the lock of ``path``, read here and not by the scripts' reader."""
     try:
         descriptor = os.open(path, os.O_RDONLY)
     except FileNotFoundError:

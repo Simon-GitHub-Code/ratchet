@@ -1,5 +1,3 @@
-"""The owed ledger: what an upgrade leaves is counted and not red, and the list only shrinks."""
-
 import atexit
 import functools
 import json
@@ -43,7 +41,6 @@ def entry(**changed: str) -> owed.Entry:
 
 @functools.cache
 def merged_upgrade() -> Path:
-    """A 0.9.2 adoption whose upgrade was made on a branch and merged into ``main``, once."""
     scratch = Path(tempfile.mkdtemp(prefix="ratchet-owed-"))
     atexit.register(shutil.rmtree, scratch, ignore_errors=True)
     root = adopted.copy(adopted.adopted("0.9.2"), scratch / "repo")
@@ -57,7 +54,6 @@ def merged_upgrade() -> Path:
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    """The merged upgrade, on a new branch for one change."""
     root = adopted.copy(merged_upgrade(), tmp_path / "repo")
     branch(root, "change")
     return root
@@ -70,20 +66,15 @@ def edit(path: Path, old: str, new: str) -> None:
 
 
 def gate(root: Path, capsys: pytest.CaptureFixture[str]) -> tuple[int, str]:
-    """What the ratchet-lowered gate says of the change: its exit code and its lines."""
     capsys.readouterr()
     code = lowered.main(["lowered.py", "--root", str(root)])
     return code, capsys.readouterr().out
 
 
 def checked(root: Path, capsys: pytest.CaptureFixture[str]) -> tuple[int, str]:
-    """What the conformance gate says: its exit code and its lines."""
     capsys.readouterr()
     code = conformance.run(root)
     return code, capsys.readouterr().out
-
-
-# --- the ledger as data -------------------------------------------------------------------------
 
 
 @given(st.lists(st.tuples(*[st.text(min_size=1)] * 4), max_size=4))
@@ -193,9 +184,6 @@ def test_a_list_that_does_not_read_is_said_plainly(
     assert "every check it held back is red until it reads" in said
 
 
-# --- the upgrade writes it, conformance counts it --------------------------------------------
-
-
 def test_an_upgrade_records_what_it_leaves_and_conformance_counts_it_green(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -226,11 +214,7 @@ def test_a_finding_whose_line_moves_stays_owed(
     assert f"owed: {WEEKLY}: line 37 in job `weekly` still says" in out
 
 
-# --- what no entry excuses ----------------------------------------------------------------------
-
-
 def placeholder(name: str) -> str:
-    """The template's toolchain placeholder in workflow ``name``, with the line it stands before."""
     lines = (TEMPLATES / name).read_text(encoding="utf-8").splitlines(keepends=True)
     return MARKER + lines[lines.index(MARKER) + 1]
 
@@ -333,9 +317,6 @@ def test_an_entry_whose_finding_is_fixed_goes_and_the_count_drops(
     assert checked(repo, capsys)[0] == 0
     assert gate(repo, capsys)[0] == 0
     assert str(owed.summary(repo)).startswith(f"{before - 1} things this project owes")
-
-
-# --- the gate before the merge: the ledger only shrinks -------------------------------------------
 
 
 def add(root: Path, *entries: owed.Entry) -> None:
@@ -519,10 +500,6 @@ PLUGIN_PARTS = (".claude-plugin", "scripts", "skills", "hooks/ratchet_guards")
 
 
 def keys_from(plugin: Path, place: Path) -> dict[str, list[list[str]]]:
-    """Every key every check raises, from a plugin copy at ``plugin``, on repositories in ``place``.
-
-    The repositories are each self-test mutation of the templates and the two older adoptions.
-    """
     for part in PLUGIN_PARTS:
         ignore = shutil.ignore_patterns("__pycache__")
         shutil.copytree(PLUGIN_ROOT / part, plugin / part, symlinks=True, ignore=ignore)
@@ -538,7 +515,6 @@ def keys_from(plugin: Path, place: Path) -> dict[str, list[list[str]]]:
 
 @pytest.mark.shard_slot(1)
 def test_no_owed_key_holds_where_the_plugin_or_the_project_lies(tmp_path: Path) -> None:
-    """An owed entry is the same debt from any checkout of the plugin, so CI excuses its list."""
     one = keys_from(tmp_path / "plugin-one", tmp_path / "here")
     two = keys_from(tmp_path / "elsewhere/plugin-two", tmp_path / "there/deeper")
     assert one.keys() == two.keys()
@@ -568,14 +544,11 @@ def test_a_missing_gates_row_is_the_same_debt_once_its_trigger_fires() -> None:
     assert before.key() == after.key()
 
 
-# --- what the change brought is never owed ------------------------------------------------------
-
 DIFF_COVERAGE = "| diff coverage |"
 MARKERS = "| marker comments did not rise |"
 
 
 def drop_row(root: Path, prefix: str) -> str:
-    """Drop the binding's Gates row that starts with ``prefix``; the problem its absence raises."""
     text = (root / BINDING).read_text(encoding="utf-8")
     [row] = [line for line in text.splitlines(keepends=True) if line.startswith(prefix)]
     (root / BINDING).write_text(text.replace(row, ""), encoding="utf-8")
@@ -648,15 +621,12 @@ def test_another_plugin_than_the_pin_skips_the_question_and_says_so(
     assert "CI, which runs the pinned plugin, asks it" in out
 
 
-# --- what another gate judges is never owed -----------------------------------------------------
-
 OWN_RULE = "Bash(my-own-tool:*)"
 
 
 def test_a_rule_of_the_project_s_own_stays_red_and_stays_a_question(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """settings-check judges the same drift, so owing it here would print green over a red gate."""
     root = adopted.copy(adopted.adopted("0.9.2"), tmp_path / "repo")
     branch(root, "feature")
     path = root / ".claude/settings.json"
@@ -707,8 +677,6 @@ def test_the_entries_an_agent_fills_first_are_those_of_the_named_checks(tmp_path
     assert [entry.rule for entry in owed.fill_first(tmp_path)] == ["pins"]
     assert owed.main(["owed", "--root", str(tmp_path), "--fill-first"]) == 0
 
-
-# --- the comments gate's entries (ADR 0063) -------------------------------------------------------
 
 COMMENT = owed.Entry("src/a.txt", owed.COMMENTS, "an old reason", VERSION)
 UNFILLED_ROW = re.compile(r"^\| <`globs` of one kind of file>[^\n]*$", re.MULTILINE)

@@ -1,5 +1,3 @@
-"""The settings check: ``.claude/settings.json`` holds the fixed denies and no ask (ADR 0033)."""
-
 import json
 import tomllib
 from pathlib import Path
@@ -50,7 +48,6 @@ def repository(tmp_path: Path, manifest: str = MANIFEST) -> Path:
 
 
 def write(root: Path) -> int:
-    """``settings_rules.py --write`` run from the plugin this suite lives in."""
     return settings_rules.main(["x", "--root", str(root), "--write"])
 
 
@@ -64,24 +61,18 @@ def test_the_deny_list_is_the_tamper_paths_then_the_command_rules() -> None:
 
 
 def test_the_template_settings_are_what_the_generator_writes() -> None:
-    # Why: the template ships the file; a hand edit to it is the drift this gate catches.
     assert settings_rules.drift(TEMPLATES) == []
     template = json.loads((TEMPLATES / ".claude/settings.json").read_text())
     assert template["permissions"]["ask"] == []
 
 
 def test_every_path_the_template_locks_and_the_hook_reads_refs_through_is_denied() -> None:
-    # Why: the list is fixed so that it never follows a manifest edit; this keeps it no looser
-    # than the paths the template still has the owner change by hand.
     manifest = tomllib.loads((TEMPLATES / "guards/manifest.toml").read_text(encoding="utf-8"))
     locked = {p for g in manifest["group"] if g.get("edit") == "deny" for p in g["paths"]}
     assert locked | set(GIT_STATE_PATTERNS) <= set(settings_rules.TAMPER)
 
 
 def test_a_workflow_is_asked_on_a_branch_once_the_template_manifest_is_committed() -> None:
-    # Why: GitHub runs a branch's own workflow before any merge, so the owner is asked at the
-    # write; a settings deny would make him edit the file by hand, and adoption writes the
-    # workflows before the manifest is on the default branch.
     guard = make_guard(manifest=STANDARD)
     assert rules("echo x > .github/workflows/ci.yml", guard) == ["workflow-write"]
     on_main = make_guard(FakeRepo(branch="main"), manifest=STANDARD)
@@ -95,8 +86,6 @@ def test_a_workflow_is_asked_on_a_branch_once_the_template_manifest_is_committed
 
 @pytest.mark.parametrize("pattern", settings_rules.TAMPER)
 def test_each_tamper_path_is_one_the_hook_refuses_on_a_branch(pattern: str) -> None:
-    # Why: a settings deny the hook does not share would leave the two layers disagreeing
-    # (ADR 0006); each of these acts before a merge, so the hook refuses it on any branch.
     path = pattern.replace("/**", "/x")
     refused = strictest(verdicts(f"echo x > {path}", make_guard()))
     assert refused is not None
@@ -160,9 +149,6 @@ def test_drift_names_each_missing_and_foreign_rule(tmp_path: Path) -> None:
 def test_an_adopted_repository_still_on_the_old_rules_is_red_until_regenerated(
     tmp_path: Path,
 ) -> None:
-    # Why: the ask rules the manifest used to generate are what this change removes; a
-    # repository that keeps them meets the same prompts, so the gate names each one, and a
-    # regeneration takes them out of ask.
     root = repository(tmp_path)
     (root / ".claude").mkdir()
     old = {
@@ -220,8 +206,6 @@ def test_main_reports_and_exits(tmp_path: Path, capsys: pytest.CaptureFixture[st
     "rule", [*settings_rules.DEFAULT_BRANCH_DENIES, *settings_rules.OTHER_REF_DENIES]
 )
 def test_each_default_ref_permission_rule_is_a_command_the_hook_refuses(rule: str) -> None:
-    # Why: a settings deny that the hook allows would refuse a command the hook lets through
-    # (ADR 0006); every rule here names a spelling the hook already denies.
     command = rule.removeprefix("Bash(").removesuffix(")").replace(":*", " x").replace("*", "x")
     assert rules(command) == ["default-ref"]
 
@@ -416,7 +400,6 @@ def test_a_held_rule_ends_once_in_one_list_never_looser_and_a_second_run_changes
 
 
 def plugin(root: Path, version: str = "1.2.3") -> tuple[Path, str]:
-    """A plugin checkout at ``root`` and the commit it is at."""
     repos.repository(root, {".claude-plugin/plugin.json": f'{{"version": "{version}"}}'})
     return root, repos.git(root, "rev-parse", "HEAD")
 
@@ -432,7 +415,6 @@ def checkout(root: Path, name: str, ref: str) -> None:
 
 
 def write_from(root: Path, used: Path, monkeypatch: pytest.MonkeyPatch) -> int:
-    """``--write`` run from the plugin at ``used``."""
     monkeypatch.setattr(plugin_pin, "PLUGIN", used)
     return write(root)
 

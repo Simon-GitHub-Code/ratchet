@@ -1,5 +1,3 @@
-"""The session hook: the stance on an adopted checkout, a nudge on a bare one, silence elsewhere."""
-
 import json
 import os
 import re
@@ -206,8 +204,6 @@ def test_a_route_that_cannot_answer_adds_nothing(tmp_path: Path) -> None:
 def test_run_route_survives_a_missing_or_failing_interpreter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Why: the hook's own limit is five seconds; starting an interpreter on a loaded machine can
-    # take longer, and this case is about the output, not about the limit.
     monkeypatch.setattr(session, "ROUTE_TIMEOUT", 120)
     assert session.run_route(["/nonexistent/python"]) is None
     assert session.run_route([sys.executable, "-c", "raise SystemExit(1)"]) is None
@@ -222,7 +218,6 @@ def test_run_route_gives_up_on_a_route_that_outlasts_the_limit(
 
 
 def test_the_shipped_stance_links_nothing_relative() -> None:
-    """The stance is read in the user's repository, where a link relative to the skill is dead."""
     text = session.stance(PLUGIN_ROOT)
     assert text.startswith(session.STANCE_HEADING)
     assert re.findall(r"\]\((?!https?://)[^)]*\)", text) == []

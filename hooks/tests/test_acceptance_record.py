@@ -1,5 +1,3 @@
-"""The acceptance record: each rule a careless or dishonest record breaks is one plain sentence."""
-
 import copy
 import dataclasses
 import hashlib
@@ -42,7 +40,6 @@ def entry(
     error: str | None = None,
     stored: dict[str, ar.Exchange] = EXCHANGES,
 ) -> ar.Entry:
-    """The log's line for ``ident``, ``line`` as ``GET / 200``, whose exchange is in ``stored``."""
     method, path, status = line.split()
     sent, answer = stored[ident].sent, stored[ident].answer
     return ar.Entry(ident, method, path, int(status), sha(sent), sha(answer), error)
@@ -94,8 +91,6 @@ def test_the_ticket_promises_are_its_checklist_lines_with_whitespace_collapsed()
     assert ar.promises(products.TICKET) == list(PROMISES)
 
 
-# Two answers that show what the request itself sent: a 404 page that repeats its query, and a
-# route that repeats its body. Neither shows anything of the product.
 GONE = "There is nothing left to read."
 SENT = "which the request itself sent, so it shows nothing of the product"
 ECHO_EXCHANGES = EXCHANGES | {
@@ -111,7 +106,6 @@ ECHO_EXCHANGES = EXCHANGES | {
 
 
 def echo_log(error: str | None = None) -> dict[str, ar.Entry]:
-    """The log with both echoes; ``error`` says how the second broke, when it did."""
     return LOG | {
         "abcd1234-4": entry("abcd1234-4", "GET /search 404", stored=ECHO_EXCHANGES),
         "abcd1234-5": entry("abcd1234-5", "POST /echo 200", error=error, stored=ECHO_EXCHANGES),
@@ -137,7 +131,6 @@ def test_a_finding_may_show_an_echo_or_a_request_that_broke() -> None:
 Mutate = Callable[[dict[str, object]], object]
 NO_STEPS: Mutate = lambda r: criterion(r, 2).update(verdict="fail")  # noqa: E731
 REFUSED: list[tuple[str, Mutate, dict[str, object], str]] = [
-    # The prototype's six seeded records, in this record's terms.
     (
         "missing evidence",
         lambda r: criterion(r, 0)["requests"][0].update(request="abcd1234-99"),
@@ -182,7 +175,6 @@ REFUSED: list[tuple[str, Mutate, dict[str, object], str]] = [
             " directory"
         ),
     ),
-    # The brief's.
     (
         "another run's request",
         lambda r: criterion(r, 0)["requests"][0].update(request="ffff0000-2"),
@@ -204,7 +196,6 @@ REFUSED: list[tuple[str, Mutate, dict[str, object], str]] = [
         {},
         f"the record is for tree {'b' * 40}, but tree {TREE} was served",
     ),
-    # Ours.
     (
         "a record for another session",
         lambda r: r.update(session="20261112T000000000000Z-ffff0000"),
@@ -653,7 +644,6 @@ def test_the_summary_is_the_records_facts_and_the_replays_of_these_very_checks()
 
 
 def documented() -> dict[str, list[str]]:
-    """Each table of ``docs/acceptance.md`` by its heading: the fields its first column names."""
     tables: dict[str, list[str]] = {}
     heading = ""
     for line in (PLUGIN_ROOT / "docs" / "acceptance.md").read_text(encoding="utf-8").splitlines():

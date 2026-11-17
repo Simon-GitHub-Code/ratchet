@@ -1,5 +1,3 @@
-"""Starting states that once made ``upgrade.py --apply`` loosen a gate, guess, or break a file."""
-
 import json
 import shutil
 import subprocess
@@ -34,7 +32,6 @@ def commit(root: Path) -> None:
 
 
 def heads(text: str) -> dict[str, tuple[str, ...]]:
-    """Each recipe of a justfile, with the recipes it depends on before its body."""
     return {
         block.name: block.parsed.before
         for block in justfile_text.blocks(text.split("\n"))
@@ -52,7 +49,6 @@ def just_reads(root: Path) -> subprocess.CompletedProcess[str]:
 
 
 def rename_tiers(root: Path) -> None:
-    """The tiers under names of the project's own, in the justfile and the binding alike."""
     just = (root / JUSTFILE).read_text()
     binding = (root / BINDING).read_text()
     for old, new in [*RENAMED.items(), ("check", "all")]:
@@ -130,7 +126,6 @@ def test_a_check_cannot_call_its_own_finding_auto(
 
 
 def import_the_pin(root: Path) -> None:
-    """``plugin-pin`` defined in a file the justfile imports, run by tier0 alone."""
     (root / "method.just").write_text(
         'plugin-pin:\n    @python3 "{{ratchet_plugin}}/scripts/plugin_pin.py"\n'
     )

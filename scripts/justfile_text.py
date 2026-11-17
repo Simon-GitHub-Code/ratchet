@@ -1,10 +1,3 @@
-"""A justfile, read and edited as text: which of the template's recipes a project may be given.
-
-``just`` runs a recipe as one script only when its body starts with ``#!``, so a line added
-before a shebang line breaks the script. ``just`` needs one indentation style within a recipe,
-so a line added follows its recipe's body and a copied recipe keeps the template's own.
-"""
-
 from __future__ import annotations
 
 import functools
@@ -31,7 +24,6 @@ QUOTES = "'\"`"
 
 
 def code_of(justfile: str) -> str:
-    """A justfile less its whole-line comments, where the template names what it explains."""
     return "\n".join(line for line in justfile.splitlines() if not line.lstrip().startswith("#"))
 
 
@@ -44,7 +36,6 @@ def uncommented(lines: Sequence[str]) -> list[str]:
 
 
 def definition(text: str, name: str) -> tuple[str, ...]:
-    """The recipe or variable ``name`` of a justfile: its comment, its head and its body."""
     lines = text.splitlines()
     for index, line in enumerate(lines):
         head = HEAD_NAME.match(line)
@@ -61,21 +52,14 @@ def definition(text: str, name: str) -> tuple[str, ...]:
 
 
 def imports(text: str) -> list[str]:
-    """The paths a justfile's ``import`` lines name, as written: relative to the file itself."""
     return [match.group(2) for match in IMPORT.finditer(text)]
 
 
 def modules(text: str) -> set[str]:
-    """The modules a justfile declares with ``mod``, whose recipes ``just`` runs by their name."""
     return set(MODULE.findall(text))
 
 
 def runs(justfile: str, recipe: str, needle: str) -> bool:
-    """Whether running ``recipe`` runs a line holding ``needle``.
-
-    It does when the recipe's own lines hold it, or a recipe it depends on or calls with ``just``
-    runs it.
-    """
     lines = justfile.split("\n")
     defined = {block.name: (block, block.parsed) for block in blocks(lines) if block.parsed}
     waiting, visited = [recipe], set()
@@ -106,8 +90,6 @@ def defines_variable(justfile: str, name: str) -> bool:
 
 @dataclass(frozen=True)
 class Head:
-    """What a recipe's head line says: where its colon is and the names it takes and needs."""
-
     colon: int
     params: tuple[str, ...]
     before: tuple[str, ...]
@@ -116,8 +98,6 @@ class Head:
 
 @dataclass(frozen=True)
 class Block:
-    """A top-level definition: the comment and attribute lines above it, its head, its body."""
-
     name: str
     start: int
     head: int
@@ -126,7 +106,6 @@ class Block:
 
 
 def mask(text: str) -> str:
-    """The text with what a quote holds replaced by ``_``: a colon in a string is not syntax."""
     out = []
     quote = ""
     escaped = False
@@ -143,7 +122,6 @@ def mask(text: str) -> str:
 
 
 def words(text: str) -> list[str]:
-    """The words of the text, a quoted string or a parenthesised group kept whole."""
     masked = mask(text)
     found = []
     depth = 0
@@ -164,12 +142,10 @@ def comment_at(text: str) -> int:
 
 
 def dependency(word: str) -> str:
-    """The recipe a dependency word names: ``(build debug)`` is ``build``."""
     return (word.lstrip("(").split() or [word])[0]
 
 
 def parse_head(line: str, name_end: int) -> Head | None:
-    """The head of a recipe, or ``None`` when the line assigns (``:=``) or has no colon."""
     masked = mask(line)
     colon = masked.find(":", name_end)
     if colon < 0 or masked[colon + 1 : colon + 2] == "=":
@@ -183,12 +159,9 @@ def parse_head(line: str, name_end: int) -> Head | None:
 
 
 def blocks(lines: Sequence[str]) -> tuple[Block, ...]:
-    """The top-level definitions of a justfile, in order."""
     return parsed_blocks(tuple(lines))
 
 
-# Why: one conformance run asks the same few justfiles about each recipe it names, and parsing
-# them again for every question was most of the run's time.
 @functools.lru_cache(maxsize=64)
 def parsed_blocks(lines: tuple[str, ...]) -> tuple[Block, ...]:
     found = []
@@ -227,7 +200,6 @@ def template_recipe(template: str, name: str) -> tuple[list[str], Block, Head] |
 
 
 def private_helper(template: str, name: str) -> bool:
-    """Whether ``name`` is a private recipe of the template, which a copied recipe brings along."""
     return name.startswith("_") and template_recipe(template, name) is not None
 
 
@@ -237,7 +209,6 @@ BLOCK_LAST = "ratchet_plugin"
 
 
 def plugin_block(template: str) -> list[str]:
-    """The template's plugin block above ``ratchet_plugin``, which ``plugin_py`` is built on."""
     lines = template.split("\n")
     first = next((i for i, line in enumerate(lines) if line.startswith(f"{BLOCK_FIRST} :=")), None)
     last = next((i for i, line in enumerate(lines) if line.startswith(f"{BLOCK_LAST} :=")), None)
@@ -249,7 +220,6 @@ def plugin_block(template: str) -> list[str]:
 
 
 def with_plugin_block(template: str) -> Want:
-    """The want of a justfile that has the variables ``plugin_py`` is built from."""
     block = plugin_block(template)
 
     def want(current: str | None) -> str:
@@ -271,7 +241,6 @@ def with_plugin_block(template: str) -> Want:
 
 
 def unmet(template: str, project: str, name: str) -> tuple[str, ...]:
-    """Why the template's recipe ``name`` cannot be copied as it stands; empty when it can."""
     found = template_recipe(template, name)
     if found is None:
         return (f"the template has no recipe `{name}`",)
@@ -305,7 +274,6 @@ def unmet(template: str, project: str, name: str) -> tuple[str, ...]:
 
 
 def first_dependents(template: str, name: str) -> tuple[str, ...]:
-    """The recipes of the template that run ``name`` before their other dependencies."""
     return tuple(
         block.name
         for block in blocks(template.split("\n"))
@@ -314,7 +282,6 @@ def first_dependents(template: str, name: str) -> tuple[str, ...]:
 
 
 def with_recipe(template: str, name: str) -> Want:
-    """The want of a justfile that has the template's recipe ``name``, its comment above it."""
     found = template_recipe(template, name)
     if found is None:
         message = f"the template has no recipe {name!r}"
@@ -358,7 +325,6 @@ def with_recipe(template: str, name: str) -> Want:
 
 
 def callers(template: str, name: str) -> tuple[str, ...]:
-    """The recipes of the template whose body runs ``just name``."""
     lines = template.split("\n")
     return tuple(
         block.name
@@ -369,7 +335,6 @@ def callers(template: str, name: str) -> tuple[str, ...]:
 
 
 def with_template_recipe(template: str, name: str) -> Want:
-    """The want of a justfile whose recipe ``name`` is the template's: replaced, else copied."""
     found = template_recipe(template, name)
     if found is None:
         message = f"the template has no recipe {name!r}"
@@ -391,16 +356,10 @@ def with_template_recipe(template: str, name: str) -> Want:
 
 
 def with_first_dependency(recipe: str, dependency_name: str) -> Want:
-    """The want of a justfile whose recipe runs ``dependency_name`` first among its dependencies."""
     return with_dependency_after(recipe, dependency_name, None)
 
 
 def with_dependency_after(recipe: str, dependency_name: str, after: str | None) -> Want:
-    """The want of a justfile whose recipe runs ``dependency_name`` right after ``after``.
-
-    With no ``after``, or when the recipe does not name it, the new dependency comes first.
-    """
-
     def want(current: str | None) -> str:
         text = current or ""
         lines = text.split("\n")
@@ -428,8 +387,6 @@ def with_dependency_after(recipe: str, dependency_name: str, after: str | None) 
 
 
 def with_first_line(recipe: str, line: str) -> Want:
-    """The want of a justfile whose recipe starts its body with ``line``, indented as the body."""
-
     def want(current: str | None) -> str:
         text = current or ""
         lines = text.split("\n")
@@ -456,7 +413,6 @@ QUOTED = re.compile(r'"([^"]*)"')
 
 @functools.lru_cache(maxsize=256)
 def variables(justfile: str) -> Mapping[str, str]:
-    """Each variable's value as written, the first definition of a name winning."""
     found: dict[str, str] = {}
     for match in VARIABLE.finditer(justfile):
         found.setdefault(match.group(1), match.group(2))
@@ -464,7 +420,6 @@ def variables(justfile: str) -> Mapping[str, str]:
 
 
 def listed(justfile: str, name: str, seen: frozenset[str] = frozenset()) -> set[str]:
-    """The words variable ``name`` lists, through each variable its value is built from."""
     value = variables(justfile).get(name)
     if value is None or name in seen:
         return set()
@@ -475,11 +430,6 @@ def listed(justfile: str, name: str, seen: frozenset[str] = frozenset()) -> set[
 
 
 def reaches(justfile: str, recipe: str) -> set[str]:
-    """Every name running ``recipe`` reaches.
-
-    That is the recipes it depends on or calls with ``just``, and every word a variable its lines
-    interpolate lists, such as a tier's list of gates, followed through each of those in turn.
-    """
     return set(_reaches(justfile, recipe))
 
 
@@ -504,7 +454,6 @@ def _reaches(justfile: str, recipe: str) -> frozenset[str]:
 
 
 def undefined(justfile: str, recipe: str) -> list[str]:
-    """The names a recipe's lines interpolate that are neither its parameters nor variables."""
     lines = justfile.split("\n")
     block = next((b for b in blocks(lines) if b.name == recipe and b.parsed), None)
     if block is None or block.parsed is None:
@@ -520,7 +469,6 @@ def undefined(justfile: str, recipe: str) -> list[str]:
 
 
 def dependencies(justfile: str, recipe: str) -> tuple[str, ...] | None:
-    """The dependencies of a recipe that has no body, which run it whole; ``None`` otherwise."""
     lines = justfile.split("\n")
     block = next((b for b in blocks(lines) if b.name == recipe), None)
     if block is None or block.parsed is None or block.parsed.after:
@@ -531,8 +479,6 @@ def dependencies(justfile: str, recipe: str) -> tuple[str, ...] | None:
 
 
 def with_dependency(recipe: str, name: str) -> Want:
-    """The want of a justfile whose bodiless recipe ``recipe`` also depends on ``name``."""
-
     def want(current: str | None) -> str:
         text = current or ""
         before = dependencies(text, recipe)
@@ -550,11 +496,6 @@ def with_dependency(recipe: str, name: str) -> Want:
 
 
 def with_listed(name: str, word: str) -> Want:
-    """The want of a justfile whose variable ``name``, one quoted list, also lists ``word``.
-
-    A variable built any other way is left as it is.
-    """
-
     def want(current: str | None) -> str:
         text = current or ""
         match = next((m for m in VARIABLE.finditer(text) if m.group(1) == name), None)
@@ -568,11 +509,6 @@ def with_listed(name: str, word: str) -> Want:
 
 
 def with_variable(name: str, value: Callable[[str], str]) -> Want:
-    """The want of a justfile that defines ``name``, after its last variable before any recipe.
-
-    ``value`` reads the justfile as it is then, so a list it gives holds every edit made before.
-    """
-
     def want(current: str | None) -> str:
         text = current or ""
         if defines_variable(text, name):

@@ -1,11 +1,3 @@
-"""The two readings of a finished run that need its repository and its transcript.
-
-``architecture`` reads the default branch's files (the binding, the decision records, each
-feature's spec) and the transcript's review results. ``stack_leaks`` reads the transcript for the
-plugin's own text and the persona's and the owner's words. Each is logged as one event, so that
-``reduce`` folds them as it folds everything else and a run reduced again gives the same numbers.
-"""
-
 from __future__ import annotations
 
 import json
@@ -25,19 +17,11 @@ WANTED = re.compile(
 )
 
 
-class Show(Protocol):
-    """One git command in the owner's project: its output, or ``None`` when it fails."""
-
-    def __call__(self, *args: str) -> str | None:
-        """Run git with ``args``."""
+class SandboxedGit(Protocol):
+    def __call__(self, *args: str) -> str | None: ...
 
 
-def files_of(show: Show, branch: str) -> dict[str, str]:
-    """The text of each file the architecture reading needs, on ``branch``.
-
-    ``show`` runs one command in the owner's project and gives its output, or ``None`` when it
-    fails: the run's own, so that every read goes through the sandbox.
-    """
+def files_of(show: SandboxedGit, branch: str) -> dict[str, str]:
     listed = show("ls-tree", "-r", "--name-only", branch) or ""
     return {
         path: text
@@ -55,12 +39,10 @@ def _records(lines: Iterable[str]) -> list[dict[str, object]]:
 
 
 def architecture_event(files: dict[str, str], transcript: Path) -> dict[str, object]:
-    """What the repository and the transcript show of the architecture."""
     blobs = architecture.transcript_texts(_lines(transcript))
     return {**architecture.inspect(files), "reviews": architecture.review_axis(blobs)}
 
 
 def leak_event(persona: Persona, answers: Iterable[str], transcript: Path) -> dict[str, object]:
-    """The plugin's own text that named a stack the owner did not say."""
     said = leaks.stated(persona.idea, persona.profile, persona.stack, *answers)
     return leaks.scan(leaks.plugin_text(_records(_lines(transcript))), said)

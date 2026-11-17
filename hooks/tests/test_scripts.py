@@ -1,5 +1,3 @@
-"""The tool-neutral gate scripts: the ceiling direction in ``lowered`` and the ``budget`` gate."""
-
 import json
 import re
 import sys
@@ -73,8 +71,6 @@ def test_a_ceiling_is_only_ever_lowered() -> None:
 
 
 def test_a_tier_ceiling_starts_no_tighter_than_the_tier_budget() -> None:
-    # Why: a trial adoption measured an empty skeleton and set tier1 to 14 seconds, so the first
-    # feature's tests would have needed an ADR to "loosen" a ceiling 60 times under the budget.
     assert budget.lowered_ceiling(None, 9.0, 1.5, floor=budget.TIER_BUDGETS["tier1"]) == 900.0
     assert budget.lowered_ceiling(None, 1000.0, 1.5, floor=900.0) == 1500.0
     assert budget.lowered_ceiling(14.0, 9.0, 1.5, floor=900.0) is None, "an existing ceiling stands"
@@ -501,8 +497,6 @@ def test_an_adr_naming_a_number_does_not_pass_a_boolean_flip(tmp_path: Path) -> 
 
 
 def test_the_change_ceiling_moves_to_its_product_keys_without_loosening(tmp_path: Path) -> None:
-    # Why: ADR 0045. The old keys are removed and the new ones written; the move is judged by the
-    # value, so a project cannot drop `lines` and write a larger `product_lines`.
     old = "[ceilings.change]\nfiles = 40\nlines = 1500\n"
     root = repository(tmp_path, {"quality/thresholds.toml": old})
     commit(root, "feat(core): second")

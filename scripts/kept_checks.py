@@ -1,41 +1,3 @@
-"""Kept checks: what an acceptance tester leaves behind so a promise is tried on every change.
-
-A kept check is data, never a program, so it carries nothing of the machine it was written on:
-no path, no port, no browser location. It names a criterion of the ticket and the steps that
-show that criterion holding against ``BASE_URL``, the address of a freshly booted product::
-
-    {"id": "K1", "criterion": "C2", "via": "http", "steps": [
-      {"request": "POST /items", "form": {"link": "https://example.com/{unique}"},
-       "headers": {"Origin": "{BASE_URL}"},
-       "expect": {"status": 303, "headers": {"Location": "/"}}},
-      {"request": "GET /", "expect": {"contains": ["https://example.com/{unique}"],
-                                     "count": {"https://example.com/{unique}": 1}}}]}
-
-    {"id": "K2", "criterion": "C9", "via": "browser", "width": 375, "steps": [
-      {"open": "/"}, {"fill": "Link to save", "with": "https://example.com/{unique}"},
-      {"click": "Save"}, {"see": "https://example.com/{unique}"},
-      {"true": "document.documentElement.scrollWidth <= innerWidth"}]}
-
-``docs/acceptance.md`` lists every field of a check and its steps, and a field it does not list
-is refused. An HTTP step sends one request, ``METHOD /path`` (a path, never a host), with optional
-``headers`` and either ``form`` (sent URL-encoded) or ``body`` (sent as it is). It follows no
-redirect. It holds when each ``expect`` holds: ``status``; ``headers``, exact values with names
-in any case; ``contains``, texts the body shows in this order; ``lacks``, texts it never shows;
-``count``, how many times a text shows. A browser step is one of: ``open`` a path; ``fill`` the
-field with that label ``with`` a value; ``click`` the button or link with that text; ``see`` a
-text on the page; ``lacks`` a text; ``true``, a script expression that must be ``true``. A
-browser step waits up to five seconds for what it needs. ``{BASE_URL}`` and ``{unique}`` are
-replaced in every text: the address, and a value new to each run, so that no check depends on
-what an earlier run left in the product's store.
-
-A run ends one of three ways. The check is ``held`` when every step holds. It is ``unmet`` when
-the product answered and did not show what a step asks, the first such step being the reason;
-a script the page throws counts as not showing it, once the step's five seconds are up. It is
-``not-run`` when nothing could try it: a request that got no answer, no browser, or a browser
-that would not start, crashed or stopped answering. A check that was not run says nothing about
-the product either way, so it is never counted as holding or as failing.
-"""
-
 from __future__ import annotations
 
 import http.client
@@ -59,7 +21,6 @@ WAIT = 5.0
 POLL = 0.1
 SETTLE = 0.3
 TIMEOUT = 30.0
-# The fields of each object, in the order docs/acceptance.md lists them.
 CHECK_FIELDS = ("id", "criterion", "via", "width", "steps")
 HTTP_STEP_FIELDS = ("request", "headers", "form", "body", "expect")
 EXPECTS = ("status", "headers", "contains", "lacks", "count")
@@ -72,8 +33,6 @@ WIDTHS = range(200, 4001)
 
 @dataclass(frozen=True)
 class Expect:
-    """What a response must show; an empty field asks nothing."""
-
     status: int | None = None
     headers: tuple[tuple[str, str], ...] = ()
     contains: tuple[str, ...] = ()
@@ -81,14 +40,11 @@ class Expect:
     count: tuple[tuple[str, int], ...] = ()
 
     def empty(self) -> bool:
-        """Whether it asks nothing of the response."""
         return self == Expect()
 
 
 @dataclass(frozen=True)
 class Request:
-    """One HTTP step: the request, and what its response must show."""
-
     method: str
     path: str
     headers: tuple[tuple[str, str], ...]
@@ -99,8 +55,6 @@ class Request:
 
 @dataclass(frozen=True)
 class Action:
-    """One browser step: ``kind`` is one of ``ACTIONS``, ``value`` only for ``fill``."""
-
     kind: str
     target: str
     value: str = ""
@@ -108,28 +62,22 @@ class Action:
 
 @dataclass(frozen=True)
 class HttpCheck:
-    """A kept check made of requests."""
-
     id: str
     criterion: str
     steps: tuple[Request, ...]
 
     def expects(self) -> bool:
-        """Whether any step can fail: a check that expects nothing proves nothing."""
         return any(not step.expect.empty() for step in self.steps)
 
 
 @dataclass(frozen=True)
 class BrowserCheck:
-    """A kept check made of browser steps, in a window ``width`` pixels wide."""
-
     id: str
     criterion: str
     steps: tuple[Action, ...]
     width: int = WIDTH
 
     def expects(self) -> bool:
-        """Whether any step can fail: every step but ``open`` waits for something."""
         return any(step.kind != "open" for step in self.steps)
 
 
@@ -137,8 +85,6 @@ Check = HttpCheck | BrowserCheck
 
 
 class Outcome(Enum):
-    """How a run of a check ended; see the module's docstring."""
-
     HELD = "held"
     UNMET = "unmet"
     NOT_RUN = "not-run"
@@ -146,8 +92,6 @@ class Outcome(Enum):
 
 @dataclass(frozen=True)
 class Result:
-    """A run's outcome, and why, unless it held."""
-
     outcome: Outcome
     reason: str | None = None
 
@@ -156,27 +100,21 @@ HELD = Result(Outcome.HELD)
 
 
 class Shape:
-    """Reads one JSON object of a check; each field that is wrong becomes a sentence."""
-
     def __init__(self, raw: object, where: str, problems: list[str]) -> None:
-        """Keep the object, where it sits for the sentences, and the list they go to."""
         self.raw = raw if isinstance(raw, dict) else {}
         self.where, self.problems = where, problems
         if not isinstance(raw, dict):
             problems.append(f"{where} is not an object")
 
     def say(self, problem: str) -> None:
-        """Add a sentence about this object."""
         self.problems.append(f"{self.where} {problem}")
 
     def known(self, fields: tuple[str, ...], which: str) -> None:
-        """Say which fields are not among ``fields``; ``which`` ends the sentence."""
         unknown = sorted(set(self.raw) - set(fields))
         if unknown:
             self.say(f"names {', '.join(unknown)}, {which}")
 
     def text(self, key: str, *, required: bool = True) -> str:
-        """The field as a non-empty text, or ``""``."""
         value = self.raw.get(key)
         if isinstance(value, str) and value.strip():
             return value
@@ -185,7 +123,6 @@ class Shape:
         return ""
 
     def texts(self, key: str) -> tuple[str, ...]:
-        """The field as a list of non-empty texts; absent is empty."""
         value = self.raw.get(key, [])
         if isinstance(value, list) and all(isinstance(item, str) and item for item in value):
             return tuple(str(item) for item in value)
@@ -193,7 +130,6 @@ class Shape:
         return ()
 
     def table(self, key: str) -> tuple[tuple[str, object], ...]:
-        """The field as an object's pairs; absent is empty."""
         value = self.raw.get(key, {})
         if isinstance(value, dict):
             return tuple((str(name), item) for name, item in value.items())
@@ -201,7 +137,6 @@ class Shape:
         return ()
 
     def text_table(self, key: str) -> tuple[tuple[str, str], ...]:
-        """The field as an object of texts; absent is empty."""
         pairs = self.table(key)
         if all(isinstance(value, str) for _, value in pairs):
             return tuple((name, str(value)) for name, value in pairs)
@@ -259,7 +194,6 @@ def parse_action(shape: Shape) -> Action:
 
 
 def parse(raw: object, where: str = "a kept check") -> tuple[Check | None, list[str]]:
-    """The check, or ``None`` and why not; ``where`` names it in each sentence."""
     problems: list[str] = []
     shape = Shape(raw, where, problems)
     ident = shape.text("id")
@@ -295,21 +229,16 @@ def parse(raw: object, where: str = "a kept check") -> tuple[Check | None, list[
 
 @dataclass(frozen=True)
 class Target:
-    """The product a check runs against, and the value ``{unique}`` stands for in this run."""
-
     base: str
     unique: str
 
     def fill(self, text: str) -> str:
-        """``text`` with ``{BASE_URL}`` and ``{unique}`` replaced."""
         return text.replace(BASE, self.base).replace(UNIQUE, self.unique)
 
     def pairs(self, pairs: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
-        """Each value filled."""
         return tuple((name, self.fill(value)) for name, value in pairs)
 
     def expect(self, expect: Expect) -> Expect:
-        """Every text the expectation names, filled."""
         return Expect(
             status=expect.status,
             headers=self.pairs(expect.headers),
@@ -320,7 +249,6 @@ class Target:
 
 
 def unmet(expect: Expect, answer: tuple[int, http.client.HTTPMessage, bytes]) -> str | None:
-    """Why the response does not show what ``expect`` asks, or ``None``."""
     status, headers, body = answer
     if expect.status is not None and status != expect.status:
         return f"answered {status}, expected {expect.status}"
@@ -394,7 +322,6 @@ SEE = "document.body !== null && document.body.innerText.includes(%s)"
 
 
 def probe(action: Action, target: Target) -> tuple[str, str]:
-    """The expression that is ``true`` once ``action`` is done or holds, and what failing means."""
     said = json.dumps(target.fill(action.target))
     if action.kind == "fill":
         value = json.dumps(target.fill(action.value))
@@ -444,10 +371,6 @@ def run_browser(check: BrowserCheck, target: Target, profile: Path) -> Result:
 
 
 def run(check: Check, base: str, scratch: Path) -> Result:
-    """How ``check`` ran against the product at ``base``.
-
-    ``scratch`` is an empty directory the browser may use; the caller removes it.
-    """
     target = Target(base.rstrip("/"), secrets.token_hex(6))
     if isinstance(check, HttpCheck):
         return run_http(check, target)

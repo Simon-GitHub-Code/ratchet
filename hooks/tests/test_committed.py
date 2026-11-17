@@ -1,5 +1,3 @@
-"""The committed manifest: which ref is the default branch, and what it carries."""
-
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path

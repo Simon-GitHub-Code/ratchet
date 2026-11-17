@@ -1,9 +1,3 @@
-"""The mutation gate: zero unregistered survivors and no stale register entry, for any tool.
-
-The plugin reads one input (ADR 0050): JSON lines, one object per mutant. A tool's own report is
-the project's to convert.
-"""
-
 import hashlib
 import io
 import json
@@ -16,8 +10,6 @@ from tests.repos import branch, commit, repository, write
 
 Out = pytest.CaptureFixture[str]
 
-# Why: a real mutation tool's run over the crate whose one file is `lib.rs`, converted once to the
-# neutral lines; the per-phase logs, which name the machine's paths, are cut from each outcome.
 CARGO = Path(__file__).parent / "fixtures/cargo-mutants"
 RUST = "src/lib.rs"
 UNTESTED_MINUS = "src/lib.rs:BinaryOperator:-@2:11-2:12"
@@ -51,10 +43,6 @@ def run(root: Path, *flags: str) -> int:
 def twin_report(
     root: Path, places: list[tuple[int, int, str]], *, header: str = "", path: str = "src/a.src"
 ) -> list[gate.Mutant]:
-    """Mutants of one mutator and replacement in ``add``, at (line, column, status) of SOURCE_TEXT.
-
-    ``header`` is prepended to the source and every line moves with it.
-    """
     moved = header.count("\n")
     lines = [
         json.dumps(
@@ -77,9 +65,6 @@ def twin_report(
 
 def any_tool(root: Path, *flags: str) -> int:
     return run(root, "--tool", "any-tool", "--mutants", "mutants.jsonl", *flags)
-
-
-# --- the register ---------------------------------------------------------------------------
 
 
 def test_malformed_register_entries_are_named(tmp_path: Path) -> None:
@@ -111,9 +96,6 @@ def test_malformed_register_entries_are_named(tmp_path: Path) -> None:
         ["quality/mutation-register.toml: survivor 1: not a table"],
     )
     assert gate.entries(tmp_path / "elsewhere") == ([], [])
-
-
-# --- the unit and the identity ---------------------------------------------------------------
 
 
 def test_unit_hash_covers_the_enclosing_top_level_declaration() -> None:
@@ -254,20 +236,13 @@ def test_entries_match_survivors_one_to_one(tmp_path: Path, capsys: Out) -> None
     assert f"{first.identity}: register entry is stale" in capsys.readouterr().out
 
 
-# --- the scope of a changed-code run --------------------------------------------------------
-
-
 def test_changed_scope_without_history_lists_the_tree(tmp_path: Path, capsys: Out) -> None:
     root = repository(tmp_path, {"src/a.src": "x", "b.txt": "y"})
     assert run(root, "--tool", "any-tool", "--changed") == 0
     assert capsys.readouterr().out == "b.txt\nsrc/a.src\n"
 
 
-# --- any tool, through the tool-neutral input -----------------------------------------------
-
-
 def cargo_records(*, shift: int = 0, units: bool = True) -> str:
-    """The fixture's records, ``shift`` lines down, with or without the unit each names."""
     moved = []
     for line in (CARGO / "mutants.jsonl").read_text(encoding="utf-8").splitlines():
         record = json.loads(line)
@@ -281,7 +256,6 @@ def cargo_records(*, shift: int = 0, units: bool = True) -> str:
 
 
 def crate(root: Path, *, header: str = "", records: str | None = None) -> list[gate.Mutant]:
-    """The fixture crate under ``root`` with its mutants file; the mutants the gate reads."""
     source = (CARGO / "lib.rs").read_text(encoding="utf-8")
     write(root, RUST, header + source)
     text = cargo_records(shift=header.count("\n")) if records is None else records

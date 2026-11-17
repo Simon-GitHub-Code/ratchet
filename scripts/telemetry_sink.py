@@ -1,37 +1,4 @@
 #!/usr/bin/env python3
-"""The telemetry gate: does a service's telemetry arrive? Answered with no collector to install.
-
-It listens on a local port as an OTLP/HTTP receiver, runs a command with the exporter pointed at
-itself, and is green only when every required signal arrived non-empty and names the expected
-``service.name``. Python 3.11 standard library only.
-
-Usage::
-
-    telemetry_sink.py --service NAME [--require traces,metrics,logs] [--wait S] [--port N] -- cmd...
-
-The command is typically a service booted by ``with_service.py`` and a request against it, in
-one line: ``telemetry_sink.py --service api -- with_service.py --boot ... --ready ... -- curl ...``.
-
-The command runs with ``OTEL_EXPORTER_OTLP_ENDPOINT`` set to the sink and the per-signal endpoint
-variables removed, so nothing in the project's environment redirects the export. When unset,
-``OTEL_EXPORTER_OTLP_PROTOCOL`` becomes ``http/protobuf`` and the batch, log and metric export
-intervals drop to a fraction of a second, so a short run exports before it ends. After the
-command the sink waits up to ``--wait`` seconds (10) for what is still missing, then judges. The
-SDK must flush on a clean shutdown, as the OTLP SDKs do.
-
-``/v1/traces``, ``/v1/metrics`` and ``/v1/logs`` take protobuf or JSON, gzip or plain, with a
-length or chunked. The protobuf is walked by hand for the two facts asked: the ``service.name``
-resource attribute and the number of spans, metrics or log records under it. A red line says
-which failed: nothing arrived, only empty exports arrived, or the signal named another service
-(``unknown_service:python`` is an SDK never told its name).
-
-What it does not check: it is not a schema validator. It does not read span names, attributes,
-metric values, trace ids or the link from a log to its trace; the tier 1 telemetry tests do. It
-runs no collector, so nothing is forwarded, retried or sampled. An exporter that speaks gRPC only
-reaches nothing here: set ``OTEL_EXPORTER_OTLP_PROTOCOL`` to ``http/protobuf`` or ``http/json``.
-It listens on loopback, so a service in a container needs a network that reaches the host.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -67,7 +34,6 @@ Block = tuple[str | None, int]
 
 
 def varint(data: bytes, pos: int) -> tuple[int, int]:
-    """The integer at ``pos`` and the position after it."""
     value = shift = 0
     while pos < len(data):
         byte = data[pos]
@@ -81,7 +47,6 @@ def varint(data: bytes, pos: int) -> tuple[int, int]:
 
 
 def fields(data: bytes) -> Iterator[tuple[int, bytes]]:
-    """Each length-delimited field of a protobuf message as (number, bytes); scalars are skipped."""
     pos = 0
     while pos < len(data):
         key, pos = varint(data, pos)
@@ -103,7 +68,6 @@ def fields(data: bytes) -> Iterator[tuple[int, bytes]]:
 
 
 def proto_service(resource: bytes) -> str | None:
-    """``service.name`` of a Resource message: KeyValue.key is field 1, its AnyValue field 2."""
     for number, pair in fields(resource):
         if number != 1:
             continue
@@ -114,12 +78,6 @@ def proto_service(resource: bytes) -> str | None:
 
 
 def proto_blocks(data: bytes) -> list[Block]:
-    """The (service.name, record count) of each resource block.
-
-    The three Export*ServiceRequest messages share a shape: field 1 repeats the resource block,
-    whose field 1 is the Resource and whose field 2 repeats a scope block, whose field 2 repeats
-    the spans, metrics or log records.
-    """
     blocks: list[Block] = []
     for number, block in fields(data):
         if number != 1:
@@ -143,7 +101,6 @@ def mapping(value: object) -> dict[str, object]:
 
 
 def json_blocks(signal: str, data: bytes) -> list[Block]:
-    """The same blocks from an OTLP/JSON body."""
     top, scope, record = JSON_KEYS[signal]
     blocks: list[Block] = []
     for block in items(mapping(json.loads(data)).get(top)):
@@ -160,7 +117,6 @@ def json_blocks(signal: str, data: bytes) -> list[Block]:
 
 
 def read_body(handler: BaseHTTPRequestHandler) -> bytes:
-    """The request body, de-chunked and un-gzipped."""
     if "chunked" in handler.headers.get("Transfer-Encoding", "").lower():
         chunks = []
         while size := int(handler.rfile.readline().split(b";")[0], 16):
@@ -174,12 +130,9 @@ def read_body(handler: BaseHTTPRequestHandler) -> bytes:
 
 
 class Handler(BaseHTTPRequestHandler):
-    """Takes an OTLP export, files its blocks under the signal, answers an empty success."""
-
     server: Receiver
 
     def do_POST(self) -> None:
-        """File one OTLP export under its signal."""
         signal = PATHS.get(self.path.split("?")[0])
         if signal is None:
             self.send_error(404)
@@ -202,21 +155,17 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(reply)
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002 # -- the override
-        """Say nothing: the verdict is the output."""
+        ...
 
 
 class Receiver(ThreadingHTTPServer):
-    """The OTLP/HTTP endpoint and what it was sent."""
-
     def __init__(self, port: int) -> None:
-        """Bind the loopback interface; port 0 lets the kernel pick."""
         super().__init__(("127.0.0.1", port), Handler)
         self.lock = threading.Lock()
         self.blocks: dict[str, list[Block]] = {name: [] for name in SIGNALS}
         self.rejected: list[str] = []
 
     def judge(self, required: list[str], service: str) -> list[str]:
-        """What is still missing: one line per required signal that has not arrived as asked."""
         with self.lock:
             seen = {name: list(self.blocks[name]) for name in required}
         problems: list[str] = []
@@ -232,7 +181,6 @@ class Receiver(ThreadingHTTPServer):
 
 
 def exporter_env(port: int) -> dict[str, str]:
-    """The environment that points an OTLP SDK at the sink."""
     own = {f"OTEL_EXPORTER_OTLP_{name.upper()}_ENDPOINT" for name in SIGNALS}
     env = {key: value for key, value in os.environ.items() if key not in own}
     env["OTEL_EXPORTER_OTLP_ENDPOINT"] = f"http://127.0.0.1:{port}"
@@ -243,11 +191,6 @@ def exporter_env(port: int) -> dict[str, str]:
 
 
 def serve(receiver: Receiver) -> None:
-    """Answer exports until shut down, on a thread an interrupt never lands on.
-
-    Why: the kernel hands a signal sent to the process to any thread that does not block it, and
-    Python runs the handler only on the main thread, which sleeps until the command exits.
-    """
     signal.pthread_sigmask(signal.SIG_BLOCK, gatelib.INTERRUPTS)
     receiver.serve_forever(0.02)
 

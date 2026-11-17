@@ -1,5 +1,3 @@
-"""The route reads the formal model's upkeep and a defect ticket from the binding and branches."""
-
 from pathlib import Path
 
 import pytest

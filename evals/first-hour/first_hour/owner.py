@@ -1,12 +1,3 @@
-"""The scripted owner's answers: a small model classifies each question, the rule picks the answer.
-
-A question reaches the owner on one of three channels: a question dialog (``AskUserQuestion``), a
-turn that ends by asking the owner something in prose, or an ``also:`` line of the route that
-proposes a life event. The model call (in ``drive.py``) returns a verdict, parsed here; the rule
-is applied here, not trusted to the model: a ``default-able`` question takes the recommended
-option whenever one exists.
-"""
-
 from __future__ import annotations
 
 import json
@@ -29,15 +20,11 @@ QUESTION_TAIL = 800
 
 
 class Kind(StrEnum):
-    """Whether the answer needed the owner (``product``) or a default could have taken it."""
-
     PRODUCT = "product"
     DEFAULT_ABLE = "default-able"
 
 
 class Channel(StrEnum):
-    """How the question reached the owner."""
-
     DIALOG = "dialog"
     PROSE = "prose"
     ALSO = "also"
@@ -45,16 +32,12 @@ class Channel(StrEnum):
 
 @dataclass(frozen=True)
 class Option:
-    """One option of a question."""
-
     label: str
     description: str = ""
 
 
 @dataclass(frozen=True)
 class Question:
-    """One question put to the owner."""
-
     header: str
     text: str
     options: tuple[Option, ...]
@@ -62,7 +45,6 @@ class Question:
 
     @property
     def recommended(self) -> str | None:
-        """The label of the option marked recommended, by its label first, then its description."""
         for option in self.options:
             if RECOMMENDED.search(option.label):
                 return option.label
@@ -76,8 +58,6 @@ class Question:
 
 @dataclass(frozen=True)
 class Verdict:
-    """The model's reading of one question: its class and the owner's pick in character."""
-
     kind: Kind
     picks: tuple[str, ...]
     reason: str
@@ -85,8 +65,6 @@ class Verdict:
 
 @dataclass(frozen=True)
 class Answer:
-    """What the owner answered, and whether the recommended option existed and was taken."""
-
     question: Question
     kind: Kind
     text: str
@@ -95,7 +73,6 @@ class Answer:
     reason: str
 
     def event(self, channel: Channel) -> dict[str, object]:
-        """The answer as one event of the run's log."""
         return {
             "kind": "question",
             "channel": channel.value,
@@ -113,8 +90,6 @@ class Answer:
 
 @dataclass(frozen=True)
 class Reply:
-    """The owner's reading of a turn's last message: whether it asks them something, and what."""
-
     needs_reply: bool
     kind: Kind
     text: str
@@ -122,7 +97,6 @@ class Reply:
 
 
 def questions_of(tool_input: dict[str, object]) -> list[Question]:
-    """The questions of one ``AskUserQuestion`` call's input."""
     found = []
     raw = tool_input.get("questions")
     for item in raw if isinstance(raw, list) else []:
@@ -166,7 +140,6 @@ def _as_dict(raw: object) -> dict[str, object]:
 
 
 def parse_verdict(raw: object) -> Verdict:
-    """The model's verdict on a question, from its structured output or its text."""
     data = _as_dict(raw)
     picks = data.get("answer")
     if isinstance(picks, str):
@@ -179,7 +152,6 @@ def parse_verdict(raw: object) -> Verdict:
 
 
 def parse_reply(raw: object) -> Reply:
-    """The model's reading of a turn's last message."""
     data = _as_dict(raw)
     kind = _kind(data.get("class", Kind.DEFAULT_ABLE.value))
     needs = bool(data.get("needs_reply"))
@@ -192,20 +164,17 @@ def _norm(text: str) -> str:
 
 
 def names(pick: str, label: str) -> bool:
-    """Whether the owner's pick names this option: its label, alone or before its description."""
     wanted, have = _norm(pick), _norm(label)
     rest = wanted.removeprefix(have)
     return bool(have) and wanted.startswith(have) and not rest[:1].isalnum()
 
 
 def label_for(labels: Iterable[str], pick: str) -> str | None:
-    """The option a pick names; of several the longest: "Accept, keep it local" is not "Accept"."""
     matches = [label for label in labels if names(pick, label)]
     return max(matches, key=len) if matches else None
 
 
 def took(labels: Iterable[str], answer: str, recommended: str | None) -> bool:
-    """Whether an answer is the recommended option."""
     return recommended is not None and label_for([*labels, recommended], answer) == recommended
 
 
@@ -214,12 +183,6 @@ def _label(question: Question, pick: str) -> str | None:
 
 
 def answer(question: Question, verdict: Verdict) -> Answer:
-    """Apply the owner's rule to a verdict.
-
-    A default-able question takes the recommended option when there is one. Otherwise the
-    owner's picks are matched to the labels; a product question may answer in its own words,
-    and a default-able one with no recommendation and no matching pick takes the first option.
-    """
     recommended = question.recommended
     labels = [label for pick in verdict.picks if (label := _label(question, pick))]
     if verdict.kind is Kind.DEFAULT_ABLE and recommended is not None:
@@ -243,7 +206,6 @@ def answer(question: Question, verdict: Verdict) -> Answer:
 
 
 def life_event_question(line: str) -> tuple[str, Question] | None:
-    """The event an ``also:`` line proposes, as a question; ``None`` for other ``also:`` lines."""
     match = re.search(r"a sign that the project is `([a-z-]+)` \(([^)]*)\)", line)
     if match is None:
         return None
@@ -301,12 +263,10 @@ Reply with JSON only.
 
 
 def system_prompt(persona: Persona) -> str:
-    """The owner model's standing instructions: the persona, then the rule."""
     return f"{RULES}\nYour idea: {persona.idea}\n\nWho you are:\n{persona.profile}\n"
 
 
 def question_prompt(question: Question) -> str:
-    """One question, as the owner model reads it."""
     options = "\n".join(
         f"- {o.label}" + (f": {o.description}" if o.description else "") for o in question.options
     )
@@ -320,12 +280,6 @@ def question_prompt(question: Question) -> str:
 
 
 def prose_question(turn: str, reply: Reply) -> dict[str, object]:
-    """A turn that ended by asking the owner something, as one event of the run's log.
-
-    The recommendation is whatever the turn's tail says it recommends; the owner took it when the
-    question was default-able, since a default-able reply is "go ahead with what you recommend".
-    ``read`` is the text the owner model was given, whole.
-    """
     offered = bool(RECOMMENDED.search(turn[-OFFER_TAIL:]))
     return {
         "kind": "question",
@@ -343,7 +297,6 @@ def prose_question(turn: str, reply: Reply) -> dict[str, object]:
 
 
 def turn_prompt(text: str) -> str:
-    """A turn's last message, as the owner model reads it to decide whether it must reply."""
     tail = text[-TURN_TAIL:]
     return (
         "The assistant finished its turn with this message:\n\n<<<\n"

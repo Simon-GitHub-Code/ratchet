@@ -1,23 +1,4 @@
 #!/usr/bin/env python3
-"""Run the test files a change adds or edits, in every suite that can run them (ADR 0073).
-
-The binding's suites table (``## Tests``) says which globs make a suite, the gate that runs it
-whole, and the recipe that runs given files of it. This lists the test files the change adds or
-edits against the base: tracked changes and the files git would add, never a deleted file. It sorts
-them by suite and runs each suite's files through its recipe, so a role, a developer and CI run
-a suite's files with the environment and the build of the gate itself.
-
-By default it runs the suites whose whole run sits in a later tier than tier 1, since the tier's
-own gates run the others whole; where none does, every suite. ``all`` runs every suite's changed
-files. A suite that has no way to run files says why and is not run. A file that two suites
-claim is red: which suite it belongs to is the binding's to say.
-
-Usage: ``changed_tests.py [--root DIR] [--base COMMIT] [all]``. The base is the one every gate
-over the change takes (``gatelib.base_commit``). Exits 0 when every run was green or no test file
-of a suite in scope changed, 1 when a suite's run failed or the table does not read, and 127 when a
-recipe cannot start.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -42,7 +23,6 @@ def listed(root: Path, *args: str) -> list[str]:
 
 
 def changed_files(root: Path, base: str) -> list[str]:
-    """The files the change adds or edits since ``base``, and the files git would add."""
     tracked = listed(root, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=d", base)
     new = listed(root, "ls-files", "-z", "--others", "--exclude-standard")
     return sorted(name for name in {*tracked, *new} if (root / name).is_file())
@@ -62,7 +42,6 @@ def in_scope(
 def sort(
     found: list[str], scoped: list[suites.Suite], every: list[suites.Suite]
 ) -> tuple[dict[str, list[str]], list[str]]:
-    """Each in-scope suite's changed files, and a line for each file two suites claim."""
     by_suite: dict[str, list[str]] = {suite.name: [] for suite in scoped}
     clashes: list[str] = []
     for path in found:

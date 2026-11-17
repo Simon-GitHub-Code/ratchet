@@ -1,6 +1,5 @@
 import * as c from "./view_common.mjs";
 
-// Drawn from DrainWork, whole: ticket c's tree, where the agent leaves work uncommitted.
 export const title = "Uncommitted work in a ticket's tree, and a kill of close";
 export const state = (v) => {
   if (v.treeC !== "none" && v.discardingC) return "Parked, its tree not yet removed";

@@ -1,16 +1,3 @@
-"""The Bash corpus: commands the guard must deny, must ask about, and must leave alone.
-
-Each row is a command run in ``/repo`` on branch ``feat/work`` with an unpushed HEAD (see
-``support``), and the exact set of rule ids expected to fire. The ``DENIED``, ``ASKED`` and
-``ALLOWED`` tables are reused by the Hypothesis properties in ``test_properties``.
-
-``P`` marks a write to a guard path the merge judge reads (ADR 0033): on ``feat/work`` it fires
-nothing, since the change reaches the default branch only through a merge, and on ``main`` it is
-refused. A row is judged on the branch without ``P``, and on ``main`` with it. ``A`` and ``F`` mark
-a write of an agent-instruction file or a CI workflow, which acts before any merge: the owner is
-asked on every branch.
-"""
-
 from pathlib import Path
 
 import pytest
@@ -30,7 +17,6 @@ F = "workflow-write"
 
 
 def on_a_branch(expected: list[str]) -> list[str]:
-    """What a row expects on ``feat/work``: a write the merge judges is not refused there."""
     return [rule for rule in expected if rule != P]
 
 
@@ -942,11 +928,6 @@ ASKED: list[tuple[str, list[str]]] = [
     ("bash -c 'gh issue edit 4 --add-label agent:ready'", ["agent-ready-label"]),
 ]
 
-# A directory the guard cannot resolve, then a relative write that is a guard path in an adopted
-# repository, which repository it is cannot be told. The session's own manifest here guards
-# nothing, as when the session works in another repository (ADR 0024). The shell may be in any
-# checkout, one on its default branch among them, so the write is refused on a branch too (ADR
-# 0033).
 UNRESOLVED = U
 LOST = "sed -i s/a/b/ .github/workflows/ci.yml"
 ASKED_ELSEWHERE: list[str] = [
@@ -1737,9 +1718,6 @@ def test_a_write_that_is_no_guard_path_after_such_a_directory_is_not_asked(comma
     assert rules(command, make_guard(manifest=EMPTY)) == []
 
 
-# Run in /repo/app: each line moves the shell, or may, in a way the line does not spell out as a
-# `cd` the guard can read, and then writes the root's justfile. As in the tables above, a row is
-# judged on the branch without ``P``, and on ``main`` with it.
 FROM_APP: list[tuple[str, list[str]]] = [
     ("eval 'cd ..'; echo x > justfile", [UNRESOLVED]),
     ('eval "(cd ..); cd .."; echo x > justfile', [UNRESOLVED]),
@@ -1751,7 +1729,6 @@ FROM_APP: list[tuple[str, list[str]]] = [
     ("shopt -s expand_aliases; alias up='cd ..'\nup; echo x > justfile", [UNRESOLVED]),
     ("function f { cd ..; }; f; echo x > justfile", [P, UNRESOLVED]),
     ("f() { cd ..; }; f; echo x > justfile", [P, UNRESOLVED]),
-    # Why: `HOME=/x cd` goes to /x, as does `cd ~` once the line has set HOME.
     ("HOME=/repo cd; echo x > justfile", [P, UNRESOLVED]),
     ("HOME=/repo builtin cd; rm -f justfile", [P, UNRESOLVED]),
     ("HOME=/repo; cd ~ && echo x > justfile", [P, UNRESOLVED]),
@@ -1759,7 +1736,6 @@ FROM_APP: list[tuple[str, list[str]]] = [
     ("HOME=/ ; cd ~/repo && echo x > justfile", [P, UNRESOLVED]),
     ("HOME=$1 cd; echo x > justfile", [UNRESOLVED]),
     ("CDPATH=/ cd repo; echo x > justfile", [UNRESOLVED]),
-    # Why: bash falls back to the target as written, so that reading stays among the others.
     ("CDPATH=/tmp cd ..; echo x > justfile", [P, UNRESOLVED]),
     ("export CDPATH=/tmp; cd sub && rm -f ../../justfile", [P, UNRESOLVED]),
     ("HOME=/tmp; cd ~/../../repo && rm -f justfile", [P, UNRESOLVED]),
@@ -1771,22 +1747,16 @@ FROM_APP: list[tuple[str, list[str]]] = [
     ("(cd ..; ( cd app ); cp notes.md justfile)", [P]),
     ("cd ..;>justfile", [P]),
     ('echo "$(echo case)"; rm -f ../justfile', ["unreadable"]),
-    # Why: posix mode and sh read a `'` in a quoted `${x-...}` as a character, bash as a quote.
     ('set -o posix\necho "${x:-\'}"; echo x > ../justfile #\'}"', [P, "unreadable"]),
     ("echo \"${x:-'}\"'}\"; rm -f ../justfile; echo '", ["unreadable"]),
-    # Why: sh reads `$'a\'` as `$` and a quote that the escaped quote ends.
     ("sh <<'E'\necho $'a\\'; rm -f ../justfile #'\nE", [P, "unreadable"]),
     ("echo $'\\''; rm -f ../justfile; echo ''", ["unreadable"]),
-    # Why: bash may end a `${ cmd; }` at a `}` after a compound command or a redirect.
     ("cd ..${ :; { :; } }; rm -rf quality\n}", ["unreadable", UNRESOLVED]),
     ("cd ..${ : >}; rm -rf quality }", [UNRESOLVED]),
-    # Why: inside backticks, an escaped backtick opens a nested substitution, ending nothing.
     (": `: \\`;(`; : \\`; cd ..; : `: \\`;)`; : \\`; echo x > justfile", [P, "unreadable"]),
     ("echo `echo \\`echo ok\\``; cd ..; echo x > justfile", [P]),
-    # Why: `$[ ... ]` is an arithmetic expansion, so a parenthesis in it opens no subshell.
     (": $[\n( ]\ncd ..\n: $[\n) ]\necho x > justfile", [P]),
     ("echo $[ 1 << 2 ]; cd ..; echo x > justfile", [P]),
-    # Why: on a line the guard does not model, a `cd` in a pipeline is read as staying in force.
     ("case a in a) :;; esac; cd .. | cat; echo x > justfile", [P]),
     ("eval :; cd .. & echo x > justfile", [P, UNRESOLVED]),
 ]
@@ -1809,8 +1779,6 @@ def test_a_tilde_beside_a_home_assignment_is_the_home_from_before_it() -> None:
     assert rules("HOME=/repo cd ~; echo x > justfile", guard, cwd=ROOT / "app") == [UNRESOLVED]
 
 
-# A session in one checkout whose line `cd`s into another: the write is judged by the checkout that
-# holds the file, not by the one the session started in.
 PY_WRITES_JUSTFILE = "python3 - <<'EOF'\nopen('justfile', 'w').write('x')\nEOF"
 
 

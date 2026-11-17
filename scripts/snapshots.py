@@ -1,15 +1,4 @@
 #!/usr/bin/env python3
-"""The snapshots gate: every config the manifest lists is recorded, and the record matches.
-
-The files in the manifest's ``tool-config`` group are the gate tools' configs it knows of; a
-config the group does not list is neither copied nor checked, so loosening it shows nowhere.
-``--write`` copies each into ``quality/snapshots/`` (the path's slashes become ``__``), which is a
-ratchet path, so a config change shows up as a guard-path change with a diff a reviewer can read.
-``--check`` regenerates the set and fails on any snapshot that differs, is missing or is stale.
-
-Usage: ``snapshots.py [--root DIR] [--group NAME] (--write | --check)``.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -25,7 +14,6 @@ GROUP = "tool-config"
 
 
 def patterns(root: Path, group: str) -> list[str] | None:
-    """The group's repository-relative patterns, or ``None`` when the manifest lacks the group."""
     path = root / MANIFEST
     if not path.is_file():
         return None
@@ -44,7 +32,6 @@ def snapshot_name(path: str) -> str:
 
 
 def expected(root: Path, group: str) -> dict[str, str] | None:
-    """Snapshot name to content for every tracked file the group covers."""
     found = patterns(root, group)
     if found is None:
         return None
