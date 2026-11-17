@@ -983,6 +983,24 @@ def test_a_red_tier_2_on_the_default_branch_stops_the_merge(root: Path) -> None:
     ]
 
 
+def test_a_red_tier_1_on_the_default_branch_stops_the_merge(
+    root: Path, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    red = "is red on `main`: that is the next piece of work, and the owner merges what fixes it"
+    change(root, {"src/a.py": "x = 2\n"})
+    assert judged(root, tier1="green", tier2="green") == []
+    both = [f"tier1: tier 1 {red}", f"tier2: tier 2 {red}"]
+    assert judged(root, tier1="red", tier2="red") == both
+    report = tmp_path / "comment.md"
+    arguments = ["merge_ready", "--root", str(root), "--current", "--report", str(report)]
+    capsys.readouterr()
+    assert merge_ready.main([*arguments, "--tier1", "green"]) == 0
+    assert merge_ready.main([*arguments, "--tier1", "red"]) == 1
+    out = capsys.readouterr().out.splitlines()
+    assert out == ["merge: agent", "merge: owner", f"tier1: tier 1 {red}"]
+    assert f"- `tier1`: tier 1 {red}\n" in report.read_text(encoding="utf-8")
+
+
 # --- failing closed ---------------------------------------------------------------------------
 
 

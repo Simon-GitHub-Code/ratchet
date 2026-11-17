@@ -414,13 +414,46 @@ def test_tier_2_that_cannot_be_read_is_red(
     assert deep(tmp_path, capsys, runs) == "red"
 
 
-def test_more_runs_than_one_page_holds_still_read_the_newest_page(
+def tier1(root: Path, capsys: pytest.CaptureFixture[str], runs: str) -> str:
+    argv = ["tier1", "--tip", "main", "--repository", REPO, "--root", str(root)]
+    assert forge_runs.main(argv, runs) == 0
+    return capsys.readouterr().out.strip()
+
+
+def test_tier_1_is_the_newest_ci_a_push_started_on_the_commit_nearest_the_tip(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     at = history(tmp_path)
+    later = "2026-11-12T12:00:00Z"
+    assert tier1(tmp_path, capsys, page()) == "none"
+    assert tier1(tmp_path, capsys, page(tier2(at["tip"]))) == "green"
+    assert tier1(tmp_path, capsys, page(tier2(at["tip"], "failure"))) == "red"
+    behind = page(tier2(at["first"]), tier2(at["second"], "failure"))
+    assert tier1(tmp_path, capsys, behind) == "red"
+    twice = page(tier2(at["tip"], "failure"), tier2(at["tip"], created_at=later, id=2))
+    assert tier1(tmp_path, capsys, twice) == "green"
+
+
+@pytest.mark.parametrize("event", ["pull_request", "schedule", "workflow_dispatch"])
+def test_a_ci_run_no_push_started_is_not_tier_1_on_the_default_branch(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], event: str
+) -> None:
+    at = history(tmp_path)
+    red = tier2(at["tip"], "failure", event=event)
+    assert tier1(tmp_path, capsys, page(red)) == "none"
+    assert tier1(tmp_path, capsys, page(red, tier2(at["second"]))) == "green"
+
+
+@pytest.mark.parametrize("command", ["tier1", "deep"])
+def test_more_runs_than_one_page_holds_still_read_the_newest_page(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], command: str
+) -> None:
+    at = history(tmp_path)
+    argv = [command, "--tip", "main", "--repository", REPO, "--root", str(tmp_path)]
 
     def state(*runs: object) -> str:
-        return deep(tmp_path, capsys, json.dumps({"total_count": 250, "workflow_runs": runs}))
+        assert forge_runs.main(argv, json.dumps({"total_count": 250, "workflow_runs": runs})) == 0
+        return capsys.readouterr().out.strip()
 
     assert state(tier2(at["tip"]), tier2(at["second"], "failure")) == "green"
     assert state(tier2(at["tip"], "failure"), tier2(at["second"])) == "red"

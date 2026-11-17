@@ -120,6 +120,10 @@ MERGE_SHAPE = (
     ("workflow_run:", "runs it after `ci`, as the default branch holds it"),
     ("merge_ready.py", "asks the merge judge"),
     ("forge_runs.py", "says which `ci` and `deep` runs count (ADR 0024)"),
+    (
+        "--tier1",
+        "leaves every merge to the owner while `ci` is red on the default branch (ADR 0069)",
+    ),
     ("issues: write", "may close the issues a merged change says it closes"),
     ("closingIssuesReferences", "closes the issues a merged change says it closes"),
     ("contents: write", "may merge what the judge passes"),

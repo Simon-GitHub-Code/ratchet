@@ -715,6 +715,8 @@ if args[:2] == ["pr", "list"]:
     print("\\n".join(world["open"]))
 elif path.endswith("/workflows/deep.yml/runs"):
     print(json.dumps(world["deep"]))
+elif path.endswith("/workflows/ci.yml/runs") and "branch" in fields:
+    print(json.dumps(world["tier1"]))
 elif path.endswith("/workflows/ci.yml/runs"):
     print(json.dumps(world["ci"][fields["head_sha"]]))
 elif path.endswith("/pulls") and "GET" in args:
@@ -747,7 +749,7 @@ MERGE_STEP = re.compile(
     r"      - name: Judge every green.*\n        run: \|\n((?:          .*\n)+)"
 )
 OURS = {"full_name": "owner/repo"}
-TIER2 = {"event": "push", "status": "completed", "conclusion": "success", "head_sha": "f" * 40}
+ON_THE_TIP = {"event": "push", "status": "completed", "conclusion": "success", "head_sha": "f" * 40}
 
 
 def one_pull(number: int, sha: str, branch: str, *, base: str = "main") -> dict[str, object]:
@@ -778,7 +780,8 @@ def forge(heads: dict[int, tuple[str, str]]) -> dict[str, Any]:
     """A forge where every pull request in ``heads`` is green, alone on its branch and unmoved."""
     return {
         "open": [f"{n} {sha} {branch} main" for n, (sha, branch) in heads.items()],
-        "deep": {"total_count": 1, "workflow_runs": [{**TIER2, "head_repository": OURS}]},
+        "deep": {"total_count": 1, "workflow_runs": [{**ON_THE_TIP, "head_repository": OURS}]},
+        "tier1": {"total_count": 1, "workflow_runs": [{**ON_THE_TIP, "head_repository": OURS}]},
         "ci": {sha: ci_runs(n, sha, branch) for n, (sha, branch) in heads.items()},
         "pulls": {branch: [one_pull(n, sha, branch)] for n, (sha, branch) in heads.items()},
         "events": {},
@@ -863,7 +866,7 @@ def test_the_merge_job_judges_every_green_pull_request_not_only_the_one_that_wok
     assert log.count("workflow run deep.yml --ref main") == 1
     judged = [line for line in log.splitlines() if line.startswith("judge ")]
     assert len(judged) == 5
-    assert all(" --tier2 green " in line for line in judged)
+    assert all(" --tier1 green --tier2 green " in line for line in judged)
     fetches = [line for line in log.splitlines() if line.startswith("git fetch")]
     assert fetches[0].endswith("+refs/heads/main:refs/remotes/origin/main")
     assert [line.split()[-1] for line in fetches[1:]] == ["aaaa", "bbbb", "dddd", "ffff", "gggg"]
@@ -873,6 +876,7 @@ def test_the_merge_job_counts_nothing_the_forge_did_not_answer(tmp_path: Path) -
     # Why: an answer that is missing or cut short must read as red, and never as green.
     world = forge({1: ("aaaa", "feat/a"), 2: ("bbbb", "feat/b"), 3: ("cccc", "feat/c")})
     del world["deep"]
+    del world["tier1"]
     del world["ci"]["aaaa"]
     del world["pulls"]["feat/b"]
     code, out, log = merge_job(tmp_path, world)
@@ -880,8 +884,24 @@ def test_the_merge_job_counts_nothing_the_forge_did_not_answer(tmp_path: Path) -
     assert "#1: the forge's answer could not be read: left alone" in out
     assert "#2: the forge's answer could not be read: left alone" in out
     judged = [line for line in log.splitlines() if line.startswith("judge ")]
-    assert [" --head cccc " in line and " --tier2 red " in line for line in judged] == [True]
+    assert [" --head cccc " in line and " --tier1 red --tier2 red " in line for line in judged] == [
+        True
+    ]
     assert log.count("-X PUT") == 1
+
+
+def test_the_merge_job_hands_the_judge_the_ci_a_push_started_on_the_default_branch(
+    tmp_path: Path,
+) -> None:
+    world = forge({1: ("aaaa", "feat/a"), 2: ("bbbb", "feat/b")})
+    world["tier1"]["workflow_runs"][0]["conclusion"] = "failure"
+    _, _, log = merge_job(tmp_path, world)
+    asked = [line for line in log.splitlines() if "ci.yml/runs" in line and "branch=main" in line]
+    assert len(asked) == 1
+    assert all(f" {field} " in f"{asked[0]} " for field in ("event=push", "status=completed"))
+    judged = [line for line in log.splitlines() if line.startswith("judge ")]
+    assert len(judged) == 2
+    assert all(" --tier1 red --tier2 green " in line for line in judged)
 
 
 def bodies(root: Path) -> dict[str, str]:

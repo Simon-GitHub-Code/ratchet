@@ -578,6 +578,7 @@ def test_only_what_git_sees_is_copied_and_a_link_stays_a_link(tmp_path: Path) ->
 
 ABSENT = re.compile(r"\('(.+?)' absent\)")
 BEFORE_ISSUES_CLOSE = "d2b36ab^"
+BEFORE_TIER_1_READ = "903d902"
 MERGE = ".github/workflows/merge.yml"
 
 
@@ -601,7 +602,7 @@ def test_an_upgrade_lists_a_finding_for_each_marker_the_old_workflows_lack(
         assert named == owed
 
 
-def test_a_merge_workflow_from_before_it_closed_issues_is_owed_both_markers(
+def test_a_merge_workflow_from_before_it_closed_issues_is_owed_every_marker_since(
     tmp_path: Path,
 ) -> None:
     root = fixture("0.9.2", tmp_path)
@@ -615,8 +616,23 @@ def test_a_merge_workflow_from_before_it_closed_issues_is_owed_both_markers(
     assert found == [
         f"nothing {meaning} ('{marker}' absent)"
         for marker, meaning in conformance.MERGE_SHAPE
-        if marker in {"issues: write", "closingIssuesReferences"}
+        if marker in {"--tier1", "issues: write", "closingIssuesReferences"}
     ]
+
+
+def test_a_merge_workflow_from_before_it_read_tier_1_on_the_default_branch_is_owed_that_read(
+    tmp_path: Path,
+) -> None:
+    root = fixture("0.9.2", tmp_path)
+    upgrade.apply(root, planned(root).changes)
+    template = (root / MERGE).read_text(encoding="utf-8")
+    old = adopted.history("show", f"{BEFORE_TIER_1_READ}:skills/adopt/templates/{MERGE}")
+    commit = re.search(r"ref: \"([0-9a-f]{40})\"", template)
+    assert commit
+    (root / MERGE).write_text(old.replace("<ratchet-sha>", commit.group(1)) + "\n")
+    found = [f.problem for f in conformance.findings(root) if f.path == MERGE]
+    [problem] = found
+    assert problem == f"nothing {dict(conformance.MERGE_SHAPE)['--tier1']} ('--tier1' absent)"
 
 
 def test_an_upgrade_owes_the_bite_all_ceiling_a_project_adopted_before_it_lacks(
