@@ -603,7 +603,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("action", choices=["expire", "cited", "stale", "passed", "prunable"])
     parser.add_argument("pages", nargs="*")
     parser.add_argument("--root", default=".")
-    options = parser.parse_args(argv[1:])
+    options = parser.parse_intermixed_args(argv[1:])
     root = Path(options.root).resolve()
     if options.action == "cited":
         if not options.pages:
