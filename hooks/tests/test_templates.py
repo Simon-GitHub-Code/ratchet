@@ -1065,8 +1065,12 @@ def test_the_binding_template_has_an_incremental_line_naming_the_justfile_variab
 
 HASH_COMMENTED = sorted(
     path
-    for root in ("skills/adopt/templates", "skills/init/templates", "skills/method")
-    for path in (PLUGIN_ROOT / root).rglob("*")
+    for root in (
+        TEMPLATES,
+        PLUGIN_ROOT / "skills/init/templates",
+        PLUGIN_ROOT / "skills/method",
+    )
+    for path in root.rglob("*")
     if path.is_file()
     and (path.suffix in {".yml", ".yaml", ".toml"} or path.name in {"justfile", "gitignore"})
 )
