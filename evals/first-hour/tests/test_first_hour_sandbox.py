@@ -62,6 +62,7 @@ def test_the_environment_is_built_from_nothing_but_the_locale(layout: sandbox.La
     assert "/operator/bin" not in env["PATH"]
     assert env["LANG"] == "C.UTF-8"
     assert env["ENABLE_CLAUDEAI_MCP_SERVERS"] == "false"
+    assert Path(env["GEM_HOME"]).parent == layout.home
     # Why: a longer socket path sends Claude Code's messaging socket to the shared /tmp/cc-socks,
     # so the runtime directory sits at the top of the temp location under a short name.
     assert env["XDG_RUNTIME_DIR"] == str(layout.runtime)
@@ -69,6 +70,33 @@ def test_the_environment_is_built_from_nothing_but_the_locale(layout: sandbox.La
     assert len(f"/tmp/{layout.runtime.name}/cc-socks/4194304.sock") <= 103
     assert layout.runtime.is_dir()
     assert layout.runtime.stat().st_mode & 0o777 == 0o700
+
+
+def test_a_given_toolchain_is_bound_read_only_and_on_path_after_the_runs_tools(
+    tmp_path: Path,
+) -> None:
+    with_bin, without_bin = tmp_path / "jdk", tmp_path / "sdk"
+    (with_bin / "bin").mkdir(parents=True)
+    without_bin.mkdir()
+    layout = sandbox.Layout(tmp_path / "run", (with_bin, without_bin))
+    sandbox.prepare(layout, {}, [])
+
+    path = sandbox.environment(layout, LEAKY)["PATH"].split(":")
+    assert path == [
+        str(layout.bin),
+        str(with_bin / "bin"),
+        str(without_bin),
+        str(layout.home / ".gem" / "bin"),
+        *sandbox.SYSTEM_PATH.split(":"),
+    ]
+    words = sandbox.argv(layout, ["true"])
+    binds = list(zip(words, words[1:], words[2:], strict=False))
+    for tree in (with_bin, without_bin):
+        assert ("--ro-bind", str(tree), str(tree)) in binds
+        assert not any(w == "--bind" and src == str(tree) for w, src, _ in binds)
+    assert all(
+        f"'--ro-bind' '{t}' '{t}'" in layout.shell.read_text() for t in (with_bin, without_bin)
+    )
 
 
 def test_the_sessions_own_settings_keep_forges_logged_out_and_connectors_off(
@@ -327,6 +355,42 @@ def test_a_toolchain_program_hidden_with_the_operators_home_runs_inside_read_onl
     assert ran.stdout.strip() == "hello from the toolchain", ran.stderr
     assert inside(layout, f"echo forged >> {tool}").returncode != 0
     assert "forged" not in tool.read_text()
+
+
+@needs_bwrap
+def test_a_given_toolchain_hidden_with_the_operators_home_runs_inside_ahead_of_the_system(
+    tmp_path: Path,
+) -> None:
+    jdk = tmp_path / "operator-home" / "installs" / "jdk"
+    sdk = tmp_path / "operator-home" / "installs" / "sdk"
+    for program in (jdk / "bin" / "python3", sdk / "hello"):
+        program.parent.mkdir(parents=True, exist_ok=True)
+        program.write_text(f"#!/bin/sh\necho {program.name} from the toolchain\n")
+        program.chmod(0o755)
+    layout = sandbox.Layout(tmp_path / "run", (jdk, sdk))
+    sandbox.prepare(layout, {}, [])
+
+    assert inside(layout, "python3").stdout.strip() == "python3 from the toolchain"
+    assert inside(layout, "hello").stdout.strip() == "hello from the toolchain"
+    for tree in (jdk, sdk):
+        assert inside(layout, f"touch {tree}/forged").returncode != 0
+        assert not (tree / "forged").exists()
+    assert inside(layout, "echo ok > $HOME/cache").returncode == 0
+
+
+@needs_bwrap
+def test_no_runtime_directory_is_named_inside(layout: sandbox.Layout) -> None:
+    assert sandbox.environment(layout, LEAKY)["XDG_RUNTIME_DIR"] == str(layout.runtime)
+    seen = inside(layout, 'echo "[${XDG_RUNTIME_DIR-unset}]"')
+    assert seen.stdout.strip() == "[unset]", seen.stderr
+
+
+@needs_bwrap
+def test_the_users_own_entry_names_the_runs_home_inside(layout: sandbox.Layout) -> None:
+    look = "import os, pwd; e = pwd.getpwuid(os.getuid()); print(e.pw_dir, e.pw_uid)"
+    seen = inside(layout, f'python3 -c "{look}"')
+    assert seen.stdout.split() == [str(layout.home), str(os.getuid())], seen.stderr
+    assert inside(layout, "getent passwd root").stdout.startswith("root:x:0:0:")
 
 
 @needs_bwrap
