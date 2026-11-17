@@ -82,8 +82,6 @@ in-binding = true
 
 [events.depended-on]
 meaning = "people outside the project rely on it: users, customers, other teams"
-# Why: files a maintainer writes for strangers (how to contribute, report a flaw, behave; the
-# forge's own are the binding's). A README or a licence is no sign: a private project has them too.
 signs = ["CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md"]
 
 [[documents]]
