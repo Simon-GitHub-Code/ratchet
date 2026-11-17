@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import tokenize
+import tomllib
 from collections import Counter
 from collections.abc import Callable, Iterable
 from pathlib import Path, PurePosixPath
@@ -30,7 +31,7 @@ OUT_OF_SCOPE = (
     "evals/_common/justfile",
     ".github/**",
 )
-NODE_SUFFIXES = (".js", ".mjs", ".ts")
+NODE_SUFFIXES = (".js", ".mjs")
 
 DIRECTIVES = {
     "interpreter line": r"^[[:space:]]*#!/",
@@ -148,6 +149,7 @@ BY_SUFFIX: dict[str, Lister] = {
     ".yml": lexed(get_lexer_by_name("yaml")),
     ".yaml": lexed(get_lexer_by_name("yaml")),
     ".toml": lexed(get_lexer_by_name("toml")),
+    ".ts": lexed(get_lexer_by_name("typescript")),
 }
 
 
@@ -183,6 +185,17 @@ def node_records(root: Path, paths: list[str]) -> list[comments.Record]:
     return comments.parsed(listed.stdout, frozenset(paths))
 
 
+def metadata_lines(block: str) -> list[int]:
+    rows = block.rstrip("\n").split("\n")
+    content = [row.removeprefix("#").removeprefix(" ") for row in rows[1:-1]]
+    try:
+        tomllib.loads("\n".join(content))
+    except tomllib.TOMLDecodeError:
+        return []
+    kept = [n + 1 for n, line in enumerate(content) if not line.lstrip().startswith("#")]
+    return [0, *kept, len(rows) - 1]
+
+
 def script_metadata(root: Path, paths: Iterable[str]) -> set[tuple[str, int]]:
     lines = set()
     for path in paths:
@@ -190,7 +203,7 @@ def script_metadata(root: Path, paths: Iterable[str]) -> set[tuple[str, int]]:
             text = (root / path).read_text(encoding="utf-8")
             for block in SCRIPT_METADATA.finditer(text):
                 first = text.count("\n", 0, block.start()) + 1
-                lines |= {(path, first + n) for n in range(block.group(0).count("\n") + 1)}
+                lines |= {(path, first + n) for n in metadata_lines(block.group(0))}
     return lines
 
 
@@ -321,6 +334,12 @@ PLANTED = [
     pytest.param("scripts/parse-js.mjs", "// planted\n", Tally(1, 0), id="module comment"),
     pytest.param(
         "adapters/pi/ratchet-guard.ts",
+        "type T = {\n  // planted\n  a: string\n}\n",
+        Tally(1, 0),
+        id="comment inside a type",
+    ),
+    pytest.param(
+        "adapters/pi/ratchet-guard.ts",
         "/* planted\n   over two lines */\n",
         Tally(2, 0),
         id="typed block comment",
@@ -408,6 +427,9 @@ PROSE_AFTER = [
     pytest.param("a.py", "x = f()  # type: ignore[misc]\n    # the reason\n", id="type ignore"),
     pytest.param("a.py", "x = 1  # pragma: no cover\n# the reason\n", id="coverage pragma"),
     pytest.param("a.py", f"{METADATA}# the reason\n", id="inline script metadata"),
+    pytest.param(
+        "a.py", "# /// script\n# # the reason\n# dependencies = []\n# ///\n", id="metadata comment"
+    ),
     pytest.param("a.yml", f"steps:\n  - uses: a/b@{SHA} # v5\n  # the reason\n", id="note"),
 ]
 
@@ -424,6 +446,14 @@ DOCSTRING_AS_DIRECTIVE = [
     pytest.param('def f() -> None:  # noqa: D103\n    """Doc."""  # noqa: E501\n', id="beside"),
     pytest.param('#!/usr/bin/env python3\n"""Usage."""\n', id="after an interpreter line"),
 ]
+
+
+METADATA_WITH_PROSE = "# /// script\n# the reason it is pinned\n# dependencies = []\n# ///\n"
+
+
+def test_a_metadata_block_that_holds_prose_is_no_directive(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text(METADATA_WITH_PROSE, encoding="utf-8")
+    assert count(tmp_path, ["a.py"]) == {"a.py": Tally(4, 0)}
 
 
 @pytest.mark.parametrize("text", DOCSTRING_AS_DIRECTIVE)

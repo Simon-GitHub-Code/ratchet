@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { createRequire, stripTypeScriptTypes } from 'node:module'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
 
 const acorn = createRequire(import.meta.url)('internal/deps/acorn/acorn/dist/acorn')
@@ -7,9 +7,7 @@ const acorn = createRequire(import.meta.url)('internal/deps/acorn/acorn/dist/aco
 const [root, ...files] = process.argv.slice(2)
 const records = []
 for (const file of files) {
-  const written = readFileSync(join(root, file), 'utf8')
-  const source = file.endsWith('.ts') ? stripTypeScriptTypes(written, { mode: 'strip' }) : written
-  acorn.parse(source, {
+  acorn.parse(readFileSync(join(root, file), 'utf8'), {
     ecmaVersion: 'latest',
     sourceType: 'module',
     allowReturnOutsideFunction: true,
