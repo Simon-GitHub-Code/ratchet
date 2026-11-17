@@ -122,7 +122,6 @@ class Change:
         return git(self.root, "cat-file", "-e", f"{self.head}:{path}") is not None
 
     def moved(self, path: str) -> str | None:
-        """Where git reads ``path`` as renamed to between the merge base and the head, if it is."""
         listed = git(self.root, "diff", "-M", "--name-status", "-z", self.fork, self.head) or ""
         fields = iter(listed.split("\0"))
         for status in fields:
