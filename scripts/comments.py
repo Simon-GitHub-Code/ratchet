@@ -298,13 +298,13 @@ def directives(root: Path, paths: Iterable[str], patterns: Sequence[str]) -> set
 
 def findings(root: Path, records: Sequence[Record], rules: Allowed) -> list[Record]:
     matched = directives(root, (record.path for record in records), rules.patterns)
-    return [
-        record
-        for record in records
-        if (record.path, record.line) not in matched
-        and not (record.kind is Kind.DOC and gatelib.matches(record.path, list(rules.published)))
-        and not pinned_note(root, record)
-    ]
+
+    def allowed_record(record: Record) -> bool:
+        if record.kind is Kind.DOC:
+            return gatelib.matches(record.path, list(rules.published))
+        return (record.path, record.line) in matched or pinned_note(root, record)
+
+    return [record for record in records if not allowed_record(record)]
 
 
 def pinned_note(root: Path, record: Record) -> bool:
