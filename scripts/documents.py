@@ -459,22 +459,19 @@ def changed_after(root: Path, page: str, path: str) -> bool:
 
 def stale(root: Path) -> list[tuple[str, str]]:
     tree = set(gatelib.tracked_paths(root))
-    return [
+    pairs = (
         (page, cite.path)
         for page in prunable_pages(root, kinds_of(root))
         for cite in citations(gatelib.read_text(root / page) or "", page)
-        if cite.path in tree and changed_after(root, page, cite.path)
-    ]
+        if cite.path in tree
+    )
+    return [pair for pair in dict.fromkeys(pairs) if changed_after(root, *pair)]
 
 
 def landed_after(root: Path, ref: str, mark: str) -> int:
-    between = (
-        gatelib.git(root, "rev-list", "--first-parent", "--ancestry-path", f"{mark}..{ref}") or ""
-    ).split()
-    if not between:
-        return 0
-    joined = gatelib.git(root, "merge-base", "--is-ancestor", mark, f"{between[-1]}^1") is None
-    return len(between) - joined
+    line = (gatelib.git(root, "rev-list", "--first-parent", ref) or "").split()
+    after = set((gatelib.git(root, "rev-list", "--ancestry-path", f"{mark}..{ref}") or "").split())
+    return sum(commit in after for commit in line) - (mark not in line)
 
 
 def count_after(root: Path, ref: str, commit: str) -> int | None:
