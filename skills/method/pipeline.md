@@ -85,7 +85,6 @@ The critic runs only once the binding's `- Life events:` line declares `depended
   - `guard-diff` run.
 - Every test the critic added that passes, and every one that fails because of a real defect, stays, in the one flat critique directory the binding's Critique tests section names, or `tests/critique/` when it names none (`<slug>.<layer>.critique.test.<ext>`), never beside the code.
 - The critic runs `tier0` and its own tests, not `check`.
-- A finding whose kept test passes (`heldByKeptTest`) is resolved by that test.
 
 Done when every attack above is done, every finding carries the command and output that proves it, and `attempted` lists every command run, so "nothing found" refutes only the attempts that would have hit.
 
@@ -109,11 +108,10 @@ Done when axes A to F are judged and the verdict approves only under that rule.
 Three roles read the ticket: the spec role, which writes the spec from it; the ticket check, which reads only the ticket and `spec.md` before anything is built; and the review, which reads the change against the readings the check settled. Every other role works from the spec alone, so a spec that drops or bends a promise of the ticket would be built to the letter and pass every other check.
 
 - Each of the three reads a local ticket file as the base branch holds it (`git show <base>:<path>`), not the copy in the working tree that an agent of the run could have edited.
-- The check and the review return the same two axes, `ticketPromises` and `acceptedInputs`, from one definition.
 
 ### Severity
 
-Every grade the critique and the review apply, blocker, major or minor, is in one list: `SEVERITY` in `workflows/pipeline.js`, which both prompts cite. The script itself files a dropped promise as major.
+Every grade the critique and the review apply, blocker, major or minor, is in one list: `SEVERITY` in `workflows/pipeline.js`.
 
 ## The loop
 
@@ -171,7 +169,7 @@ The script is a pure function of its arguments and the agents' structured result
 **Agents.** Each role is one agent. The ticket check adds two when it finds a gap (the amend and the second read), the fix loop two per round (the fix pass on a young project's review is one such round, which re-reviews instead of re-critiquing), and a change judged again behind another merge two more (reconcile and review). `AGENTS_AT_MOST` in the script holds the most a run spawns before and after `depended-on`.
 
 - Agents leave every change uncommitted. The orchestrator commits and publishes.
-- An agent blocked by a guard path writes a dispute and returns it. A guard path an open dispute in the change names is not a finding of the critic or the review, so the verdict stands on the rest, and the merge judge leaves the merge to the owner (ADR 0067).
+- An agent blocked by a guard path writes a dispute and returns it. A guard path an open dispute in the change names is not a finding of the critic or the review, so the verdict stands on the rest (ADR 0067).
 
 **A run that dies.** A run in which an agent dies throws and returns no result. The drain resumes it once, and on a second error closes the ticket with the retryable reason code `errored`, which becomes the owner's only after three closes in a row.
 
@@ -211,15 +209,14 @@ The orchestrator is the `/ratchet:feature` skill's session. It runs the prefligh
 
 1. **Check the result.** Check `verdict === "approve"`, empty `unresolvedBlockingFindings`, and a green tail in `checkOutput`. Otherwise commit nothing. Stash what the agents left with `git stash push -u -m "<branch>: <verdict> run"`, since the route holds a ticket only on a `blocked` stash of that name. Switch back to the base branch, and settle each field the result holds as [`/ratchet:feature`](../feature/SKILL.md) step 4 says. Two of them build the ticket again with the ticket unchanged: `ticketFindings`, passed back as `args.ticketFindings`, and a `triggers` red, after the owner is told to type `/ratchet:safeguard`, or `/ratchet:architecture` for an owed review.
 2. **Report every dispute** to the owner in the hand-over, in plain words: what the rule stopped and what changing it would allow. It is a report, not a question. The owner answers in their own words if they want the rule changed, and any gate change is theirs.
-3. **Raise the floors.** Run the `ratchet` entry point when it is bound, so each threshold rises to what the approved change measured, and confirm `ratchet-lowered` stays green. Commit everything the work tree holds (`git add -A`) with the raised `quality/` files on the branch, with a message naming the slug: the roles' `filesChanged` can miss the spec and a record they added. The drain commits the two apart, as [`/ratchet:feature`](../feature/SKILL.md) says. Without this step a floor recorded at adoption never moves, and coverage can fall back to it with every gate green.
+3. **Raise the floors.** Run the `ratchet` entry point when it is bound, and confirm `ratchet-lowered` stays green. Commit everything the work tree holds (`git add -A`) with the raised `quality/` files on the branch, with a message naming the slug: the roles' `filesChanged` can miss the spec and a record they added. The drain commits the two apart, as [`/ratchet:feature`](../feature/SKILL.md) says. Without this step a floor recorded at adoption never moves, and coverage can fall back to it with every gate green.
 4. **Commit what else the change holds.**
-   - If an ADR is suggested, write it under the next free number: the guard lets a new ADR through. One that must supersede another or carry a `Relaxes:` line waits for the owner, in an interactive session where the guard can ask.
+   - If an ADR is suggested, write it under the next free number. One that must supersede another or carry a `Relaxes:` line waits for the owner, in an interactive session where the guard can ask.
    - With no forge (the binding's Forge section names a change template instead of a pull request template), the filled template is `.scratch/changes/<branch>.md` (the branch's `/` written as `-`). Commit it on the branch with the local ticket's `Status:` line set to `resolved`, the local form of `Closes #N`, so the merge resolves it.
 5. **Write the verdict record.** Put the result's `verdictRecord` on stdin of the `merge-ready` entry point's `record` form (`just merge-ready record`), and commit the `docs/features/<slug>/verdict.json` it writes alone, as the last commit. The record names the tree the review saw, so any commit after it sends the merge to the owner.
 6. **Publish.** Push, and open the pull request with every section of the repository's template filled ([records.md](records.md)), every entry of `recordNotes` (each added term, *Avoid* item and ADR) listed in the Decisions section. When the critic did not run, the pull request says so and why, from the result's `critic`. With no forge nothing is pushed.
 7. **Leave the merge to the judge.** The merge judge decides who merges, never the orchestrator ([guards.md](guards.md)). Run the `merge-ready` entry point and report its lines: `merge: agent`, or `merge: owner` with every reason.
-   - On a forge, the pull request's merge job asks the same judge once `ci` is green, merges what it passes and comments why on the rest.
-   - With no forge, run the `merge` entry point with the branch (`just merge <branch>`). It judges, runs `check` on the merge result and merges, or prints why the merge is the owner's.
+   - With no forge, run the `merge` entry point with the branch (`just merge <branch>`).
 
    Merge nothing by hand.
 
@@ -227,16 +224,10 @@ The orchestrator is the `/ratchet:feature` skill's session. It runs the prefligh
 
 `/ratchet:feature` with no ticket builds every agent-ready ticket. `scripts/drain.py` holds everything about it that needs no judgement, and the skill runs the pipelines.
 
-- **The plan.** `drain.py plan` lists the open agent-ready tickets with the preflight's verdict on each, ordered by their `Blocked by` lines: `buildable`, `building`, `built`, `waiting`, `held`, `merged` or `refused`. It starts at most three at once unless the owner names another number, and prints the most agents the drain can run, from the numbers the script declares.
-- **A work tree per ticket.** `drain.py open <ticket>` makes the ticket's branch and work tree under the temporary directory, outside the repository, and only when the plan starts that ticket. The pipeline runs there (`args.root`). `close`, `land` and `clean` remove it, so no work tree is left for an agent to remember.
-- **Merging is serial.** One result is settled at a time. When another change merged first, `drain.py update <ticket>` rebases the branch onto the default branch, or names the conflicts and leaves it as it was. The pipeline then runs with `args.rejudge`:
-  - one reconcile agent when the rebase conflicted or `check` went red;
-  - the reviewer again on the change as it now stands, reading the ticket as the base branch holds it and held to the readings the first run's ticket check settled, which the skill passes back as `settled`. The verdict record comes from that review, since the first one saw another tree.
-
-  `ratchet` runs after the rebase.
-- **The judge merges.** With no forge, `drain.py land <ticket>` runs the `merge` entry point and closes the ticket with the judge's lines. With a forge, the skill opens the pull request and watches it, and the merge job merges.
-- **A ticket that cannot go on is parked.** An open question, a guard edit, a dispute, a verdict that is not an approval or a `merge: owner` closes the ticket with the reasons as given, and the others go on. A too-large result is not parked, though its verdict is `blocked`: the agent splits it, as [Too large](../feature/SKILL.md#too-large-the-agent-splits-it) says, unless the ticket is itself a part. A parked ticket is held until its text changes or a path its run named as the cause (a guard edit, a dispute file) changes on the default branch.
-  - A `triggers` red, another instance of a kind whose safeguard or architecture review is owed, parks it with a reason naming `/ratchet:safeguard` or `/ratchet:architecture`, and holds it only until the row is bound or the review has landed.
+- **Merging is serial.** One result is settled at a time.
+- **The judge merges.** With a forge, the skill opens the pull request and watches it.
+- **A ticket that cannot go on is parked.** An open question, a guard edit, a dispute, a verdict that is not an approval or a `merge: owner` closes the ticket with the reasons as given, and the others go on. A too-large result is not parked, though its verdict is `blocked`: the agent splits it, as [Too large](../feature/SKILL.md#too-large-the-agent-splits-it) says, unless the ticket is itself a part.
+  - A `triggers` red, another instance of a kind whose safeguard or architecture review is owed, parks it with a reason naming `/ratchet:safeguard` or `/ratchet:architecture`.
   - No role writes the review: it is the owner's next command, and a decision record written in the same change as the instance would not count.
-- **One report.** `drain.py report` writes `.ratchet/queue/<date>-<time>.md`: what merged, what waits for the owner and why, what is parked, every assumption with its refuter, every record added, the time each ticket took. The owner's questions come after it.
-- **An interrupted drain.** The next one starts with `drain.py clean --all`, which another drain's live session refuses. A merged ticket is done and recorded, a branch with commits goes to the judge, and a build that had not committed is built again. `update` and `land` run again finish what they left: an abandoned rebase starts over, a merge that landed is recorded, a fast-forward cut off half-way is put back.
+- **One report.** `drain.py report` writes `.ratchet/queue/<date>-<time>.md`. The owner's questions come after it.
+- **An interrupted drain.** The next one starts with `drain.py clean --all`.
