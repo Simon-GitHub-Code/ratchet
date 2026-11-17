@@ -81,9 +81,17 @@ class Readers(NamedTuple):
 Lister = Callable[[str, str], list[comments.Record]]
 
 
-def docstrings(text: str) -> dict[int, str]:
+def docstrings(text: str) -> dict[int, str | None]:
     tree = ast.parse(text)
-    found = {tree.body[0].lineno: ""} if ast.get_docstring(tree, clean=False) is not None else {}
+    found: dict[int, str | None] = {
+        node.lineno: None
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    }
+    if ast.get_docstring(tree, clean=False) is not None:
+        found[tree.body[0].lineno] = ""
 
     def walk(node: ast.AST, prefix: str) -> None:
         for child in ast.iter_child_nodes(node):
@@ -331,6 +339,18 @@ PLANTED = [
         Tally(0, 1),
         id="docstring beside kept rules",
     ),
+    pytest.param(
+        "scripts/owed.py",
+        'x = 1\n"""Planted."""\n',
+        Tally(0, 1),
+        id="bare string after an assignment",
+    ),
+    pytest.param(
+        "hooks/tests/drain_model.py",
+        'class Planted:\n    x: int = 1\n    """Planted."""\n',
+        Tally(0, 1),
+        id="bare string after a field",
+    ),
     pytest.param("scripts/parse-js.mjs", "// planted\n", Tally(1, 0), id="module comment"),
     pytest.param(
         "adapters/pi/ratchet-guard.ts",
@@ -489,7 +509,7 @@ f = lambda: "no body"
 '''
 
 
-def test_the_docstring_reader_names_each_docstring_as_its_qualified_name() -> None:
+def test_the_reader_names_each_docstring_by_its_owner_and_a_bare_string_by_none() -> None:
     assert docstrings(DOCSTRING_FORMS) == {
         1: "",
         4: "A",
@@ -497,6 +517,7 @@ def test_the_docstring_reader_names_each_docstring_as_its_qualified_name() -> No
         8: "A.g",
         16: "A.k.<locals>.inner",
         21: "A.k.<locals>.C",
+        22: None,
     }
 
 
