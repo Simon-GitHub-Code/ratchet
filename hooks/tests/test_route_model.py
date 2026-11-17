@@ -1792,6 +1792,7 @@ DETOURS = [
     Advice.FINISH_RECORDS,
     Advice.SWITCH,
     Advice.MERGE_RECORDS,
+    Advice.OWNER_MERGE,
     Advice.FILL,
     Advice.REVIEW,
     Advice.SAFEGUARD,
