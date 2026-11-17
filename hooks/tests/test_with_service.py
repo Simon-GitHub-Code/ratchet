@@ -317,17 +317,21 @@ SENDS_THEN_WAITS = (
     "import os, time\nopen(os.environ['RATCHET_SENDING'], 'w').close()\ntime.sleep(1)"
 )
 STOPS_AT_ONCE = (
-    "import os, signal, threading, http.server as h\n"
+    "import os, signal, threading, time, http.server as h\n"
     "class Handler(h.BaseHTTPRequestHandler):\n"
     "    def log_message(self, *args): pass\n"
     "    def do_GET(self):\n"
     "        self.send_response(200)\n"
     "        self.send_header('Content-Length', '2')\n"
     "        self.end_headers()\n"
+    "        self.wfile.flush()\n"
+    "        time.sleep(0.05)\n"
     "        self.wfile.write(b'ok')\n"
     "server = h.ThreadingHTTPServer(('127.0.0.1', int(os.environ['PORT'])), Handler)\n"
     "signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown).start())\n"
-    "server.serve_forever()"
+    "server.daemon_threads = False\n"
+    "server.serve_forever()\n"
+    "server.server_close()"
 )
 DROPPED = re.compile(r"^\d+ x GET http://127\.0\.0\.1:\d+/work: (\w+)$", re.MULTILINE)
 
