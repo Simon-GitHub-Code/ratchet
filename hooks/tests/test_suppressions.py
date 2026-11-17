@@ -82,7 +82,7 @@ def test_the_section_gives_kinds_with_their_rules_and_the_kinds_that_silence_eac
         ("| quiet |", "| silence |", "'silence' is listed twice"),
         ("`(`" if False else "`ONLY-THIS`", "`(`", "needs one backticked extended regex"),
         ("`ONLY-THIS`", "ONLY-THIS", "needs one backticked extended regex"),
-        ("`ONLY-THIS` | never", "`ONLY-THIS` | sometimes", "write `rises` or `never`"),
+        ("`ONLY-THIS` | never", "`ONLY-THIS` | sometimes", "write `rises`, `never` or `kept`"),
         ("`silence`, `quiet`", "`silence`, `ghost`", "names the kind 'ghost', which has no row"),
         ("`silence`, `quiet`", "silence", "names no kind"),
         ("none: this checker has no directive that skips a line", "none: x", "says none with no"),
@@ -135,6 +135,18 @@ def test_an_untracked_file_counts_and_a_longer_word_does_not_match_a_bounded_pat
     write(root, "new.txt", "SILENCE-IT\n")
     assert run(root) == 1
     assert "silence: rose from 0 to 1" in capsys.readouterr().out
+
+
+def test_a_kept_kind_is_neither_counted_nor_red_wherever_it_matches(
+    tmp_path: Path, capsys: Out
+) -> None:
+    kept = BINDING.replace("| focus |", "| interpreter | `^RUN-WITH ` | kept |\n| focus |")
+    assert [kind.rule for kind in parsed(kept).kinds if kind.name == "interpreter"] == ["kept"]
+    root = repository(tmp_path, {"docs/process/binding.md": kept, "a.txt": "RUN-WITH this\n"})
+    branch(root)
+    write(root, "a.txt", "RUN-WITH this\nRUN-WITH that\n")
+    assert run(root) == 0
+    assert "interpreter" not in capsys.readouterr().out
 
 
 def test_a_never_kind_fails_wherever_it_matches_and_names_the_line(

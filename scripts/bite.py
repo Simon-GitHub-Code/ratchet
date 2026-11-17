@@ -14,6 +14,7 @@ Usage: ``bite.py``. Exits 1 when any gate fails to bite or fails to pass.
 from __future__ import annotations
 
 import http.server
+import io
 import json
 import os
 import shlex
@@ -28,6 +29,7 @@ from unittest import mock
 
 import budget
 import change_size
+import comments
 import commits
 import conformance
 import coverage_groups
@@ -451,6 +453,64 @@ def merge_judge(argv: list[str]) -> int:
     return merge_ready.main([*argv, "--base", "main"])
 
 
+LISTER = "comments-list.py"
+LISTER_CODE = (
+    "import sys\n"
+    "for path in sys.argv[1:]:\n"
+    "    with open(path, encoding='utf-8') as handle:\n"
+    "        for number, line in enumerate(handle, 1):\n"
+    "            code, mark, text = line.rstrip('\\n').partition('~~')\n"
+    "            if mark:\n"
+    "                kind = 'doc' if text.startswith('~') else 'comment'\n"
+    "                said = text.lstrip('~ ')\n"
+    "                print(f'{path}\\t{number}\\t{kind}\\t{said}')\n"
+)
+LIBRARY_LINE = "- Application types: library\n"
+COMMENTS_BINDING = (
+    "\n## Architecture\n\n- Published interface: `lib/**`\n\n## Comments\n\n"
+    "| Files | Comments |\n| --- | --- |\n| `src/**`, `lib/**` | listed |\n"
+)
+
+
+def comments_gate(argv: list[str]) -> int:
+    root = Path(argv[2])
+    if not (root / LISTER).is_file():
+        git(root, "checkout", "-q", "main")
+        binding = root / "docs/process/binding.md"
+        text = binding.read_text().replace("- Life events:", LIBRARY_LINE + "- Life events:", 1)
+        binding.write_text(text + COMMENTS_BINDING)
+        write(root, LISTER, LISTER_CODE)
+        commit(root, "chore(binding): the comments lister")
+        git(root, "checkout", "-q", "-B", "change")
+        write(root, "src/b.txt", "value = 1 ~~ bite-silence: the rule misreads this line\n")
+        write(root, "lib/api.txt", "~~~ Returns the value.\n")
+    judged = comments.scope(root, gatelib.base_commit(root))
+    listed = subprocess.run(
+        [*gatelib.interpreter(), LISTER, *judged.paths],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if listed.returncode != 0:
+        print(f"comments: the lister failed: {listed.stderr}")
+        return listed.returncode
+    with mock.patch("sys.stdin", io.StringIO(listed.stdout)):
+        return comments.main(["comments", "--root", str(root), "--changed"])
+
+
+def prose_comment(root: Path) -> None:
+    write(root, "src/c.txt", "value = 2 ~~ keep it small\n")
+
+
+def doc_outside_the_interface(root: Path) -> None:
+    write(root, "src/d.txt", "~~~ Returns the inner value.\n")
+
+
+def lister_reports_what_the_line_lacks(root: Path) -> None:
+    write(root, LISTER, LISTER_CODE.replace("said = text.lstrip('~ ')", "said = 'a ghost'"))
+
+
 PLUGIN_COPY = "plugin"
 PLUGIN_MANIFEST = f"{PLUGIN_COPY}/{plugin_pin.MANIFEST}"
 
@@ -514,6 +574,19 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("markers", markers.main, add_marker, []),
     ("suppressions: a count rose", suppressions.main, add_suppression, []),
     ("suppressions: a focus marker", suppressions.main, add_focus, []),
+    ("comments: a comment no tool reads", comments_gate, prose_comment, []),
+    (
+        "comments: a doc comment outside the published interface",
+        comments_gate,
+        doc_outside_the_interface,
+        [],
+    ),
+    (
+        "comments: a lister that reports text its line does not show",
+        comments_gate,
+        lister_reports_what_the_line_lacks,
+        [],
+    ),
     ("pins", pins.main, unpin, []),
     ("prose", prose.main, avoided_word, []),
     ("snapshots-check", snapshots.main, change_config, ["--check"]),

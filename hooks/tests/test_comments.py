@@ -1,11 +1,20 @@
 import io
+import os
+import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
 import comments
+import lowered
 import owed
-from tests.repos import branch, commit, git, repository, write
+import plugin_pin
+from tests.repos import branch, commit, git, installed_copy, repository, write
+from tests.support import PLUGIN_ROOT
+
+RULE = comments.RULE
 
 Out = pytest.CaptureFixture[str]
 
@@ -346,3 +355,191 @@ def test_a_comment_with_no_text_cannot_be_owed(
     assert "a.txt:1: a comment no tool reads: ''" in capsys.readouterr().out
     write(root, str(owed.LEDGER), owed.render([owed.Entry("a.txt", comments.RULE, "", "0.13.0")]))
     assert run(root, "a.txt\t1\tcomment\t\n", "a.txt", monkeypatch=monkeypatch) == 1
+
+
+COMMENTS = """\
+## Comments
+
+| Files | Comments |
+| --- | --- |
+| `src/**` | listed |
+| `gen/**` | none: generated from the schema by a tool, never by hand |
+"""
+PIN = f"- Ratchet plugin: 1.2.3 at {'a' * 40}\n"
+LISTED = f"# Binding\n\n{PIN}\n{SUPPRESSIONS}\n{COMMENTS}"
+KEPT_ROW = "| interpreter | `^RUN-WITH ` | kept |\n"
+UNBOUND = 'comments-list *files:\n    @echo "bind: list the comments"; exit 1\n'
+
+
+def judged(root: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out) -> list[str]:
+    capsys.readouterr()
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    assert comments.main(["comments", "--root", str(root), "--files"]) == 0
+    return [path for path in capsys.readouterr().out.split("\0") if path]
+
+
+def changed(root: Path, records: str, monkeypatch: pytest.MonkeyPatch, *more: str) -> int:
+    monkeypatch.setattr("sys.stdin", io.StringIO(records))
+    return comments.main(["comments", "--root", str(root), "--changed", *more])
+
+
+def test_a_change_judges_the_files_of_listed_rows_it_changes_and_no_other(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+) -> None:
+    files = {"src/a.txt": "x\n", "src/kept.txt": "y\n", "gen/b.txt": "z\n"}
+    root = project(tmp_path, LISTED, files)
+    write(root, "src/a.txt", "x\ny\n")
+    write(root, "gen/b.txt", "z // made by the tool\n")
+    write(root, "src/new.txt", "w\n")
+    write(root, "notes.md", "a page\n")
+    assert judged(root, monkeypatch, capsys) == ["src/a.txt", "src/new.txt"]
+
+
+def test_the_adoption_judges_every_listed_text_file_by_the_binding_it_brings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+) -> None:
+    root = repository(
+        tmp_path, {"src/old.txt": "x // old\n", "src/blob.bin": "\0\1", "gen/b.txt": "y\n"}
+    )
+    branch(root)
+    write(root, BINDING_PATH, LISTED)
+    assert judged(root, monkeypatch, capsys) == ["src/old.txt"]
+
+
+def test_while_the_lister_is_the_templates_bind_line_nothing_is_judged_and_it_says_why(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+) -> None:
+    root = project(tmp_path, LISTED, {"justfile": UNBOUND})
+    write(root, "src/a.txt", "x // a reason\n")
+    assert judged(root, monkeypatch, capsys) == []
+    assert changed(root, "", monkeypatch) == 0
+    out = capsys.readouterr().out
+    assert "comments: green: the lister is not bound yet, so nothing is judged" in out
+
+
+def test_a_prose_comment_is_red_and_a_kept_directive_and_a_rises_suppression_are_not(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+) -> None:
+    binding = LISTED.replace("| keep |", f"{KEPT_ROW}| keep |")
+    root = project(tmp_path, binding)
+    write(
+        root, "src/a.txt", "RUN-WITH tool\nx = 1 // SILENCE-IT: misread\ny = 2 // keep it small\n"
+    )
+    records = (
+        "src/a.txt\t1\tcomment\tRUN-WITH tool\n"
+        "src/a.txt\t2\tcomment\tSILENCE-IT: misread\n"
+        "src/a.txt\t3\tcomment\tkeep it small\n"
+    )
+    assert changed(root, records, monkeypatch) == 1
+    out = capsys.readouterr().out
+    assert "src/a.txt:3: a comment no tool reads: 'keep it small'" in out
+    assert "src/a.txt:1:" not in out
+    assert "src/a.txt:2:" not in out
+
+
+def test_the_adoption_records_what_exists_and_a_later_comment_is_red(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+) -> None:
+    root = repository(tmp_path, {"src/old.txt": "x // old reason\n"})
+    branch(root)
+    write(root, BINDING_PATH, LISTED)
+    old = "src/old.txt\t1\tcomment\told reason\n"
+    assert changed(root, old, monkeypatch) == 1
+    assert changed(root, old, monkeypatch, "--record") == 0
+    assert "comments: recorded 1 owed since 1.2.3" in capsys.readouterr().out
+    assert owed.read(root).entries == (owed.Entry("src/old.txt", RULE, "old reason", "1.2.3"),)
+    assert lowered.owed_grown(root, git(root, "rev-parse", "main")) == []
+    commit(root, "chore(method): adopt")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "-q", "--ff-only", "change")
+    branch(root, "later")
+    write(root, "src/old.txt", "x // old reason\ny // new reason\n")
+    both = f"{old}src/old.txt\t2\tcomment\tnew reason\n"
+    assert changed(root, both, monkeypatch) == 1
+    out = capsys.readouterr().out
+    assert "src/old.txt:2: a comment no tool reads: 'new reason'" in out
+    assert "'old reason'" not in out
+    assert changed(root, both, monkeypatch, "--record") == 1
+    assert "comments: refused: only the adoption and the change that first fills" in (
+        capsys.readouterr().out
+    )
+
+
+LISTER = """\
+for f in "$@"; do
+  awk -v OFS='\\t' -v f="$f" '{ i = index($0, "//"); if (i) { t = substr($0, i + 2); k = "comment";
+    if (substr(t, 1, 1) == "/") { k = "doc"; t = substr(t, 2) } sub(/^ +/, "", t);
+    print f, FNR, k, t } }' "$f" || exit 1
+done
+"""
+
+
+def just_comments(root: Path, plugin: Path, *words: str) -> tuple[int, str]:
+    done = subprocess.run(  # noqa: S603 # -- a fixed argv; the justfile is the template's own
+        [str(shutil.which("just")), "comments", *words],
+        cwd=root,
+        env={**os.environ, "RATCHET_PLUGIN": str(plugin)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return done.returncode, done.stdout + done.stderr
+
+
+def test_the_templates_recipe_runs_the_projects_lister_from_adoption_to_the_next_change(
+    tmp_path: Path,
+) -> None:
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    plugin = installed_copy()
+    version = plugin_pin.version_of(PLUGIN_ROOT)
+    pin = f"{version} at {plugin_pin.commit_of(plugin) or '1' * 40}"
+    binding = LISTED.replace(
+        PIN, f"- Ratchet plugin: {pin} tree {plugin_pin.copy_tree_id(plugin)}\n"
+    )
+    template = (PLUGIN_ROOT / "skills/adopt/templates/justfile").read_text(encoding="utf-8")
+    lister = re.sub(
+        r'^(comments-list \*files:\n)    @echo "bind:[^\n]*\n',
+        r"\1    sh list.sh {{files}}\n",
+        template,
+        flags=re.MULTILINE,
+    )
+    assert lister != template
+    root = repository(tmp_path, {"src/old.txt": "x // old reason\n", "gen/g.txt": "// made\n"})
+    branch(root, "adopt")
+    write(root, BINDING_PATH, binding)
+    write(root, "justfile", lister)
+    write(root, "list.sh", LISTER)
+    code, out = just_comments(root, plugin)
+    assert code == 1, out
+    assert "src/old.txt:1: a comment no tool reads: 'old reason'" in out
+    assert "gen/g.txt" not in out
+    code, out = just_comments(root, plugin, "--record")
+    assert code == 0, out
+    assert f"comments: recorded 1 owed since {version}" in out
+    commit(root, "chore(method): adopt")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "-q", "--ff-only", "adopt")
+    branch(root, "change")
+    write(root, "src/old.txt", "x // old reason\n/// Returns x.\n")
+    code, out = just_comments(root, plugin)
+    assert code == 1, out
+    assert "src/old.txt:2: a doc comment outside the published interface of a library" in out
+    assert "'old reason'" not in out
+    write(root, "list.sh", "exit 3\n")
+    code, out = just_comments(root, plugin)
+    assert code != 0, "a lister that fails turns the gate red"
+
+
+def test_the_version_note_of_a_pinned_workflow_line_is_a_directive_and_other_notes_are_not(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    workflow = ".github/workflows/ci.yml"
+    pinned = f"      - uses: actions/checkout@{'f' * 40} # v5\n"
+    write(root, workflow, f"{pinned}      - run: make # build it first\n")
+    output = f"{workflow}\t1\tcomment\tv5\n{workflow}\t2\tcomment\tbuild it first\n"
+    assert run(root, output, workflow, monkeypatch=monkeypatch) == 1
+    out = capsys.readouterr().out
+    assert f"{workflow}:2: a comment no tool reads: 'build it first'" in out
+    assert f"{workflow}:1:" not in out

@@ -1345,3 +1345,107 @@ def test_an_incremental_line_of_none_wants_the_variable_empty_or_absent(repo: Pa
 def test_a_repository_with_no_justfile_has_no_incremental_finding(repo: Path) -> None:
     remove("justfile")(repo)
     assert not [f for f in conformance.findings(repo) if "mutation_incremental" in f.problem]
+
+
+COMMENTS_ROW = conformance.SELF_TEST_COMMENTS
+LISTER_LINE = '    @echo "bind: list the comments of the files given'
+
+
+def finding(root: Path, line: str) -> conformance.Finding:
+    return next(found for found in conformance.findings(root) if str(found) == line)
+
+
+def test_a_binding_without_the_comments_section_is_owed_it_from_the_template(repo: Path) -> None:
+    replace(BINDING, "## Comments\n", "## Remarks\n")(repo)
+    line = (
+        f"{BINDING}: has no '## Comments' section, which names the lister the `comments` gate"
+        " reads (ADR 0063); add the template's section and fill it"
+    )
+    assert line in red(repo)
+    found = finding(repo, line)
+    assert isinstance(found.fix, conformance.Auto)
+    assert found.rule == "comments_section"
+
+
+@pytest.mark.parametrize(
+    ("row", "problem"),
+    [
+        (
+            "| <`globs` of one kind of file> | <`listed`, or `none: <reason>`> |",
+            "the Comments table still has the template's placeholder row",
+        ),
+        ("| `**` | sometimes |", "says 'sometimes': write `listed`, or `none: <reason>`"),
+        ("| `**` | none: x |", "says 'none: x': write `listed`, or `none: <reason>`"),
+        ("| ** | listed |", "the Comments row '**' gives no glob in backticks"),
+    ],
+)
+def test_a_comments_table_that_is_unfilled_or_malformed_is_red(
+    repo: Path, row: str, problem: str
+) -> None:
+    replace(BINDING, COMMENTS_ROW, row)(repo)
+    assert any(problem in line for line in red(repo)), red(repo)
+
+
+def test_a_tracked_text_file_no_comments_row_matches_is_red(repo: Path) -> None:
+    git(repo, "init", "-q")
+    replace(BINDING, COMMENTS_ROW, "| `src/**` | none: the self-test writes no code by hand |")(
+        repo
+    )
+    lines = red(repo)
+    assert (
+        f"{BINDING}: '## Comments' has no row matching `justfile`; add a row for its kind,"
+        " `listed` or `none: <reason>`"
+    ) in lines
+    assert not any("matching `README.md`" in line for line in lines), "a document needs no row"
+
+
+def test_a_listed_row_needs_a_bound_lister_and_a_bite_that_plants_into_its_files(
+    repo: Path,
+) -> None:
+    replace(BINDING, COMMENTS_ROW, "| `lib/**` | listed |")(repo)
+    lines = red(repo)
+    unbound = "justfile: the `comments-list` recipe still holds the template's `bind:` placeholder"
+    assert unbound in lines
+    unplanted = (
+        "quality/bites.toml: the Comments row `lib/**` is `listed`, and no [[bite]] of gate"
+        " 'comments' plants into a file it matches"
+    )
+    assert any(line.startswith(unplanted) for line in lines), lines
+    text = (repo / "justfile").read_text(encoding="utf-8")
+    bound = re.sub(
+        rf"^{re.escape(LISTER_LINE)}[^\n]*$", "    ./list {{files}}", text, flags=re.MULTILINE
+    )
+    (repo / "justfile").write_text(bound, encoding="utf-8")
+    replace(BINDING, "| `lib/**` | listed |", "| `src/**` | listed |")(repo)
+    assert red(repo) == []
+
+
+def test_the_published_interface_is_named_or_said_to_be_none_outside_a_library(
+    repo: Path,
+) -> None:
+    published = "- Published interface: none: not a library"
+    replace(BINDING, published + "\n", "")(repo)
+    assert any("has no '- Published interface:' line" in line for line in red(repo))
+    replace(BINDING, "- Decision:", f"{published}\n- Decision:")(repo)
+    assert red(repo) == []
+    replace(BINDING, "- Application types: cli", "- Application types: cli, library")(repo)
+    assert f"{BINDING}: the types declare `library`, and '- Published interface:' says none:" in (
+        "\n".join(red(repo))
+    )
+    replace(BINDING, published, "- Published interface: `src/api/**`")(repo)
+    assert not any("Published interface" in line for line in red(repo))
+
+
+def test_documentation_coverage_bound_outside_a_library_is_unbound_by_the_upgrade(
+    repo: Path,
+) -> None:
+    question = "documentation coverage, ratcheted"
+    replace(BINDING, f"| {question} | none: not a library |", f"| {question} | a tool |")(repo)
+    line = (
+        f"{BINDING}: gate '{question}' is asked of a library only, and the types do not declare"
+        " one; write `none: not a library` (ADR 0063: the owner merges this unbinding)"
+    )
+    assert line in red(repo)
+    assert isinstance(finding(repo, line).fix, conformance.Auto)
+    replace(BINDING, "- Application types: cli", "- Application types: cli, library")(repo)
+    assert line not in red(repo)
