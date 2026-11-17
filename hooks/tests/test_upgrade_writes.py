@@ -280,11 +280,30 @@ def test_an_operability_row_of_the_plugin_s_own_gate_is_bound_and_another_is_an_
     )
 
 
-def test_a_gate_the_plugin_ships_that_no_tier_runs_is_named_and_left_when_the_tier_has_a_body(
+def test_a_gate_the_plugin_ships_that_no_tier_runs_is_listed_where_the_tier_reads_its_gates(
     repo: Path,
 ) -> None:
     replace(JUSTFILE, " conformance triggers incidents ", " conformance triggers ")(repo)
-    [found] = settle(repo)
+    assert settle(repo) == []
+    listed = next(
+        line for line in text(repo, JUSTFILE).splitlines() if line.startswith("tier1_gates")
+    )
+    assert " incidents" in listed
+
+
+def test_a_gate_the_plugin_ships_that_no_tier_runs_is_named_and_left_when_the_tier_lists_its_own(
+    repo: Path,
+) -> None:
+    gates = next(
+        line for line in text(repo, JUSTFILE).splitlines() if line.startswith("tier1_gates :=")
+    )
+    own = justfile_text.STRING.search(gates).group(0).strip('"').replace(" incidents", "")
+    replace(
+        JUSTFILE,
+        "{{parallel}} {{serial1}} -- {{tier1_gates}}",
+        f"{{{{parallel}}}} {{{{serial1}}}} -- {own}",
+    )(repo)
+    [found] = [f for f in settle(repo) if f.stops == "incidents tighten a gate"]
     assert found.problem.startswith(
         "no tier runs `incidents`, which the binding binds to 'incidents tighten a gate' at tier 1"
     )
