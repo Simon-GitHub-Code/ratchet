@@ -6,6 +6,7 @@ ticket files and the notes, and a work tree is only proved gone by asking git.
 
 import json
 import os
+import re
 import signal
 import sys
 import tempfile
@@ -154,6 +155,28 @@ def test_a_depended_on_project_counts_the_critic_and_its_fix_loop(tmp_path: Path
         drain.plan(offline(root)).agents_at_most
         == 3 * (drain.PIPELINE_AGENTS + drain.UPDATE_AGENTS) - 2
     )
+
+
+DECLARED_AGENTS = json.loads(
+    re.findall(
+        r"^const AGENTS_AT_MOST = (\{.*\})$",
+        (SCRIPTS.parent / "workflows/pipeline.js").read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )[0]
+)
+
+
+@pytest.mark.parametrize(
+    ("life", "role"),
+    [("", "young"), (LIFE_DEPENDED_ON, "dependedOn")],
+    ids=["young", "depended-on"],
+)
+def test_the_agents_a_plan_counts_are_the_ones_the_workflow_declares(
+    tmp_path: Path, life: str, role: str
+) -> None:
+    root = project(tmp_path, **{"docs/process/binding.md": binding(MERGE) + life})
+    update = DECLARED_AGENTS["rejudge"]
+    assert drain.plan(offline(root)).agents_at_most == 3 * (DECLARED_AGENTS[role] + update) - update
 
 
 def test_main_prints_the_plan_as_json(tmp_path: Path, capsys: Out) -> None:
