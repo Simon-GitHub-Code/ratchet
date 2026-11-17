@@ -148,6 +148,10 @@ def fill_first(root: Path) -> list[Entry]:
     return [entry for entry in read(root).entries if entry.rule in FILL_FIRST]
 
 
+def comments(root: Path) -> list[Entry]:
+    return sorted(entry for entry in read(root).entries if entry.rule == COMMENTS)
+
+
 def quoted(value: str) -> str:
     """``value`` as a TOML basic string."""
     return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
@@ -369,8 +373,13 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="owed.py")
     parser.add_argument("--root", type=Path, default=Path())
     parser.add_argument("--fill-first", action="store_true", help="list what an agent fills first")
+    parser.add_argument("--comments", action="store_true", help="list the comments owed")
     options = parser.parse_args(argv[1:])
     root = options.root.resolve()
+    if options.comments:
+        for entry in comments(root):
+            print(f"{entry.path}\t{entry.problem}")
+        return 0
     if options.fill_first:
         for entry in fill_first(root):
             print(f"{entry.rule}\t{entry.path}\t{entry.problem}")

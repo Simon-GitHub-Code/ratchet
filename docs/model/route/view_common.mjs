@@ -28,6 +28,8 @@ export const NEXT = {
   "formal-ticket": "Fix the bug the formal model's round found",
   "formal-round": "Merge the formal model's round",
   "formal-upkeep": "Run the formal model's round",
+  "prune-comments": "Prune the owed comments",
+  "prune-pages": "Prune the pages",
 };
 
 export const checkout = (v) => {
@@ -92,5 +94,8 @@ const STEP = {
   AgentRunsARound: "an agent runs the formal model's round",
   OwnerMergesTheRound: "you merge the round",
   AgentFixesTheRoundTicket: "an agent fixes the bug the round found",
+  MergesLeaveAPageStale: "merges leave a page stale",
+  AgentPrunesComments: "an agent prunes the comments",
+  AgentPrunesPages: "an agent prunes the pages",
 };
 export const step_ = (action) => STEP[action];
