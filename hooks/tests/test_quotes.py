@@ -91,6 +91,12 @@ def found(root: Path, quote: str, record: str = "AGENTS.md") -> bool:
     return bool(quotes.check([finding(record, quote)], root)["found"])
 
 
+def test_only_a_whole_line_of_a_file_that_is_not_markdown_is_found(tmp_path: Path) -> None:
+    put(tmp_path, "guards/manifest.toml", "First clause. Second clause.\n")
+    assert found(tmp_path, "First clause. Second clause.", "guards/manifest.toml")
+    assert not found(tmp_path, "Second clause.", "guards/manifest.toml")
+
+
 @pytest.mark.parametrize(
     "quote",
     [

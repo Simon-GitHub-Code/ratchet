@@ -103,6 +103,20 @@ def test_a_removed_key_written_back_looser_with_a_record_is_green(root: Path) ->
     assert change(root, "readd", "1", record("2", "1", "0902-c.md")) == 0
 
 
+def test_a_removed_key_is_judged_against_the_last_value_it_held_not_the_first(root: Path) -> None:
+    assert change(root, "raise", "3") == 0
+    land(root, "raise")
+    assert change(root, "drop", None, record("3", "removed")) == 0
+    land(root, "drop")
+    assert change(root, "readd", "2.5") == 1, "the key last held 3"
+
+
+def test_a_record_for_a_number_does_not_excuse_a_flag_changed_to_it(root: Path) -> None:
+    assert change(root, "flag", "true", record("2", "true", "0903-d.md")) == 0
+    land(root, "flag")
+    assert change(root, "number", "1", record("1", "1", "0904-e.md")) == 1
+
+
 def test_a_key_the_file_never_held_is_new(root: Path) -> None:
     branch(root, "new")
     write(root, THRESHOLDS, table("2") + "brand = 0\n")

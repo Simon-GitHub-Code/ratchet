@@ -42,6 +42,11 @@ def test_markers_rise_is_red_and_paydown_is_green(tmp_path: Path, capsys: Out) -
     assert markers.grep_count(root, "TODOS", None) == 0, "whole words only"
 
 
+def test_a_marker_inside_a_longer_word_is_not_counted(tmp_path: Path) -> None:
+    root = repository(tmp_path, {"a.py": "x = 1  # TODOS and FIXMEs and HACKED and XXXL\n"})
+    assert markers.counts(root, None) == {"TODO": 0, "FIXME": 0, "HACK": 0, "XXX": 0}
+
+
 # --- pins -----------------------------------------------------------------------------------
 
 PINNED = "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5"

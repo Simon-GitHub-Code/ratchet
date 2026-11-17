@@ -3,6 +3,7 @@
 import errno
 import fcntl
 import os
+import select
 import signal
 import socket
 import subprocess
@@ -185,6 +186,27 @@ def test_a_child_that_exited_unreaped_hides_nothing() -> None:
         held[0].copy.close()
 
 
+def test_a_process_that_exits_as_the_gate_lists_the_processes_is_left_out() -> None:
+    sleeper = subprocess.Popen(["sleep", "30"])  # noqa: S607 # -- sleep on PATH
+    try:
+        assert sleeper.pid in listeners.table()
+        read = listeners.read
+
+        def vanishing(path: str) -> bytes:
+            if path == f"{listeners.PROC}/{sleeper.pid}/stat":
+                raise FileNotFoundError(errno.ENOENT, "gone")
+            return read(path)
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(listeners, "read", vanishing)
+            found = listeners.table()
+        assert sleeper.pid not in found
+        assert os.getppid() in found
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+
+
 def test_a_process_that_exits_while_the_gate_looks_is_not_hiding() -> None:
     # Why: a process can exit between the gate reading its state and listing its files, and the
     # kernel then refuses the listing as for a hidden process, though it holds nothing.
@@ -285,6 +307,34 @@ def test_a_connection_the_service_never_accepted_is_written_down_before_it_is_re
         {running.port: None}, listeners.ELSEWHERE, frozenset({name})
     ), "the client found its connection in the marker once it saw the reset"
     assert held[0].copy.fileno() == -1, "the copy is let go of when the command ends"
+
+
+def test_a_connection_is_in_the_marker_while_the_client_has_not_yet_seen_a_reset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = tmp_path / "stopping"
+    seen: list[str] = []
+    with service() as running:
+        held = listeners.grab(running.process.pid)
+        assert isinstance(held, list)
+        waiting = socket.create_connection(("127.0.0.1", running.port))
+        waiting.settimeout(10)
+        name = gatelib.connection(waiting.getpeername(), waiting.getsockname())
+        write = gatelib.write_stopping
+
+        def writes(path: Path, stopping: gatelib.Stopping) -> None:
+            if name in stopping.taken:
+                readable, _, _ = select.select([waiting], [], [], 0)
+                seen.append("reset" if readable else "waiting")
+            write(path, stopping)
+
+        monkeypatch.setattr(gatelib, "write_stopping", writes)
+        with taking(held, marker):
+            assert running.tell("close") == "done"
+            with pytest.raises(ConnectionResetError):
+                waiting.recv(1)
+        waiting.close()
+    assert seen[0] == "waiting", "the marker named the connection before the gate reset it"
 
 
 def test_the_gate_leaves_the_listener_as_blocking_as_the_service_made_it(tmp_path: Path) -> None:

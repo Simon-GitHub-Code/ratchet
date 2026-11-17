@@ -487,6 +487,17 @@ def test_a_runner_that_cannot_start_is_a_red_gate(capsys: pytest.CaptureFixture[
     assert "types: red (exit 127)" in out
 
 
+def test_a_gate_that_cannot_start_does_not_stop_the_gates_waiting_behind_it(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert (
+        run("--serial", "lint", "types", "--runner", "/no/such/runner", "--", "lint", "types") == 1
+    )
+    out = capsys.readouterr().out
+    assert "lint: red (exit 127)" in out
+    assert "types: red (exit 127)" in out
+
+
 def test_a_gate_reads_nothing_from_the_terminal(capsys: pytest.CaptureFixture[str]) -> None:
     asks = gate("import sys; print(repr(sys.stdin.read()))")
     assert run("--", asks) == 0

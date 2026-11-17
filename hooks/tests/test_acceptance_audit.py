@@ -88,6 +88,19 @@ def test_every_way_of_naming_a_file_of_the_product_is_flagged(
     ]
 
 
+def test_a_tester_that_only_goes_to_the_products_directory_has_looked_at_nothing_in_it(
+    root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    lines = [
+        call("Bash", {"command": f"cd {root} && curl -s http://127.0.0.1:8000/"}, root.parent),
+        call("Bash", {"command": f"cd {root.name} && curl -s http://127.0.0.1:8000/"}, root.parent),
+    ]
+    assert audited(lines, root, capsys) == (
+        0,
+        ["acceptance audit: green, 2 tool calls and none inside the product"],
+    )
+
+
 def test_a_path_is_judged_through_the_links_it_passes(
     root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

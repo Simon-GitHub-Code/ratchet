@@ -6,6 +6,7 @@ ticket files and the notes, and a work tree is only proved gone by asking git.
 
 import json
 import os
+import re
 import signal
 import sys
 import tempfile
@@ -154,6 +155,28 @@ def test_a_depended_on_project_counts_the_critic_and_its_fix_loop(tmp_path: Path
         drain.plan(offline(root)).agents_at_most
         == 3 * (drain.PIPELINE_AGENTS + drain.UPDATE_AGENTS) - 2
     )
+
+
+DECLARED_AGENTS = json.loads(
+    re.findall(
+        r"^const AGENTS_AT_MOST = (\{.*\})$",
+        (SCRIPTS.parent / "workflows/pipeline.js").read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )[0]
+)
+
+
+@pytest.mark.parametrize(
+    ("life", "role"),
+    [("", "young"), (LIFE_DEPENDED_ON, "dependedOn")],
+    ids=["young", "depended-on"],
+)
+def test_the_agents_a_plan_counts_are_the_ones_the_workflow_declares(
+    tmp_path: Path, life: str, role: str
+) -> None:
+    root = project(tmp_path, **{"docs/process/binding.md": binding(MERGE) + life})
+    update = DECLARED_AGENTS["rejudge"]
+    assert drain.plan(offline(root)).agents_at_most == 3 * (DECLARED_AGENTS[role] + update) - update
 
 
 def test_main_prints_the_plan_as_json(tmp_path: Path, capsys: Out) -> None:
@@ -1228,6 +1251,32 @@ def test_a_mechanical_reason_that_keeps_coming_back_becomes_the_owners(
         reasons=["record: no verdict"],
     )
     assert note(root, BRANCH_A)["attempts"] == 0
+    capsys.readouterr()
+
+
+def test_a_mechanical_reason_is_retried_twice_and_the_third_time_it_is_the_owners(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    build(root, BRANCH_A, {"src/b.py": "B = 1\n"})
+    red = "gates: `just check` is red on the merge result (exit 1)"
+    for _ in range(2):
+        drain.close(
+            root,
+            drain.preflight.fetch(ALPHA, root, offline(root).tracker),
+            outcome="waits",
+            reasons=[red],
+        )
+        assert states(root)[BRANCH_A] == "built"
+    drain.close(
+        root,
+        drain.preflight.fetch(ALPHA, root, offline(root).tracker),
+        outcome="waits",
+        reasons=[red],
+    )
+    entry = next(e for e in drain.plan(offline(root)).tickets if e.branch == BRANCH_A)
+    assert entry.state == "held"
     capsys.readouterr()
 
 

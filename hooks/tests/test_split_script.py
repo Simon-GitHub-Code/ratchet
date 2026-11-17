@@ -72,6 +72,30 @@ def test_the_parent_of_an_issue_is_what_the_tracker_says(tmp_path: Path) -> None
     assert found.title == "A"
 
 
+def test_the_parent_of_a_local_ticket_is_what_the_default_branch_holds_not_the_work_tree(
+    tmp_path: Path,
+) -> None:
+    root = repository(tmp_path, {PARENT_REF: PARENT})
+    edited = PARENT.replace("It saves.", "It is edited.")
+    (root / PARENT_REF).write_text(edited, encoding="utf-8")
+    found = split.parent_now(root, PARENT_REF, tracker(None))
+    assert found is not None
+    assert "It saves." in found.body
+    assert "It is edited." not in found.body
+
+
+def test_a_checkbox_in_a_section_a_part_inherits_is_not_a_promise_the_part_makes() -> None:
+    text = f"{PARENT}\n## Conjecture\n\n- [ ] It is fast.\n"
+    parent = preflight.local_ticket(PARENT_REF, text)
+    plan = {
+        "parts": [
+            {"title": "Save", "promises": ["It saves.", "It is fast."]},
+            {"title": "List", "promises": ["It lists."], "after": [0]},
+        ]
+    }
+    assert split.problems(parent, split.parts_of(plan), "L", holds=True) == []
+
+
 def test_the_parts_of_an_issue_are_filed_on_the_tracker_each_waiting_on_the_one_before(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

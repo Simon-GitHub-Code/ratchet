@@ -1,7 +1,9 @@
 """The gate library: one merge base for every gate, the changed paths, the thresholds file."""
 
 import contextlib
+import errno
 import http.server
+import json
 import os
 import signal
 import socket
@@ -12,6 +14,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from hypothesis import given
@@ -231,6 +234,22 @@ def test_http_status_names_the_client_port_however_soon_the_connection_is_reset(
     assert clients == accepted
 
 
+def test_reach_names_the_connection_before_it_waits_for_the_connect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order: list[str] = []
+    sock = MagicMock()
+    sock.connect_ex.return_value = errno.EINPROGRESS
+    sock.getsockname.return_value = ("127.0.0.1", 5)
+    sock.getsockopt.return_value = 0
+    selector = MagicMock()
+    selector.__enter__.return_value = selector
+    selector.select.side_effect = lambda _: order.append("waited") or [object()]
+    monkeypatch.setattr(gatelib.selectors, "DefaultSelector", lambda: selector)
+    gatelib.reach(sock, ("127.0.0.1", 80), timeout=1, connecting=lambda _: order.append("named"))
+    assert order == ["named", "waited"]
+
+
 def test_http_status_says_why_a_connect_failed_or_that_it_timed_out() -> None:
     tried: list[gatelib.Connection] = []
     with pytest.raises(OSError, match="Network is unreachable"):
@@ -435,8 +454,13 @@ def test_a_process_run_from_a_tree_is_ended_and_every_other_one_is_left(tmp_path
     tree = tmp_path / "tree"
     inside = servers.sleeper(tree)
     outside = start("import time\ntime.sleep(60)\n", tmp_path)
+    proc = tmp_path / "proc"
+    for process in (inside, outside):
+        entry = proc / str(process.pid)
+        entry.mkdir(parents=True)
+        (entry / "exe").symlink_to(Path(f"/proc/{process.pid}/exe").readlink())
     try:
-        assert gatelib.end_running_from(tree.resolve()) == [inside.pid]
+        assert gatelib.end_running_from(tree.resolve(), proc) == [inside.pid]
         assert inside.wait(timeout=5) == -signal.SIGKILL
         assert outside.poll() is None
     finally:
@@ -473,6 +497,16 @@ def test_chained_wants_apply_in_order_and_an_empty_chain_changes_nothing(
     assert gatelib.chained()(current) == (current or "")
     both = gatelib.chained(gatelib.created(text), lambda made: f"{made}!")
     assert both(current) == f"{text if current is None else current}!"
+
+
+def test_a_git_a_hook_pointed_at_another_repository_still_reads_the_repository_it_is_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    here = repository(tmp_path / "here")
+    elsewhere = repository(tmp_path / "elsewhere")
+    monkeypatch.setenv("GIT_DIR", str(elsewhere / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(elsewhere))
+    assert Path(gatelib.git_checked(here, "rev-parse", "--show-toplevel").strip()) == here.resolve()
 
 
 def test_a_git_that_fails_raises_instead_of_answering(tmp_path: Path) -> None:
@@ -514,3 +548,126 @@ def test_a_child_keeps_the_options_its_parent_was_started_with(
     options = ["-E", "-s", "-B", "-X", "pycache_prefix=/private/cache"]
     assert gatelib.interpreter()[1:] == options
     assert gatelib.interpreter(inline=True)[1:] == [*options, "-P"]
+
+
+def test_a_listing_held_open_reads_a_tree_once_and_one_not_held_reads_each_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = repository(tmp_path)
+    listed: list[Path] = []
+    real = gatelib.git
+
+    def counting(where: Path, *args: str) -> str | None:
+        if args[0] == "ls-files":
+            listed.append(where)
+        return real(where, *args)
+
+    monkeypatch.setattr(gatelib, "git", counting)
+    held = gatelib.listings.set({})
+    try:
+        first = gatelib.tracked_paths(root)
+        write(root, "late.txt", "x\n")
+        assert gatelib.tracked_paths(root) == first
+        assert "late.txt" not in gatelib.tracked_paths(root)
+        assert len(listed) == 1
+    finally:
+        gatelib.listings.reset(held)
+    assert "late.txt" in gatelib.tracked_paths(root)
+    assert len(listed) == 2
+
+
+def test_an_export_holds_what_git_holds_at_the_ref_and_none_of_what_the_work_tree_says(
+    tmp_path: Path,
+) -> None:
+    root = repository(tmp_path / "repo", {"a.txt": "committed\n", "run.sh": "#!/bin/sh\n"})
+    git(root, "update-index", "--chmod=+x", "run.sh")
+    git(
+        root, "update-index", "--add", "--cacheinfo", f"160000,{git(root, 'rev-parse', 'HEAD')},sub"
+    )
+    git(root, "commit", "-q", "-m", "feat(core): an executable and a submodule")
+    ref = git(root, "rev-parse", "HEAD")
+    write(root, "a.txt", "edited and not committed\n")
+    write(root, "untracked.txt", "x\n")
+    target = tmp_path / "copy"
+    before = git(root, "status", "--porcelain")
+    gatelib.export(root, ref, target)
+    assert git(root, "status", "--porcelain") == before
+    assert git(root, "rev-parse", "HEAD") == ref
+    assert (target / "a.txt").read_text(encoding="utf-8") == "committed\n"
+    assert os.access(target / "run.sh", os.X_OK)
+    assert not (target / "sub").exists()
+    assert not (target / "untracked.txt").exists()
+    assert git(target, "ls-files").splitlines() == ["a.txt", "run.sh"]
+
+
+def test_what_a_leader_left_in_its_group_is_ended_after_the_leader_is_reaped(
+    tmp_path: Path,
+) -> None:
+    leader = start(
+        "import subprocess, sys\n"
+        "from pathlib import Path\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        "Path(sys.argv[1], 'child').write_text(str(child.pid))\n",
+        tmp_path,
+    )
+    child = wait_for(tmp_path / "child")
+    leader.wait(timeout=30)
+
+    def running() -> bool:
+        try:
+            return Path(f"/proc/{child}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+        except OSError:
+            return False
+
+    assert running()
+    assert gatelib.end_group(leader.pid)
+    deadline = time.monotonic() + 10
+    while running() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert not running()
+    assert not gatelib.end_group(leader.pid)
+
+
+def test_a_process_whose_program_is_outside_the_tree_is_left_whatever_else_the_listing_holds(
+    tmp_path: Path,
+) -> None:
+    tree, proc = tmp_path / "tree", tmp_path / "proc"
+    inside = start("import time\ntime.sleep(60)\n", tmp_path)
+    outside = start("import time\ntime.sleep(60)\n", tmp_path)
+    try:
+        for process, program in (
+            (inside, tree / "bin" / "service"),
+            (outside, tmp_path / "elsewhere" / "service"),
+        ):
+            entry = proc / str(process.pid)
+            entry.mkdir(parents=True)
+            (entry / "exe").symlink_to(program)
+        assert gatelib.end_running_from(tree, proc) == [inside.pid]
+        assert inside.wait(timeout=5) == -signal.SIGKILL
+        assert outside.poll() is None
+    finally:
+        for process in (inside, outside):
+            process.kill()
+            process.wait()
+
+
+def test_a_stop_marker_is_replaced_whole_so_a_reader_never_sees_half_of_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = tmp_path / "stopping"
+    before = gatelib.Stopping({80: None}, "none", frozenset())
+    after = gatelib.Stopping({80: "shut", 81: None}, "no Linux", frozenset(), answered=True)
+    gatelib.write_stopping(marker, before)
+    write_text = Path.write_text
+    reads: list[str] = []
+
+    def halfway(self: Path, data: str, encoding: str | None = None) -> int:
+        write_text(self, data[: len(data) // 2], encoding=encoding)
+        reads.append(marker.read_text(encoding="utf-8"))
+        return write_text(self, data, encoding=encoding)
+
+    monkeypatch.setattr(Path, "write_text", halfway)
+    gatelib.write_stopping(marker, after)
+    monkeypatch.undo()
+    assert [json.loads(read)["ports"] for read in reads] == [{"80": None}]
+    assert gatelib.read_stopping(marker) == after

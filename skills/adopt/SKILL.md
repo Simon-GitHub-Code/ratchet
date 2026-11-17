@@ -275,7 +275,7 @@ Tell the owner this before step 1. It is not a question.
     - Commit what the proof changed, push and open a pull request (with no forge, the change description at `.scratch/changes/<branch>.md`, the branch's `/` written as `-`) with every template section filled, and under Gates the `tier0` tail and the guard paths the rehearsal changed.
     - Say how to start the product and open it: `just start` and the address it prints, and on an empty repository that it starts once the first feature brings the file `boot` runs.
     - Under Criticism: every `none` row that applies, every tool you could not check, every assumption of step 5, every answer you could not act on, a rehearsal with no slice one named and each edit its second round still needed, the adoption's measured size, and the owner's hooks command, if any, which `just ratchet`, the route and the feature preflight wait for.
-    - Say in one line which rows wait for which trigger, and that the route names `/ratchet:safeguard` when one fires.
+    - Say in one line which rows wait for which trigger, and that the route names `/ratchet:safeguard` when one fires. Say also that the first code that runs things at once, reads outside input or moves between named states will owe a formal model, which an agent writes and checks against the code, or a record of why there is none.
     - The merge judge reads the adoption by the gates it brings:
       - **No forge:** `just merge <branch>` merges it when the judge passes it and `check-deep` is green on the merge result.
       - **A forge:** the `merge` workflow arrives with the adoption, so no merge job runs on its own pull request and the owner merges it once.

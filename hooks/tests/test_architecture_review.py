@@ -372,7 +372,7 @@ def test_conformance_asks_for_a_row_of_each_kind_that_reopens_the_architecture(
     tmp_path: Path,
 ) -> None:
     root = repository(tmp_path, {BINDING: binding(REVIEW_ROW)})
-    problems = [str(finding) for finding in conformance.check_triggers(root)]
+    problems = [str(finding) for finding in conformance.check_trigger_kinds(root)]
     assert any(
         "the Triggers table has no row for kind 'access-control', whose arrival reopens the"
         " architecture (ADR 0052)" in problem
