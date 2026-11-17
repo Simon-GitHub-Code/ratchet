@@ -80,6 +80,7 @@ from tests.route_model import (
     Ticket,
     Tree,
     World,
+    expires,
     runnable_slots,
 )
 from tests.test_drain import MERGE
@@ -151,7 +152,11 @@ FLAG_ANSWER = (
 )
 CRITERIA = "## Acceptance criteria"
 STORIES = "## User Stories"
-SPEC = f"# Settle\n\n{STORIES}\n\n1. As the owner, I am told the next command.\n"
+LEFT_SPEC = f"# Settle\n\n{STORIES}\n\n1. As the owner, I am told the next command.\n"
+SPEC = f"{LEFT_SPEC}\n## Answers\n\n- `spec.scope`: one command, not a list of them.\n"
+ANSWERS = "## Answers"
+OWNERS_WORDS = "## In the owner's words"
+EXPIRED_ON = "2026-11-17"
 CONJECTURE_SKILL: Final = plugin_pin.PLUGIN / "skills/conjecture/SKILL.md"
 CRITERIA_LINE: Final = re.compile(r"^- Criteria: .*$", re.MULTILINE)
 DIGEST: Final = re.compile(r"[0-9a-f]{40}")
@@ -172,6 +177,7 @@ OWN_CONJECTURE: Final = frozenset(Ticket) - {
 }
 LETTERS: Final = "ab"
 TICKETS_BRANCH: Final = "docs/tickets-"
+STATUS_LINE: Final = re.compile(r"^Status: .*$", re.MULTILINE)
 
 
 @functools.cache
@@ -584,12 +590,44 @@ def rewrites_ticket(repo: Repo, change: Change) -> None:
         snapshot(repo.root, "docs(tracker): the owner's edit of a ticket")
 
 
-for _name in (
-    ActionName.OWNER_AGREES_TICKET,
-    ActionName.OWNER_WORKS_TICKET_THEMSELF,
-    ActionName.OWNER_RESOLVES_TICKET,
-):
-    DO[_name] = rewrites_ticket
+DO[ActionName.OWNER_AGREES_TICKET] = rewrites_ticket
+
+
+def expire(repo: Repo) -> None:
+    repo.edits += 1
+    unit = repo.root / repo.feature()
+    said = [
+        f"- {EXPIRED_ON}, `{path.relative_to(repo.root)}`: {line.removeprefix('- ')}"
+        for path in sorted(unit.rglob("*.md"))
+        for line in markdown_text.section(path.read_text(encoding="utf-8"), ANSWERS).split("\n")
+        if line.strip()
+    ]
+    if said:
+        brief = repo.root / route.DESIGN_BRIEF
+        text = brief.read_text(encoding="utf-8").rstrip("\n")
+        held = markdown_text.section(text, OWNERS_WORDS).strip("\n")
+        words = "\n".join([held, *said]).strip("\n")
+        text = (
+            with_body(text, OWNERS_WORDS, words)
+            if markdown_text.has_section(text, OWNERS_WORDS)
+            else f"{text}\n\n{OWNERS_WORDS}\n\n{words}\n"
+        )
+        brief.write_text(text, encoding="utf-8")
+    git(repo.root, "rm", "-r", "-q", "-f", "--", repo.feature())
+
+
+def resolves_ticket(repo: Repo, change: Change) -> None:
+    path = repo.root / repo.ticket_path(change.slot)
+    status = f"Status: {STATUS[Ticket.RESOLVED]}"
+    path.write_text(STATUS_LINE.sub(status, path.read_text(encoding="utf-8")), encoding="utf-8")
+    if expires(change.before, change.after):
+        expire(repo)
+    if change.after.tree is Tree.CLEAN:
+        snapshot(repo.root, "docs(tracker): the owner's edit of a ticket")
+
+
+DO[ActionName.OWNER_WORKS_TICKET_THEMSELF] = resolves_ticket
+DO[ActionName.OWNER_RESOLVES_TICKET] = resolves_ticket
 
 
 def build_on_branch(repo: Repo, slot: int, files: dict[str, str] | None = None) -> str:
@@ -914,6 +952,19 @@ def _owner_records_architecture(repo: Repo, _change: Change) -> None:
     snapshot(repo.root, "chore(method): record the architecture")
 
 
+@does(ActionName.UPGRADE_FINDS_AN_EXPIRED_UNIT)
+def _upgrade_finds_an_expired_unit(repo: Repo, _change: Change) -> None:
+    write(repo.root, repo.spec_path(), LEFT_SPEC)
+    for slot in (0, 1):
+        repo.write_ticket(slot, Ticket.RESOLVED, inherits=False)
+    snapshot(repo.root, "docs(tracker): a unit a plugin from before ADR 0064 left")
+
+
+@does(ActionName.AGENT_DELETES_THE_EXPIRED_UNIT)
+def _agent_deletes_the_expired_unit(repo: Repo, _change: Change) -> None:
+    expire(repo)
+
+
 @does(ActionName.AGENT_BINDS_SAFEGUARD)
 def _agent_binds_safeguard(repo: Repo, _change: Change) -> None:
     repo.tools = [tool or "`just safe`" for tool in repo.tools]
@@ -1021,6 +1072,7 @@ STAGES: Final = {
     "architecture-review": Advice.REVIEW,
     "safeguard": Advice.SAFEGUARD,
     "architecture": Advice.ARCHITECTURE,
+    "expire": Advice.EXPIRE,
     "triage": Advice.TRIAGE,
     "resolve": Advice.RESOLVE,
     "blocked": Advice.BLOCKED,
