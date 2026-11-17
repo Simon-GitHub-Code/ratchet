@@ -12,12 +12,14 @@ from ratchet_guards import bash
 from ratchet_guards.context import Context
 from ratchet_guards.hook import GitRepoState
 from ratchet_guards.verdict import RULES, Decision, Verdict
-from tests.repos import git
+from tests.repos import commit, git, write
 from tests.support import make_guard
 from tests.test_drain import (
     ALPHA,
     BRANCH_A,
     Out,
+    killed,
+    moved,
     project,
     run,
     scratch,  # noqa: F401 # -- an autouse fixture of the drain's tests
@@ -136,3 +138,48 @@ def test_a_check_before_a_resume_does_not_open_the_gate(
     assert "authorises a resume and nothing else" in capsys.readouterr().out
     assert queue_notes.read_note(root, BRANCH_A).get("passed") is not True
     assert [v.rule for v in judged(COMMIT, tree_of(root))] == GATED
+
+
+def test_a_commit_after_an_update_cut_off_past_its_rebase_is_refused(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    assert run(root, "check", ALPHA, "--final") == 0
+    assert judged(COMMIT, tree_of(root)) == []
+    moved(root)
+    with pytest.MonkeyPatch.context() as patch:
+        killed(patch, "after_rebase")
+        with pytest.raises(KeyboardInterrupt):
+            run(root, "update", ALPHA)
+    assert [v.rule for v in judged(COMMIT, tree_of(root))] == GATED
+    assert run(root, "update", ALPHA) == 0
+    assert [v.rule for v in judged(COMMIT, tree_of(root))] == GATED
+    assert run(root, "check", ALPHA, "--final") == 0
+    capsys.readouterr()
+    assert judged(COMMIT, tree_of(root)) == []
+
+
+@pytest.mark.parametrize(
+    "point", ["before_rebase", "after_rebase", "mid_note_write", "after_note_write"]
+)
+def test_an_update_cut_off_after_the_orchestrator_committed_parks_nothing(
+    tmp_path: Path, capsys: Out, point: str
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    assert run(root, "check", ALPHA, "--final") == 0
+    tree = tree_of(root)
+    assert judged(COMMIT, tree) == []
+    write(tree, "src/b.py", "B = 1\n")
+    commit(tree, "feat(core): the orchestrator's change")
+    moved(root)
+    with pytest.MonkeyPatch.context() as patch:
+        killed(patch, point)
+        with pytest.raises(KeyboardInterrupt):
+            run(root, "update", ALPHA)
+    capsys.readouterr()
+    assert run(root, "update", ALPHA) == 0
+    said = capsys.readouterr().out
+    assert "a role published" not in said
+    assert queue_notes.read_note(root, BRANCH_A).get("outcome") != drain.PARKED

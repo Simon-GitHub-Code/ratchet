@@ -15,7 +15,7 @@ const COARSE = {
 
 export const title = "What the route names once nothing is unfinished";
 export const state = (v) => {
-  if (COARSE[v.real_advice] === COARSE[v.advice]) return COARSE[v.beneath];
+  if (!(v.advice in COARSE) || COARSE[v.real_advice] === COARSE[v.advice]) return COARSE[v.beneath];
   if (v.advice === "adopt") return "Run /ratchet:adopt, yet the route names what follows it";
   return `${COARSE[v.advice]}, yet the route names: ${COARSE[v.real_advice]}`;
 };

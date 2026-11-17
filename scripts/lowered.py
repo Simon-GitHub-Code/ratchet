@@ -41,6 +41,7 @@ import tomllib
 from collections import Counter
 from pathlib import Path
 
+import comments
 import gatelib
 import owed
 import plugin_pin
@@ -218,7 +219,13 @@ def owed_grown(root: Path, base: str) -> list[str]:
     before, after = owed.parse(gatelib.show(root, base, str(owed.LEDGER))), owed.read(root)
     pins = (gatelib.show(root, base, binding), gatelib.read_text(root / binding))
     floor = plugin_pin.version_of(plugin_pin.PLUGIN)
-    problems = owed.grown(before, after, binding=pins, floor=floor)
+    problems = owed.grown(
+        before,
+        after,
+        binding=pins,
+        floor=floor,
+        exempt=(comments.first_listed(root, base), gatelib.renamed(root, base)),
+    )
     added = Counter(after.entries) - Counter(before.entries)
     pin = owed.moved(*pins, floor=floor)
     if problems or not added or pin is None:

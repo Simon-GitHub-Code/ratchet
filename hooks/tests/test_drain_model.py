@@ -24,7 +24,7 @@ import gatelib
 import publish_check
 from tests import drain_model as model
 from tests import model_tla
-from tests.drain_model import Branch, Kind, Merge, Name, Step, Tree
+from tests.drain_model import Branch, Deed, Keep, Kind, Merge, Name, Stage, Step, Tree
 from tests.drain_world import (
     BRANCH,
     DRAFT,
@@ -206,6 +206,19 @@ def landed_unchecked(*, gate: bool) -> list[str]:
     ]
 
 
+def committed_while_marked(*, gate: bool) -> list[str]:
+    """The commit steps on a ticket whose note holds ``update``'s mark: cut off, or mid-rebase."""
+    commits = {kind.value for kind in model.COMMITS}
+    return [
+        said
+        for before, said, _ in main_graph(gate=gate)[1]
+        if said.rpartition(" ")[0] in commits
+        and (name := model.ticket_of(said)) is not None
+        and (note := before.of(name).note) is not None
+        and note.rebasing
+    ]
+
+
 @pytest.mark.parametrize(
     "part", [pytest.param(n, marks=pytest.mark.shard_slot(4 * n)) for n in range(len(RULE_PARTS))]
 )
@@ -225,6 +238,7 @@ def test_each_rule_holds_on_every_step_of_the_model_or_breaks_on_its_recorded_pa
         assert any(name.startswith(kind.value) for name in found.taken), kind
     unchecked = landed_unchecked(gate=False)
     assert not unchecked, f"a branch lands on a start no check passed: {unchecked[0]}"
+    assert committed_while_marked(gate=False), "without the gate, a commit follows a cut-off update"
 
 
 @pytest.mark.parametrize(
@@ -247,13 +261,24 @@ def test_with_the_guards_gate_each_rule_but_10_holds_and_no_role_commits(part: i
         assert taken is (kind is not Kind.PUBLISH), kind
     unchecked = landed_unchecked(gate=True)
     assert not unchecked, f"a branch lands on a start no check passed: {unchecked[0]}"
+    marked = committed_while_marked(gate=True)
+    assert not marked, f"a commit goes through on a branch update moved: {marked[0]}"
+    states, edges = main_graph(gate=True)
     moved = {
         (ticket.branch, ticket.note is not None and ticket.note.rebasing)
-        for state in main_graph(gate=True)[0]
+        for state in states
         for ticket in state.tickets
         if ticket.since
     }
     assert moved == {(Branch.BARE, True)}, "only a killed update moves a branch from its start"
+    told = {
+        after == before
+        for before, said, after in edges
+        if said.startswith(Kind.CHECK.value)
+        and (name := model.ticket_of(said)) is not None
+        and before.of(name).since
+    }
+    assert told == {True}, "a check of a branch a killed update moved changes nothing"
 
 
 def test_every_rule_reads_as_one_sentence() -> None:
@@ -309,6 +334,8 @@ class Play:
         assert merging == (self.state.scratch, self.state.half), self.says(f"merge.py: {merging}")
         for name, real, kept in zip(Name, seen.tickets, self.state.tickets, strict=True):
             assert real == kept, self.says(f"ticket {name.value} is {real}\nnot {kept}")
+            cut = drain.cut_off(self.world.root, BRANCH[name])
+            assert cut is model.cut_off(kept), self.says(f"drain.cut_off of {name.value}: {cut}")
         for name, kept in self.state.each():
             if kept.tree is Tree.NONE:
                 continue
@@ -593,15 +620,22 @@ def test_check_records_the_start_and_marks_it_passed_in_the_note(tmp_path: Path)
     assert note_of(play)["passed"] is True
 
 
-def test_a_check_after_an_update_killed_past_the_rebase_of_a_bare_branch_parks_it_as_published(
+def test_a_check_after_an_update_killed_past_the_rebase_of_a_bare_branch_says_to_run_update_again(
     tmp_path: Path,
 ) -> None:
-    path = [*MARK_LEFT[:-1], KILL_AFTER_REBASE, CHECK_A]
-    assert broken_by(path) == set()
-    assert model.held_by_note(walked(path)[-1].of(Name.A)), "parked and held"
-    play = replay(tmp_path, path)
-    assert play.world.code == 1
-    assert note_of(play)["reasons"][0].startswith("a role published: `feature/1-alpha` moved")
+    path = [*MARK_LEFT[:-1], KILL_AFTER_REBASE, CHECK_A, UPDATE_A, CHECK_A]
+    assert {rule for at in range(1, len(path) + 1) for rule in broken_by(path[:at])} == set()
+    states = walked(path)
+    assert model.cut_off(states[2].of(Name.A)), "the mark stands and the branch moved"
+    assert states[3] == states[2], "the check changes nothing"
+    play = replay(tmp_path, path[:3])
+    kept = note_of(play)
+    told = f"check: {REF[Name.A]} {drain.CUT_OFF}\n"
+    assert (play.named(CHECK_A), play.world.code) == (told, drain.UNREAD)
+    assert note_of(play) == kept, "the check parks nothing and writes no note"
+    assert play.named(UPDATE_A) == '{"moved": true, "conflicts": []}\n'
+    assert (play.named(CHECK_A), play.world.code) == (f"{publish_check.GREEN}\n", 0)
+    assert note_of(play)["passed"] is True
 
 
 def test_a_check_after_a_run_that_died_makes_the_tree_and_parks_a_branch_a_role_committed_on(
@@ -851,15 +885,15 @@ def test_clean_all_clears_the_mark_of_an_update_killed_on_a_branch_with_no_commi
     assert plan_of(play)[BRANCH[Name.A]].state == "buildable"
 
 
-def test_a_commit_goes_through_after_the_final_check_and_in_a_rebase_left_on_a_passed_start(
+def test_a_commit_goes_through_after_the_final_check_and_not_in_a_rebase_a_kill_left(
     tmp_path: Path,
 ) -> None:
     stopped = replay(tmp_path / "stopped", ["drain.py open a", CHECK_A]).state.of(Name.A)
     assert stopped.tree is Tree.CLEAN
     assert not model.commit_refused(stopped)
     halted = replay(tmp_path / "halted", [*OPEN_A, EDIT_A, MARK_LEFT[-1]]).state.of(Name.A)
-    assert halted.tree is Tree.REBASING
-    assert not model.commit_refused(halted)
+    assert (halted.tree, model.unchecked(halted)) == (Tree.REBASING, False), "on a passed start"
+    assert model.commit_refused(halted), "the mark refuses it"
 
 
 RECORDED = (
@@ -914,6 +948,9 @@ def test_an_update_killed_twice_before_it_drops_the_record_keeps_its_mark(
     tmp_path: Path,
 ) -> None:
     assert broken_by(KILLED_TWICE) == set()
+    killed = walked(KILLED_TWICE)[-1].of(Name.A)
+    assert not model.unchecked(killed), "the start a check passed is kept"
+    assert model.commit_refused(killed), "the mark refuses a commit"
     play = replay(tmp_path, [*KILLED_TWICE, "drain.py clean --all"])
     assert play.state.of(Name.A).branch is Branch.STALE
     assert note_of(play)["rebasing"], "the mark stays until the record is dropped"
@@ -924,6 +961,24 @@ def test_an_update_killed_twice_before_it_drops_the_record_keeps_its_mark(
     assert play.state.of(Name.A).branch is Branch.DRAFT, "update drops the record no review wrote"
     assert "rebasing" not in note_of(play)
     assert plan_of(play)[BRANCH[Name.A]].why == ()
+    assert model.commit_refused(play.state.of(Name.A)), "the new start awaits its check"
+    assert play.named(CHECK_A).startswith(publish_check.GREEN)
+    assert not model.commit_refused(play.state.of(Name.A)), "the final check lets a commit through"
+
+
+@pytest.mark.parametrize("kill", [MARK_LEFT[-1], KILL_AFTER_REBASE])
+def test_an_update_cut_off_after_the_agent_committed_on_a_passed_start_parks_nothing(
+    tmp_path: Path, kill: str
+) -> None:
+    path = ["drain.py open a", CHECK_A, "the agent commits a", EDIT_C, kill, UPDATE_A]
+    assert {rule for at in range(1, len(path) + 1) for rule in broken_by(path[:at])} == set()
+    states = walked(path)
+    assert model.commit_refused(states[-2].of(Name.A)), "the mark refuses a commit"
+    assert not any(model.held_by_note(state.of(Name.A)) for state in states), "nothing parks"
+    play = replay(tmp_path, path)
+    assert play.world.code == 0
+    assert "a role published" not in play.world.printed
+    assert note_of(play).get("outcome") != drain.PARKED
 
 
 def test_update_records_a_landed_branchs_merge_and_does_not_rebase_it(tmp_path: Path) -> None:
@@ -1967,6 +2022,161 @@ def test_a_stopped_drain_blocks_the_next_until_its_session_ends(two_drains: Leas
     assert taken == f"drain: {two_drains.world.tokens[model.Drain.TWO]}\n", (
         "a gone drain blocks not"
     )
+
+
+(LAST_DELETES, NEVER_REFUSED, CARRIED, RESOLVED, SPEC_FOUND, LAND_RECOVERS) = model.EXPIRY_RULES
+BUILT_A = ["the agent commits a", "documents.py expire runs on a"]
+BUILT_C = ["the agent commits c", "documents.py expire runs on c"]
+VERDICT_A = "the agent commits the verdict record of a"
+VERDICT_C = "the agent commits the verdict record of c"
+REJUDGE_A = "a judge-again run commits the verdict record of a"
+REJUDGE_C = "a judge-again run commits the verdict record of c"
+ANSWERED = "the owner lands an Answers line on a ticket of the unit"
+LANDED_A = [*BUILT_A, VERDICT_A, "drain.py land a"]
+EDITED_ACROSS = [*LANDED_A, *BUILT_C, ANSWERED, "drain.py update c"]
+OUT_OF_ORDER = [
+    "the agent commits a",
+    "the agent commits c",
+    "documents.py expire runs on a",
+    "documents.py expire runs on c",
+    VERDICT_A,
+    "drain.py land a",
+    "drain.py update c",
+    REJUDGE_C,
+    "drain.py land c",
+]
+SQUASHED = [
+    *BUILT_A,
+    "the owner squashes by hand the branch of a",
+    ANSWERED,
+    "drain.py update a",
+    REJUDGE_A,
+]
+UNKEPT: dict[frozenset[Keep], dict[str, list[str]]] = {
+    frozenset(): {SPEC_FOUND: SQUASHED},
+    frozenset({Keep.UPDATE_EXPIRE}): {SPEC_FOUND: SQUASHED, NEVER_REFUSED: OUT_OF_ORDER},
+    frozenset({Keep.CARRY}): {
+        SPEC_FOUND: SQUASHED,
+        CARRIED: EDITED_ACROSS,
+        NEVER_REFUSED: [*EDITED_ACROSS, REJUDGE_C, "drain.py land c"],
+    },
+    frozenset({Keep.ONCE}): {SPEC_FOUND: SQUASHED, CARRIED: EDITED_ACROSS},
+    frozenset({Keep.RESOLVE}): {SPEC_FOUND: SQUASHED, RESOLVED: EDITED_ACROSS},
+    frozenset({Keep.JUDGE}): {SPEC_FOUND: SQUASHED},
+    frozenset({Keep.HISTORY}): {SPEC_FOUND: [*BUILT_A, ANSWERED, "drain.py update a", REJUDGE_A]},
+    frozenset({Keep.NOTE}): {
+        SPEC_FOUND: SQUASHED,
+        LAND_RECOVERS: [
+            *LANDED_A,
+            *BUILT_C,
+            VERDICT_C,
+            "a kill before the note stops drain.py land c",
+            "drain.py land c",
+        ],
+    },
+    frozenset({Keep.UPDATE_EXPIRE, Keep.JUDGE}): {SPEC_FOUND: SQUASHED, LAST_DELETES: OUT_OF_ORDER},
+}
+
+
+def expiry_breaks(keeps: frozenset[Keep]) -> dict[str, list[str]]:
+    _, edges = model.expiry_graph(keeps)
+    came: dict[model.Expiry, tuple[model.Expiry, str] | None] = {model.EXPIRY_INITIAL: None}
+    breaks: dict[str, list[str]] = {}
+    for before, said, after in edges:
+        for name, rule_holds in model.EXPIRY_RULES.items():
+            if name not in breaks and not rule_holds(before, said, after):
+                path, at = [said], came[before]
+                while at is not None:
+                    path.append(at[1])
+                    at = came[at[0]]
+                breaks[name] = path[::-1]
+        came.setdefault(after, (before, said))
+    return breaks
+
+
+def expiry_walk(path: list[str], keeps: frozenset[Keep] = model.KEEPS) -> model.Expiry:
+    state = model.EXPIRY_INITIAL
+    for said in path:
+        state = dict(model.expiry_moves(state, keeps))[said]
+    return state
+
+
+def test_each_expiry_rule_holds_on_every_step_but_12d_which_a_hand_squash_breaks() -> None:
+    states, edges = model.expiry_graph()
+    assert (len(states), len(edges)) == (1237, 2752)
+    assert expiry_breaks(model.KEEPS) == UNKEPT[frozenset()]
+    taken = {said.removesuffix(" a").removesuffix(" c") for _, said, _ in edges}
+    assert taken == {deed.value for deed in Deed}
+
+
+@pytest.mark.parametrize(
+    "dropped", list(UNKEPT)[1:], ids=lambda keeps: "-".join(sorted(k.name for k in keeps))
+)
+def test_each_keep_the_adr_asks_for_is_what_holds_its_rule(dropped: frozenset[Keep]) -> None:
+    assert expiry_breaks(model.KEEPS - dropped) == UNKEPT[dropped]
+
+
+def test_expire_converges_on_every_branch_the_drain_leaves() -> None:
+    def unconverged(keeps: frozenset[Keep]) -> list[model.Change]:
+        states, _ = model.expiry_graph(keeps)
+        return [
+            change
+            for state in states
+            for name, change in zip(model.SIBLINGS, state.changes, strict=True)
+            if change is not None
+            and not change.merged
+            and change.stage not in {Stage.BUILT, Stage.STOPPED}
+            and model.expire(change, name, keeps)._replace(stage=change.stage) != change
+        ]
+
+    assert not unconverged(model.KEEPS), "a second run of expire changes nothing"
+    assert unconverged(model.KEEPS - {Keep.UPDATE_EXPIRE}), "an update that skips it leaves work"
+
+
+@pytest.mark.parametrize("first", [Name.A, Name.C], ids=lambda name: f"{name.value}-lands-first")
+def test_whichever_ticket_lands_last_deletes_the_unit_and_carries_its_line(first: Name) -> None:
+    last = Name.C if first is Name.A else Name.A
+    path = [
+        *BUILT_A,
+        VERDICT_A,
+        *BUILT_C,
+        VERDICT_C,
+        f"drain.py land {first.value}",
+        f"drain.py update {last.value}",
+        f"a judge-again run commits the verdict record of {last.value}",
+        f"drain.py land {last.value}",
+    ]
+    end = expiry_walk(path)
+    deleter, keeper = end.change(last), end.change(first)
+    assert (end.tip.unit, end.tip.brief) == (False, (0,))
+    assert deleter is not None
+    assert keeper is not None
+    assert (deleter.dropped, deleter.recorded) == (True, True)
+    assert (keeper.merged, keeper.dropped) == (True, False)
+
+
+def test_a_records_edit_between_expire_and_update_reaches_the_brief_once_and_lands() -> None:
+    end = expiry_walk([*EDITED_ACROSS, REJUDGE_C, "drain.py land c"])
+    assert (end.tip.unit, end.tip.brief) == (False, (0, model.OWNERS_LINE))
+
+
+def test_a_judge_again_run_after_two_updates_reads_the_deleted_spec() -> None:
+    path = [
+        *BUILT_A,
+        *BUILT_C,
+        VERDICT_C,
+        "drain.py land c",
+        "drain.py update a",
+        ANSWERED,
+        "drain.py update a",
+        REJUDGE_A,
+        "drain.py land a",
+    ]
+    end = expiry_walk(path)
+    change = end.change(Name.A)
+    assert change is not None
+    assert (change.history, change.blind) == (True, False)
+    assert (end.tip.unit, end.tip.brief) == (False, (0, model.OWNERS_LINE))
 
 
 def test_the_page_was_checked_and_drawn_from_the_current_exports() -> None:

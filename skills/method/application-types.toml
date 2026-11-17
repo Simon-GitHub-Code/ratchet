@@ -111,6 +111,8 @@ broken-flag-state = "a flag whose on state breaks a test that its off state pass
 erroring-route = "a route the smoke requests that answers with an error"
 guarded-crash = "a crash reached only when the input holds an exact value of four bytes or more that the parser compares against"
 related-fields = "a crash reached only when two fields of the input satisfy an arithmetic relation, such as one equal to the sum of the others"
+prose-comment = "a prose comment in a file of a `listed` row of the binding's Comments table"
+doc-comment = "a doc comment in a file outside the published interface"
 
 [[question]]
 name = "lint, near-all rules"
@@ -119,6 +121,10 @@ directives = true
 [[question]]
 name = "strict types"
 directives = true
+
+[[question]]
+name = "no prose comments"
+proofs = ["prose-comment", "doc-comment"]
 
 [[question]]
 name = "unit, property and fitness tests"
@@ -267,6 +273,7 @@ trigger = "code:public-interface"
 [[question]]
 name = "documentation coverage, ratcheted"
 trigger = "code:public-interface"
+applies-to = ["library"]
 
 [[question]]
 name = "old data still loads"

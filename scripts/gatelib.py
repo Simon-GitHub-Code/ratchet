@@ -156,6 +156,21 @@ def changed_paths(root: Path, base: str) -> list[str]:
     return sorted({p for p in (tracked + (untracked or "")).split("\0") if p})
 
 
+def renamed(root: Path, base: str) -> dict[str, str]:
+    listed = git(root, "diff", "--find-renames", "--name-status", "-z", base) or ""
+    fields = listed.split("\0")
+    moves: dict[str, str] = {}
+    at = 0
+    while at < len(fields) and fields[at]:
+        status = fields[at]
+        if status.startswith("R") and at + 2 < len(fields):
+            moves[fields[at + 1]] = fields[at + 2]
+            at += 3
+        else:
+            at += 3 if status.startswith("C") else 2
+    return moves
+
+
 listings: contextvars.ContextVar[dict[Path, list[str]] | None] = contextvars.ContextVar(
     "listings", default=None
 )

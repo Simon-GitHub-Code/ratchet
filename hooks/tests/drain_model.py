@@ -31,9 +31,10 @@ runs ``check`` only on a start no check passed, of a ticket its note does not ho
 ``--final`` is taken only in ``a``. A check that cannot read, or that finds only a rebase left
 unfinished, is taken only in ``a``, on a branch with commits of its own.
 
-The guard refuses a commit in a queue work tree whose start no check with ``--final`` has passed
-(``commit_refused``). ``graph(guarded)`` is the drain as it runs: a commit step only where the
-guard lets it through, so a role never commits and the agent commits only after the check.
+The guard refuses a commit in a queue work tree whose start no check with ``--final`` has passed,
+or whose note holds ``update``'s mark (``commit_refused``). ``graph(guarded)`` is the drain as it
+runs: a commit step only where the guard lets it through, so a role never commits and the agent
+commits only after the check.
 ``graph()`` is the drain without that gate, the record of what breaks there: in ``a`` the agent
 may commit before the check, and a role before its run's check. In ``d`` and ``e`` the commits
 obey the gate in both.
@@ -568,11 +569,14 @@ def unchecked(ticket: Ticket) -> bool:
 
 
 def commit_refused(ticket: Ticket) -> bool:
-    """Whether a commit in the ticket's queue work tree is refused: one stands on a start unpassed.
+    """Whether a commit in the ticket's queue work tree is refused: the guard's ``awaiting_final``.
 
-    The note of a branch always holds a start, so a start no check passed is ``unchecked``.
+    The note of a branch always holds a start, so a start no check passed is ``unchecked``. While
+    ``update``'s mark stands, the branch is moving, or has moved, off the start a check passed, so
+    the mark refuses a commit whatever ``passed`` says.
     """
-    return ticket.tree is not Tree.NONE and unchecked(ticket)
+    mark = ticket.note is not None and ticket.note.rebasing
+    return ticket.tree is not Tree.NONE and (unchecked(ticket) or mark)
 
 
 def checked(ticket: Ticket) -> Ticket:
@@ -599,15 +603,33 @@ def _publish(state: State, name: Name) -> State | None:
     return state.with_ticket(name, moved_by_a_role)
 
 
+def asked(ticket: Ticket) -> bool:
+    """Whether the skill runs ``check`` on the ticket.
+
+    The skill runs the check after a run returns, so on a start no check has passed, of a branch
+    the note does not hold.
+    """
+    return unchecked(ticket) and not held_by_note(ticket)
+
+
+def cut_off(ticket: Ticket) -> bool:
+    """Whether ``update`` was cut off after it moved the branch: ``drain.cut_off``.
+
+    The note holds ``update``'s mark, and the branch is not at the tip the mark names. While the
+    mark stands, the branch is at that tip only while the rebase is under way in its tree.
+    """
+    note = ticket.note
+    return note is not None and note.rebasing and ticket.tree is not Tree.REBASING
+
+
 def in_its_tree(state: State, name: Name) -> Ticket | None:
     """The ticket as ``check`` has it once it has a tree to read; ``None`` where it reads none.
 
-    The skill runs the check after a run returns, so on a start no check has passed, of a branch
-    the note does not hold. A branch with commits of its own and no work tree gets one under the
-    cap, as ``update`` makes one, which drops ``settle``'s mark.
+    A branch with commits of its own and no work tree gets one under the cap, as ``update`` makes
+    one, which drops ``settle``'s mark. The check of an ``update`` cut off reads no tree.
     """
     ticket = state.of(name)
-    if not unchecked(ticket) or held_by_note(ticket):
+    if not asked(ticket) or cut_off(ticket):
         return None
     if ticket.tree is Tree.NONE:
         if not ticket.ahead or trees(state) >= CAP or ticket.note is None:
@@ -617,7 +639,13 @@ def in_its_tree(state: State, name: Name) -> Ticket | None:
 
 
 def _check(state: State, name: Name, *, final: bool = True) -> State | None:
-    """``drain.py check``: green with ``--final`` marks the start passed; a branch that moved is parked and held."""  # noqa: E501
+    """``drain.py check``: green with ``--final`` marks the start passed; a branch that moved is parked and held.
+
+    After an ``update`` cut off once it moved the branch, the check says to run ``update`` again
+    and changes nothing: it cannot tell that move from a role's commit.
+    """  # noqa: E501
+    if asked(state.of(name)) and cut_off(state.of(name)):
+        return state
     ticket = in_its_tree(state, name)
     if ticket is None:
         return None
@@ -2105,6 +2133,328 @@ LEASE_RULES: dict[str, Callable[[Lease, str, Lease], bool]] = {
 }
 
 
+# --- the expiry of a unit: ADR 0064 --------------------------------------------------------------
+
+
+SIBLINGS = (Name.A, Name.C)
+OWNERS_LINE = 1
+
+
+class Keep(Fact):
+    UPDATE_EXPIRE = "update runs expire once its rebase is done"
+    CARRY = "update takes the incoming edit of a unit file it deleted, then runs expire"
+    ONCE = "expire carries only a line the brief does not hold yet"
+    RESOLVE = "update resolves a modify/delete conflict in the files of a unit expire lists"
+    JUDGE = "the judge refuses a unit the change left expired or an Answers line it dropped"
+    HISTORY = "a judge-again run reads the spec from the parent of the commit that deleted it"
+    NOTE = "a command on a ticket finds it by the note written when it opened"
+
+
+KEEPS = frozenset(Keep)
+
+
+class Files(NamedTuple):
+    unit: bool = True
+    answers: frozenset[int] = frozenset({0})
+    brief: tuple[int, ...] = ()
+    resolved: frozenset[Name] = frozenset()
+
+
+class Stage(Fact):
+    BUILT = "the content commit, expire not yet run"
+    EXPIRED = "expire ran, the verdict record not yet written"
+    JUDGED = "the verdict record last"
+    STOPPED = "a rebase stopped on a conflict, left for Reconcile"
+
+
+class Change(NamedTuple):
+    base: Files
+    stage: Stage = Stage.BUILT
+    dropped: bool = False
+    carried: tuple[int, ...] = ()
+    history: bool = False
+    rebased: bool = False
+    merged: bool = False
+    recorded: bool = False
+    held: bool = False
+    blind: bool = False
+
+
+class Expiry(NamedTuple):
+    tip: Files = Files()
+    changes: tuple[Change | None, ...] = (None, None)
+    answered: bool = False
+
+    def change(self, name: Name) -> Change | None:
+        return self.changes[SIBLINGS.index(name)]
+
+    def with_change(self, name: Name, change: Change) -> Expiry:
+        changes = list(self.changes)
+        changes[SIBLINGS.index(name)] = change
+        return self._replace(changes=tuple(changes))
+
+
+EXPIRY_INITIAL = Expiry()
+
+
+def expired(files: Files) -> bool:
+    return files.unit and files.resolved >= frozenset(SIBLINGS)
+
+
+def head(change: Change, name: Name) -> Files:
+    base = change.base
+    brief = base.brief + change.carried
+    if change.dropped:
+        return base._replace(unit=False, brief=brief, resolved=frozenset())
+    return base._replace(brief=brief, resolved=base.resolved | {name})
+
+
+def expire(change: Change, name: Name, keeps: frozenset[Keep]) -> Change:
+    files = head(change, name)
+    ran = change._replace(
+        stage=Stage.EXPIRED, history=change.history or change.stage is Stage.BUILT
+    )
+    if not expired(files):
+        return ran
+    fresh = Keep.ONCE not in keeps
+    lines = tuple(line for line in sorted(files.answers) if fresh or line not in files.brief)
+    return ran._replace(dropped=True, carried=change.carried + lines)
+
+
+def unit_edited(base: Files, tip: Files) -> bool:
+    return (base.unit, base.answers, base.resolved) != (tip.unit, tip.answers, tip.resolved)
+
+
+def refused_for_expiry(base: Files, after: Files) -> bool:
+    left = expired(after) and not expired(base)
+    lost = base.unit and not after.unit and not base.answers <= set(after.brief)
+    return left or lost
+
+
+def live(state: Expiry, name: Name) -> Change | None:
+    change = state.change(name)
+    return None if change is None or change.merged or change.held else change
+
+
+def _sibling_build(state: Expiry, name: Name, _: frozenset[Keep]) -> Expiry | None:
+    tip = state.tip
+    if state.change(name) is not None or not tip.unit or name in tip.resolved:
+        return None
+    return state.with_change(name, Change(base=tip))
+
+
+def _sibling_expire(state: Expiry, name: Name, keeps: frozenset[Keep]) -> Expiry | None:
+    change = live(state, name)
+    if change is None or change.stage is not Stage.BUILT:
+        return None
+    return state.with_change(name, expire(change, name, keeps))
+
+
+def _sibling_record(state: Expiry, name: Name, _: frozenset[Keep]) -> Expiry | None:
+    change = live(state, name)
+    if change is None or change.stage is not Stage.EXPIRED or change.rebased:
+        return None
+    return state.with_change(name, change._replace(stage=Stage.JUDGED))
+
+
+def _sibling_rejudge(state: Expiry, name: Name, keeps: frozenset[Keep]) -> Expiry | None:
+    change = live(state, name)
+    if change is None or change.stage is not Stage.EXPIRED or not change.rebased:
+        return None
+    found = change.history and Keep.HISTORY in keeps
+    return state.with_change(name, change._replace(stage=Stage.JUDGED, blind=not found))
+
+
+def _sibling_update(state: Expiry, name: Name, keeps: frozenset[Keep]) -> Expiry | None:
+    change = live(state, name)
+    tip = state.tip
+    if change is None or change.base == tip or change.stage not in {Stage.EXPIRED, Stage.JUDGED}:
+        return None
+    moved = change._replace(base=tip, stage=Stage.EXPIRED, rebased=True)
+    if change.dropped and unit_edited(change.base, tip):
+        if Keep.RESOLVE not in keeps:
+            return state.with_change(name, moved._replace(stage=Stage.STOPPED))
+        if Keep.CARRY in keeps:
+            return state.with_change(name, expire(moved._replace(dropped=False), name, keeps))
+        return state.with_change(name, moved)
+    if Keep.UPDATE_EXPIRE in keeps:
+        moved = expire(moved, name, keeps)
+    return state.with_change(name, moved)
+
+
+def recorded_again(state: Expiry, name: Name, keeps: frozenset[Keep]) -> Expiry | None:
+    change = state.change(name)
+    if change is None or change.recorded:
+        return None
+    if Keep.NOTE not in keeps and not state.tip.unit:
+        return state
+    return state.with_change(name, change._replace(recorded=True))
+
+
+def _sibling_land(
+    state: Expiry, name: Name, keeps: frozenset[Keep], *, killed: bool = False
+) -> Expiry | None:
+    change = state.change(name)
+    if change is not None and change.merged:
+        return None if killed else recorded_again(state, name, keeps)
+    if change is None or change.held or change.stage is not Stage.JUDGED:
+        return None
+    if change.base != state.tip:
+        return None
+    after = head(change, name)
+    if Keep.JUDGE in keeps and refused_for_expiry(change.base, after):
+        return None if killed else state.with_change(name, change._replace(held=True))
+    merged = change._replace(merged=True, recorded=not killed)
+    return state.with_change(name, merged)._replace(tip=after)
+
+
+def _sibling_kill_land(state: Expiry, name: Name, keeps: frozenset[Keep]) -> Expiry | None:
+    return _sibling_land(state, name, keeps, killed=True)
+
+
+def _sibling_squash(state: Expiry, name: Name, _: frozenset[Keep]) -> Expiry | None:
+    change = live(state, name)
+    if change is None or change.stage is not Stage.EXPIRED or not change.history:
+        return None
+    return state.with_change(name, change._replace(history=False))
+
+
+def _owner_answers(state: Expiry, _: frozenset[Keep]) -> Expiry | None:
+    if state.answered or not state.tip.unit:
+        return None
+    tip = state.tip._replace(answers=state.tip.answers | {OWNERS_LINE})
+    return state._replace(tip=tip, answered=True)
+
+
+class Deed(Fact):
+    COMMIT = Kind.COMMIT.value
+    EXPIRE = "documents.py expire runs on"
+    RECORD = Kind.RECORD.value
+    UPDATE = Kind.UPDATE.value
+    REJUDGE = "a judge-again run commits the verdict record of"
+    LAND = Kind.LAND.value
+    KILL_LAND = Kind.KILL_LAND_BEFORE_NOTE.value
+    SQUASH = "the owner squashes by hand the branch of"
+    ANSWER = "the owner lands an Answers line on a ticket of the unit"
+
+
+ON_A_SIBLING: dict[Deed, Callable[[Expiry, Name, frozenset[Keep]], Expiry | None]] = {
+    Deed.COMMIT: _sibling_build,
+    Deed.EXPIRE: _sibling_expire,
+    Deed.RECORD: _sibling_record,
+    Deed.UPDATE: _sibling_update,
+    Deed.REJUDGE: _sibling_rejudge,
+    Deed.SQUASH: _sibling_squash,
+    Deed.LAND: _sibling_land,
+    Deed.KILL_LAND: _sibling_kill_land,
+}
+
+
+def expiry_moves(state: Expiry, keeps: frozenset[Keep]) -> list[tuple[str, Expiry]]:
+    found = [
+        (f"{deed.value} {name.value}", after)
+        for deed, act in ON_A_SIBLING.items()
+        for name in SIBLINGS
+        if (after := act(state, name, keeps)) is not None
+    ]
+    if (answered := _owner_answers(state, keeps)) is not None:
+        found.append((Deed.ANSWER.value, answered))
+    return found
+
+
+ExpiryEdge = tuple[Expiry, str, Expiry]
+
+
+@functools.cache
+def expiry_graph(keeps: frozenset[Keep] = KEEPS) -> tuple[frozenset[Expiry], list[ExpiryEdge]]:
+    seen = {EXPIRY_INITIAL: EXPIRY_INITIAL}
+    frontier = deque([EXPIRY_INITIAL])
+    edges: list[ExpiryEdge] = []
+    while frontier:
+        state = frontier.popleft()
+        for said, after in expiry_moves(state, keeps):
+            known = seen.get(after)
+            if known is None:
+                seen[after] = known = after
+                frontier.append(after)
+            edges.append((state, said, known))
+    return frozenset(seen), edges
+
+
+def sibling_of(said: str) -> Name | None:
+    name = ticket_of(said)
+    return name if name in SIBLINGS else None
+
+
+def kept_once(files: Files) -> bool:
+    once = len(set(files.brief)) == len(files.brief)
+    return once and (files.unit or files.answers <= set(files.brief))
+
+
+def heads(state: Expiry) -> list[Files]:
+    return [
+        head(change, name)
+        for name, change in zip(SIBLINGS, state.changes, strict=True)
+        if change is not None and not change.merged and change.stage is not Stage.STOPPED
+    ]
+
+
+def newly(before: Expiry, after: Expiry, fact: Callable[[Change], bool]) -> bool:
+    return any(
+        now is not None and fact(now) and (was is None or not fact(was))
+        for was, now in zip(before.changes, after.changes, strict=True)
+    )
+
+
+def deleted_by_the_last(_: Expiry, __: str, after: Expiry) -> bool:
+    return not expired(after.tip)
+
+
+def never_refused_for_expiry(before: Expiry, _: str, after: Expiry) -> bool:
+    return not newly(before, after, lambda change: change.held)
+
+
+def answers_carried(_: Expiry, __: str, after: Expiry) -> bool:
+    return all(map(kept_once, [after.tip, *heads(after)]))
+
+
+def unit_conflicts_resolved(_: Expiry, said: str, after: Expiry) -> bool:
+    name = sibling_of(said)
+    if name is None or not said.startswith(Deed.UPDATE.value):
+        return True
+    change = after.change(name)
+    return change is None or change.stage is not Stage.STOPPED
+
+
+def spec_found(before: Expiry, _: str, after: Expiry) -> bool:
+    return not newly(before, after, lambda change: change.blind)
+
+
+def land_recovers(before: Expiry, said: str, after: Expiry) -> bool:
+    name = sibling_of(said)
+    if name is None or said != f"{Deed.LAND.value} {name.value}":
+        return True
+    was, now = before.change(name), after.change(name)
+    owed = was is not None and was.merged and not was.recorded
+    return not owed or (now is not None and now.recorded)
+
+
+EXPIRY_RULES: dict[str, Callable[[Expiry, str, Expiry], bool]] = {
+    "12. no step leaves the default branch holding a unit expired at its tip": deleted_by_the_last,
+    "12a. no ticket's merge is refused for a unit it left or an Answers line it dropped": (
+        never_refused_for_expiry
+    ),
+    "12b. wherever the unit is gone, each of its Answers lines is in the brief once": (
+        answers_carried
+    ),
+    "12c. no update stops on a conflict whose every path is in a unit expire lists": (
+        unit_conflicts_resolved
+    ),
+    "12d. a judge-again run finds the spec": spec_found,
+    "12e. a land killed after its merge records the merge when run again": land_recovers,
+}
+
+
 # --- the export: the graphs as TLA+ modules, for a model checker and the charts ------------------
 
 
@@ -2316,6 +2666,66 @@ SHOWN_LEASE: dict[str, Callable[[Lease], object]] = {
 """What the charts of the lease read: how the drains run, the lease, the landing and its merge."""
 
 
+def expiry_run() -> Run:
+    _, edges = expiry_graph()
+    return Run(tuple(dict.fromkeys([EXPIRY_INITIAL, *(after for _, _, after in edges)])), edges)
+
+
+CHANGE_FACTS: dict[str, tuple[Callable[[Change, Files], object], object]] = {
+    "stage": (lambda change, _: change.stage.name.lower(), "none"),
+    "behind": (lambda change, tip: change.base != tip, False),
+    "dropped": (lambda change, _: change.dropped, False),
+    "carried": (lambda change, _: change.carried, ()),
+    "history": (lambda change, _: change.history, False),
+    "rebased": (lambda change, _: change.rebased, False),
+    "merged": (lambda change, _: change.merged, False),
+    "recorded": (lambda change, _: change.recorded, False),
+    "held": (lambda change, _: change.held, False),
+    "blind": (lambda change, _: change.blind, False),
+}
+
+
+def expiry_facts() -> dict[str, Callable[[Expiry], object]]:
+    facts: dict[str, Callable[[Expiry], object]] = {
+        "unit": lambda state: state.tip.unit,
+        "answers": lambda state: state.tip.answers,
+        "brief": lambda state: state.tip.brief,
+        "resolved": lambda state: frozenset(name.value for name in state.tip.resolved),
+        "answered": lambda state: state.answered,
+    }
+    for name in SIBLINGS:
+        for fact, (read, none) in CHANGE_FACTS.items():
+            facts[f"{fact}{name.value.upper()}"] = lambda state, name=name, read=read, none=none: (
+                none if (change := state.change(name)) is None else read(change, state.tip)
+            )
+    return facts
+
+
+def short_of_a_line(change: Change, tip: Files) -> bool:
+    return change.dropped and not tip.answers <= change.base.answers
+
+
+SHOWN_EXPIRY: dict[str, Callable[[Expiry], object]] = {
+    "unit": lambda state: state.tip.unit,
+    "landed": lambda state: sum(change is not None and change.merged for change in state.changes),
+    "deletes": lambda state: any(
+        change is not None and not change.merged and change.dropped for change in state.changes
+    ),
+    "short": lambda state: any(
+        change is not None and not change.merged and short_of_a_line(change, state.tip)
+        for change in state.changes
+    ),
+}
+
+
+def spoken(rules: Mapping[str, Callable[[Any, str, Any], bool]]) -> dict[str, model_tla.Rule]:
+    sentences = {name: name.partition(" ")[2] for name in rules}
+    return {
+        rule_name(name): model_tla.Step(said[:1].upper() + said[1:] + ".", rules[name])
+        for name, said in sentences.items()
+    }
+
+
 def seen_through(
     name: str, graph: Run, shown: Mapping[str, Callable[[Any], object]], *, deadlock: bool = True
 ) -> model_tla.Export:
@@ -2337,12 +2747,12 @@ def exports() -> tuple[model_tla.Export, ...]:
     """The modules ``docs/model/drain.md`` was checked and drawn from.
 
     TLC checks the rules on the landing run, the work run, the life run with the guard's gate and
-    without it, and the whole lease graph; the search in the tests proves them on the whole main
-    graph, gated and not. The charts are drawn from those five, and from summaries of the gated
-    life run and the lease graph.
+    without it, the whole lease graph and the whole expiry graph; the search in the tests proves
+    them on the whole main graph, gated and not. The charts are drawn from those six, and from
+    summaries of the gated life run, the lease graph and the expiry graph.
     """
     landing, life, lease = landing_run(), life_run(gate=False), lease_run()
-    gated = life_run(gate=True)
+    gated, expiry = life_run(gate=True), expiry_run()
     facts = state_facts(UNSPLIT)
     main = step_rules(RULES)
     return (
@@ -2374,4 +2784,14 @@ def exports() -> tuple[model_tla.Export, ...]:
         ),
         seen_through("DrainLife", gated, {fact: facts[fact] for fact in SHOWN_LANDING}),
         seen_through("DrainLeaseShown", lease, SHOWN_LEASE, deadlock=False),
+        model_tla.export(
+            "DrainExpiry",
+            expiry,
+            spoken(EXPIRY_RULES),
+            fields=(),
+            derived=expiry_facts(),
+            action=model_tla.identifier,
+            deadlock=False,
+        ),
+        seen_through("DrainExpiryShown", expiry, SHOWN_EXPIRY, deadlock=False),
     )

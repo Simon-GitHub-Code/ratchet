@@ -39,7 +39,8 @@ QUESTION = "Question"
 BINDING = str(gatelib.BINDING)
 RISES = "rises"
 NEVER = "never"
-RULES = (RISES, NEVER)
+KEPT = "kept"
+RULES = (RISES, NEVER, KEPT)
 NONE_PREFIX = "none:"
 MIN_REASON = 10
 COLUMNS = {KIND: (KIND, "Pattern", "Rule"), QUESTION: (QUESTION, "Kinds")}
@@ -93,7 +94,9 @@ def _kinds(rows: tuple[tuple[str, ...], ...], problems: list[str]) -> tuple[Kind
         elif not pattern or not valid(pattern):
             problems.append(f"the kind '{name}' needs one backticked extended regex as Pattern")
         elif rule.strip("` ") not in RULES:
-            problems.append(f"the kind '{name}' has the Rule '{rule}': write `rises` or `never`")
+            problems.append(
+                f"the kind '{name}' has the Rule '{rule}': write `rises`, `never` or `kept`"
+            )
         else:
             found[name] = Kind(name, pattern, rule.strip("` "))
     return tuple(found.values())

@@ -23,9 +23,9 @@ section, as the adoption has since ADR 0049; an adoption by a plugin from before
 neither. An upgrade runs the real ``upgrade.py --apply`` as a process, from a copy of the plugin
 committed as the next version, on a branch the world merges. ``/ratchet:fill`` writes the rows on
 a branch and settles the ledger by running that upgrade again, which drops each entry whose
-finding is gone. The binding keeps the sections an upgrade added while the world rewrites its own
-parts. ``/ratchet:architecture`` writes the record and the parts, settles the ledger, and leaves
-its branch for the owner to merge.
+finding is gone. The binding keeps the sections and the Gates rows an upgrade added while the
+world rewrites its own parts. ``/ratchet:architecture`` writes the record and the parts, settles the
+ledger, and leaves its branch for the owner to merge.
 
 The upgrade that asks the ``Flag:`` line before deployment (ADR 0061) declares an application type
 the catalogue asks it of, the binding naming no life event. From then on the conjecture writes the
@@ -56,6 +56,7 @@ from typing import Final
 
 import application_types
 import architecture
+import comments
 import conformance
 import drain
 import feature_preflight as preflight
@@ -80,6 +81,7 @@ from tests.route_model import (
     Ticket,
     Tree,
     World,
+    expires,
     runnable_slots,
 )
 from tests.test_drain import MERGE
@@ -114,10 +116,12 @@ ARCHITECTURE_RECORD = (
     "## Refutation criterion\n\nA second team needs to deploy on its own.\n"
 )
 ARCHITECTURE_SECTION = (
-    "\n" + architecture.SECTION + "\n\n- Decision: `{record}`\n\n| Part | Path | May depend on |\n"
+    "\n" + architecture.SECTION + "\n\n- Decision: `{record}`\n"
+    f"- {comments.PUBLISHED}: {comments.NOT_A_LIBRARY}\n\n| Part | Path | May depend on |\n"
     "| --- | --- | --- |\n| rules | `src/rules/**` | nothing |\n| web | `src/**` | rules |\n"
 )
 ARCHITECTURE_BRANCH = "chore/architecture"
+GATES = "## Gates"
 SECTIONS: Final = re.compile(r"\n(?=## )")
 REVIEW_ROW = (
     f"| {triggers.REVIEW_QUESTION} | `ratchet` plugin `scripts/triggers.py` | 1 | |"
@@ -151,7 +155,12 @@ FLAG_ANSWER = (
 )
 CRITERIA = "## Acceptance criteria"
 STORIES = "## User Stories"
-SPEC = f"# Settle\n\n{STORIES}\n\n1. As the owner, I am told the next command.\n"
+LEFT_SPEC = f"# Settle\n\n{STORIES}\n\n1. As the owner, I am told the next command.\n"
+SPEC = f"{LEFT_SPEC}\n## Answers\n\n- `spec.scope`: one command, not a list of them.\n"
+ANSWERS = "## Answers"
+OWNERS_WORDS = "## In the owner's words"
+BRIEF = f"# Brief\n\n{OWNERS_WORDS}\n\n- `adopt.purpose`: tell me the next command.\n"
+EXPIRED_ON = "2026-11-17"
 CONJECTURE_SKILL: Final = plugin_pin.PLUGIN / "skills/conjecture/SKILL.md"
 CRITERIA_LINE: Final = re.compile(r"^- Criteria: .*$", re.MULTILINE)
 DIGEST: Final = re.compile(r"[0-9a-f]{40}")
@@ -172,6 +181,7 @@ OWN_CONJECTURE: Final = frozenset(Ticket) - {
 }
 LETTERS: Final = "ab"
 TICKETS_BRANCH: Final = "docs/tickets-"
+STATUS_LINE: Final = re.compile(r"^Status: .*$", re.MULTILINE)
 
 
 @functools.cache
@@ -307,7 +317,7 @@ class Repo:
             entries="".join(
                 f"| {name} | `{command}` |\n" for name, command in self.entries.items()
             ),
-            gates=gates + REVIEW_ROW,
+            gates=gates + REVIEW_ROW + self.kept_gates(),
             triggers=rows,
             architecture=self.architecture,
         )
@@ -325,6 +335,14 @@ class Repo:
             for block in SECTIONS.split(text)[1:]
             if not markdown_text.has_section(made, block.split("\n", 1)[0])
         )
+
+    def kept_gates(self) -> str:
+        found = markdown_text.table(gatelib.read_text(self.root / route.BINDING) or "", GATES)
+        if found is None:
+            return ""
+        own = {f"q{n}" for n in range(1, len(self.tools) + 1)} | {triggers.REVIEW_QUESTION}
+        rows = zip(found.rows, found.lines[2:], strict=True)
+        return "".join(f"{line}\n" for row, line in rows if row[0] not in own)
 
     def version(self) -> str:
         """The plugin version the binding pins: one more minor version for each upgrade."""
@@ -511,7 +529,7 @@ def _agent_installs_hooks(repo: Repo, _change: Change) -> None:
 @does(ActionName.OWNER_GRILLS)
 def _owner_grills(repo: Repo, _change: Change) -> None:
     write(repo.root, "GLOSSARY.md", GLOSSARY)
-    write(repo.root, "docs/design-brief.md", "# Brief\n")
+    write(repo.root, "docs/design-brief.md", BRIEF)
 
 
 @does(ActionName.OWNER_WRITES_SPEC)
@@ -584,12 +602,39 @@ def rewrites_ticket(repo: Repo, change: Change) -> None:
         snapshot(repo.root, "docs(tracker): the owner's edit of a ticket")
 
 
-for _name in (
-    ActionName.OWNER_AGREES_TICKET,
-    ActionName.OWNER_WORKS_TICKET_THEMSELF,
-    ActionName.OWNER_RESOLVES_TICKET,
-):
-    DO[_name] = rewrites_ticket
+DO[ActionName.OWNER_AGREES_TICKET] = rewrites_ticket
+
+
+def expire(repo: Repo) -> None:
+    repo.edits += 1
+    unit = repo.root / repo.feature()
+    said = [
+        f"- {EXPIRED_ON}: {line.removeprefix('- ')}"
+        for path in sorted(unit.rglob("*.md"))
+        for line in markdown_text.section(path.read_text(encoding="utf-8"), ANSWERS).split("\n")
+        if line.strip()
+    ]
+    if said:
+        brief = repo.root / route.DESIGN_BRIEF
+        text = brief.read_text(encoding="utf-8").rstrip("\n")
+        held = markdown_text.section(text, OWNERS_WORDS).strip("\n")
+        words = "\n".join([held, *said]).strip("\n")
+        brief.write_text(with_body(text, OWNERS_WORDS, words), encoding="utf-8")
+    git(repo.root, "rm", "-r", "-q", "-f", "--", repo.feature())
+
+
+def resolves_ticket(repo: Repo, change: Change) -> None:
+    path = repo.root / repo.ticket_path(change.slot)
+    status = f"Status: {STATUS[Ticket.RESOLVED]}"
+    path.write_text(STATUS_LINE.sub(status, path.read_text(encoding="utf-8")), encoding="utf-8")
+    if expires(change.before, change.after):
+        expire(repo)
+    if change.after.tree is Tree.CLEAN:
+        snapshot(repo.root, "docs(tracker): the owner's edit of a ticket")
+
+
+DO[ActionName.OWNER_WORKS_TICKET_THEMSELF] = resolves_ticket
+DO[ActionName.OWNER_RESOLVES_TICKET] = resolves_ticket
 
 
 def build_on_branch(repo: Repo, slot: int, files: dict[str, str] | None = None) -> str:
@@ -836,6 +881,9 @@ FILLED: Final = {
     "## Suppressions": (
         "| Kind | Pattern | Rule |\n| --- | --- | --- |\n\n| Question | Kinds |\n| --- | --- |\n"
     ),
+    comments.SECTION: (
+        "| Files | Comments |\n| --- | --- |\n| `**` | none: nobody writes it by hand |\n"
+    ),
 }
 
 
@@ -912,6 +960,19 @@ def _owner_records_architecture(repo: Repo, _change: Change) -> None:
     repo.record_architecture()
     repo.settle(lambda entry: entry.rule == route.ARCHITECTURE_RULE)
     snapshot(repo.root, "chore(method): record the architecture")
+
+
+@does(ActionName.UPGRADE_FINDS_AN_EXPIRED_UNIT)
+def _upgrade_finds_an_expired_unit(repo: Repo, _change: Change) -> None:
+    write(repo.root, repo.spec_path(), LEFT_SPEC)
+    for slot in (0, 1):
+        repo.write_ticket(slot, Ticket.RESOLVED, inherits=False)
+    snapshot(repo.root, "docs(tracker): a unit a plugin from before ADR 0064 left")
+
+
+@does(ActionName.AGENT_DELETES_THE_EXPIRED_UNIT)
+def _agent_deletes_the_expired_unit(repo: Repo, _change: Change) -> None:
+    expire(repo)
 
 
 @does(ActionName.AGENT_BINDS_SAFEGUARD)
@@ -1021,6 +1082,7 @@ STAGES: Final = {
     "architecture-review": Advice.REVIEW,
     "safeguard": Advice.SAFEGUARD,
     "architecture": Advice.ARCHITECTURE,
+    "expire": Advice.EXPIRE,
     "triage": Advice.TRIAGE,
     "resolve": Advice.RESOLVE,
     "blocked": Advice.BLOCKED,
