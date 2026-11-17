@@ -119,6 +119,10 @@ def test_a_binding_without_the_section_gets_the_templates_and_the_rest_is_an_age
     assert after == [
         f"{BINDING}: {architecture.NO_RECORD}",
         f"{BINDING}: the Architecture table's row '<part>' has a cell still to fill",
+        (
+            f"{BINDING}: the Architecture section's '- Published interface:' line is still the"
+            " template's placeholder"
+        ),
     ]
 
 

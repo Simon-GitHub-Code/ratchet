@@ -56,6 +56,7 @@ from typing import Final
 
 import application_types
 import architecture
+import comments
 import conformance
 import drain
 import feature_preflight as preflight
@@ -115,7 +116,8 @@ ARCHITECTURE_RECORD = (
     "## Refutation criterion\n\nA second team needs to deploy on its own.\n"
 )
 ARCHITECTURE_SECTION = (
-    "\n" + architecture.SECTION + "\n\n- Decision: `{record}`\n\n| Part | Path | May depend on |\n"
+    "\n" + architecture.SECTION + "\n\n- Decision: `{record}`\n"
+    f"- {comments.PUBLISHED}: {comments.NOT_A_LIBRARY}\n\n| Part | Path | May depend on |\n"
     "| --- | --- | --- |\n| rules | `src/rules/**` | nothing |\n| web | `src/**` | rules |\n"
 )
 ARCHITECTURE_BRANCH = "chore/architecture"
@@ -873,6 +875,9 @@ FILLED: Final = {
     "## Image pins": "| Files | Reference |\n| --- | --- |\n| none: no file names an image | |\n",
     "## Suppressions": (
         "| Kind | Pattern | Rule |\n| --- | --- | --- |\n\n| Question | Kinds |\n| --- | --- |\n"
+    ),
+    comments.SECTION: (
+        "| Files | Comments |\n| --- | --- |\n| `**` | none: nobody writes it by hand |\n"
     ),
 }
 
