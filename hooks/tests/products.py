@@ -1,5 +1,3 @@
-"""A small product the acceptance harness can boot, in a git work tree of its own."""
-
 import http.client
 import json
 import os
@@ -16,15 +14,6 @@ from pathlib import Path
 import gatelib
 from tests import repos
 
-# Why each route: `/` and `/items` are the product a tester tries; `/flag` shows the flag the
-# justfile's `flags_on` turns on; the rest are the shapes of answer the proxy must pass through
-# unchanged (a large body, one with no length, no content, one that breaks off, the request's
-# own headers echoed, one compressed when the request accepts gzip or names no coding, as RFC
-# 9110 allows), a route that holds a
-# request open and one that answers half a second late. `/held` answers only once the file `GO`
-# names exists, and `/drip` sends its head and half its body, then the rest once it does.
-# `BOOTING` names a file the app writes its process id to as it starts, and `DELAY` holds it
-# that long before it listens.
 APP = r"""
 import gzip, html, json, os, time, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -150,7 +139,6 @@ def make(
     ready: str = "http://127.0.0.1:{port}/",
     extra: str = "",
 ) -> Path:
-    """A committed product at ``root``: an app, its justfile and binding, and a ticket."""
     root.mkdir(parents=True, exist_ok=True)
     (root / "app.py").write_text(APP, encoding="utf-8")
     (root / "src").mkdir(exist_ok=True)
@@ -168,7 +156,6 @@ def make(
 
 @contextmanager
 def serving(tmp_path: Path) -> Iterator[str]:
-    """The test product on a free port, stopped at the end; its address."""
     (tmp_path / "app.py").write_text(APP, encoding="utf-8")
     port = gatelib.free_port()
     env = {
@@ -193,7 +180,6 @@ def serving(tmp_path: Path) -> Iterator[str]:
 def request(
     url: str, method: str = "GET", path: str = "/", *, body: bytes | None = None
 ) -> tuple[int, bytes]:
-    """One request through the harness's address; the status and body."""
     host, port = url.split("//")[1].rstrip("/").split(":")
     connection = http.client.HTTPConnection(host, int(port), timeout=30)
     headers = {"Content-Type": "application/x-www-form-urlencoded"} if body is not None else {}
@@ -206,8 +192,6 @@ def request(
 
 
 def png(path: Path) -> Path:
-    """A one-pixel PNG, as a screenshot would be."""
-
     def chunk(kind: bytes, data: bytes) -> bytes:
         crc = struct.pack(">I", zlib.crc32(kind + data))
         return struct.pack(">I", len(data)) + kind + data + crc
@@ -220,7 +204,6 @@ def png(path: Path) -> Path:
 
 
 def log(directory: Path) -> list[dict[str, object]]:
-    """The session's logged requests in the order they arrived, which is the order of their ids."""
     lines = (directory / "requests.jsonl").read_text(encoding="utf-8").splitlines()
     entries = [json.loads(line) for line in lines]
     return sorted(entries, key=lambda entry: int(str(entry["id"]).rsplit("-", 1)[1]))
@@ -234,10 +217,6 @@ def wait_for(path: Path, limit: float = 30.0) -> None:
 
 
 def processes_naming(text: str) -> list[str]:
-    """Every process whose command line names ``text``: what a test left running.
-
-    ``-ww`` because ps otherwise cuts each line to the terminal's width, before the path.
-    """
     listed = subprocess.run(
         ["ps", "-ww", "-eo", "pid=,args="],  # noqa: S607 # -- ps is resolved from PATH
         capture_output=True,
@@ -248,12 +227,10 @@ def processes_naming(text: str) -> list[str]:
 
 
 def running(root: Path) -> list[str]:
-    """The products of ``root`` that run now, ``with_service.py`` that started them aside."""
     return [line for line in processes_naming(str(root / "app.py")) if "with_service" not in line]
 
 
 def tried(url: str) -> None:
-    """What the good record says was done: the empty list, a link saved, the list again."""
     expected = (("GET", "/", None, 200), ("POST", "/items", b"link=https://example.com/a", 303))
     for method, path, body, want in (*expected, ("GET", "/", None, 200)):
         status, answer = request(url, method, path, body=body)
@@ -261,7 +238,6 @@ def tried(url: str) -> None:
 
 
 def good_record(directory: Path) -> dict[str, object]:
-    """A record the harness accepts, citing what ``directory``'s session logged after ``tried``."""
     session = json.loads((directory / "session.json").read_text(encoding="utf-8"))
     entries = log(directory)
     png(directory / "tester" / "shots" / "list.png")
@@ -270,7 +246,6 @@ def good_record(directory: Path) -> dict[str, object]:
 
 
 def record(session: str, tree: str, ids: tuple[str, ...]) -> dict[str, object]:
-    """The good record of ``session``, which served ``tree``; ``ids`` are what was ``tried``."""
     first, saved, after = ({"id": ident} for ident in ids)
     return {
         "schema": 1,

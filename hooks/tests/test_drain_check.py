@@ -1,5 +1,3 @@
-"""``drain.py check``: the publish check of ADR 0060 in a drain, and the start it reads."""
-
 import stat
 from pathlib import Path
 from unittest import mock

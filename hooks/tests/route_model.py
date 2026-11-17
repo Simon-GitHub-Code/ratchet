@@ -1,19 +1,3 @@
-"""The route's reference model: what the owner is told next, as a small state machine.
-
-``scripts/route.py`` decides the owner's next command from the checkout, so the repository is the
-state and a priority chain is the transition function. This module writes that machine down once,
-pure: a frozen ``World`` abstracts the repository, ``advice`` is what the method's pages say the
-route names, in the order ``route.decide`` asks, and ``ACTIONS`` is every way the world changes,
-each registered with the advice it follows. ``advice`` is the specification. Where the real route
-names something else, ``DIVERGENCES`` says so by name, and ``real_advice`` is the specification
-with those entries applied: the tests hold the real route to ``real_advice``, so a fix to the route
-is red until its entry is deleted. ``docs/model/route.md`` is the page for the owner.
-
-Scope: no forge (no ``origin``), local tickets, offline. Two tickets, the second blocked by the
-first. One thing happens at a time: a spec or ticket action needs a clean default branch with
-nothing parked. One checkout: no other work tree holds the default branch.
-"""
-
 from __future__ import annotations
 
 import functools
@@ -27,13 +11,6 @@ from tests import model_tla
 
 
 class Setup(StrEnum):
-    """How far the one-time setup has got.
-
-    Nothing; an init that stopped with the purpose placeholder in ``AGENTS.md``; init done; the
-    tracker; an adoption that stopped before it wrote the plugin pin; one that stopped after the
-    pin, before its proof; the binding, pinned and proved.
-    """
-
     BARE = "bare"
     STARTED = "started"
     NAMED = "named"
@@ -44,12 +21,6 @@ class Setup(StrEnum):
 
 
 class Head(StrEnum):
-    """Where HEAD is: the default branch, a working branch, or a ``records/<time>`` branch.
-
-    ``MERGED`` is a working branch the default branch already holds: a merge that landed and left
-    the checkout on it. Its commits are merged, so a new commit makes it a working branch again.
-    """
-
     MAIN = "main"
     WORK = "work"
     MERGED = "merged"
@@ -57,35 +28,18 @@ class Head(StrEnum):
 
 
 class Tree(StrEnum):
-    """What the work tree holds: nothing, records alone, or more than records (code, the brief)."""
-
     CLEAN = "clean"
     RECORDS = "records"
     CODE = "code"
 
 
 class Spec(StrEnum):
-    """A spec not yet split into tickets: none, written, or stating its conjecture."""
-
     NONE = "none"
     BARE = "bare"
     STATED = "stated"
 
 
 class Ticket(StrEnum):
-    """A ticket's life.
-
-    None yet, open for triage, agent-ready with or without a conjecture, or with a conjecture whose
-    criteria changed after it was written (stale); held by a blocked
-    feature run's stash; held by the drain's note for open questions, for guard edits, for an owed
-    safeguard, or by a note written before the drain recorded kinds or the base commit that
-    landing guard edits is read from; built on a branch, merged but
-    still open, or resolved. A ticket parked for guard edits the owner has since landed is not a
-    state of its own: landing them releases the hold, so the route reads it as agent-ready again.
-    A guard hold whose note keeps no base commit cannot be released that way: the route reads it
-    as ``PARKED``, which only a change to the ticket releases.
-    """
-
     NONE = "none"
     TRIAGE = "triage"
     READY = "ready"
@@ -103,27 +57,12 @@ class Ticket(StrEnum):
 
 
 class Architecture(StrEnum):
-    """The architecture's record (ADR 0049).
-
-    Not asked: no decision record and no declared parts, before adoption or after an adoption by
-    a plugin from before the architecture was asked; owed: an upgrade wrote the ``architecture``
-    check's entries in ``quality/owed.toml``; recorded: the record and the binding's parts exist.
-    """
-
     UNASKED = "unasked"
     OWED = "owed"
     RECORDED = "recorded"
 
 
 class Flag(StrEnum):
-    """Whether a ticket's ``Flag:`` line is asked before the project is deployed (ADR 0061).
-
-    Waits: the line waits for ``deployed``, as it did before the upgrade that ships ADR 0061 to a
-    project asked and not deployed. Missing: that upgrade met a record in flight that states its
-    conjecture and no line, so the spec in flight and its tickets state none. Asked: the conjecture
-    writes the line on the spec with its answer, so every record states it.
-    """
-
     WAITS = "waits"
     MISSING = "missing"
     ASKED = "asked"
@@ -153,8 +92,6 @@ class Answers(StrEnum):
 
 
 class Advice(StrEnum):
-    """What the route tells the owner: one label per distinct next step."""
-
     INIT = "init"
     TRACKER = "tracker"
     ADOPT = "adopt"
@@ -190,8 +127,6 @@ class Advice(StrEnum):
 
 
 class ActionName(StrEnum):
-    """Every way the world changes; the value is the name a TLA+ module gives the action."""
-
     OWNER_INITS = "OwnerInits"
     INIT_STOPS = "InitStops"
     OWNER_SETS_UP_TRACKER = "OwnerSetsUpTracker"
@@ -258,18 +193,6 @@ CLOSED: Final = frozenset({Ticket.NONE, Ticket.RESOLVED})
 
 @dataclass(frozen=True)
 class World:
-    """The repository as far as the route can tell.
-
-    ``parked``: a branch waits unmerged whose change holds only records, that no run owns and no
-    work tree has checked out, whatever its name. ``foundation``: the glossary and the
-    design brief are written. ``inherits``: the tickets were split from a spec that states its
-    conjecture, so none needs one of its own. ``owes``: a safeguard is owed. ``reviews``: an
-    architecture review is owed (ADR 0052). ``fills``: an upgrade left rows an agent writes from
-    the repository alone (ADR 0050). ``architecture``: whether the architecture is recorded, owed
-    since an upgrade, or not yet asked (ADR 0049). ``flag``: whether the spec in flight and its
-    tickets state the ``Flag:`` line where it is asked before deployment (ADR 0061).
-    """
-
     setup: Setup = Setup.BARE
     hooks: bool = False
     head: Head = Head.MAIN
@@ -291,16 +214,10 @@ class World:
 
 
 def adopted(world: World) -> bool:
-    """Whether the binding is pinned and the commit hooks are in place, as the scripts see it.
-
-    An adoption that stopped after its pin, before its proof, is adopted here: nothing in the
-    repository stops a step there. ``rest`` and the route's advice tell it apart.
-    """
     return world.setup in {Setup.PINNED, Setup.BOUND} and world.hooks
 
 
 def settled(world: World) -> bool:
-    """Whether the default branch is checked out clean with nothing parked, after setup."""
     return adopted(world) and (world.head, world.tree, world.parked) == (
         Head.MAIN,
         Tree.CLEAN,
@@ -309,12 +226,10 @@ def settled(world: World) -> bool:
 
 
 def calm(world: World) -> bool:
-    """Whether the owner can start the next piece of work: settled, with the records written."""
     return settled(world) and world.foundation
 
 
 def rest(world: World) -> bool:
-    """Whether there is nothing left to finish: the route's answer is to write the next spec."""
     return (
         calm(world)
         and world.setup is Setup.BOUND
@@ -339,24 +254,20 @@ def expires(before: World, after: World) -> bool:
 
 
 def with_ticket(world: World, slot: int, ticket: Ticket) -> World:
-    """``world`` with the ticket in ``slot`` set to ``ticket``."""
     first, second = world.tickets
     return replace(world, tickets=(ticket, second) if slot == 0 else (first, ticket))
 
 
 def labelled(world: World) -> list[int]:
-    """The slots of the open agent-ready tickets."""
     return [slot for slot, ticket in enumerate(world.tickets) if ticket in LABELLED]
 
 
 def unblocked(world: World, slot: int) -> bool:
-    """Whether the ticket in ``slot`` has no open blocker."""
     blocker = BLOCKED_BY.get(slot)
     return blocker is None or world.tickets[blocker] not in OPEN
 
 
 def triage_waits(world: World) -> bool:
-    """Whether an open ticket with no agent-ready label has no open blocker."""
     return any(
         ticket is Ticket.TRIAGE and unblocked(world, slot)
         for slot, ticket in enumerate(world.tickets)
@@ -364,39 +275,26 @@ def triage_waits(world: World) -> bool:
 
 
 def free(world: World) -> list[int]:
-    """The agent-ready tickets with no open blocker."""
     return [slot for slot in labelled(world) if unblocked(world, slot)]
 
 
 def buildable(world: World) -> list[int]:
-    """The free tickets nothing holds."""
     return [slot for slot in free(world) if world.tickets[slot] not in HOLDS]
 
 
 def states(world: World, slot: int) -> bool:
-    """Whether the preflight finds the ticket in ``slot`` stated: its conjecture, and its line.
-
-    Why the line is read from the world: the conjecture writes it on the spec, so every ticket of
-    the spec in flight lacks it, or none does (ADR 0061).
-    """
     return world.tickets[slot] in STATED and world.flag is not Flag.MISSING
 
 
 def stated(world: World) -> list[int]:
-    """The agent-ready tickets that state a conjecture and that nothing holds."""
     return [slot for slot in labelled(world) if states(world, slot)]
 
 
 def queue_builds(world: World) -> bool:
-    """Whether a buildable ticket states its conjecture, so the route names a build."""
     return any(states(world, slot) for slot in buildable(world))
 
 
 def lacks_the_line(world: World) -> bool:
-    """Whether a record in flight states its conjecture, so the line can be missing from it.
-
-    The spec states it, or a ticket inherits it or states its own and has not been built.
-    """
     return (
         world.spec is Spec.STATED
         or any(ticket in STATED | HOLDS | {Ticket.STALE} for ticket in world.tickets)
@@ -405,15 +303,12 @@ def lacks_the_line(world: World) -> bool:
 
 
 def held_for(world: World, ticket: Ticket) -> bool:
-    """Whether no free ticket can be built and the first free one is held as ``ticket``."""
     slots = free(world)
     return bool(slots) and not buildable(world) and world.tickets[slots[0]] is ticket
 
 
 @dataclass(frozen=True)
 class Rule:
-    """One link of the advice chain: ``advice`` is the answer when nothing before it held."""
-
     advice: Advice
     holds: Callable[[World], bool]
 
@@ -440,10 +335,6 @@ MODEL_BEHIND: Final = Rule(Advice.FORMAL_UPKEEP, lambda w: w.upkeep in BEHIND)
 MEET: Final = Rule(Advice.CHANGE_TICKET, lambda w: held_for(w, Ticket.OWES_ITS_ROW))
 
 
-# The order is the order ``route.decide`` asks: setup, an unfinished change, the records, the rows
-# an upgrade left for an agent to fill, the architecture review, the safeguard, the architecture an
-# upgrade left owed, the formal model's upkeep, then the glossary and the tickets. The last rule
-# holds for any world, so the chain is total.
 CHAIN: Final = (
     Rule(Advice.INIT, lambda w: w.setup in {Setup.BARE, Setup.STARTED}),
     Rule(Advice.TRACKER, lambda w: w.setup is Setup.NAMED),
@@ -487,7 +378,6 @@ Chain = tuple[Rule, ...]
 
 
 def advice(world: World, chain: Chain = CHAIN) -> Advice:
-    """What the method's pages say the route names in ``world``: the first rule that holds."""
     return next(rule.advice for rule in chain if rule.holds(world))
 
 
@@ -497,10 +387,6 @@ def swapped(rule: Rule, *by: Rule) -> Chain:
 
 
 def beneath(world: World, chain: Chain = CHAIN) -> str:
-    """The advice once nothing is unfinished in the checkout and nothing is owed.
-
-    A ticket built on its branch is ``building``: its merge is what the checkout shows.
-    """
     if Ticket.BUILT in world.tickets:
         return "building"
     if world.upkeep in ROUND_TICKETS:
@@ -513,14 +399,6 @@ def beneath(world: World, chain: Chain = CHAIN) -> str:
 
 @dataclass(frozen=True)
 class Divergence:
-    """A state where the real route names something other than the pages say, as a fact.
-
-    ``holds`` picks the worlds; ``reads`` is the world as the real route reads it there, so the
-    label it gives is ``advice(reads(world))``. ``contradicts`` is the sentence of ``source`` it
-    goes against, ``breaks`` the rules that fail there on ``real_advice``, and ``example`` the
-    world the replay reaches: the shortest path to it from an empty repository.
-    """
-
     name: str
     holds: Callable[[World], bool]
     reads: Callable[[World], World]
@@ -531,7 +409,6 @@ class Divergence:
 
 
 def as_proved_by_its_pin(world: World) -> World:
-    """``world`` as the route reads it while a pinned binding counts as a finished adoption."""
     return replace(world, setup=Setup.BOUND)
 
 
@@ -599,7 +476,6 @@ def divergences(world: World) -> tuple[Divergence, ...]:
 
 
 def real_advice(world: World, chain: Chain = CHAIN) -> Advice:
-    """What the real route names in ``world``: the specification, with the divergences applied."""
     return advice(as_the_route_reads(world), chain)
 
 
@@ -639,8 +515,6 @@ PAGES: Final = Variant()
 
 @dataclass(frozen=True)
 class Action:
-    """A way the world changes: its name, the advice it follows if any, and its outcomes."""
-
     name: ActionName
     follows: tuple[Advice, ...]
     outcomes: Successors
@@ -682,18 +556,12 @@ def kept(world: World) -> World:
 
 
 def lined(world: World) -> World:
-    """``world`` with no line missing once no record in flight could lack it."""
     if world.flag is Flag.MISSING and not lacks_the_line(world):
         return replace(world, flag=Flag.ASKED)
     return world
 
 
 def following_today(world: World, chain: Chain = CHAIN) -> frozenset[ActionName]:
-    """The steps taken where an adoption stopped after its pin: its resume, and the real advice.
-
-    Why no other: the model shows where an owner who follows today's route is led from there,
-    and an arrival of its own beside that run would only grow the graph.
-    """
     return frozenset({ActionName.OWNER_ADOPTS, ADVISED[real_advice(world, chain)]})
 
 
@@ -719,8 +587,6 @@ def allowed_steps(world: World, chain: Chain) -> frozenset[ActionName] | None:
 
 
 def action(name: ActionName, *follows: Advice) -> Callable[[Successors], Successors]:
-    """Register ``successors`` as action ``name``; each advice in ``follows`` leads to it."""
-
     def register(successors: Successors) -> Successors:
         ACTIONS[name] = Action(name, follows, successors)
         for advice_label in follows:
@@ -752,17 +618,11 @@ def _owner_sets_up_tracker(world: World) -> Iterator[World]:
 
 
 def on_the_adoption_branch(world: World) -> bool:
-    """Whether the adoption's own branch is checked out: a working branch before the glossary."""
     return world.head is Head.WORK and not world.foundation
 
 
 @action(ActionName.OWNER_ADOPTS, Advice.ADOPT)
 def _owner_adopts(world: World) -> Iterator[World]:
-    """``/ratchet:adopt``, or its resume: from its branch it merges; after that it proves alone.
-
-    Why a resume from anywhere else changes only the setup: what the stopped adoption left is
-    merged, and its proof writes nothing the route reads.
-    """
     if world.setup is Setup.PINNED and not on_the_adoption_branch(world):
         yield replace(world, setup=Setup.BOUND)
         return
@@ -778,18 +638,12 @@ def _owner_adopts(world: World) -> Iterator[World]:
 
 @action(ActionName.OLDER_PLUGIN_ADOPTS)
 def _older_plugin_adopts(world: World) -> Iterator[World]:
-    """An adoption by a plugin from before ADR 0049, which asked no architecture."""
     if world.setup is Setup.TRACKED:
         yield replace(world, setup=Setup.BOUND)
 
 
 @action(ActionName.ADOPTION_STOPS)
 def _adoption_stops(world: World) -> Iterator[World]:
-    """An adoption stops on its branch: before it writes the pin, committed; or after it.
-
-    Why after the pin is a place of its own: the adoption writes the pin in its step 11, since
-    every tier runs the plugin-pin gate first, and proves the adoption in step 12.
-    """
     if world.setup is Setup.TRACKED:
         yield replace(world, setup=Setup.ADOPTING, head=Head.WORK)
     if world.setup in {Setup.TRACKED, Setup.ADOPTING}:
@@ -811,8 +665,6 @@ def _agent_installs_hooks(world: World) -> Iterator[World]:
 @action(ActionName.OWNER_GRILLS, Advice.GRILL)
 def _owner_grills(world: World) -> Iterator[World]:
     if settled(world) and not world.foundation:
-        # Why: the design brief is no kind of record to the merge judge, so the grill's output goes
-        # on a branch like code; only the glossary alone would land as records.
         yield replace(world, foundation=True, tree=Tree.CODE)
 
 
@@ -855,11 +707,6 @@ def _owner_splits_spec(world: World) -> Iterator[World]:
 
 @dataclass(frozen=True)
 class Move:
-    """One ticket's step from one of ``before`` to ``after``, and what it leaves behind.
-
-    ``tree`` or ``head`` is what the checkout holds afterwards.
-    """
-
     before: frozenset[Ticket]
     after: Ticket
     needs_free: bool = False
@@ -868,21 +715,14 @@ class Move:
 
 
 def runnable(world: World, slot: int) -> bool:
-    """Whether a feature run or the drain may start on the ticket in ``slot``.
-
-    Why: ADR 0050 and ADR 0061. The feature preflight and the drain refuse while rows an agent
-    fills are owed, and a ticket whose ``Flag:`` line is missing.
-    """
     return unblocked(world, slot) and not world.fills and world.flag is not Flag.MISSING
 
 
 def runnable_slots(world: World) -> list[int]:
-    """The slots of the tickets a feature run or the drain may start on."""
     return [slot for slot in range(len(world.tickets)) if runnable(world, slot)]
 
 
 def moves(world: World, move: Move) -> Iterator[World]:
-    """Each way a calm ``world`` takes one ticket through ``move``."""
     if not calm(world):
         return
     for slot, ticket in enumerate(world.tickets):
@@ -892,7 +732,6 @@ def moves(world: World, move: Move) -> Iterator[World]:
 
 
 def per_ticket(name: ActionName, follows: tuple[Advice, ...], move: Move) -> None:
-    """Register the action that takes one ticket through ``move``."""
     action(name, *follows)(lambda world: moves(world, move))
 
 
@@ -919,11 +758,6 @@ per_ticket(
 
 @action(ActionName.OWNER_STATES_CONJECTURE, Advice.CONJECTURE)
 def _owner_states_conjecture(world: World) -> Iterator[World]:
-    """``/ratchet:conjecture <ticket>``: the ticket's conjecture, and the line where it is missing.
-
-    Why one step lands the line for every ticket: the conjecture writes the answer and the line on
-    the spec, which each ticket of it reads (ADR 0061).
-    """
     flag = Flag.ASKED if world.flag is Flag.MISSING else world.flag
     for moved in moves(world, Move(one(Ticket.READY), Ticket.STATED)):
         yield replace(moved, flag=flag)
@@ -968,11 +802,6 @@ per_ticket(
 
 @action(ActionName.BUILD_STOPS)
 def _build_stops(world: World) -> Iterator[World]:
-    """The build stops with its code uncommitted, or on the branch it cut before it wrote any.
-
-    Why the second is a merged branch: a branch cut from the default branch's tip and holding no
-    commit of its own is in the default branch, and the route reads it so.
-    """
     yield from moves(
         world, Move(STATED, Ticket.BUILT, needs_free=True, head=Head.WORK, tree=Tree.CODE)
     )
@@ -1009,7 +838,6 @@ def _drain_parks_ticket(world: World) -> Iterator[World]:
 
 @action(ActionName.DRAIN_PARKS_FOR_A_SAFEGUARD)
 def _drain_parks_for_a_safeguard(world: World) -> Iterator[World]:
-    """The drain merges the first ticket, which brings a new kind, and parks the second on it."""
     if (
         calm(world)
         and not (world.owes or world.fills)
@@ -1043,7 +871,6 @@ per_ticket(
 
 @action(ActionName.UPGRADE_LEAVES_ROWS_TO_FILL)
 def _upgrade_leaves_rows_to_fill(world: World) -> Iterator[World]:
-    """An upgrade at rest: rows to fill, and the architecture where none was asked (ADR 0049)."""
     if rest(world) and world.tickets == (Ticket.RESOLVED, Ticket.RESOLVED):
         owed = world.architecture is Architecture.UNASKED
         yield replace(
@@ -1053,15 +880,6 @@ def _upgrade_leaves_rows_to_fill(world: World) -> Iterator[World]:
 
 @action(ActionName.UPGRADE_ASKS_THE_FLAG_LINE)
 def _upgrade_asks_the_flag_line(world: World) -> Iterator[World]:
-    """The upgrade that ships ADR 0061 to a project asked and not deployed.
-
-    It moves no ticket. A ticket that states its conjecture and no line is read as needing the
-    conjecture again, and a built one, which no preflight reads again, goes on to its merge. It
-    lands on the default branch, so it can arrive while the build's branch is checked out.
-
-    Why only where the architecture is recorded: an upgrade from a plugin before ADR 0049 is the
-    model's other upgrade, which comes at rest and owes the architecture.
-    """
     building = on_a_clean_branch(world, Head.WORK) and Ticket.BUILT in world.tickets
     if (
         (calm(world) or (building and world.foundation and not world.parked))
@@ -1086,12 +904,6 @@ def _kind_of_code_arrives(world: World) -> Iterator[World]:
 
 @action(ActionName.KIND_THAT_REOPENS_THE_ARCHITECTURE_ARRIVES)
 def _kind_that_reopens_the_architecture_arrives(world: World) -> Iterator[World]:
-    """The first instance of a kind that reopens the architecture and owes no row of its own.
-
-    Why no row: a kind that owes both is a state with both owed, which takes the graph past what
-    a chart can draw; ``test_architecture_review`` holds the order there, the review and then the
-    safeguard.
-    """
     if rest(world) and Ticket.RESOLVED in world.tickets:
         yield replace(world, reviews=True)
 
@@ -1122,11 +934,6 @@ def _agent_binds_safeguard(world: World) -> Iterator[World]:
 
 @action(ActionName.OWNER_RECORDS_ARCHITECTURE, Advice.ARCHITECTURE)
 def _owner_records_architecture(world: World) -> Iterator[World]:
-    """``/ratchet:architecture``: the record, the parts and the settled ledger, on a branch.
-
-    Why the branch is left to merge: the record and the binding are guard paths, so the merge
-    judge leaves the merge to the owner.
-    """
     if calm(world) and world.architecture is Architecture.OWED:
         yield replace(world, architecture=Architecture.RECORDED, head=Head.WORK)
 
@@ -1150,17 +957,11 @@ def _agent_deletes_the_expired_unit(world: World) -> Iterator[World]:
 
 
 def on_a_clean_branch(world: World, *heads: Head) -> bool:
-    """Whether the setup is done and a clean branch of ``heads`` is checked out."""
     return adopted(world) and world.head in heads and world.tree is Tree.CLEAN
 
 
 @action(ActionName.SOMEONE_EDITS_CODE)
 def _someone_edits_code(world: World) -> Iterator[World]:
-    """An edit at rest, on a clean working branch, or on a merged branch checked out at rest.
-
-    Why a merged branch only at rest: what the route makes of its dirty tree does not depend on
-    the tickets or on what is owed, and each other state it is edited in adds a working branch.
-    """
     at_rest = on_a_clean_branch(world, Head.MERGED) and rest(replace(world, head=Head.MAIN))
     if rest(world) or on_a_clean_branch(world, Head.WORK) or at_rest:
         yield replace(world, tree=Tree.CODE)
@@ -1173,18 +974,12 @@ def _agent_commits_on_a_branch(world: World) -> Iterator[World]:
 
 
 def merged(world: World, head: Head) -> World:
-    """``world`` once its working branch is merged, the checkout left on ``head``."""
     first, second = (Ticket.MERGED if t is Ticket.BUILT else t for t in world.tickets)
     return replace(world, head=head, tickets=(first, second))
 
 
 @action(ActionName.BRANCH_MERGES, Advice.MERGE)
 def _branch_merges(world: World) -> Iterator[World]:
-    """The merge entry point merges the branch and switches the checkout to the default branch.
-
-    Why it can be run on a branch already merged, and changes nothing there: the merge judge
-    refuses it, behind a merge commit that holds it, or with nothing of its own to judge.
-    """
     if on_a_clean_branch(world, Head.WORK):
         yield merged(world, Head.MAIN)
     if on_a_clean_branch(world, Head.MERGED):
@@ -1193,18 +988,12 @@ def _branch_merges(world: World) -> Iterator[World]:
 
 @action(ActionName.MERGE_LEAVES_THE_BRANCH_CHECKED_OUT)
 def _merge_leaves_the_branch_checked_out(world: World) -> Iterator[World]:
-    """The default branch holds the branch, and the checkout is still on it.
-
-    It stands for a merge cut off after it moved the default branch and before it switched, a
-    merge that could not switch, and the owner's merge of the branch from another checkout.
-    """
     if on_a_clean_branch(world, Head.WORK):
         yield merged(world, Head.MERGED)
 
 
 @action(ActionName.SOMEONE_CHECKS_OUT_A_MERGED_BRANCH)
 def _someone_checks_out_a_merged_branch(world: World) -> Iterator[World]:
-    """A merge keeps the branch it merged, so it can be checked out again at rest."""
     if rest(world):
         yield replace(world, head=Head.MERGED)
 
@@ -1278,8 +1067,6 @@ def _agent_fixes_the_round_ticket(world: World) -> Iterator[World]:
 
 
 class Edge(NamedTuple):
-    """One way an action takes ``source`` to ``target``."""
-
     source: World
     action: ActionName
     target: World
@@ -1287,14 +1074,11 @@ class Edge(NamedTuple):
 
 @dataclass(frozen=True)
 class Graph:
-    """Every world reachable from the start, in the order a breadth-first walk finds them."""
-
     states: tuple[World, ...]
     edges: tuple[Edge, ...]
     variant: Variant = PAGES
 
     def followed(self, label: Callable[[World], Advice]) -> dict[World, tuple[World, ...]]:
-        """For each world, the worlds the action that ``label`` names there can lead to."""
         out: dict[World, list[World]] = {state: [] for state in self.states}
         for source, name, target in self.edges:
             if name is ADVISED[label(source)]:
@@ -1304,7 +1088,6 @@ class Graph:
 
 @functools.cache
 def graph(start: World = World(), variant: Variant = PAGES) -> Graph:  # noqa: B008 # -- World is frozen
-    """The reachable worlds and the edges between them, from ``start``."""
     seen = {start: None}
     edges: list[Edge] = []
     todo = deque([start])
@@ -1324,11 +1107,6 @@ LOOPS: Final = -1
 
 @functools.cache
 def ranks(of: Graph) -> dict[World, int]:
-    """Each world's longest run of advised steps to rest, or ``LOOPS`` when advice never gets there.
-
-    A world is ``LOOPS`` when following advice can return to a world already passed (resting is
-    the one place a run may start again) or has no advised step to take.
-    """
     advised = of.followed(of.variant.advice)
     found: dict[World, int] = {}
 
@@ -1348,26 +1126,18 @@ def ranks(of: Graph) -> dict[World, int]:
 
 
 def following(label: str) -> str:
-    """TLA+ text: the step taken is the action that ``label`` names in the state it leaves."""
     return "\n".join(f'     \\/ ({label} = "{a}" /\\ {act})' for a, act in ADVISED.items())
 
 
 def can_be_followed(label: str) -> str:
-    """TLA+ text: the action that ``label`` names can be taken."""
     return "\n".join(f'  /\\ ({label} = "{a}" => ENABLED {act})' for a, act in ADVISED.items())
 
 
 def lowers_rank(label: str) -> str:
-    """TLA+ text: every step that follows ``label`` away from rest lowers the rank."""
     return f"[][(rank > 0 /\\\n{following(label)}) => rank' < rank]_vars"
 
 
 def changes_the_state(label: Callable[[World], Advice]) -> Callable[[World], bool]:
-    """Whether every way of taking the step ``label`` names in a world leads out of it.
-
-    Why a fact of each state: TLA+ cannot see a step that leaves every variable as it was.
-    """
-
     def check(world: World) -> bool:
         return world not in ACTIONS[ADVISED[label(world)]].successors(world)
 
@@ -1375,15 +1145,10 @@ def changes_the_state(label: Callable[[World], Advice]) -> Callable[[World], boo
 
 
 def never_merges_a_merged_branch(label: str) -> str:
-    """TLA+ text: on a branch the default branch already holds, ``label`` is not its merge."""
     return f'head = "{Head.MERGED}" => {label} # "{Advice.MERGE}"'
 
 
 def above_architecture_open(world: World) -> bool:
-    """Whether anything the route names before an owed architecture is open in ``world``.
-
-    Said apart from ``CHAIN``, field by field, so a change of the chain's order is a change here.
-    """
     return not (
         adopted(world)
         and (world.head, world.tree, world.parked) == (Head.MAIN, Tree.CLEAN, False)
@@ -1398,7 +1163,6 @@ ABOVE_ARCHITECTURE_CLEAR: Final = (
 
 
 def beside(*named: Advice) -> str:
-    """TLA+ text: where one of ``named`` is named, the step beneath it can be taken."""
     names = ", ".join(f'"{label}"' for label in named)
     return "\n".join(
         f'  /\\ (advice \\in {{{names}}} /\\ beneath = "{a}" => ENABLED {act})'
@@ -1419,7 +1183,6 @@ def round_before_behind(label: str) -> str:
 
 
 def only(action_name: ActionName, before: str, after: str) -> str:
-    """TLA+ text: a step from ``before`` to ``after`` on the architecture is ``action_name``."""
     return (
         f'[][(architecture {before} "{Architecture.OWED}" /\\'
         f' architecture\' {after} "{Architecture.OWED}") => {action_name}]_vars'
@@ -1438,8 +1201,6 @@ BUILDS: Final = frozenset({Advice.BUILD, Advice.DRAIN})
 
 
 def line_before_the_build(label: Callable[[World], Advice]) -> Callable[[World], bool]:
-    """Whether ``label`` names no build and no drain where a ticket's ``Flag:`` line is missing."""
-
     def check(world: World) -> bool:
         return world.flag is not Flag.MISSING or label(world) not in BUILDS
 
@@ -1447,8 +1208,6 @@ def line_before_the_build(label: Callable[[World], Advice]) -> Callable[[World],
 
 
 def proved_before_the_build(label: Callable[[World], Advice]) -> Callable[[World], bool]:
-    """Whether ``label`` names no build and no drain where the adoption was never proved."""
-
     def check(world: World) -> bool:
         return world.setup is not Setup.PINNED or label(world) not in BUILDS
 
@@ -1518,18 +1277,15 @@ def only_the_upgrade_finds_a_unit_left() -> str:
 
 
 def no_run_without_the_line() -> str:
-    """TLA+ text: while the line is missing, no step is a feature run or the drain."""
     runs = " \\/ ".join(RUNS)
     return f'[][flag = "{Flag.MISSING}" => ~({runs})]_vars'
 
 
 def upgrade_moves_no_ticket() -> str:
-    """TLA+ text: the upgrade that asks the line leaves the tickets and their inheritance."""
     return f"[][{ActionName.UPGRADE_ASKS_THE_FLAG_LINE} => UNCHANGED <<tickets, inherits>>]_vars"
 
 
 def only_the_upgrade_leaves_the_line_missing() -> str:
-    """TLA+ text: a step into a missing line is the upgrade."""
     return (
         f'[][(flag # "{Flag.MISSING}" /\\ flag\' = "{Flag.MISSING}")'
         f" => {ActionName.UPGRADE_ASKS_THE_FLAG_LINE}]_vars"
@@ -1691,11 +1447,6 @@ RULES: Final[dict[str, model_tla.Rule]] = {
 
 
 class Shown(NamedTuple):
-    """What the charts read of a world: what the route names, the checkout and what is owed.
-
-    And whether a ticket's ``Flag:`` line is missing.
-    """
-
     advice: str
     real_advice: str
     beneath: str
@@ -1724,7 +1475,6 @@ def charted(label: str) -> str:
 
 
 def shown(world: World) -> Shown:
-    """What the charts read of ``world``."""
     return Shown(
         advice(world),
         real_advice(world),
@@ -1743,7 +1493,6 @@ def shown(world: World) -> Shown:
 
 
 def export() -> model_tla.Export:
-    """The reachable graph as a TLA+ module, with what the route names and how far rest is."""
     rank = ranks(graph())
     return model_tla.export(
         "Route",
@@ -1759,7 +1508,6 @@ def export() -> model_tla.Export:
 
 
 def summary() -> model_tla.Export:
-    """The graph seen through what the charts show, small enough for the statechart tool."""
     return model_tla.export(
         "RouteShown", model_tla.summary(graph(), shown), {}, fields=Shown._fields
     )

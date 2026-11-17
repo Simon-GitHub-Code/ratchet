@@ -107,16 +107,11 @@ import project_bite
 import runrecord
 
 POLL = 0.05
-# The job a gate that is measured alone runs in; the units count from 0.
 ALONE = -1
-# Why: the template gives a question not asked yet the recipe `@echo "later: <trigger>"`, and one
-# that does not apply `@echo "none: <reason>"`, so that one line is all such a gate says.
 WAITING = re.compile(r"(?P<standing>later|none): \S.*")
 
 
 class Standing(Enum):
-    """How a finished gate stands, worded as the closing line counts it."""
-
     GREEN = "ran and passed"
     RED = "failed"
     LATER = "not run yet, each waiting for what its line names"
@@ -124,11 +119,6 @@ class Standing(Enum):
 
 
 def tools(root: Path) -> frozenset[str]:
-    """The entry points the binding at ``root`` binds to a tool: a row neither ``none`` nor later.
-
-    Why: a tool whose whole output reads ``none: ...`` judged something, so a ``none:`` line is a
-    gate that judged nothing only where the binding gives the gate no tool.
-    """
     rows = project_bite.gate_rows(gatelib.read_text(root / gatelib.BINDING) or "")
     waits = (application_types.NONE, application_types.LATER)
     return frozenset(
@@ -138,11 +128,6 @@ def tools(root: Path) -> frozenset[str]:
 
 @dataclass(frozen=True, slots=True)
 class Finished:
-    """One gate that ran to its end: what it printed, how it ended and how long it took.
-
-    ``tool`` says the binding binds the gate to a tool.
-    """
-
     name: str
     seconds: float
     exit_code: int
@@ -151,12 +136,10 @@ class Finished:
 
     @property
     def green(self) -> bool:
-        """Whether the gate exited 0."""
         return self.exit_code == 0
 
     @property
     def standing(self) -> Standing:
-        """Red, ran and passed, or green having judged nothing: ``later:`` or ``none:``."""
         if not self.green:
             return Standing.RED
         waiting = WAITING.fullmatch(self.output.strip())
@@ -165,7 +148,6 @@ class Finished:
         return Standing[waiting["standing"].upper()]
 
     def line(self) -> str:
-        """The one status line the gate gets."""
         match self.standing:
             case Standing.GREEN:
                 how = "green"
@@ -180,8 +162,6 @@ class Finished:
 
 @dataclass(slots=True)
 class Live:
-    """A running gate: its process, where its output goes and when it started."""
-
     name: str
     process: subprocess.Popen[bytes]
     log: IO[bytes]
@@ -196,13 +176,6 @@ def say(text: str) -> None:
 def plan(
     gates: list[str], serial: list[list[str]], alone: frozenset[str] = frozenset()
 ) -> list[tuple[str, ...]]:
-    """The units of work in launch order: each ``--serial`` group once, other gates singly.
-
-    A unit is the gates that share one job; a unit launches where its first gate stands in
-    ``gates``. The gates in ``alone`` are left out: they run after the units. Raises
-    ``ValueError`` with the reason when the gates or groups are unusable, which includes a gate
-    that does not split like a shell line.
-    """
     if not gates:
         message = "no gates: name them after '--'"
         raise ValueError(message)
@@ -231,19 +204,15 @@ def plan(
 def shares(
     units: list[tuple[str, ...]], wide: list[str], *, alone: list[str], jobs: int
 ) -> dict[str, int]:
-    """Each wide gate's share of ``jobs``: split between the units that hold one, all alone."""
     beside = sum(1 for unit in units if set(wide).intersection(unit))
     each = max(1, jobs // beside) if beside else jobs
     return {name: jobs if name in alone else each for name in wide}
 
 
 class Scheduler:
-    """Runs units of gates up to ``jobs`` at a time and collects what finished."""
-
     def __init__(
         self, units: list[tuple[str, ...]], runner: list[str], options: argparse.Namespace
     ) -> None:
-        """Queue every unit; nothing runs until ``run``."""
         self.pending = [deque(unit) for unit in units]
         self.groups = [unit for unit in units if len(unit) > 1]
         self.measured_alone = frozenset(options.alone)
@@ -262,14 +231,11 @@ class Scheduler:
         self.halted = False
 
     def run(self) -> None:
-        """Start, watch and settle gates until every unit is empty or a red halts the run."""
         try:
             while True:
                 self.start_ready()
                 self.start_alone()
                 if not self.live:
-                    # Why: a gate that could not start is settled at once and leaves no job
-                    # running, while gates after it still wait.
                     if self.halted or not self.not_started():
                         return
                     continue
@@ -282,11 +248,9 @@ class Scheduler:
             raise
 
     def not_started(self) -> list[str]:
-        """The gates a halted run never began."""
         return [*(name for queue in self.pending for name in queue), *self.alone]
 
     def start_ready(self) -> None:
-        """Start the next gate of every idle unit while a job is free."""
         for index, queue in enumerate(self.pending):
             if self.halted or len(self.live) >= self.jobs:
                 return
@@ -294,12 +258,10 @@ class Scheduler:
                 self.begin(index, queue.popleft())
 
     def start_alone(self) -> None:
-        """Start the next gate that is measured alone, once nothing else runs or waits."""
         if self.alone and not (self.halted or self.live or any(self.pending)):
             self.begin(ALONE, self.alone.popleft())
 
     def begin(self, index: int, name: str) -> None:
-        """Launch one gate in the job ``index``; one that cannot start is settled at once."""
         with gatelib.signals_held():
             started = self.launch(name)
             if isinstance(started, Finished):
@@ -308,7 +270,6 @@ class Scheduler:
                 self.live[index] = started
 
     def launch(self, name: str) -> Live | Finished:
-        """The gate started in a session of its own, or its failure to start."""
         command = [*self.runner, *shlex.split(name)]
         log = tempfile.TemporaryFile()  # noqa: SIM115 # -- held until the gate is settled
         say(f"parallel: {name}: started")
@@ -331,7 +292,6 @@ class Scheduler:
         return Live(name, process, log, time.monotonic(), shlex.split(name)[-1] in self.tools)
 
     def settle_exited(self) -> None:
-        """Settle every running gate whose process has exited."""
         for index, gate in list(self.live.items()):
             code = gate.process.poll()
             if code is not None:
@@ -339,7 +299,6 @@ class Scheduler:
                 self.settle(collect(gate, code))
 
     def settle(self, result: Finished) -> None:
-        """Print the gate whole, record it, and halt the run if it is red under ``--fail-fast``."""
         if result.output:
             say(f"==> {result.name} <==")
             say(result.output.rstrip("\n"))
@@ -352,7 +311,6 @@ class Scheduler:
             self.halted = True
 
     def stop_running(self) -> None:
-        """Stop every running gate's whole process group; they are neither red nor green."""
         gates = list(self.live.values())
         self.live.clear()
         for gate in gates:
@@ -365,7 +323,6 @@ class Scheduler:
 
 
 def collect(gate: Live, code: int) -> Finished:
-    """The finished gate: its output read back, its signal death written as a shell would."""
     seconds = time.monotonic() - gate.started
     left = gatelib.end_group(gate.process.pid)
     gate.log.seek(0)
@@ -377,7 +334,6 @@ def collect(gate: Live, code: int) -> Finished:
 
 
 def chains(scheduler: Scheduler) -> list[str]:
-    """One line for each group whose gates, one after another, outlasted every gate beside it."""
     seconds = {result.name: result.seconds for result in scheduler.finished}
     grouped = {name for group in scheduler.groups for name in group}
     beside = [
@@ -402,7 +358,6 @@ def chains(scheduler: Scheduler) -> list[str]:
 
 
 def closing(scheduler: Scheduler, wall: float) -> list[str]:
-    """What is wrong with the run, after the slowest gate is named."""
     slowest = max(scheduler.finished, key=lambda result: result.seconds)
     work = sum(result.seconds for result in scheduler.finished)
     total = len(scheduler.finished) + len(scheduler.stopped) + len(scheduler.not_started())
@@ -432,7 +387,6 @@ def closing(scheduler: Scheduler, wall: float) -> list[str]:
 
 
 def record(scheduler: Scheduler, wall: float, *, exit_code: int, gates: list[str]) -> None:
-    """The tier's whole line, then one line for each Local caches path the run left missing."""
     missing = runrecord.missing_cache(scheduler.root)
     for path in missing:
         say(
@@ -457,7 +411,6 @@ def record(scheduler: Scheduler, wall: float, *, exit_code: int, gates: list[str
 
 
 def verdict(scheduler: Scheduler, problems: list[str]) -> str:
-    """The last line: red, green with what ran and what waits, or that no check ran."""
     if problems:
         return "parallel: red"
     counts = Counter(result.standing for result in scheduler.finished)
@@ -467,7 +420,6 @@ def verdict(scheduler: Scheduler, problems: list[str]) -> str:
         if counts[each]
     ]
     if not counts[Standing.GREEN]:
-        # Why: a new repository whose every question waits is not failing, and not green either.
         return f"parallel: no check ran ({', '.join(waits)})"
     return f"parallel: green ({', '.join([f'{counts[Standing.GREEN]} ran', *waits])})"
 

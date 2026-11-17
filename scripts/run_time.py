@@ -1,18 +1,4 @@
 #!/usr/bin/env python3
-"""The run's time, stated with its result (ADR 0073, point 5).
-
-The feature preflight stamps the ticket's start into ``.ratchet/run-time.json`` and ``end`` stamps
-its end, both in UTC. ``line`` reads the timing lines written between the two stamps and prints
-one line: how long the ticket took, how many ``check`` runs it held and their seconds, and how many
-of them ran on a tree an earlier green ``check`` run had covered. It reports and never stops a run.
-
-A ``check`` run is a tier line whose gate set is the project's ``check`` gate set: the gates of the
-justfile's ``tier0_gates`` and ``tier1_gates``. The window between the two stamps, in the
-ticket's own work tree, bounds the lines.
-
-Usage: ``run_time.py end|line [--root DIR]``.
-"""
-
 from __future__ import annotations
 
 import argparse

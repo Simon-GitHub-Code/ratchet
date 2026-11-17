@@ -1,5 +1,3 @@
-"""Kept checks: read as data, run against a fresh product over HTTP and in a browser."""
-
 import io
 from http.client import parse_headers
 from pathlib import Path
@@ -52,12 +50,10 @@ HELD = kept_checks.HELD
 
 
 def unmet(reason: str) -> kept_checks.Result:
-    """The product ran the check and did not show what it asks."""
     return kept_checks.Result(kept_checks.Outcome.UNMET, reason)
 
 
 def not_run(reason: str) -> kept_checks.Result:
-    """Nothing could try the check: no answer, no browser, a browser that broke."""
     return kept_checks.Result(kept_checks.Outcome.NOT_RUN, reason)
 
 

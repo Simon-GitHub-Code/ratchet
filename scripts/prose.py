@@ -1,24 +1,4 @@
 #!/usr/bin/env python3
-"""The prose gate: the glossary's ``_Avoid_`` words stay out of the documents and comments.
-
-Reads every ``_Avoid_:`` line of ``GLOSSARY.md`` (the format is domain-modeling's: a bold term,
-a definition, then the synonyms to avoid) and scans the tracked documents (``.md``, ``.txt``,
-``.rst``, ``.adoc``) and the comment lines of every other tracked text file for any of those words
-as a whole word, case-insensitively. The plugin keeps no list of source file extensions, which
-would name the languages of a stack (ADR 0050): a file that is not a document is read for the
-text after a comment marker of any common syntax, and a binary file is skipped. The check cannot
-see meaning, so the whole word is banned; a line that must use one carries ``glossary: allow``
-and the reason, which is a record a review can read.
-The glossary files themselves are not scanned.
-
-Like the markers gate, it judges the change: a word fails a file only when its uses there rose
-against the merge base, read with today's glossary. So putting a word on an Avoid list never
-turns the records written before it red, and every new use of it is caught. Without a base
-commit every use counts.
-
-Usage: ``prose.py [--root DIR]``.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -39,7 +19,6 @@ COMMENT = re.compile(r"(?:^|\s)(?:#|//|/\*|\*|--|<!--)\s*(.*)$")
 
 
 def avoided(glossary: str) -> dict[str, str]:
-    """Each word to avoid (lower-cased) mapped to the term it stands in for."""
     words: dict[str, str] = {}
     term = "?"
     for line in glossary.splitlines():
@@ -70,20 +49,16 @@ def is_scanned(path: str) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class Hit:
-    """One use of an avoided word: where, as written, and the term it stands in for."""
-
     path: str
     line: int
     word: str
     term: str
 
     def __str__(self) -> str:
-        """``path:line: 'word' is on the Avoid list of 'Term'``."""
         return f"{self.path}:{self.line}: '{self.word}' is on the Avoid list of '{self.term}'"
 
 
 def scan(path: str, text: str, *, found: re.Pattern[str], words: dict[str, str]) -> list[Hit]:
-    """Each use of an avoided word in the file."""
     document = is_document(path)
     hits = []
     for number, line in enumerate(text.splitlines(), 1):
@@ -99,7 +74,6 @@ def scan(path: str, text: str, *, found: re.Pattern[str], words: dict[str, str])
 
 
 def renames(root: Path, base: str) -> dict[str, str]:
-    """Each path renamed since ``base`` mapped to the path it had there."""
     out = gatelib.git(root, "diff", "-M", "--name-status", "-z", base) or ""
     fields = out.split("\0")
     moved: dict[str, str] = {}

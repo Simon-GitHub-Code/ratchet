@@ -1,12 +1,3 @@
-"""The matrix: one first-hour run per persona, one after another, and one table of all of them.
-
-Runs are sequential on purpose: each is a whole Claude Code session with builds and a sandbox, and
-two at once on one machine move each other's minutes (the README's noise section). Each run is its
-own ``run.py run`` process in its own directory under the matrix directory, so a run that fails
-leaves a row that says so and the next one still starts. The table is rewritten after every run, so
-a matrix that is stopped keeps what it finished.
-"""
-
 from __future__ import annotations
 
 import json
@@ -41,8 +32,6 @@ STOP_WAIT_S = 180.0
 
 @dataclass(frozen=True)
 class Settings:
-    """What every run of the matrix is given, besides its persona and directory."""
-
     plugin: Path
     minutes: float
     usd: float
@@ -52,7 +41,6 @@ class Settings:
 
 
 def command(run_py: Path, settings: Settings, *, persona: str, directory: Path) -> list[str]:
-    """The command that drives one persona's run."""
     return [
         "uv",
         "run",
@@ -92,7 +80,6 @@ def _yn(value: object) -> str:
 
 
 def architecture_cell(metrics: Mapping[str, object]) -> str:
-    """The architecture measures of one run on one line."""
     if not _at(metrics, "architecture.read"):
         return f"asked {_yn(_at(metrics, 'architecture.asked'))}; repository not read"
     done = _cell(_at(metrics, "architecture.features.with_design"))
@@ -111,7 +98,6 @@ def architecture_cell(metrics: Mapping[str, object]) -> str:
 
 
 def harness_cell(metrics: Mapping[str, object]) -> str:
-    """The commit of the eval code that drove the run, marked when its tree had changes."""
     commit = _at(metrics, "meta.harness.commit")
     if not commit:
         return "not recorded"
@@ -122,13 +108,11 @@ def harness_cell(metrics: Mapping[str, object]) -> str:
 
 
 def stopped(metrics: Mapping[str, object], error: str) -> str:
-    """Why the run stopped and when, led by its exit code when that was not zero."""
     reason, minute = _cell(_at(metrics, "stop.reason")), _cell(_at(metrics, "stop.minute"))
     return (f"{error}; " if error else "") + f"{reason} at {minute} min"
 
 
 def row(persona: Persona, metrics: Mapping[str, object] | None, error: str = "") -> list[str]:
-    """One persona's cells; a run with no measurements says why in its first cells."""
     if metrics is None:
         why = error or "no measurements"
         return [persona.name, _cell(persona.stack or "unstated"), "n/a", why] + ["n/a"] * (
@@ -159,14 +143,12 @@ def row(persona: Persona, metrics: Mapping[str, object] | None, error: str = "")
 
 
 def table(rows: Sequence[Sequence[str]]) -> str:
-    """The rows as a Markdown table."""
     lines = ["| " + " | ".join(HEADER) + " |", "| " + " | ".join("---" for _ in HEADER) + " |"]
     lines += ["| " + " | ".join(r) + " |" for r in rows]
     return "\n".join(lines) + "\n"
 
 
 def read_metrics(directory: Path) -> Mapping[str, object] | None:
-    """A run's ``metrics.json``, or ``None`` when the run wrote none."""
     try:
         data = json.loads((directory / "metrics.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -179,11 +161,6 @@ def run_all(
     root: Path,
     launch: Callable[[Persona, Path], int],
 ) -> list[list[str]]:
-    """Run each persona in turn through ``launch``, writing ``matrix.md`` and ``matrix.json``.
-
-    ``launch`` runs one persona in its directory and gives the exit code. A run that fails to
-    start or ends in an error still gets a row, and the next persona still runs.
-    """
     rows: list[list[str]] = []
     raw: dict[str, object] = {}
     root.mkdir(parents=True, exist_ok=True)
@@ -201,16 +178,11 @@ def run_all(
 
 
 def write(root: Path, rows: Sequence[Sequence[str]], raw: Mapping[str, object]) -> None:
-    """Write the rows as ``matrix.md`` and each run's measurements by persona as ``matrix.json``."""
     (root / "matrix.md").write_text(table(rows), encoding="utf-8")
     (root / "matrix.json").write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
 
 
 def launch_process(argv: Sequence[str]) -> int:
-    """Run one command to its end.
-
-    An interrupt goes on to it, and it gets time to write its results.
-    """
     process = subprocess.Popen(list(argv))
     try:
         return process.wait()

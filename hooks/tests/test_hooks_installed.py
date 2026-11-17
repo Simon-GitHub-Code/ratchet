@@ -1,5 +1,3 @@
-"""Would a commit run tier 0? Each case is a real repository, none on the machine's git config."""
-
 import os
 import shutil
 import subprocess
@@ -200,8 +198,6 @@ def test_a_hooks_path_from_the_environment_is_named_by_its_scope(
 def test_a_hook_that_never_answers_is_killed_at_the_timeout(
     root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Why: pgrep searches the whole machine, so the duration carries this process's id; a
-    # parallel worker or another checkout's run sleeping 31 seconds must not look like a leftover.
     nap = f"31.{os.getpid()}"
     hook_script(root / ".git/hooks", "pre-commit", f"exec sleep {nap}")
     hook_script(root / ".git/hooks", "commit-msg", f"exec sleep {nap}")
@@ -220,8 +216,6 @@ def test_a_hook_that_never_answers_is_killed_at_the_timeout(
 
 
 def test_a_hook_that_fails_before_it_answers_is_not_read_as_not_installed(root: Path) -> None:
-    # Why: a pre-commit framework error, such as a cache database locked for over five seconds
-    # on a loaded machine, exits non-zero without reaching the recipe. The hooks are installed.
     hook_script(
         root / ".git/hooks",
         "pre-commit",
@@ -251,8 +245,6 @@ def test_a_hook_that_answers_and_then_fails_is_still_an_answer(root: Path) -> No
 
 
 def test_the_hooks_run_one_after_the_other_as_git_runs_them(root: Path, tmp_path: Path) -> None:
-    # Why: two pre-commit processes at once contend for the cache database; a commit never runs
-    # them together.
     log = tmp_path / "order"
     for name in hooks_installed.HOOKS:
         body = f"echo 'start {name}' >> {log}\nsleep 0.2\necho 'end {name}' >> {log}\n"
@@ -324,9 +316,7 @@ def test_the_template_recipes_answer_the_probe_and_nothing_else_does(tmp_path: P
     assert recipe(tmp_path, "commit-msg", "any-file", probe=probe).returncode == 0
     assert probe.read_text(encoding="utf-8").strip() == "commit-msg"
     probe.unlink()
-    # Why: without the variable the recipe runs the gates, which the template leaves unbound.
     assert recipe(tmp_path, "pre-commit", probe=None).returncode != 0
-    # Why: tier0 reaches the gates directly, so a stray variable never skips one there.
     assert recipe(tmp_path, "tier0", probe=probe).returncode != 0
     assert not probe.exists()
 
@@ -337,8 +327,6 @@ def test_the_entry_point_installs_the_real_hooks_that_a_global_path_still_runs(
     pre_commit, just = shutil.which("pre-commit"), shutil.which("just")
     if pre_commit is None or just is None:
         pytest.skip("pre-commit and just are not installed")
-    # Why: this case is about the command the gate prints, not about how long a hook may take; the
-    # limit is tested on its own, and a real pre-commit on a heavily loaded machine can exceed it.
     monkeypatch.setattr(hooks_installed, "TIMEOUT", 600.0)
     monkeypatch.setenv("PRE_COMMIT_HOME", str(tmp_path / "cache"))
     monkeypatch.setenv("PATH", f"{Path(just).parent}:{Path(pre_commit).parent}:/usr/bin:/bin")

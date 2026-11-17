@@ -1,10 +1,3 @@
-"""A session reads public registry metadata with curl, and is told what a refusal leaves alone.
-
-The allowed lines are what an eval run's `/ratchet:adopt` ran to look up current tool versions,
-cut down and with neutral names. The refused lines are the ways a `curl` could send, sign or leave
-the registries.
-"""
-
 from pathlib import Path
 
 import pytest
@@ -109,21 +102,16 @@ def test_a_curl_that_could_send_sign_or_leave_the_registries_is_refused(command:
     assert not decision.allowed, command
 
 
-# Each was refused as a registry publish, a network connection or a path in an eval run: text that
-# a command writes into a file, or a loop's own words, read as a command.
 NOT_COMMANDS = [
-    # a heredoc that edits a document which says `uv` and later `publish`
     (
         "python3 - <<'EOF'\np='doc.md'; s=open(p).read()\n"
         "s=s.replace('<runner>','`just`; every tool runs through `uv run --frozen`, so the owner"
         " can publish')\nEOF"
     ),
-    # a heredoc that appends to a file a list of gates and a word like `token`
     (
         "cat >> quality/bites.toml <<'EOF'\n"
         'setup = ["uv sync --frozen --quiet"]\nexpect = "token"\nEOF'
     ),
-    # code that writes prose about the modules a project bans, in string literals
     (
         "python3 - <<'EOF'\ns=open('AGENTS.md').read()\n"
         "s=s.replace('x','`lint` refuses `urllib.request`, `http.client` and socket use')\nEOF"
@@ -133,7 +121,6 @@ NOT_COMMANDS = [
         "s=s.replace('import a\\n', 'import socket\\nimport a\\n')\nEOF"
     ),
     "node -e \"console.log('fetch(x) and https.request are only words here')\"",
-    # a sed script after `do`, which is the program the loop runs
     'for g in a b; do sed -n "/==> $g <==/,/done: $g:/p" /tmp/x.log | head -5; done',
     "if true; then sed -n '/a/,/b/p' notes.txt; fi",
 ]
@@ -164,7 +151,6 @@ def test_a_registry_publish_and_a_network_script_are_still_refused(command: str,
 
 
 def test_a_path_one_directory_too_far_up_is_a_real_reach() -> None:
-    """From a work tree under the run's tmp, five `..` leave the run; four reach its root."""
     cwd = f"cd {ROOT}/tmp/queue/app/feature"
     assert policy.decide("Bash", {"command": f"{cwd} && ls ../../../../plugin"}, SCOPE).allowed
     far = policy.decide("Bash", {"command": f"{cwd} && ls ../../../../../plugin"}, SCOPE)

@@ -1,5 +1,3 @@
-"""The threshold ratchet's rules: on every state of its model, then on real git histories."""
-
 from __future__ import annotations
 
 import functools
@@ -21,9 +19,6 @@ from tests.support import PLUGIN_ROOT
 
 NAMED, BROUGHT, NOT_LATE, REMEMBERED = model.RULES
 
-# Why: a rule the gate does not keep is pinned here by the shortest path from the initial state
-# to a step that breaks it, so the break is a recorded fact and not a red test. Rules 2 and 4
-# were pinned that way until ADR 0047; every rule holds now.
 COUNTEREXAMPLES: dict[str, list[str] | None] = {
     NAMED: None,
     BROUGHT: None,
@@ -31,7 +26,6 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     REMEMBERED: None,
 }
 HOLDING = [name for name, path in COUNTEREXAMPLES.items() if path is None]
-# Why: the two paths that broke rules 2 and 4 before ADR 0047, replayed below as red landings.
 RECORD_LANDED_ALONE = [
     "branch a opens from the default tip",
     "branch b opens from the default tip",
@@ -53,7 +47,6 @@ OWN_RECORD = [
     "branch a records its own loosening: 'Relaxes: gate.floor from 2 to 1'",
     "branch a tries to land",
 ]
-# Why: the stateful run checks real histories past the exhaustive graph's bound.
 LONGER = 6
 PAGE = PLUGIN_ROOT / "docs/model/ratchet.md"
 
@@ -64,7 +57,6 @@ def graph() -> model.Graph:
 
 
 def shortest_break(name: str) -> list[str] | None:
-    """The fewest actions from the initial state to a step that breaks the rule, or ``None``."""
     rule_holds = model.RULES[name]
     came: dict[model.State, tuple[model.State, str] | None] = {model.INITIAL: None}
     queue = deque([model.INITIAL])
@@ -108,7 +100,6 @@ def test_the_page_was_checked_and_drawn_from_the_current_export() -> None:
 
 
 def landings() -> list[tuple[model.State, model.Branch, model.State]]:
-    """Every landing attempt in the graph: the state, the branch, and the state after."""
     states, _ = graph()
     return [
         (state, branch, model.land(state, slot))
@@ -143,8 +134,6 @@ def test_a_branch_left_open_can_land_its_own_recorded_loosening_late() -> None:
 
 
 def test_a_number_is_left_behind_through_a_flag_by_two_changes_each_with_its_record() -> None:
-    # Why: ADR 0047 allows this chain, so rule 4 is about a removed key and not about a retyped
-    # one; this shows the chain is reachable, and rule 2 that each of its steps brought a record.
     _, edges = graph()
     flagged = [
         after
@@ -162,7 +151,6 @@ def test_a_number_is_left_behind_through_a_flag_by_two_changes_each_with_its_rec
 
 
 def real_steps(world: World) -> list[model.Edge]:
-    """Each merge the default branch moved to, as a model step, so the rules read it."""
     steps: list[model.Edge] = []
     state = model.INITIAL
     held = [state.last]
@@ -178,8 +166,6 @@ def real_steps(world: World) -> list[model.Edge]:
 
 
 class Play:
-    """The model and a real repository taking the same actions, compared after each one."""
-
     def __init__(self, directory: Path, state: model.State) -> None:
         self.world = World(directory)
         self.state = state
@@ -190,7 +176,6 @@ class Play:
         return "\n".join([*lines, *(f"the gate printed:\n{text}" for text in printed)])
 
     def named(self, name: str) -> Landing | None:
-        """Take the action the model calls ``name``."""
         move = next((move for move in model.moves(self.state) if move[0].name == name), None)
         assert move is not None, self.says(f"no action is called {name!r} here")
         return self.take(*move)
@@ -240,21 +225,16 @@ def family(action: model.Action) -> str:
     return action.kind.name
 
 
-# Why: two slots keep opening and abandoning possible at nearly every step; drawn as often as
-# changes and landings, they spent most of a run's git calls on branches that did nothing.
 WEIGHTED = ["change", "change", "record", "record", "LAND", "LAND", "OPEN", "ABANDON"]
 
 
 def worth_taking(state: model.State, action: model.Action) -> bool:
-    """Whether ``action`` is anything but landing a branch that changed nothing."""
     branch = state.branch(action.slot)
     idle = branch is not None and not branch.changed and not branch.own_records
     return action.kind is not model.Kind.LAND or not idle
 
 
 class RatchetOnARepository(RuleBasedStateMachine):
-    """Random actions on the model and on a real repository together."""
-
     def __init__(self) -> None:
         super().__init__()
         self.scratch = Path(tempfile.mkdtemp(prefix="ratchet-model-"))
@@ -279,8 +259,6 @@ class RatchetOnARepository(RuleBasedStateMachine):
 
 
 def test_the_real_gate_agrees_with_the_model_and_real_histories_keep_its_rules() -> None:
-    # Why: every shrink replays git; shrinking a red run took over five minutes, so a red run
-    # reports its path unshrunk, and the exhaustive tests above give each rule's shortest one.
     run_state_machine_as_test(
         RatchetOnARepository,
         settings=settings(
@@ -313,8 +291,6 @@ def test_a_record_landed_alone_excuses_no_later_branch(tmp_path: Path) -> None:
 
 
 def test_a_record_once_landed_does_not_let_the_same_loosening_land_again(tmp_path: Path) -> None:
-    # Why: three landings, one past the exhaustive graph's bound. The floor was lowered with a
-    # record and raised back; lowering it again needs a record of its own, in a file of its own.
     *_, again, _, own = replay(
         tmp_path,
         [

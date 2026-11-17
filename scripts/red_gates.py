@@ -23,7 +23,6 @@ from pathlib import Path
 import gatelib
 
 LINES = 40
-# Why: a forge refuses an issue or a comment of 65536 characters, so one gate may not take it all.
 CHARACTERS = 6000
 CLIPPED = "... (only the end of the output is shown)"
 STATUS = re.compile(r"^parallel: (?P<name>.+): (?P<how>green|red \(exit \d+\)) in \d+\.\d+s$")
@@ -31,8 +30,6 @@ STATUS = re.compile(r"^parallel: (?P<name>.+): (?P<how>green|red \(exit \d+\)) i
 
 @dataclass(frozen=True)
 class Gate:
-    """One finished gate of the log: what it printed and the status line that ended it."""
-
     name: str
     output: list[str]
     status: str
@@ -44,7 +41,6 @@ def header(name: str) -> str:
 
 
 def gates(log: str) -> list[Gate]:
-    """Every gate that finished in ``log``, in order."""
     lines = log.splitlines()
     found = []
     floor = 0
@@ -64,7 +60,6 @@ def gates(log: str) -> list[Gate]:
 
 
 def tail(output: list[str], lines: int) -> list[str]:
-    """The last ``lines`` lines of ``output``, at most ``CHARACTERS`` characters of them."""
     text = "\n".join(output[-lines:])
     clipped = len(output) > lines or len(text) > CHARACTERS
     kept = text[-CHARACTERS:].split("\n") if text else []
@@ -72,7 +67,6 @@ def tail(output: list[str], lines: int) -> list[str]:
 
 
 def report(log: str, lines: int = LINES) -> str | None:
-    """The header, the end of the output and the status line of each red gate, or ``None``."""
     red = [gate for gate in gates(log) if gate.red]
     blocks = [
         "\n".join([header(gate.name), *tail(gate.output, lines), gate.status]) for gate in red

@@ -18,16 +18,9 @@ dev = [
     "ruff>=0.8",
 ]
 
-# Why: the plugin is hooks, skills and workflows, not an installable package.
 [tool.uv]
 package = false
 
-# Why: the gate scripts and the guard hook (the package, `hooks/guard.py` and `hooks/session.py`)
-# are the method's own checkers; a line of them nobody ran is a gate that may never fire, so they
-# are held at 100% by the tool, not by a number that could be lowered. Nothing is omitted but the
-# tests; `patch = ["subprocess"]` measures the shims the tests run as the hook runs them. The
-# first-hour eval's measurements are held the same way; its driver is omitted because it runs only
-# against a signed-in `claude` and the Agent SDK, which the suite has neither of.
 [tool.coverage.run]
 branch = true
 source = ["scripts", "hooks", "evals/first-hour/first_hour"]
@@ -56,63 +49,63 @@ src = ["hooks", "scripts", "evals/first-hour"]
 select = ["ALL"]
 ignore = [
     "D",
-    "COM812", # missing-trailing-comma: conflicts with the formatter, which owns commas
-    "CPY001", # copyright notice: private single-owner repository, no header policy
+    "COM812",
+    "CPY001",
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "hooks/guard.py" = [
-    "INP001", # the shim is a standalone script, deliberately not a package
+    "INP001",
 ]
 "hooks/session.py" = [
-    "INP001", # the shim is a standalone script, deliberately not a package
-    "T201",   # the hook reports context to stdout by design
+    "INP001",
+    "T201",
 ]
 "hooks/ratchet_guards/session.py" = [
-    "T201", # the hook reports context to stdout by design
+    "T201",
 ]
 "hooks/tests/test_session.py" = [
-    "S603", # subprocess runs the shim with a literal argv list, no shell
+    "S603",
 ]
 "hooks/ratchet_guards/diff.py" = [
-    "T201", # the diff tool reports to stdout by design
+    "T201",
 ]
 "scripts/*.py" = [
-    "T201",   # the gate scripts report to stdout by design
-    "S603", "S607", # subprocess runs git with a literal argv list, no shell
-    "INP001", # standalone scripts, deliberately not a package
+    "T201",
+    "S603", "S607",
+    "INP001",
 ]
 "evals/first-hour/run.py" = [
-    "T201",   # the command prints the table by design
-    "S603",   # subprocess runs the resolved `claude` with a literal argv list
-    "INP001", # a script run by `uv run`, deliberately not a package
+    "T201",
+    "S603",
+    "INP001",
 ]
 "evals/first-hour/first_hour/*.py" = [
-    "S603", "S607", # subprocess runs git, the route and the app with argv lists or the owner's line
-    "S108",         # the sandbox and the policy name /tmp to replace it with the run's own
+    "S603", "S607",
+    "S108",
 ]
 "evals/first-hour/tests/**" = [
-    "INP001",  # pytest imports these by basename; a package would clash with hooks/tests
-    "S101",    # assert is the test idiom
+    "INP001",
+    "S101",
     "S603", "S607",
-    "S108",    # the policy and sandbox tables name the temp paths a session would write to
-    "ARG002",  # the fakes keep the signatures of the protocols they stand in for
-    "PLR2004", # magic numbers are the test fixtures
+    "S108",
+    "ARG002",
+    "PLR2004",
 ]
 "hooks/tests/**" = [
-    "S101",    # assert is the test idiom
-    "PLR2004", # magic numbers are the test fixtures
+    "S101",
+    "PLR2004",
 ]
 
 [tool.ruff.lint.mccabe]
-max-complexity = 10 # C901
+max-complexity = 10
 
 [tool.ruff.lint.pylint]
-max-branches = 12        # PLR0912
-max-returns = 6          # PLR0911
-max-args = 5             # PLR0913
-max-positional-args = 3  # PLR0917
-max-statements = 40      # PLR0915
+max-branches = 12
+max-returns = 6
+max-args = 5
+max-positional-args = 3
+max-statements = 40
 
 [tool.ruff.lint.isort]
 known-first-party = ["ratchet_guards", "tests", "guard", "first_hour"]

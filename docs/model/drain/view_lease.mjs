@@ -1,7 +1,5 @@
 import * as c from "./view_common.mjs";
 
-// Drawn from DrainLeaseShown. The two drains are alike, so a step is named by its drain's part:
-// the lease's holder, or the other drain.
 export const title = "The drain lease: who holds it, and when the next drain may take it";
 const MODE = { separate: "Each drain in a session of its own", one: "One process runs both drains" };
 const HOLDER = {
@@ -32,12 +30,9 @@ export const step = (action, from, to) => {
   const who =
     from.holder === "none" ? "a drain" : taken.drain === from.holder ? "the holder" : "the other drain";
   const found = Object.entries(WORDS).find(([key]) => action.endsWith(key))?.[1] ?? taken.words;
-  // Why: a take-over differs from a plain clean --all only where that is refused: in sessions of
-  // their own, while the holder's session is alive.
   const alive = from.processes === "separate" && ["draining", "stopped"].includes(from.holderIs);
   const word = found === "clean --all --take-over" && !(alive && who === "the other drain") ? "clean --all" : found;
   if (word === "stop") return `${who} stops`;
-  // Why: a report keeps the lease only while a program runs from the tree, which no state here shows.
   if (word === "report" && to.holder !== "none") return `${who}'s report while a program runs`;
   return `${who}'s ${word}`;
 };

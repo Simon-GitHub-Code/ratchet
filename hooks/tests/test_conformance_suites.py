@@ -1,5 +1,3 @@
-"""The suites table (ADR 0073, point 7): its shape, the recipes it names, the gate that runs it."""
-
 import shutil
 from pathlib import Path
 

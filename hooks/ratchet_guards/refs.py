@@ -1,16 +1,3 @@
-"""The refs the guard reads the default branch through, and the spellings git accepts for them.
-
-The path rules come from ``guards/manifest.toml`` at the default branch's tip and the additive
-records check compares with the merge base of ``HEAD`` and that branch (ADR 0005, ADR 0014).
-``ratchet_guards.committed`` finds the branch through ``refs/remotes/origin/HEAD`` and what it
-names, else through ``refs/remotes/origin/main``, ``refs/remotes/origin/master``,
-``refs/heads/main`` and ``refs/heads/master``, and git shows it with object replacement
-(``refs/replace/*``) applied. A command that writes any of them, or a setting that decides what a
-fetch writes into them, switches the path guards off or turns merged records into the branch's own
-additions (ADR 0016). This module says which names those are, in every spelling a command line
-can give them.
-"""
-
 from fnmatch import fnmatchcase
 
 REMOTE = "origin"
@@ -18,37 +5,21 @@ MAIN_BRANCHES = frozenset({"main", "master"})
 REMOTE_HEAD = f"refs/remotes/{REMOTE}/HEAD"
 TRACKING = tuple(f"refs/remotes/{REMOTE}/{name}" for name in sorted(MAIN_BRANCHES))
 LOCAL = tuple(f"refs/heads/{name}" for name in sorted(MAIN_BRANCHES))
-# Why: git reads a short name from `refs/tags` before `refs/heads`, and a forge lists a run on
-# the tag `main` beside the runs on the branch, so a tag named as a default branch stands in for it.
 TAGS = tuple(f"refs/tags/{name}" for name in sorted(MAIN_BRANCHES))
-# Why: whichever branch ``origin/HEAD`` names is read, and the guard cannot know which without
-# asking git, so every remote-tracking ref and every replace ref is treated as one of them.
 _NAMESPACES = frozenset({"remotes", "replace"})
 _DEFAULTS = frozenset({"heads", "tags"})
-# Why: `git fetch` writes a destination that starts with one of these under `refs/`, so
-# `remotes/origin/main` is the tracking ref and not a branch of that name.
 _QUALIFIED = ("heads/", "tags/", "remotes/")
-# A tag pattern is left out: `git fetch` follows tags whatever the hook says, so refusing
-# `refs/tags/*` would cost every tag fetch and stop nothing.
 
 
 def local(names: frozenset[str]) -> tuple[str, ...]:
-    """The full names of the local branches ``names``."""
     return tuple(f"refs/heads/{name}" for name in sorted(names))
 
 
 def tracking(names: frozenset[str]) -> tuple[str, ...]:
-    """The full names of the remote's tracking refs for ``names``."""
     return tuple(f"refs/remotes/{REMOTE}/{name}" for name in sorted(names))
 
 
 def protected(ref: str, names: frozenset[str] = MAIN_BRANCHES) -> bool:
-    """Whether the full name ``ref``, or a pattern with ``*``, is or covers a ref the guard reads.
-
-    Those are the local default branches, a tag named as one, and everything under
-    ``refs/remotes`` and ``refs/replace``. ``names`` are the default branches: ``main`` and
-    ``master``, and whichever other the repository's own state says is the default one.
-    """
     if "*" in ref:
         samples = (*local(names), REMOTE_HEAD, *tracking(names), "refs/replace/x")
         return any(fnmatchcase(sample, ref) for sample in samples)
@@ -59,13 +30,6 @@ def protected(ref: str, names: frozenset[str] = MAIN_BRANCHES) -> bool:
 
 
 def protects(ref: str, names: frozenset[str] = MAIN_BRANCHES) -> bool:
-    """Whether writing ``ref``, as a command line spells it, can move what the guard reads.
-
-    ``ref`` may carry ``+``, may be fully qualified (``refs/heads/main``), may start from a
-    namespace as ``git fetch`` reads a destination (``heads/main``, ``tags/main``,
-    ``remotes/origin/main``), or be bare (``main``), which names a branch. It may be a pattern
-    with ``*``. A bare ``replace/x`` is a branch of that name.
-    """
     name = ref.removeprefix("+")
     if name.startswith("refs/"):
         return protected(name, names)
@@ -73,15 +37,6 @@ def protects(ref: str, names: frozenset[str] = MAIN_BRANCHES) -> bool:
 
 
 def pushed(ref: str) -> tuple[str, ...]:
-    """The full names ``git push`` may write for the destination ``ref``, or read for a source.
-
-    A name that starts with ``refs/`` is taken as written. Any other is matched against the refs
-    the receiving repository holds, by the rules git resolves a revision with: ``refs/<name>``,
-    ``refs/tags/<name>``, ``refs/heads/<name>``, ``refs/remotes/<name>`` and
-    ``refs/remotes/<name>/HEAD``. So ``heads/main`` is the branch, ``origin/main`` the tracking
-    ref and ``origin`` the remote's ``HEAD``. The last two rules are followed for ``origin``
-    alone: the guard reads no other remote's refs, and ``feature/x`` is not a tracking ref.
-    """
     name = ref.removeprefix("+")
     if name.startswith("refs/"):
         return (name,)
@@ -91,5 +46,4 @@ def pushed(ref: str) -> tuple[str, ...]:
 
 
 def default_branch(ref: str, names: frozenset[str] = MAIN_BRANCHES) -> bool:
-    """Whether the full name ``ref``, or a pattern with ``*``, is or covers a default branch."""
     return any(fnmatchcase(name, ref) for name in local(names))

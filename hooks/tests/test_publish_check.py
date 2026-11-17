@@ -1,5 +1,3 @@
-"""The publish check: red when a role committed, pushed or opened a pull request during the run."""
-
 import hashlib
 import json
 import subprocess
@@ -22,7 +20,6 @@ NONE_OPEN = "[]"
 
 
 def checkout(tmp_path: Path, *, forge: bool = False) -> Path:
-    """A repository on the ticket's branch, with a bare repository as its forge when asked."""
     root = repository(tmp_path / "work")
     branch(root, BRANCH)
     commit(root, "feat(core): the branch's first commit")
@@ -35,7 +32,6 @@ def checkout(tmp_path: Path, *, forge: bool = False) -> Path:
 def started(
     tmp_path: Path, root: Path, prs: str = NONE_OPEN, *, rebase_onto: str | None = None
 ) -> Path:
-    """The start state, read as the check reads the present, in the preflight's whole report."""
     start = publish_check.start_of(root, BRANCH, gh_returning(prs), rebase_onto=rebase_onto)
     path = tmp_path / "start.json"
     path.write_text(json.dumps({"ok": True, "branch": BRANCH, "start": asdict(start)}), "utf-8")
@@ -44,7 +40,6 @@ def started(
 
 
 def resulted(start: Path, fields: dict[str, object]) -> None:
-    """The run's result beside the start, with no findings unless ``fields`` say otherwise."""
     result = {
         "criticFindingsByRound": [],
         "reviewIssuesByRound": [],
@@ -60,8 +55,6 @@ class Check(Protocol):
 
 @pytest.fixture
 def checked(capsys: Out, monkeypatch: pytest.MonkeyPatch) -> Check:
-    """The check run as the orchestrator runs it, the forge answering ``prs``: exit and lines."""
-
     def run(path: Path, root: Path, prs: str | None = NONE_OPEN) -> tuple[int, list[str]]:
         monkeypatch.setattr(preflight, "run_gh", gh_returning(prs))
         code = publish_check.main(["publish_check.py", str(path), "--root", str(root)])
@@ -194,7 +187,6 @@ def test_a_branch_that_is_gone_is_a_move(tmp_path: Path, checked: Check) -> None
 
 
 def test_a_tag_or_another_branch_a_role_made_is_not_seen(tmp_path: Path, checked: Check) -> None:
-    # Why: the start state names one branch; the module docstring states this limit.
     root = checkout(tmp_path)
     path = started(tmp_path, root)
     git(root, "tag", "v1")
@@ -444,7 +436,6 @@ HALTED = (
 
 
 def rejudged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, forge: bool = False) -> Path:
-    """A ticket's branch whose rebase onto `main` conflicts, left as the drain leaves it."""
     monkeypatch.setenv("GIT_AUTHOR_DATE", WHEN)
     monkeypatch.setenv("GIT_EDITOR", "true")
     root = checkout(tmp_path, forge=forge)
@@ -460,13 +451,11 @@ def rejudged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, forge: bool = F
 
 
 def stopped(root: Path) -> None:
-    """Start the rebase onto `main`: it stops on the readme both sides edited."""
     with pytest.raises(subprocess.CalledProcessError):
         git(root, "rebase", "main")
 
 
 def finished(root: Path) -> None:
-    """Finish the rebase as the Reconcile role is told to: resolve, add, continue."""
     stopped(root)
     write(root, "README.md", "# From main and the branch\n")
     git(root, "add", "README.md")
@@ -500,7 +489,6 @@ def not_held(root: Path, old: str, *, dropped: int) -> list[str]:
 def landed_on_main(
     root: Path, monkeypatch: pytest.MonkeyPatch, *, message: str | None = None, date: str = WHEN
 ) -> None:
-    """Main takes the branch's notes change as its own commit, as a merge that landed it did."""
     notes = git(root, "rev-parse", "HEAD")
     git(root, "switch", "-q", "main")
     monkeypatch.setenv("GIT_AUTHOR_DATE", date)

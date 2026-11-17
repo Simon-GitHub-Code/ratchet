@@ -1,5 +1,3 @@
-"""The acceptance proxy: each request passes through unchanged and is logged; the log is sealed."""
-
 import fcntl
 import hashlib
 import http.client
@@ -33,7 +31,6 @@ SESSION = "20261113T000000000000Z-abcd1234"
 
 @contextmanager
 def proxied(tmp_path: Path, upstream: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """The proxy in front of ``upstream``, serving on a thread until the block ends; its address."""
     directory = tmp_path / "session"
     directory.mkdir(exist_ok=True)
     (directory / "session.json").write_text(json.dumps({"session": SESSION}), encoding="utf-8")
@@ -57,7 +54,6 @@ class Answer:
 
 
 def exchange(url: str, method: str, path: str, **sent: object) -> Answer:
-    """One request on a connection of its own, read whole."""
     host, port = url.split("//")[1].rstrip("/").split(":")
     connection = http.client.HTTPConnection(host, int(port), timeout=30)
     try:
@@ -388,7 +384,7 @@ def test_a_request_the_proxy_cannot_read_is_refused_by_it_and_counted_unlogged(
     with products.serving(tmp_path) as upstream, proxied(tmp_path, upstream, monkeypatch) as url:
         host, port = url.split("//")[1].rstrip("/").split(":")
         with socket.create_connection((host, int(port)), timeout=30) as raw:
-            raw.sendall(b"GET / HTTP/1.1\r\nX: " + b"a" * 65534)  # a header longer than it reads
+            raw.sendall(b"GET / HTTP/1.1\r\nX: " + b"a" * 65534)
             answer = b"".join(iter(lambda: raw.recv(65536), b""))
     assert answer.startswith(b"HTTP/1.1 431 ")
     seal = json.loads((tmp_path / "session" / "seal.json").read_text(encoding="utf-8"))

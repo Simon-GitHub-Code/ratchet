@@ -1,16 +1,3 @@
-"""Verdicts: what the guard decides about one tool call, and why.
-
-Every rule has an id, a decision, a sentence and a way out: what the agent does next without the
-owner. A tool call collects the verdicts of every rule that fired and the strictest wins: deny
-over ask. No verdict at all means the guard has no opinion, and the harness's own permission rules
-decide.
-
-A guard path is no rule of its own. A change to one on a branch gets no verdict: it reaches the
-default branch only through a merge, and the merge judge reads it there (ADR 0033). What would take
-effect before any merge is refused: a guard path changed where its commit lands on the default
-branch, and the paths the owner changes by hand.
-"""
-
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import IntEnum
@@ -25,7 +12,6 @@ ON_A_BRANCH = (
     "Make the change on a branch (`git switch -c <name>`) and commit it there: the merge judge "
     "reads it and sends it to the owner when it must."
 )
-# Why: the owner answers a file that acts before the merge at the prompt, in plain words.
 ALLOW = "Allow it?"
 NAME_THE_DIRECTORY = (
     "Give the file a path the guard can follow, an absolute one or one after a `cd` to a literal "
@@ -42,16 +28,12 @@ SWITCH_ALONE = (
 
 
 class Decision(IntEnum):
-    """How strict a verdict is; a higher value wins."""
-
     ASK = 1
     DENY = 2
 
 
 @dataclass(frozen=True, slots=True)
 class Rule:
-    """One guard rule: what it decides, the sentence that explains it, and the way out."""
-
     decision: Decision
     because: str
     way_out: str = DISPUTE
@@ -156,38 +138,27 @@ RULES: dict[str, Rule] = {
 
 
 ACTING_RULES = {Kind.WORKFLOW: "workflow-write", Kind.INSTRUCTIONS: "instructions-write"}
-# Why: the owner answers these at the prompt, so each says in plain words what is at stake, the
-# matched detail in brackets, and nothing about how the guard works.
 OWNER_ASKS = frozenset({*ACTING_RULES.values(), "agent-ready-label", "unreadable"})
 
 
 @dataclass(frozen=True, slots=True)
 class Verdict:
-    """A rule that fired on a tool call, with the detail that made it fire.
-
-    ``source`` is the sentence that says where a guard path's group comes from, when it has one.
-    """
-
     rule: str
     detail: str
     source: str = ""
 
     @property
     def decision(self) -> Decision:
-        """The rule's decision."""
         return RULES[self.rule].decision
 
     @property
     def because(self) -> str:
-        """The rule's sentence."""
         return RULES[self.rule].because
 
     @property
     def way_out(self) -> str:
-        """What the agent, or the owner at a prompt, does next."""
         return RULES[self.rule].way_out
 
 
 def strictest(verdicts: Iterable[Verdict]) -> Verdict | None:
-    """The first verdict with the strictest decision, or ``None`` when no rule fired."""
     return max(verdicts, key=lambda verdict: verdict.decision, default=None)

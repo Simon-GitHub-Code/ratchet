@@ -1,5 +1,3 @@
-"""Files that act before the merge: the hook asks the owner before each write, on every branch."""
-
 import json
 
 import pytest
@@ -29,7 +27,6 @@ def on_main() -> Guard:
 
 
 def asked(case: dict[str, object], guard: Guard) -> dict[str, str]:
-    """What the hook prints for ``case``, or ``{}`` when it gives no verdict."""
     printed = hook.respond(hook.decide(case, guard))
     return json.loads(printed)["hookSpecificOutput"] if printed else {}
 
@@ -94,7 +91,6 @@ def test_a_dead_worktree_still_holds_instruction_files_of_its_own(path: str) -> 
     ],
 )
 def test_a_worktrees_directory_anywhere_else_excuses_no_instruction_file(path: str) -> None:
-    # Why: only .claude/worktrees/ itself holds agent checkouts.
     assert kind_of(path) is Kind.INSTRUCTIONS
 
 
@@ -113,7 +109,6 @@ def test_a_path_through_dot_dot_is_judged_where_it_lands() -> None:
     ],
 )
 def test_prose_in_a_program_that_writes_another_file_asks_nothing(line: str) -> None:
-    # Why: the template's guard groups, as the replayed sessions had them.
     program = f"python3 - <<'EOF'\n{line}\nopen('out.txt', 'w').write(s)\nEOF"
     assert asked(bash(program), make_guard(manifest=STANDARD)) == {}
 
@@ -129,7 +124,6 @@ def test_a_glob_in_a_program_that_writes_is_no_instruction_file_it_names() -> No
         (".claude", Kind.INSTRUCTIONS),
         ("sub/.Claude", Kind.INSTRUCTIONS),
         (".github/workflows", Kind.WORKFLOW),
-        # Why: removing, moving or filling `.github` removes, moves or fills its workflows.
         (".github", Kind.WORKFLOW),
         (".GitHub", Kind.WORKFLOW),
     ],

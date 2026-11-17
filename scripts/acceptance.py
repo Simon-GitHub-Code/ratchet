@@ -1,69 +1,4 @@
 #!/usr/bin/env python3
-"""The acceptance harness: boot the work tree, put a logging proxy before it, hold a record to it.
-
-A tester who sees only the ticket and an address tries the product the way its owner would and
-writes a record. This script starts the product, logs every request the tester makes, and then
-holds the record to that log, so a verdict rests on requests the harness saw and not on what the
-tester says it did. For the application types ``service`` and ``web-ui``; any other type is
-refused before anything starts.
-
-Usage::
-
-    acceptance.py up      --slug S --ticket TICKET.md [--root R]
-    acceptance.py down    --slug S [--root R]
-    acceptance.py check   --slug S [--root R] [--commit C] [--seal D]
-    acceptance.py replay  --slug S [--root R] [--control]
-    acceptance.py replay  --checks FILE [--root R] [--control]
-    acceptance.py summary --slug S [--root R]
-    acceptance.py audit   --transcript FILE [--root R]
-
-``up`` boots the work tree at ``R`` as it is, committed or not, the way the project's justfile
-says (``boot``, ``ready``, ``boot_timeout``, and ``flags_on`` so every flag due for removal is
-on) through ``with_service.py``, on a free port it picks, puts ``acceptance_proxy.py`` in
-front of it, and prints two lines: the one address the tester gets, and the directory the tester
-writes its record (``record.json``) and screenshots in. It returns while the product keeps
-running. Run again while that session lives, it prints the same two lines, waiting first when it
-still boots.
-A session of the same work tree that serves a tree the work tree no longer holds is stopped
-first and sealed stale, so one work tree serves one tree at a time. When the product cannot start
-(``boot`` is ``"none"`` or a placeholder, ``ready`` is ``"none"``, the boot exits or never
-answers) it writes the record itself, a blocker in plain words with every line of the ticket
-``unsure``, and exits 1. Exit 2 is a harness that cannot run here: a type it does not try, a
-ticket with no checklist, no justfile, not a git work tree.
-
-``down`` stops every session of the slug and waits until nothing it started runs and nothing
-listens on the addresses it used, then prints the digest of each seal it blesses; run again, it
-finds nothing and exits 0. ``check`` prints what is wrong with the latest record of the slug for
-the tree the work tree holds now, or with ``--commit C`` the tree of ``C``, one sentence each,
-and exits 1 when anything is; with ``--seal D`` the seal must also be the one ``down`` printed.
-``replay`` runs the record's kept checks, or a committed checks file, each against a fresh boot;
-with ``--control`` against a product that does nothing, where each must fail.
-``summary`` writes ``docs/features/<slug>/acceptance.json`` and ``acceptance-checks.json`` from
-an accepted record and its session, the same bytes on every run. ``audit`` says whether a
-tester's transcript named a file under the product (``acceptance_audit.py``).
-
-Evidence lives in ``<git common dir>/ratchet/acceptance/<slug>/<tree>/<session>/``, never in the
-work tree and never committed. ``<tree>`` is the tree a commit of the whole work tree would have,
-so the same evidence holds once the orchestrator commits what was served. A session that ended
-more than 14 days ago is removed by the next ``up``::
-
-    session.json      the harness: what was booted, for which tree and work tree
-    ticket.md         the ticket as ``up`` was given it
-    boot.log          what the boot and ``with_service.py`` printed
-    live.lock         held while the session runs; it holds the supervisor's process id
-    proxy.json        the proxy: its address and the product's, once it listens
-    requests.jsonl    the proxy: one line per request the tester made
-    probes/           the proxy: each request and answer as sent, cut at 1 MB
-    seal.json         the proxy, when it stops: how many lines it wrote, their SHA-256, and
-                      how many answers reached the tester with no line
-    tester/           the tester's: record.json and its screenshots; ``check`` refuses a link
-                      in it that leads out of it
-    replay.json       the last replay of the record's kept checks; control.json, against nothing
-
-Every command stops what it started on SIGINT, SIGTERM and SIGHUP, removes its temporary
-directories, and exits 128 plus the signal. ``up`` interrupted removes the session it began.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -101,8 +36,6 @@ WITH_SERVICE = HERE / "with_service.py"
 PROXY = HERE / "acceptance_proxy.py"
 SUPPORTED = ("service", "web-ui")
 KEEP = dt.timedelta(days=14)
-# Why 30: `with_service.py` stops the proxy and then the product, each with five seconds of grace
-# and one to settle; a supervisor that gave up sooner would leave the product running.
 STOP_GRACE = 30.0
 DOWN_WAIT = 60.0
 POLL = 0.05
@@ -111,28 +44,23 @@ BIND = "bind:"
 NONE = "none"
 SUMMARY, CHECKS = "acceptance.json", "acceptance-checks.json"
 RECORD = Path("tester/record.json")
-# Why in the background of a shell: the supervisor outlives the `up` that starts it, so it is
-# nobody's child there; the shell prints its process id and exits.
 BACKGROUND = '"$@" </dev/null >&2 & echo "$!"'
 EXITED = re.compile(r"^the service exited with code (-?\d+) before")
 SILENT = re.compile(r" did not answer within (\S+?);")
 
 
 class Usage(Exception):  # noqa: N818 # -- a refusal to run, said to the caller
-    """The harness cannot run here; the message says why. Exit 2."""
+    ...
 
 
 @dataclass(frozen=True)
 class Boot:
-    """How to start the product: the binding's boot and ready, or the do-nothing control."""
-
     command: str
     ready: str
     timeout: float
     env: tuple[str, ...] = ()
 
     def argv(self, directory: Path) -> list[str]:
-        """``with_service.py`` booting this, with the proxy for ``directory`` as its command."""
         pairs = [word for pair in self.env for word in ("--env", pair)]
         return [
             *gatelib.interpreter(),
@@ -152,16 +80,12 @@ NULL = Boot(
 
 @dataclass(frozen=True)
 class Binding:
-    """The project's types and how it boots; ``boot`` is ``None`` with ``why`` when it cannot."""
-
     types: tuple[str, ...]
     boot: Boot | None
     why: str = ""
 
 
 class State(Enum):
-    """Where a session is: running, ended with a sealed log, or never served at all."""
-
     STARTING = "starting"
     LIVE = "live"
     ENDED = "ended"
@@ -178,7 +102,6 @@ def git(root: Path, *args: str) -> str:
 
 
 def evaluate(root: Path, name: str) -> str | None:
-    """A variable of the project's justfile, or ``None`` when it has none by that name."""
     try:
         done = subprocess.run(
             [
@@ -201,7 +124,6 @@ def evaluate(root: Path, name: str) -> str | None:
 
 
 def why_not(boot: str | None, ready: str | None) -> str:
-    """Why these values start nothing, in plain words; empty when they can."""
     for name, value in (("boot", boot), ("ready", ready)):
         if value is None:
             return f"The project gives no way to start it: its justfile sets no `{name}`."
@@ -215,7 +137,6 @@ def why_not(boot: str | None, ready: str | None) -> str:
 
 
 def read_binding(root: Path) -> Binding:
-    """The binding's types (``docs/process/binding.md``) and boot (the ``justfile``)."""
     text = gatelib.read_text(root / gatelib.BINDING)
     types = application_types.declared(text or "")
     if not types:
@@ -232,8 +153,6 @@ def read_binding(root: Path) -> Binding:
     flags = (evaluate(root, "flags_on") or NONE).strip()
     env: tuple[str, ...] = ()
     if flags != NONE and not flags.startswith(BIND):
-        # Why the shell: `flags_on` is written to be expanded as the recipes expand it, inside
-        # double quotes, so a `$(flags.py --temporary ...)` in it runs on every boot.
         shown = subprocess.run(
             ["bash", "-c", f'printf "%s" "{flags}"'],
             cwd=root,
@@ -247,19 +166,11 @@ def read_binding(root: Path) -> Binding:
 
 
 def store(root: Path) -> Path:
-    """Where the evidence of ``root`` lives: inside its git common directory."""
     common = Path(git(root, "rev-parse", "--git-common-dir"))
     return (root / common).resolve() / "ratchet" / "acceptance"
 
 
 def tree_of(root: Path, slug: str, commit: str | None = None) -> str:
-    """The tree evidence of ``slug`` is filed under: ``commit``'s, or the work tree's at ``root``.
-
-    The work tree's is the tree a commit of all of it would have: tracked changes, and untracked
-    files git does not ignore. The slug's own summary files are left out of either, so the
-    evidence of a tree still holds once the orchestrator commits that tree with its summary.
-    Built in an index of its own, so the project's index is untouched.
-    """
     with tempfile.TemporaryDirectory(prefix="ratchet-tree-") as scratch:
         env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
 
@@ -305,17 +216,12 @@ def read_json(path: Path) -> dict[str, object] | None:
 
 
 def sessions(place: Path, depth: int) -> list[Path]:
-    """The session directories ``depth`` levels under ``place``, oldest first by name."""
     pattern = "/".join(["*"] * depth + ["session.json"])
     return sorted(path.parent for path in place.glob(pattern))
 
 
 @contextlib.contextmanager
 def serialized(place: Path, slug: str) -> Iterator[None]:
-    """One ``up`` or ``down`` of ``slug`` at a time, so two at once converge on one session.
-
-    The kernel drops the lock when its holder dies, however it dies.
-    """
     place.mkdir(parents=True, exist_ok=True)
     with (place / f"{slug}.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -323,7 +229,6 @@ def serialized(place: Path, slug: str) -> Iterator[None]:
 
 
 def latest(root: Path, slug: str, commit: str | None = None) -> Path:
-    """The newest session of ``slug`` that served the tree of ``commit``, or of the work tree."""
     place = store(root)
     tree = tree_of(root, slug, commit)
     found = sessions(place / slug / tree, 1)
@@ -335,7 +240,6 @@ def latest(root: Path, slug: str, commit: str | None = None) -> Path:
 
 
 def prune(place: Path, now: dt.datetime) -> None:
-    """Remove each session that ended more than ``KEEP`` ago, then the directories left empty."""
     for directory in sessions(place, 3):
         newest = max(path.stat().st_mtime for path in [directory, *directory.iterdir()])
         ended = dt.datetime.fromtimestamp(newest, dt.UTC)
@@ -347,10 +251,6 @@ def prune(place: Path, now: dt.datetime) -> None:
 
 
 def what_it_did(log: Path) -> str:
-    """What the boot did instead of answering, in plain words, from what ``with_service.py`` said.
-
-    It indents the boot's own output by two spaces under a ``boot output`` line.
-    """
     lines = (gatelib.read_text(log) or "").splitlines()
     why = "it never answered"
     for line in lines:
@@ -382,7 +282,6 @@ def cannot_start(directory: Path, said: str) -> int:
 
 
 def wait_serving(going: Callable[[], bool], directory: Path, limit: float) -> str | None:
-    """The proxy's address once it listens; ``None`` when the boot stopped or took too long."""
     deadline = time.monotonic() + limit
     while True:
         proxy = read_json(directory / "proxy.json")
@@ -394,13 +293,11 @@ def wait_serving(going: Callable[[], bool], directory: Path, limit: float) -> st
 
 
 def stop(process: subprocess.Popen[bytes] | None) -> None:
-    """Stop a process this one started in a session of its own, unless it has already exited."""
     if process is not None and process.poll() is None:
         gatelib.stop_group(process, grace=STOP_GRACE)
 
 
 def start(argv: list[str], cwd: Path, out: IO[bytes]) -> subprocess.Popen[bytes]:
-    """``argv`` in a session of its own, writing to ``out``."""
     return subprocess.Popen(
         argv,
         cwd=cwd,
@@ -412,11 +309,6 @@ def start(argv: list[str], cwd: Path, out: IO[bytes]) -> subprocess.Popen[bytes]
 
 
 def launch(root: Path, directory: Path, boot: Boot) -> int:
-    """Start the supervisor, which outlives this command, and print the address once it serves.
-
-    The supervisor holds the session's lock from here on: this command takes it, hands the
-    supervisor the same open file, writes the supervisor's process id into it and lets go.
-    """
     argv = [*gatelib.interpreter(), str(Path(__file__).resolve()), "_supervise", str(directory)]
     try:
         with (
@@ -490,7 +382,6 @@ def up(root: Path, slug: str, ticket: Path) -> int:
 
 
 def awaited(directory: Path) -> str | None:
-    """The address of a running session once it serves; ``None`` when it stops before it does."""
     timeout = float(str((read_json(directory / "session.json") or {})["timeout"]))
     return wait_serving(
         lambda: acceptance_proxy.locked(directory), directory, 2 * timeout + DOWN_WAIT
@@ -498,7 +389,6 @@ def awaited(directory: Path) -> str | None:
 
 
 def retire(directory: Path) -> list[str]:
-    """Stop a session of a tree its work tree no longer holds, sealed stale; what was said of it."""
     began = acceptance_proxy.now()
     problems = end(directory)
     closed = close(directory, began)
@@ -506,7 +396,6 @@ def retire(directory: Path) -> list[str]:
 
 
 def begin(root: Path, under: Path, *, ticket: str, binding: Binding) -> Path:
-    """A new session directory under ``under``, holding the ticket and what is booted."""
     begun = dt.datetime.now(dt.UTC)
     session = f"{begun:%Y%m%dT%H%M%S%fZ}-{secrets.token_hex(4)}"
     directory = under / session
@@ -528,7 +417,6 @@ def begin(root: Path, under: Path, *, ticket: str, binding: Binding) -> Path:
 
 
 def supervise(directory: Path) -> int:
-    """Hold the session: run ``with_service.py`` until it ends or this process is told to stop."""
     session = read_json(directory / "session.json") or {}
     env = session.get("env")
     boot = Boot(
@@ -567,10 +455,6 @@ def down(root: Path, slug: str) -> int:
 
 
 def end(directory: Path) -> list[str]:
-    """Stop the session's supervisor and wait for it; a sentence for what did not stop.
-
-    Signalled only while it holds the lock, so the process id is never one the kernel reused.
-    """
     text = (directory / "live.lock").read_text(encoding="utf-8").strip()
     pid = int(text) if text.isdigit() else None
     if pid is not None and acceptance_proxy.locked(directory):
@@ -591,13 +475,6 @@ def end(directory: Path) -> list[str]:
 
 
 def stop_sessions(place: Path) -> int:
-    """Stop every running session under ``place``, wait until nothing of it answers, and end it.
-
-    Every sealed session ``down`` has not yet ended gets ``down``'s word on its seal: when it
-    came, and whether the proxy had stopped before then. Only one that ran until ``down`` came
-    is blessed, by printing the digest of its seal. Answers that reached the tester with no line
-    in the log are said, and do not stop the blessing: a pass can cite only a logged request.
-    """
     began = acceptance_proxy.now()
     every = sessions(place, 2)
     running = [d for d in every if state(d) in (State.LIVE, State.STARTING)]
@@ -618,19 +495,11 @@ def stop_sessions(place: Path) -> int:
 
 @dataclass(frozen=True)
 class Closed:
-    """What ``down`` said of a session it ended: blessed, or why not."""
-
     blessed: bool
     lines: list[str]
 
 
 def close(directory: Path, began: str) -> Closed | None:
-    """Put ``down``'s word on the seal of a session it has not ended before; what it says of it.
-
-    ``None`` when there is nothing to end: no seal yet, or ``down`` ended it already. A session
-    whose proxy stopped before ``down`` came ended early; one whose work tree no longer holds
-    the tree it served is stale.
-    """
     path = directory / "seal.json"
     raw = read_json(path)
     seal = acceptance_record.parse_seal(raw)
@@ -651,7 +520,6 @@ def close(directory: Path, began: str) -> Closed | None:
 
 
 def still_served(directory: Path) -> bool:
-    """Whether the work tree the session booted still holds the tree it served."""
     facts = read_json(directory / "session.json") or {}
     try:
         return tree_of(Path(str(facts["root"])), str(facts["slug"])) == facts["tree"]
@@ -660,11 +528,6 @@ def still_served(directory: Path) -> bool:
 
 
 def code_paths(root: Path, ticket: str) -> tuple[str, ...]:
-    """The paths of the files the work tree holds that a tester has no business naming.
-
-    Every file the served tree is made of, tracked or not, top-level or not, but a README and
-    the paths the ticket itself names, which the tester was given.
-    """
     listed = git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
     return tuple(
         path
@@ -674,7 +537,6 @@ def code_paths(root: Path, ticket: str) -> tuple[str, ...]:
 
 
 def screenshots(directory: Path, cited: list[str]) -> frozenset[str]:
-    """The cited paths that are PNG files inside the tester's directory."""
     tester = (directory / "tester").resolve()
     good = set()
     for path in cited:
@@ -689,8 +551,6 @@ def screenshots(directory: Path, cited: list[str]) -> frozenset[str]:
 def exchanges(
     directory: Path, log: dict[str, acceptance_record.Entry], cited: set[str]
 ) -> dict[str, acceptance_record.Exchange]:
-    """The stored exchanges of the cited requests whose probes both still match the log."""
-
     def probe(name: str) -> bytes:
         path = directory / "probes" / name
         return path.read_bytes() if path.is_file() else b""
@@ -705,7 +565,6 @@ def exchanges(
 
 
 def judged(root: Path, directory: Path) -> tuple[acceptance_record.Record | None, list[str]]:
-    """The record of a session, and every sentence about what is wrong with it."""
     if state(directory) in (State.LIVE, State.STARTING):
         return None, ["the session is still running: run `down` first"]
     escapes = links_out(directory)
@@ -751,7 +610,6 @@ def judged(root: Path, directory: Path) -> tuple[acceptance_record.Record | None
 
 
 def read_record(path: Path) -> tuple[acceptance_record.Record | None, list[str]]:
-    """The tester's record at ``path``, or why there is none."""
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -762,10 +620,6 @@ def read_record(path: Path) -> tuple[acceptance_record.Record | None, list[str]]
 
 
 def links_out(directory: Path) -> list[str]:
-    """A sentence for each link in the session's ``tester/`` that leads out of it.
-
-    Such a link is a way to the product's code or the harness's log that no path names.
-    """
     tester = directory / "tester"
     inside = Path(os.path.realpath(tester))
     found = []
@@ -784,10 +638,6 @@ def seal_of(directory: Path) -> acceptance_record.Seal | None:
 
 
 def check(root: Path, slug: str, *, kept: str | None, commit: str | None) -> int:
-    """Judge the latest record of the tree asked about: ``commit``'s, else the work tree's.
-
-    With ``kept``, the digest ``down`` printed, the seal is also held to it.
-    """
     directory = latest(root, slug, commit)
     path = directory / "seal.json"
     problems = []
@@ -801,7 +651,6 @@ def check(root: Path, slug: str, *, kept: str | None, commit: str | None) -> int
 def replay_one(
     check: kept_checks.Check, boot: Boot, *, root: Path, scratch: Path
 ) -> kept_checks.Result:
-    """How ``check`` ran on a fresh boot of its own; not run when the product did not start."""
     place = scratch / check.id
     place.mkdir()
     (place / "session.json").write_text(
@@ -822,7 +671,6 @@ def replay_one(
 
 
 def kept(listed: object) -> tuple[list[object], list[kept_checks.Check]]:
-    """The kept checks as written and as read; a check that does not read is a usage error."""
     written = listed if isinstance(listed, list) else []
     checks, problems = [], []
     for n, item in enumerate(written, 1):
@@ -837,10 +685,6 @@ def kept(listed: object) -> tuple[list[object], list[kept_checks.Check]]:
 def verdicts(
     checks: list[kept_checks.Check], results: list[kept_checks.Result], *, control: bool
 ) -> tuple[list[str], list[str]]:
-    """What held as it should, and what did not, one sentence each.
-
-    A check that was not run is red either way: it showed nothing of the product.
-    """
     good, bad = [], []
     against = "against a server that does nothing" if control else "on a fresh boot"
     for item, result in zip(checks, results, strict=True):

@@ -1,5 +1,3 @@
-// Ratchet guard for pi: translate a tool call into the guard's PreToolUse JSON and act on its decision.
-// The rules live in hooks/guard.py; this file only marshals. See docs/harness/pi.md.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,8 +9,6 @@ const TOOLS: Record<string, string> = { bash: "Bash", edit: "Edit", write: "Writ
 
 type Decision = { permissionDecision?: string; permissionDecisionReason?: string };
 
-// Why: session.py writes commands Claude Code's way (/ratchet:init, /mattpocock-skills:setup-matt-pocock-skills);
-// pi has no plugin namespaces and spells every skill command /skill:<name>.
 export function piCommands(text: string): string {
   return text.replace(/(^|[\s(`'"])\/(?:ratchet|mattpocock-skills|pstack|impeccable):([a-z0-9][a-z0-9-]*)/g, "$1/skill:$2");
 }
@@ -29,7 +25,6 @@ function decide(toolName: string, input: Record<string, unknown>, cwd: string): 
   const payload = { hook_event_name: "PreToolUse", tool_name: tool, tool_input: toolInput, cwd };
   const result = run(GUARD, payload);
   if (!result.ok && !result.stdout.trim()) {
-    // Why: a guard that cannot run fails closed, as the Claude Code shim does.
     return { permissionDecision: "deny", permissionDecisionReason: `Ratchet guard could not run: ${result.stderr.trim()}` };
   }
   if (!result.stdout.trim()) return null;

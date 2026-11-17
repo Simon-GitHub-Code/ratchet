@@ -18,7 +18,6 @@ def lines(path: Path, items: list[dict[str, object]]) -> None:
 
 
 def stamp(path: Path, clock: str) -> None:
-    """Give ``path`` the mtime of ``clock`` (UTC) on the day of the timeline file."""
     day = (path.parent / "timeline.jsonl").stat().st_mtime // 86400 * 86400
     hours, minutes, seconds = (int(p) for p in clock.split(":"))
     moment = day + hours * 3600 + minutes * 60 + seconds

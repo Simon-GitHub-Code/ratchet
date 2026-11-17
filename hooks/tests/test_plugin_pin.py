@@ -1,5 +1,3 @@
-"""``plugin_pin``: the plugin a tier runs from is the commit and version the binding pins."""
-
 import shlex
 from pathlib import Path
 
@@ -16,7 +14,6 @@ ELSEWHERE = "f" * 40
 
 
 def plugin(root: Path, version: str = "1.2.3") -> tuple[Path, str]:
-    """A plugin checkout at ``root`` and the commit it is at."""
     repos.repository(root, {MANIFEST: f'{{"version": "{version}"}}'})
     return root, repos.git(root, "rev-parse", "HEAD")
 
@@ -177,7 +174,6 @@ def test_a_binding_that_pins_nothing_is_red_and_names_the_plugin_in_use(
 def test_the_commit_is_the_plugins_own_inside_a_git_hook(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Why: git exports GIT_DIR to a hook, and `git -C` obeys it over the directory it is given.
     used, commit = plugin(tmp_path / "plugin")
     root = repos.repository(tmp_path / "repo")
     adopted(root, f"- Ratchet plugin: 1.2.3 at {commit} tree {tree(used)}")
@@ -355,7 +351,6 @@ def test_with_pin_is_idempotent_and_keeps_every_line_it_does_not_own(text: str) 
 
 
 def masked(text: str) -> str:
-    """``text`` with the value of every plugin-checkout ``ref:`` taken out."""
     return plugin_pin.PLUGIN_REF.sub(lambda m: m.group(0).replace(m.group(1), ""), text)
 
 

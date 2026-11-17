@@ -1,5 +1,3 @@
-"""The conformance checks of the formal model: the Triggers row, the section and the proof."""
-
 from pathlib import Path
 
 import pytest

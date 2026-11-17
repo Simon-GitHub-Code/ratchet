@@ -1,36 +1,4 @@
 #!/usr/bin/env python3
-"""The ratchet's first rule as a gate: no threshold lowered, no ceiling raised, none missing.
-
-Compares ``quality/thresholds.toml`` at head with the merge base. Every key only rises, except
-the keys under ``ceilings`` (the speed gate's seconds per tier and gate, the change-size
-ceilings), which only fall. The change ceiling's older keys ``files`` and ``lines`` may move to
-``product_files`` and ``product_lines`` (ADR 0045) at the same value or lower. A flag that is
-``true`` (``absolute``) stays ``true``.
-
-Relaxing a value is the owner's change with an ADR behind it, so a loosening passes when an ADR
-under ``docs/adr/`` names it exactly, on a line of its own:
-``Relaxes: <key> from <old> to <new>``, with ``removed`` as the new value of a dropped key. An
-agent may add that ADR (ADR 0014), but ``quality/thresholds.toml`` is a guard path, so the
-loosening itself is the owner's edit.
-
-A record binds one change (ADR 0047). Only a ``Relaxes:`` line the change adds, against the merge
-base, counts; one the base already holds excuses nothing, so a record that landed alone, or for a
-step later undone, cannot be spent again. ``<old>`` and ``<new>`` must be the base's value and
-head's value. A key the base lacks but the file once held is judged against the value it last
-held (its newest earlier version, found by one path-limited ``git log``), so removing a key and
-writing it back looser is a loosening. A key is forgotten only through named steps: each step of a
-chain such as 2, true, 1 is a change with a record of its own.
-
-The owed ledger, ``quality/owed.toml``, is a ratchet too (ADR 0037): against the merge base an
-entry may go, and none may be added or changed unless the same change moves the binding's plugin
-pin to a newer version and the new entry carries that version. Otherwise a change could silence a
-new red finding by writing an entry for it.
-
-Usage: ``lowered.py [--root DIR] [--base REF] [--file PATH]``. The base is ``gatelib.base_commit``:
-the merge base of HEAD with the default branch, or ``HEAD~1`` on the default branch itself. A
-base without the file passes: that is the first adoption.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -49,8 +17,6 @@ import owed
 import plugin_pin
 
 CEILINGS = "ceilings."
-# Why: ADR 0045 moved the change ceiling to product-only keys. The old key's value is the bound the
-# new one is held to, so the move is a loosening only when the new ceiling is higher.
 MOVED = {
     "ceilings.change.files": "ceilings.change.product_files",
     "ceilings.change.lines": "ceilings.change.product_lines",
@@ -82,11 +48,6 @@ def show(value: Value) -> str:
 
 
 def renamed(before: dict[str, Value], after: dict[str, Value]) -> dict[str, Value]:
-    """``before`` with each moved key under the name ``after`` holds it by.
-
-    A key counts as moved when ``after`` dropped the old name and holds the new one, which the
-    base did not: the new value is then judged against the old one, as any ceiling is.
-    """
     moved = dict(before)
     for old, new in MOVED.items():
         if old in moved and old not in after and new in after and new not in moved:
@@ -119,7 +80,6 @@ def _loosenings(before: dict[str, Value], after: dict[str, Value]) -> list[Loose
 
 
 def loosened(before: dict[str, Value], after: dict[str, Value]) -> list[str]:
-    """Every key that was removed, lowered (a threshold), raised (a ceiling) or turned off."""
     return [message for *_, message in _loosenings(before, after)]
 
 
@@ -128,7 +88,6 @@ def lowered(before: dict[str, Value], after: dict[str, Value]) -> list[str]:
 
 
 def _spelled(text: str) -> str:
-    """A value as ``RELAXES`` spells it, in the form ``show`` prints."""
     if text in {"removed", "true", "false"}:
         return text
     return show(float(text))
@@ -139,11 +98,6 @@ def _named(value: Value | None) -> str:
 
 
 def relaxations(root: Path, base: str) -> dict[tuple[str, str, str], str]:
-    """Each loosening an ADR line added since ``base`` names, mapped to the ADR's path.
-
-    Why: ADR 0047. A line the merge base already holds was spent on the change that added it.
-    Keyed on the shown values: ``1.0 == True`` in Python, so values would let a number pass a flag.
-    """
     named: dict[tuple[str, str, str], str] = {}
     for adr in sorted((root / ADRS).glob("*.md")):
         relative = adr.relative_to(root).as_posix()
@@ -159,11 +113,6 @@ def relaxations(root: Path, base: str) -> dict[tuple[str, str, str], str]:
 
 
 def forgotten(root: Path, base: str, path: str, *, wanted: set[str]) -> dict[str, Value]:
-    """The last value each key in ``wanted`` held in ``path`` before ``base``, where it held one.
-
-    Why: ADR 0047. One ``git log`` limited to the file, newest first, stopping once every key is
-    found. A repository without that history (a shallow clone) finds nothing, so a key reads as new.
-    """
     found: dict[str, Value] = {}
     listed = gatelib.git(root, "log", "--format=%H", base, "--", path) or ""
     for commit in listed.split():
@@ -216,11 +165,6 @@ def main(argv: list[str]) -> int:
 
 
 def dropped_answers(root: Path, base: str) -> list[str]:
-    """Each ``## Answers`` line of a ticket or spec the change deletes that the brief lacks.
-
-    Why: ADR 0064. ``expire`` carries those lines to the brief's ``## In the owner's words``, and
-    the owner's words survive a deletion only there.
-    """
     gone = gatelib.git(root, "diff", "--name-only", "--diff-filter=D", "-M", base, "HEAD") or ""
     brief = gatelib.read_text(root / documents.BRIEF) or ""
     held = {
@@ -237,7 +181,6 @@ def dropped_answers(root: Path, base: str) -> list[str]:
 
 
 def owed_grown(root: Path, base: str) -> list[str]:
-    """What the owed ledger at head adds against ``base`` that no move of the pin allows."""
     binding = str(gatelib.BINDING)
     before, after = owed.parse(gatelib.show(root, base, str(owed.LEDGER))), owed.read(root)
     pins = (gatelib.show(root, base, binding), gatelib.read_text(root / binding))
@@ -257,14 +200,6 @@ def owed_grown(root: Path, base: str) -> list[str]:
 
 
 def unfound(root: Path, base: str, *, pin: plugin_pin.Pin, added: Counter[owed.Entry]) -> list[str]:
-    """Each entry the change adds that its upgrade could not have written, one line each.
-
-    Why: ADR 0037. An entry may be added only for a finding red at head that the same plan also
-    leaves red on the merge base, so a violation the change itself brought is never owed. The plan
-    is the plugin's, so the answer is the pinned plugin's: another plugin skips this, and says so.
-    CI always runs the pinned one. An entry whose finding is no longer red, paid by hand since the
-    upgrade wrote it, is not judged here: the conformance gate names it as stale.
-    """
     if plugin_pin.relation(pin, plugin_pin.PLUGIN) is not plugin_pin.Relation.PINNED:
         print(
             f"ratchet-lowered: note: whether the merge base also owes each entry this change adds"

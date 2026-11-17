@@ -1,5 +1,3 @@
-"""The merge judge, a page that loses a heading its kind keeps, and a prune pass beyond ``pass``."""
-
 from pathlib import Path
 
 import documents

@@ -1,10 +1,3 @@
-"""The hooks-install entry point: the framework's install, run where an agent may, then the probe.
-
-``pre-commit`` here is a stand-in on the path that behaves as the framework's install does: it
-refuses while git reports a ``core.hooksPath``, and otherwise writes its marked hooks into the
-repository's own hooks directory. The real one is run in ``test_hooks_installed.py``.
-"""
-
 import os
 from pathlib import Path
 
@@ -41,7 +34,6 @@ ANSWERS = '[ -n "$RATCHET_HOOK_PROBE" ] && echo %s > "$RATCHET_HOOK_PROBE"; exit
 
 
 def framework(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> None:
-    """Put a ``pre-commit`` with ``body`` first on the path."""
     hook_script(tmp_path / "bin", "pre-commit", body)
     monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
 
@@ -67,7 +59,6 @@ def root(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A ``pre-commit`` on the path that installs answering hooks, and the log of its calls."""
     calls = tmp_path / "calls"
     body = INSTALLS.format(log=calls, refuse=REFUSE, mark=MARK, body=ANSWERS)
     framework(tmp_path, monkeypatch, body)
@@ -76,25 +67,21 @@ def log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture
 def chained(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A global hooks path whose hooks run the repository's own."""
     return global_hooks(tmp_path, monkeypatch, chain=True)
 
 
 @pytest.fixture
 def unchained(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A global hooks path whose hooks do not run the repository's own."""
     return global_hooks(tmp_path, monkeypatch, chain=False)
 
 
 @pytest.fixture
 def failing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A ``pre-commit`` whose install fails."""
     framework(tmp_path, monkeypatch, "echo 'no such config' >&2\nexit 3")
 
 
 @pytest.fixture
 def silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A ``pre-commit`` that installs hooks which never answer the probe."""
     body = INSTALLS.format(log=tmp_path / "calls", refuse="", mark=MARK, body="exit 0 # %s")
     framework(tmp_path, monkeypatch, body)
 

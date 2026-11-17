@@ -1,90 +1,4 @@
 #!/usr/bin/env python3
-"""The service gate: boot a deliverable, wait until it answers, run a command against it, stop it.
-
-It knows nothing about the language the service is written in. It runs the boot command in a
-shell of its own, polls a URL until the service answers, runs the command you give it, and stops
-the service whatever happened. Python 3.11 standard library only, Linux and macOS.
-
-Usage::
-
-    with_service.py --boot "<command>" --ready <url> [--timeout S] [--env K=V]...
-                    [--graceful S [--signal-after S]] [-- <command>...]
-    with_service.py --boot "<command>" --ready <url> --refuses NAME [--refuses NAME]...
-
-* With a command after ``--``, the exit code is the command's. The service is up for exactly
-  as long as the command runs: a load smoke, a contract test, an end-to-end suite, a request.
-* With no command it is the ``smoke`` gate: boot, probe, stop. Green means the service started
-  and answered; the verdict line is ``with_service: green``.
-* Ready means the URL answers with a status below 400. The probe repeats every 100 ms until
-  ``--timeout`` (30 s by default; raise it for a service that compiles on start). A service that
-  never answers is red, with the last lines of its output. One that exits before it answers is
-  red with everything it wrote, the start and the end when that is long, since the cause of an
-  exit is usually the first thing it said; that also says the command as it ran, where, and for
-  how long, and says so when the command printed nothing.
-* ``{port}`` in ``--boot``, ``--ready``, an ``--env`` value or the command is replaced by a free
-  port picked below the range outgoing connections draw from, and ``PORT`` is exported with it,
-  so parallel CI jobs on one host do not collide on a fixed port. The boot output is shown only
-  when the run is red.
-* The pick is only free until the service binds it, and another gate's service can bind it in
-  between. So when a service on a port picked that way exits before it answers, the gate says so
-  on stderr with that first boot's output and boots once more on a new port. A second failure is
-  red as before, and a service that always fails ends red after the one retry. A port the caller
-  fixed in the command is never changed, so it is not retried.
-* ``RATCHET_READY`` is exported with the ready URL, port filled in, so the command can tell the
-  readiness route from the rest: ``load_smoke.py`` is red while it requests nothing else.
-* Something already answering on the ready URL's port before the boot is red, since the probe
-  would then judge a service this run did not start. A port still bound after the stop is red
-  too: a process escaped the stop.
-
-The boot command runs in its own session, and the stop signals that whole process group: a shell
-that started a server that forked workers loses all of them. SIGTERM goes first, SIGKILL after
-five seconds. SIGINT, SIGTERM and SIGHUP to this script stop the service and the command
-too, and exit 128 plus the signal. What no script can survive is SIGKILL, and a daemon that
-calls ``setsid`` leaves the group; the bound-port check above is what notices the second.
-
-``--graceful SECONDS`` is the "shuts down gracefully" check, and needs a command after ``--``,
-typically the load smoke run with ``--until-stopped``. While the command runs, partway through,
-the gate sends SIGTERM to the service process alone, not its group, as an orchestrator does on a
-deploy. Green needs the service to exit with code 0 within SECONDS of the signal and the command
-to still succeed, so the requests in flight when the signal came were finished. "Partway" is a
-fixed delay, ``--signal-after`` (1 s by default), counted from when the command says it is
-sending: it creates the path the gate exports as ``RATCHET_SENDING``, as ``load_smoke.py
---until-stopped`` does once its workers start. The delay does not depend on how fast the service
-answers, so a slow runner and a fast one signal at the same point, and a runner slow to start the
-command still signals with requests in flight. A command that has not started sending within
-``--timeout`` seconds is red, and so is one that ends before the signal, since nothing was in
-flight. The service
-process is the boot command's own process, so boot with ``exec`` (``exec ./server``) or the shell
-takes the signal and the server never sees it; an exit by signal is red and says so. A service
-that ignores the signal is red, and is stopped with its whole group at the end as before.
-
-A server that stops closes its listener, and the kernel then resets every connection still
-waiting on it to be accepted. The service never accepted those, so it dropped nothing, though
-the client sees the reset a dropped request gives. So just before the signal the gate takes a
-copy of each TCP listener of the service, its process group and every process descended from
-one, which keeps the listener open. It writes the file it exports as ``RATCHET_STOPPING``, which
-exists from the signal on. Once no process of the service holds a listener, the gate accepts
-what is queued there, writes each connection's ports to that file, and only then resets it.
-``load_smoke.py --until-stopped`` reads the file to tell those resets from the service's own,
-and a refusal after the signal (expected, nothing listens) from one before it (a fault). The
-copy needs Linux 5.6 or later and the permission ptrace needs over the service, which a service
-the gate started gives unless the host forbids ptrace. On a port where the gate holds no
-listener, the smoke judges a reset by when its request started, as it did before the gate held
-listeners, and says why. See ``listeners.py``.
-
-``--refuses NAME`` (repeatable) is the "refuses bad configuration" check, with no command. For each
-NAME the service boots with the environment variable NAME removed, an ``--env`` of that name too.
-Green only when it exits non-zero before the ready URL answers, within ``--timeout``, and what it
-wrote names NAME. Red, with the boot output, if it becomes ready, hangs, exits 0, or exits without
-naming the setting. A setting the service reads from a file it finds itself is not removed.
-
-The boot command stays in the foreground: a command that starts the service and waits on it
-does, one that starts it in the background and returns does not, and a boot that returns is
-"exited before it answered".
-
-Pair it with ``load_smoke.py`` and ``telemetry_sink.py``, which are commands to run inside it.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -108,14 +22,11 @@ import listeners
 POLL = 0.1
 SENDING_POLL = 0.01
 TAIL = 30
-# An exited service shows its first lines as well: the cause is usually the first thing it
-# said, and a long start-up can push it out of the tail.
 HEAD = 30
 PORT_TOKEN = "{port}"  # noqa: S105 # -- a placeholder, not a credential
 
 
 def probe(url: str) -> str | None:
-    """``None`` when the URL answers below 400, else what the probe saw."""
     try:
         status = gatelib.http_status("GET", url, timeout=2.0)
     except (OSError, http.client.HTTPException) as error:
@@ -126,7 +37,6 @@ def probe(url: str) -> str | None:
 def wait_ready(
     process: subprocess.Popen[bytes], options: argparse.Namespace
 ) -> tuple[str | None, bool]:
-    """``(None, False)`` once the ready URL answers; else why not, and whether it exited."""
     url, timeout = options.ready, options.timeout
     started = time.monotonic()
     deadline = started + timeout
@@ -147,11 +57,6 @@ def wait_ready(
 
 
 def tail(log: IO[bytes], *, exited: bool = False) -> list[str]:
-    """What the service wrote, indented, for a red verdict.
-
-    The last lines; for a service that exited, the first lines too, with the count left out
-    between them when there are more than both hold.
-    """
     log.seek(0)
     lines = log.read().decode("utf-8", errors="replace").splitlines()
     if not lines:
@@ -167,7 +72,6 @@ def tail(log: IO[bytes], *, exited: bool = False) -> list[str]:
 def start(
     options: argparse.Namespace, env: dict[str, str], log: IO[bytes]
 ) -> subprocess.Popen[bytes]:
-    """The boot command, in a shell and a session of its own, writing to ``log``."""
     return subprocess.Popen(  # noqa: S602 # -- the boot command is a shell line by contract
         options.boot,
         shell=True,
@@ -180,7 +84,6 @@ def start(
 
 
 def sends_within(sending: Path, within: float, ended: threading.Event) -> bool:
-    """Whether the command creates ``sending`` within ``within`` seconds, before it ends."""
     deadline = time.monotonic() + within
     while not sending.exists():
         if ended.wait(SENDING_POLL) or time.monotonic() >= deadline:
@@ -196,14 +99,6 @@ def signal_midway(
     sending: Path,
     ended: threading.Event,
 ) -> list[str]:
-    """SIGTERM the service ``--signal-after`` seconds into the sending; what was wrong with it.
-
-    Why a fixed delay and not "after N requests": the gate cannot see the requests, a count
-    would hang on a service too slow to reach it, and a delay signals at the same point of the
-    command on every runner. Why from ``sending`` and not from the command's start: a runner
-    slow to start the command would signal before a request was sent. ``ended`` is set when the
-    command finishes first.
-    """
     after = options.signal_after
     if not sends_within(sending, options.timeout, ended) and not ended.is_set():
         return [
@@ -218,7 +113,6 @@ def signal_midway(
     if process.poll() is not None:
         return [f"the service exited with code {process.returncode} before it was signalled"]
     held = listeners.grab(process.pid)
-    # Why: before the signal, so whatever fails after it is judged by what the marker says.
     gatelib.write_stopping(marker, listeners.told(held))
     signalled = time.monotonic()
     process.send_signal(signal.SIGTERM)
@@ -231,7 +125,6 @@ def signal_midway(
 
 
 def stopped(process: subprocess.Popen[bytes], graceful: float, signalled: float) -> list[str]:
-    """What was wrong with how the service ended after the signal at ``signalled``."""
     try:
         code = process.wait(timeout=graceful)
     except subprocess.TimeoutExpired:
@@ -254,7 +147,6 @@ def run_signalled(
     *,
     env: dict[str, str],
 ) -> tuple[int, list[str]]:
-    """Run ``command`` and stop the service partway; the command's code and every problem."""
     with tempfile.TemporaryDirectory() as scratch:
         marker, sending = Path(scratch) / "stopping", Path(scratch) / "sending"
         env[gatelib.STOPPING_ENV], env[gatelib.SENDING_ENV] = str(marker), str(sending)
@@ -276,7 +168,6 @@ def run_signalled(
 def refusal(
     code: int | None, name: str, not_ready: str | None, *, output: str, timeout: float
 ) -> list[str]:
-    """What is wrong with how a service met a missing setting; ``code`` is None if it ran on."""
     if not_ready is None:
         return [f"the service became ready without {name}: it did not refuse"]
     if code is None:
@@ -291,11 +182,6 @@ def refusal(
 def serve(
     options: argparse.Namespace, command: list[str], env: dict[str, str]
 ) -> tuple[int, list[str], bool]:
-    """Boot, wait, run the command, stop; the exit code, the problems, and whether it exited.
-
-    With ``options.refuses`` set to a name, the command is not run: the verdict is on how the
-    service met that setting missing.
-    """
     code, problems, exited = 1, [], False
     with tempfile.TemporaryFile() as log:
         try:
@@ -338,7 +224,6 @@ def pair(text: str) -> tuple[str, str]:
 
 
 def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
-    """The options and the command after ``--``; the parser exits on a bad combination."""
     parser = argparse.ArgumentParser(prog="with_service.py", usage="%(prog)s [options] [-- cmd...]")
     parser.add_argument("--boot", required=True, help="shell command that starts the service")
     parser.add_argument("--ready", required=True, help="URL that answers below 400 when ready")
@@ -376,7 +261,6 @@ def main(argv: list[str]) -> int:
     picked = any(PORT_TOKEN in text for text in texts)
 
     def attempt(missing: str | None = None) -> tuple[int, list[str], bool]:
-        """One boot on a port picked now, with ``missing`` removed from the environment."""
         env = dict(os.environ)
         if picked:
             env["PORT"] = str(gatelib.free_port())
@@ -401,8 +285,6 @@ def main(argv: list[str]) -> int:
         return gatelib.report("with_service", found)
     code, problems, exited = attempt()
     if exited and picked:
-        # Why: the pick is free only until the service binds it, and another gate's service may
-        # have bound it first. A service that always fails still ends red, after this one retry.
         print(
             "with_service: exited before answering; booting once more on a new port",
             file=sys.stderr,

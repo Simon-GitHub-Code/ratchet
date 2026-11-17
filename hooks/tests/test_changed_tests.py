@@ -1,5 +1,3 @@
-"""``changed_tests.py`` and ``suites.py``: the test files a change touches run in their suites."""
-
 import os
 import shutil
 import stat
@@ -33,7 +31,6 @@ def binding(*rows: str) -> str:
 
 @pytest.fixture
 def just(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A ``just`` that logs its arguments and exits with the status in ``STATUS``, when set."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log = tmp_path / "just.log"

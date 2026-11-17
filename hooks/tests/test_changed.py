@@ -1,5 +1,3 @@
-"""``changed.py``: a gate over the change gets its base, and judges nothing on the adoption."""
-
 import sys
 from pathlib import Path
 
@@ -20,7 +18,6 @@ def run(root: Path, *command: str) -> int:
 
 @pytest.fixture
 def adopted(tmp_path: Path) -> Path:
-    """A repository whose default branch holds a binding, on a branch with one commit more."""
     root = repository(tmp_path, {BINDING: "# Binding\n"})
     branch(root)
     write(root, "src/new.py", "x = 1\n")

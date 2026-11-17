@@ -1,5 +1,3 @@
-"""``runrecord``: the lines a run appends to its record carry when, which run and which tree."""
-
 import json
 import re
 import shlex

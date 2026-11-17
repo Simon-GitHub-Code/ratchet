@@ -1,25 +1,4 @@
 #!/usr/bin/env python3
-"""Run a gate over the change against its base, or say the change is the adoption.
-
-A gate over the change (coverage of changed lines, mutation of changed functions, the test count
-against the base, the flag states of changed flags) compares the tree with a base: the merge
-base with the default branch, or on that branch the commit before. This wrapper hands the gate
-that commit, so every such gate and every shipped one agree on what the change is.
-
-The adoption is the one change with no base to compare with. Its base holds no binding and no
-suite, so against it every line is changed, and each such gate would repeat on every run what
-tier 2 does once over the whole tree: the full mutation run, the coverage groups, ``bite-all``.
-So on the adoption the wrapper runs nothing, says so and exits 0. That is decided from the base
-commit, which no later change can make true again: once the adoption has merged, every base holds
-a binding.
-
-In a scratch copy of the bite proof the gate always runs, since its fault is the change.
-
-Usage: ``changed.py [--root DIR] -- COMMAND...``. ``{base}`` in any word of ``COMMAND`` becomes
-the base commit, which is also exported as ``RATCHET_BASE``. Exits with the command's code, 0 on
-the adoption, 127 when the command cannot start and 2 for a usage error.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -30,7 +9,6 @@ from pathlib import Path
 
 import gatelib
 
-# Why: `project_bite.py` sets this in a scratch copy, where the planted fault is the change.
 BITING = "RATCHET_BITING"
 BASE_ENV = "RATCHET_BASE"
 

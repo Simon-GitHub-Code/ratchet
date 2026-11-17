@@ -1,13 +1,3 @@
-"""Read gate results out of the output of the plugin's parallel runner.
-
-``parallel.py`` prints each gate's output whole under ``==> gate <==`` and one line per gate,
-``parallel: gate: green in 0.1s`` or ``parallel: gate: red (exit 1) in 2.0s``. A gate that is not
-asked yet prints ``later: <trigger>``. Older runners call it green; later ones say
-``parallel: gate: judged nothing (later: <trigger>)``, and ``judged nothing (none: <why>)`` for a
-gate that does not apply to the project at all; today's say ``not run yet (later: <trigger>)``
-and ``not applicable (none: <why>)``. Every shape reads the same here.
-"""
-
 from __future__ import annotations
 
 import re
@@ -23,8 +13,6 @@ LATER = re.compile(r"^later: (.+)$")
 
 
 class Status(StrEnum):
-    """What a gate did."""
-
     GREEN = "green"
     RED = "red"
     LATER = "later"
@@ -33,15 +21,12 @@ class Status(StrEnum):
 
 @dataclass(frozen=True)
 class Gate:
-    """One gate's result."""
-
     name: str
     status: Status
     trigger: str = ""
 
 
 def parse(output: str) -> list[Gate]:
-    """Every gate the runner reported, in the order of their verdicts."""
     later: dict[str, str] = {}
     verdicts: dict[str, Gate] = {}
     section = None
@@ -64,5 +49,4 @@ def parse(output: str) -> list[Gate]:
 
 
 def red(output: str) -> list[str]:
-    """The names of the red gates in ``output``."""
     return [g.name for g in parse(output) if g.status is Status.RED]

@@ -33,7 +33,6 @@ SECRETS = [v for k, v in LEAKY.items() if "secret" in v]
 
 @pytest.fixture(autouse=True)
 def _own_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Each test's runtime directory sits in its own temp, not in the machine's."""
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
 
 
@@ -63,8 +62,6 @@ def test_the_environment_is_built_from_nothing_but_the_locale(layout: sandbox.La
     assert env["LANG"] == "C.UTF-8"
     assert env["ENABLE_CLAUDEAI_MCP_SERVERS"] == "false"
     assert Path(env["GEM_HOME"]).parent == layout.home
-    # Why: a longer socket path sends Claude Code's messaging socket to the shared /tmp/cc-socks,
-    # so the runtime directory sits at the top of the temp location under a short name.
     assert env["XDG_RUNTIME_DIR"] == str(layout.runtime)
     assert layout.runtime.parent == Path(tempfile.gettempdir())
     assert len(f"/tmp/{layout.runtime.name}/cc-socks/4194304.sock") <= 103
@@ -178,18 +175,9 @@ def test_the_model_token_goes_alone_and_only_if_it_outlives_the_run() -> None:
         sandbox.model_token({}, now=1000, minutes=1)
 
 
-# What runs inside the sandbox. Each case is a command the product session could type if the
-# policy let it through; the sandbox and the missing credentials must stop it on their own.
-
-
 def inside(
     layout: sandbox.Layout, command: str, inherited: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
-    """``command`` as the session's Bash runs it.
-
-    A shell plays Claude Code: it holds the model token in its environment and hands the line to
-    the shell prefix.
-    """
     env = sandbox.environment(layout, LEAKY if inherited is None else inherited)
     return subprocess.run(
         ["sh", "-c", '"$0" "$1"; exit $?', str(layout.shell), command],
@@ -214,10 +202,6 @@ def inside(
     ],
 )
 def test_gh_is_not_logged_in_inside(layout: sandbox.Layout, command: str) -> None:
-    """``gh repo create`` and ``gh api -X POST user/repos`` need this login to send anything.
-
-    They are not run here: on a machine where the sandbox broke they would act.
-    """
     if shutil.which("gh") is None:
         pytest.skip("gh is not installed")
     done = inside(layout, command, {**LEAKY, "GH_CONFIG_DIR": str(Path.home() / ".config/gh")})
@@ -308,10 +292,6 @@ def test_what_a_command_sends_out_carries_no_credential(
 def test_a_write_outside_the_run_does_not_reach_its_target(
     layout: sandbox.Layout, tmp_path: Path, write: str
 ) -> None:
-    """A write into the launcher's scratchpad lands in the run's own temp.
-
-    The scratchpad is under the same temp root as the run; inside, that root is the run's.
-    """
     target = tmp_path / "scratchpad-file"
     inside(layout, write.format(target=target))
     assert not target.exists()

@@ -1,27 +1,4 @@
 #!/usr/bin/env python3
-"""Upgrade an adopted repository to the plugin this script runs from, and say what is left.
-
-``upgrade.py --apply`` moves the binding's pin to the plugin in use and then makes every edit the
-conformance gate calls ``auto``: the pin line, the workflow refs, the permission rules, the
-workflows, files and recipes the template supplies whole, the rows and sections the template
-adds. Each edit keeps every line it did not write, and none loosens a gate. What needs judgement
-is listed for an agent. What only the owner can say keeps a stated default that loosens nothing,
-so the upgrade asks him nothing. When the change moves the pin, every finding it leaves is
-written down in ``quality/owed.toml`` as owed: counted, and not red (ADR 0037).
-
-It writes guard paths: the binding, the workflows, `.claude/settings.json`. The merge judge, not the
-guard, is the trust boundary: a change that touches a guard path is `merge: owner`, so the upgrade
-reaches the default branch only once the owner merges it (ADR 0029).
-
-Usage: ``upgrade.py [--root DIR] [--apply]``. Without ``--apply`` it writes nothing. Exit status:
-0 when nothing is left to write and nothing left is red (owed items may remain), 1 when edits are
-unwritten or an item left is red, 2 when it
-refuses (the plugin is older than the pin, its order against the pin cannot be told, it has no
-commit to pin, the root is not an adopted git repository, a file it would write leads out of
-the repository or is one git ignores, or ``just`` cannot read the justfile it would write), 3 when
-the plan does not settle, which is a bug in the plugin and leaves the repository as it was.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -44,7 +21,6 @@ import owed
 import plugin_pin
 from conformance import Agent, Auto, Finding, Owner
 
-# Why: the guard reads the manifest under hooks/, and this script reads it the same way.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards.manifest import EditRule, ManifestError, parse
 
@@ -68,37 +44,24 @@ TEMPORARY = ".upgrade-"
 
 @dataclass(frozen=True)
 class Change:
-    """A file the plan writes: its bytes now (``None``: absent) and the bytes it must hold."""
-
     before: bytes | None
     after: bytes
 
 
 @dataclass(frozen=True)
 class AgentFinding(Finding):
-    """A finding left for an agent; ``owed`` when an entry of the owed ledger excuses it."""
-
     fix: Agent
     owed: bool = False
 
 
 @dataclass(frozen=True)
 class OwnerFinding(Finding):
-    """A finding left for the owner, under its stated default; ``owed`` as for an agent's."""
-
     fix: Owner
     owed: bool = False
 
 
 @dataclass(frozen=True)
 class Plan:
-    """What an upgrade writes and what it leaves, for one repository and one plugin.
-
-    ``was`` and ``now`` are the two versions as the owner reads them. ``waiting`` names the checks
-    that do not run until what is left is fixed, and ``approved`` counts the items left in guard
-    paths, whose changes go to the owner at the merge.
-    """
-
     old: str
     new: str
     changes: dict[str, Change]
@@ -112,46 +75,36 @@ class Plan:
 
     @property
     def edits(self) -> int:
-        """How many edits were made, counting each one that changed a file."""
         return sum(len(did) for did in self.done.values())
 
     @property
     def left(self) -> int:
-        """How many items remain for an agent and for the owner."""
         return len(self.agent) + len(self.owner)
 
     @property
     def items(self) -> list[AgentFinding | OwnerFinding]:
-        """Every item left, the agent's first."""
         return [*self.agent, *self.owner]
 
     @property
     def red(self) -> list[AgentFinding | OwnerFinding]:
-        """The items no owed entry excuses: each stops a merge."""
         return [finding for finding in self.items if not finding.owed]
 
     @property
     def owing(self) -> int:
-        """How many items the project owes: counted, and none of them red."""
         return self.left - len(self.red)
 
 
 @dataclass(frozen=True)
 class Refused:
-    """The reason an upgrade must not start: nothing is written."""
-
     reason: str
 
 
 @dataclass(frozen=True)
 class Stuck:
-    """Auto findings that no edit clears: a bug in the plugin, so the repository is untouched."""
-
     findings: list[Finding]
 
 
 def standing(root: Path, plugin: Path) -> str:
-    """The plugin version and commit the repository runs now, as the report's first line says."""
     pin = plugin_pin.pinned(gatelib.read_text(root / gatelib.BINDING))
     if pin is not None:
         return f"{pin.version} at {pin.commit[:SHORT]}"
@@ -165,7 +118,6 @@ def standing(root: Path, plugin: Path) -> str:
 
 
 def version_at(plugin: Path, commit: str) -> str:
-    """``X.Y.Z `` for the version the plugin's history gives ``commit``, or nothing."""
     shown = gatelib.show(plugin, commit, str(plugin_pin.MANIFEST))
     try:
         version = json.loads(shown or "").get("version")
@@ -175,7 +127,6 @@ def version_at(plugin: Path, commit: str) -> str:
 
 
 def refusal(root: Path, plugin: Path) -> str | None:
-    """Why no upgrade may start from ``root`` with ``plugin``, or ``None``."""
     if gatelib.git(root, "rev-parse", "--is-inside-work-tree") != "true":
         return f"{root} is not a git work tree: the upgrade copies what git sees"
     if not (root / gatelib.BINDING).is_file():
@@ -203,32 +154,21 @@ def refusal(root: Path, plugin: Path) -> str | None:
 
 
 class StuckError(Exception):
-    """Auto findings that no edit clears."""
-
     def __init__(self, autos: list[Finding]) -> None:
-        """Keep the findings that would not clear."""
         super().__init__("auto findings remain")
         self.autos = autos
 
 
 class NotTextError(Exception):
-    """A file the plan must edit is not UTF-8 text, so an edit would lose its other bytes."""
-
     def __init__(self, name: str) -> None:
-        """Keep the file's name for the refusal."""
         super().__init__(f"{name} is not UTF-8 text, so the upgrade does not write it")
 
 
 def inside(sandbox: Path, name: str) -> str:
-    """The path of ``name`` once symlinks are followed, relative to the sandbox.
-
-    An auto edit always lands inside: its trial never writes outside the tree it is made in.
-    """
     return str((sandbox / name).resolve().relative_to(sandbox.resolve()))
 
 
 def pass_over(sandbox: Path, autos: list[Finding], done: dict[str, list[str]]) -> set[str]:
-    """Apply each file's auto wants in finding order to the sandbox; the files that changed."""
     fixes: dict[str, list[Auto]] = {}
     for path, fix in [(f.path, f.fix) for f in autos if isinstance(f.fix, Auto)]:
         fixes.setdefault(inside(sandbox, path), []).append(fix)
@@ -255,14 +195,11 @@ def pass_over(sandbox: Path, autos: list[Finding], done: dict[str, list[str]]) -
 
 @dataclass(frozen=True)
 class Converged:
-    """Where the auto edits ended: the files they touched, and the findings left."""
-
     touched: set[str]
     left: list[Finding]
 
 
 def converge(sandbox: Path, done: dict[str, list[str]]) -> Converged:
-    """Run the checks and apply the auto edits until none is left."""
     touched: set[str] = set()
     number = 0
     while True:
@@ -278,7 +215,6 @@ def converge(sandbox: Path, done: dict[str, list[str]]) -> Converged:
 
 
 def pinned_to(plugin: Path) -> Finding:
-    """The edit that moves the binding's pin to ``plugin``, which every plan makes first."""
     line = plugin_pin.line_for(plugin)
     return Finding(
         str(gatelib.BINDING),
@@ -288,7 +224,6 @@ def pinned_to(plugin: Path) -> Finding:
 
 
 def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
-    """What upgrading ``root`` to ``plugin`` writes, and what it leaves for others."""
     reason = refusal(root, plugin)
     if reason is not None:
         return Refused(reason)
@@ -349,14 +284,6 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
 
 
 def owing(root: Path, sandbox: Path, left: list[Finding], *, plugin: Path) -> list[Finding]:
-    """The edit that writes down what the upgrade leaves, when the change moves the pin.
-
-    Why: ADR 0037. A release never turns an adopted repository red: what it newly asks is owed.
-    An entry is written for a finding no entry excuses yet, and only as many times as the same
-    plan, run on the merge base, leaves it red there: what the change itself brought stays red.
-    The ledger grows only in the change that moves the pin to a newer version, against the base
-    the ratchet-lowered gate compares with, so the gate and this agree on every run.
-    """
     base = gatelib.base_commit(root)
     before = gatelib.show(root, base, str(gatelib.BINDING)) if base else None
     after = gatelib.read_text(sandbox / gatelib.BINDING)
@@ -379,12 +306,6 @@ def owing(root: Path, sandbox: Path, left: list[Finding], *, plugin: Path) -> li
 
 
 def red_at_base(root: Path, base: str | None, plugin: Path) -> Counter[owed.Key]:
-    """The keys the plan for ``plugin`` leaves red on what git holds at ``base``, by count.
-
-    Why: ADR 0037. What the upgrade may write down is what the release asks of the project as it
-    stood before the change, findings of the files the upgrade copies included; a violation the
-    change brought is not there, so it stays red.
-    """
     if base is None:
         return Counter()
     with tempfile.TemporaryDirectory(prefix="ratchet-base-") as scratch:
@@ -397,7 +318,6 @@ def red_at_base(root: Path, base: str | None, plugin: Path) -> Counter[owed.Key]
 
 
 def version_now(root: Path, plugin: Path) -> str:
-    """The plugin version the repository runs now, as the owner's summary names it."""
     pin = plugin_pin.pinned(gatelib.read_text(root / gatelib.BINDING))
     if pin is not None:
         return pin.version
@@ -408,20 +328,11 @@ def version_now(root: Path, plugin: Path) -> str:
 
 
 def joined(names: list[str]) -> str:
-    """``a``, ``a and b``, or ``a, b and c``."""
     *head, last = names
     return f"{', '.join(head)} and {last}" if head else last
 
 
 def unwritable(root: Path, changes: dict[str, Change], foreign: dict[str, str]) -> str | None:
-    """Why the plan must not write what it changed, or ``None``.
-
-    A file that leads out of the repository through a link, or lies in a submodule, is not this
-    repository's to write; nor is one under ``guards/``, which the manifest gives to the owner. A
-    file git ignores is one the plan, which reads only what git sees, would write over unread,
-    and one the change would never carry. Git is asked in the repository itself, so every rule it
-    reads counts: ignore files tracked or not, the repository's config, the user's.
-    """
     names = write_order(changes)
     for name in names:
         for prefix, why in foreign.items():
@@ -441,17 +352,12 @@ def unwritable(root: Path, changes: dict[str, Change], foreign: dict[str, str]) 
 
 
 def unreadable(root: Path, sandbox: Path) -> str | None:
-    """What ``just`` says of the planned justfile when it reads the repository's and not that one.
-
-    Why: a justfile ``just`` cannot read turns every gate red. Without ``just`` on the path there
-    is nothing to ask, and the edits stand on the checks alone.
-    """
     just = shutil.which("just")
     if just is None:
         return None
 
     def error(tree: Path) -> str | None:
-        done = subprocess.run(  # -- a fixed argv, `just` from PATH
+        done = subprocess.run(
             [just, "--justfile", str(tree / JUSTFILE), "--list"],
             capture_output=True,
             text=True,
@@ -466,13 +372,11 @@ def unreadable(root: Path, sandbox: Path) -> str | None:
 
 
 def write_order(changes: dict[str, Change]) -> list[str]:
-    """The files in the order they are written: the binding last, so the pin moves after them."""
     binding = str(gatelib.BINDING)
     return sorted(changes, key=lambda name: (name == binding, name))
 
 
 def write_atomically(path: Path, data: bytes, holder: Path) -> None:
-    """Replace ``path`` with ``data`` by renaming a file made in ``holder``, keeping its mode."""
     path.parent.mkdir(parents=True, exist_ok=True)
     handle, temporary = tempfile.mkstemp(dir=holder, prefix=TEMPORARY)
     try:
@@ -489,12 +393,6 @@ def write_atomically(path: Path, data: bytes, holder: Path) -> None:
 
 
 def apply(root: Path, changes: dict[str, Change]) -> None:
-    """Write each changed file, the binding last, one apply at a time.
-
-    Why: each file is made whole in the repository's uncommitted state, which git ignores, and
-    renamed into place. A run stopped between the two leaves nothing git sees or the plan reads,
-    and the next one clears it; a lock keeps that clearing from taking a running apply's file.
-    """
     if not changes:
         return
     holder = gatelib.state_dir(root) / "upgrade"
@@ -508,7 +406,6 @@ def apply(root: Path, changes: dict[str, Change]) -> None:
 
 
 def editor(root: Path, path: str) -> str:
-    """Who may edit ``path``, as the repository's guard manifest says."""
     try:
         manifest = parse(gatelib.read_text(root / MANIFEST) or "")
     except ManifestError:
@@ -522,7 +419,6 @@ def editor(root: Path, path: str) -> str:
 
 
 def by_file(found: list[Kept]) -> dict[str, list[Kept]]:
-    """The findings grouped by file, each file where its first finding stood."""
     files: dict[str, list[Kept]] = {}
     for finding in found:
         files.setdefault(finding.path, []).append(finding)
@@ -530,7 +426,6 @@ def by_file(found: list[Kept]) -> dict[str, list[Kept]]:
 
 
 def describe(fix: Agent | Owner) -> list[str]:
-    """The lines under a finding: what to start from, or what holds and what would settle it."""
     if isinstance(fix, Owner):
         lines = [
             f"{BODY}assumed: {fix.assumed}",
@@ -543,7 +438,6 @@ def describe(fix: Agent | Owner) -> list[str]:
 
 
 def items_block(root: Path, title: str, found: list[AgentFinding | OwnerFinding]) -> str:
-    """Items left, by file, each file with who may edit it."""
     lines = [title]
     for path, items in by_file(found).items():
         lines.append(f"  {path}: {editor(root, path)}")
@@ -553,14 +447,12 @@ def items_block(root: Path, title: str, found: list[AgentFinding | OwnerFinding]
 
 
 def moved_lines(change: Change) -> list[str]:
-    """The lines an agent-instruction file gained in the moved section, word for word."""
     text = change.after.decode("utf-8", errors="replace")
     kept = conformance.moved_items((change.before or b"").decode("utf-8", errors="replace"))
     return [line for line in conformance.moved_items(text) if line not in kept]
 
 
 def render(root: Path, result: Plan, *, applied: bool) -> str:
-    """The report: the header, what was written (or would be), what is left, the owner's words."""
     blocks = [f"upgrade: {root} from {result.old} to {result.new}."]
     if result.changes:
         verb = "Wrote" if applied else "Would write"
@@ -589,7 +481,6 @@ def render(root: Path, result: Plan, *, applied: bool) -> str:
 
 
 def summary(root: Path, result: Plan, *, applied: bool) -> str:
-    """The agent's line: the counts, and what to do about the guard paths it touched."""
     left = (
         f"{result.owing} items are owed and {len(result.red)} red; {len(result.owner)} of them"
         " hold an assumption until the owner says otherwise."
@@ -607,11 +498,6 @@ def summary(root: Path, result: Plan, *, applied: bool) -> str:
 
 
 def plain(result: Plan, *, applied: bool) -> str:
-    """What the owner reads: the versions, the counts, the assumptions, and his one step.
-
-    Why: ADR 0037. The owner is asked one thing, the merge, so every call the upgrade left open
-    is stated with the default that holds, in words without the method's vocabulary.
-    """
     moves = "moves" if applied else "would move"
     made = "made" if applied else "would make"
     if not result.changes:
@@ -640,12 +526,6 @@ def plain(result: Plan, *, applied: bool) -> str:
 
 
 def owing_words(count: int, *, approved: int) -> str:
-    """What the owner reads of the items the upgrade leaves: what they stop, and who fixes them.
-
-    Why: ADR 0037. Nothing works through the list by itself. An agent makes a fix in a guard path
-    on a branch with no prompt (ADR 0033), and one change carries as many fixes as it likes, so
-    the owner decides once at that merge, not once per item.
-    """
     things = "thing" if count == 1 else "things"
     text = (
         f"The project owes {count} {things} since the upgrade. None of them turns a check red or"

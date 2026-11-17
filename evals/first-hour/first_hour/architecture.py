@@ -1,18 +1,3 @@
-"""What a run did about the project's architecture, read from its repository and its transcript.
-
-Three readings, none of them a model's judgement:
-
-``asked`` reads the owner's questions: whether the architecture question came in the adoption round
-with at least two options and a recommendation, and how many later questions asked the owner to
-change the architecture. ``inspect`` reads the files of the default branch: the architecture
-decision record and its required sections, the binding's parts table, and each feature's design
-section. ``review_axis`` reads the transcript for the review's design axis.
-
-The words that find a question are the ones ``skills/method/questions.toml`` registers for
-``architecture.system`` and ``architecture.tools``; an agent that reworded both beyond these is
-read as not having asked, which is the finding.
-"""
-
 from __future__ import annotations
 
 import json
@@ -46,7 +31,6 @@ SPEC_PATH = re.compile(r"^docs/features/([^/]+)/spec\.md$")
 
 
 def section(text: str, name: str) -> str | None:
-    """The body under the heading called ``name``, up to the next heading at its level or above."""
     found = [(m.start(), m.end(), len(m.group(1)), m.group(2)) for m in HEADING.finditer(text)]
     for index, (_, end, level, title) in enumerate(found):
         if title.strip().casefold() != name.casefold():
@@ -73,7 +57,6 @@ def _options(question: Mapping[str, object]) -> int:
 
 
 def asked(questions: Sequence[Mapping[str, object]]) -> dict[str, object]:
-    """Whether the architecture was asked in the adoption round, and what was asked of it later."""
     dialog = [q for q in questions if q.get("channel") == "dialog"]
     system = next((q for q in dialog if _is_system(q)), None)
     tools = next((q for q in dialog if TOOLS.search(_question_text(q))), None)
@@ -109,7 +92,6 @@ def _filled(body: str | None) -> bool:
 
 
 def decision_record(text: str) -> dict[str, object]:
-    """The required sections of an architecture decision record, each present and filled or not."""
     decision = section(text, "Decision")
     chosen = CHOSEN_BY.search(decision or "")
     options = _count_items(section(text, "Considered options"))
@@ -144,7 +126,6 @@ def _parts(body: str) -> list[dict[str, str]]:
 
 
 def binding(files: Mapping[str, str]) -> dict[str, object]:
-    """The binding's architecture section: the record it names and the parts it declares."""
     text = files.get(BINDING, "")
     body = section(text, "Architecture")
     if body is None:
@@ -160,7 +141,6 @@ def binding(files: Mapping[str, str]) -> dict[str, object]:
 
 
 def features(files: Mapping[str, str]) -> dict[str, object]:
-    """Each feature's spec, and whether it carries a filled Design section."""
     specs = {m.group(1): files[p] for p in sorted(files) if (m := SPEC_PATH.match(p))}
     found = {slug: _filled(section(text, "Design")) for slug, text in specs.items()}
     return {
@@ -171,11 +151,6 @@ def features(files: Mapping[str, str]) -> dict[str, object]:
 
 
 def inspect(files: Mapping[str, str]) -> dict[str, object]:
-    """The repository's architecture: the record, the parts and the features' design sections.
-
-    The record read is the one the binding names; a binding that names none (or a file that is
-    not there) falls back to the first record with a ``## Considered options`` section.
-    """
     bound = binding(files)
     adrs = {p: t for p, t in files.items() if ADR_PATH.match(p)}
     path = str(bound["decision"]) if bound["decision_exists"] else None
@@ -190,12 +165,6 @@ def inspect(files: Mapping[str, str]) -> dict[str, object]:
 
 
 def review_axis(blobs: Iterable[str]) -> dict[str, object]:
-    """What the transcript shows of reviews and their design axis.
-
-    A review result is counted by its ``verdict`` field, a design issue by ``axis: design`` and a
-    mention by "axis F" or "design axis" in any text. A review that approved with no design issue
-    leaves nothing of the axis in the transcript, so ``design_issues`` and ``mentions`` are a floor.
-    """
     texts = list(blobs)
     return {
         "results": sum(len(VERDICT.findall(t)) for t in texts),
@@ -205,5 +174,4 @@ def review_axis(blobs: Iterable[str]) -> dict[str, object]:
 
 
 def transcript_texts(lines: Iterable[str]) -> list[str]:
-    """The message bodies of a transcript, one JSON text each."""
     return [json.dumps(json.loads(line).get("msg"), default=str) for line in lines if line.strip()]

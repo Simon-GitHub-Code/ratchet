@@ -1,5 +1,3 @@
-"""``bite.py``: every shipped gate goes red on its violation and green without it."""
-
 import os
 import subprocess
 import sys
@@ -35,8 +33,6 @@ def test_every_shipped_service_gate_bites(
     assert bite.bite(tmp_path) == 0
 
 
-# The smoke says it is sending, and its first request reaches the service a second later, as on a
-# machine too busy to run it promptly.
 LATE = (
     "import os, pathlib, subprocess, sys, time; "
     "pathlib.Path(os.environ['RATCHET_SENDING']).touch(); time.sleep(1); "

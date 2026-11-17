@@ -17,7 +17,6 @@ def message_events(  # noqa: PLR0917
 
 
 def recorded() -> list[dict[str, object]]:
-    """A short run as the driver records it: setup, an owner merge, a feature, a usable merge."""
     return [
         {"s": 0, "step": "setup", "kind": "run", "model": "opus", "plugin": {"commit": "abc"}},
         {"s": 1, "step": "01-init", "kind": "step", "action": "type", "text": "/ratchet:init"},

@@ -1,13 +1,3 @@
-"""The pipeline model's runs played on the real workflow, many runs to one node process.
-
-Each abstract answer stands for one concrete structured answer the workflow's schema allows, built
-from the answers ``test_pipeline`` already scripts; the stand-in ``agent`` checks each against the
-schema the workflow passed for that call, and a play fails on an answer it refuses. The workflow
-runs in a fresh ``vm`` context whose only globals are the language's own, with ``agent``, ``phase``
-and ``log`` passed in, so an effect it reached for any other way would end the run in a
-``ReferenceError``.
-"""
-
 from __future__ import annotations
 
 import json
@@ -125,7 +115,6 @@ SPECS: dict[Said, object] = {
 
 
 def reviewed(**fields: object) -> dict[str, Any]:
-    """A review whose blocker quotes the record it breaks, as the quote check printed it."""
     return _quoted({**REVIEW, **fields}, "issues")
 
 
@@ -378,8 +367,6 @@ main()
 
 @dataclass(frozen=True)
 class Played:
-    """What the real workflow did on one run: its agent calls with their phases, and its end."""
-
     calls: tuple[tuple[str, str], ...]
     ending: Ending
     raw: dict[str, Any]
@@ -405,7 +392,6 @@ def expected_calls(actions: list[Action]) -> tuple[tuple[str, str], ...]:
 
 
 def scripted(actions: list[Action], *, local: bool = False) -> dict[str, object]:
-    """The workflow's arguments and each agent's answer, by label, for the run ``actions`` take."""
     start, *answers = actions
     assert isinstance(start.answer, Start)
     args = ARGS[start.answer]
@@ -415,7 +401,6 @@ def scripted(actions: list[Action], *, local: bool = False) -> dict[str, object]
 
 
 def play(runs: list[list[Action]], local: list[list[Action]] | None = None) -> Batch:
-    """Each run on the real workflow, then each of ``local`` again reading a local ticket file."""
     batch = [scripted(actions) for actions in runs]
     batch += [scripted(actions, local=True) for actions in local or []]
     catalogue = {key(answer): concrete for answer, concrete in CONCRETE.items()}
@@ -465,8 +450,6 @@ STAGES = {
 ROUND = re.compile(r"-(\d+)$")
 DIED = re.compile(r"^(.+) agent returned no result")
 RESUME = "resume the run"
-# Why: the "Too large" section of skills/feature/SKILL.md has the orchestrator split the ticket and
-# ask nothing. These are the words of the result that tell it so, with parts named and without.
 SPLIT_UNASKED = (
     "the orchestrator splits it and the owner is not asked",
     "with no `proposedSplit`, divide the ticket's promises yourself",
@@ -482,7 +465,6 @@ def objection(reason: str) -> Objection:
 
 
 def failure(error: dict[str, str]) -> str:
-    """The agent the script's own error names, ``refused`` for its other errors, else the crash."""
     if error["name"] != "Error":
         return f"crash {error['name']}: {error['message']}"
     died = DIED.match(error["message"])
@@ -523,7 +505,6 @@ def stopped(result: dict[str, Any]) -> Ending:
 
 
 def ending(raw: dict[str, Any]) -> Ending:
-    """How a real run ended, as the model tells it."""
     if "error" in raw:
         error = raw["error"]
         return Ending(Outcome.ERROR, error=failure(error), resume=RESUME in error["message"])

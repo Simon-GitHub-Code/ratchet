@@ -1,11 +1,3 @@
-"""The owner's next move, decided by the plugin's route, and when the run stops.
-
-The driver never chooses a step: it runs the route engine behind ``/ratchet:next`` and does what
-its ``next:`` line names. A slash command is typed into the session. A shell command is pasted,
-which the run counts. Anything else (commit this, mark that ticket resolved) is something a
-non-engineer asks the assistant to do for them.
-"""
-
 from __future__ import annotations
 
 import re
@@ -18,8 +10,6 @@ if TYPE_CHECKING:
 
 
 class Action(StrEnum):
-    """What the owner does with an instruction."""
-
     TYPE = "type"
     PASTE = "paste"
     ASK = "ask"
@@ -28,8 +18,6 @@ class Action(StrEnum):
 
 @dataclass(frozen=True)
 class Instruction:
-    """One answer of the route: the command, why, the step after, its stage, the proposals."""
-
     command: str
     why: str
     then: str
@@ -38,7 +26,6 @@ class Instruction:
 
     @classmethod
     def parse(cls, data: dict[str, object]) -> Instruction:
-        """The route's ``--json`` output."""
         also = data.get("also")
         return cls(
             command=str(data["command"]),
@@ -51,15 +38,11 @@ class Instruction:
 
 @dataclass(frozen=True)
 class Move:
-    """What the owner does: type a command, paste shell commands, or ask the assistant."""
-
     action: Action
     text: str
     commands: tuple[str, ...] = ()
 
 
-# Why: these stages name work on the checkout in words (commit it, mark a ticket resolved) that
-# a non-engineer cannot do by hand; they ask the assistant, which the route allows.
 ASK_STAGES = frozenset({"change", "triage", "resolve", "blocked", "blocked-run"})
 FORGE_STAGES = frozenset({"review", "pull-request"})
 RUNNERS = (
@@ -89,24 +72,15 @@ ASK = (
 
 
 def is_command(text: str) -> bool:
-    """Whether ``text`` reads as a shell command line."""
     first = text.strip().split(" ", 1)[0]
     return first in RUNNERS
 
 
 def shell_commands(text: str) -> tuple[str, ...]:
-    """The backticked shell commands in ``text``, in order."""
     return tuple(span.strip() for span in TICKED.findall(text) if is_command(span))
 
 
 def next_commands(output: str) -> tuple[str, ...]:
-    """The shell commands an entry point's ``next:`` lines tell the owner to run.
-
-    ``merge`` prints ``next: just check-deep on `main`: ...`` with the command bare,
-    ``next: `git switch main`, then just check-deep on `main`: ...`` when it ran on the merged
-    branch, and ``next: the owner types `git switch ...`, then `just check-deep` ...`` with both
-    ticked.
-    """
     found: list[str] = []
     for line in NEXT_LINE.findall(output):
         found.extend(shell_commands(line))
@@ -117,14 +91,12 @@ def next_commands(output: str) -> tuple[str, ...]:
 
 
 def move_for(instruction: Instruction) -> Move:
-    """What the owner does with the route's instruction."""
     command = instruction.command
     if instruction.stage in FORGE_STAGES:
         return Move(Action.FORGE, command)
     if command.startswith("/"):
         return Move(Action.TYPE, command)
     if instruction.stage == "hooks" and re.search(r"hooks[-_]install", command):
-        # Why: /ratchet:next runs the hooks-install entry point itself; it is not the owner's.
         return Move(Action.TYPE, "/ratchet:next")
     commands = shell_commands(command)
     if instruction.stage not in ASK_STAGES and commands:
@@ -132,12 +104,7 @@ def move_for(instruction: Instruction) -> Move:
     return Move(Action.ASK, ASK.format(command=command))
 
 
-# --- stopping -----------------------------------------------------------------------------
-
-
 class Stop(StrEnum):
-    """Why a run ended."""
-
     USABLE = "usable-merged"
     WALL_CLOCK = "wall-clock"
     COST = "cost"
@@ -150,8 +117,6 @@ class Stop(StrEnum):
 
 @dataclass(frozen=True)
 class Budget:
-    """The limits of one run."""
-
     minutes: float = 120.0
     usd: float = 40.0
     repeats: int = 3
@@ -160,8 +125,6 @@ class Budget:
 
 @dataclass(frozen=True)
 class Seen:
-    """One instruction the route gave, with the checkout's state when it gave it."""
-
     command: str
     state: str
 
@@ -174,11 +137,6 @@ def stop_reason(
     usable: bool,
     history: Sequence[Seen],
 ) -> Stop | None:
-    """Why the run stops before the next instruction, or ``None`` to carry on.
-
-    The same instruction twice on an unchanged checkout is a step that made no progress; the
-    same instruction ``budget.repeats`` times is a loop even when something changed between.
-    """
     stalled = len(history) > 1 and history[-1] == history[-2]
     looped = bool(history) and sum(s.command == history[-1].command for s in history) >= (
         budget.repeats

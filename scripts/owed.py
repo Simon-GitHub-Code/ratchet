@@ -1,31 +1,4 @@
 #!/usr/bin/env python3
-"""The owed ledger: what a project owes since an upgrade, which is counted and not red.
-
-An upgrade moves the pin and makes every edit it can derive. What it cannot make, a finding an
-agent or the owner settles, it records in ``quality/owed.toml``, one entry per finding (ADR 0037)::
-
-    [[owed]]
-    rule = "bites"
-    path = "quality/bites.toml"
-    problem = "gate 'lint' (lint, near-all rules) is bound to a tool and no [[bite]] plants ..."
-    since = "0.12.0"
-
-``rule`` is the conformance check that raised the finding, ``path`` the file it names,
-``problem`` what stays the same while the finding stands, and ``since`` the plugin version whose
-upgrade recorded it. An entry excuses one finding: the one that check raises on that path with
-that problem. Two equal entries excuse two equal findings. A finding no entry excuses is red as
-before, so a new violation of the same check in the same file, or the same one in another file,
-stays red.
-
-Between upgrades the ledger only shrinks. An entry whose finding is gone is red until it goes,
-and ``upgrade.py --apply`` drops it. Against the merge base, a change may add or alter an entry
-only when it also moves the plugin pin to a newer version, and the entry it adds carries that
-version; ``lowered.py``, which runs before every merge, holds that.
-
-Usage: ``owed.py [--root DIR]`` prints how many things the project owes and which checks do not
-run until they are fixed, in plain words, or nothing when it owes nothing. It always exits 0.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -48,10 +21,6 @@ LEDGER = Path("quality/owed.toml")
 OWN = "owed"
 COMMENTS = "comments"
 GATE_RULES = frozenset({COMMENTS})
-# Why: a finding that another tier 0 or tier 1 gate also judges red is never owed: conformance
-# would print it as owed while that gate stays red on the same thing. Each pair is a check here, or
-# one file of it, and the gate that judges the same condition. The ledger's own findings are never
-# owed either, or an entry could excuse the stale entry it sits beside.
 NEVER: dict[tuple[str, str | None], str] = {
     (OWN, None): "ratchet-lowered reads the ledger and is red on one that does not parse",
     ("settings", None): "settings-check is red on the same drift of the permission rules",
@@ -68,11 +37,6 @@ NEVER: dict[tuple[str, str | None], str] = {
     ("quality", "quality/thresholds.toml"): "ratchet-lowered reads the file and is red without it",
     ("quality", "quality/mutation-register.toml"): "the mutation gates read the register",
 }
-# Why: ADR 0050. A finding an agent writes from the repository alone (a section of the binding
-# that the project's own tree and tools state, a recipe it converts) is filled first: the route
-# names the step right after an upgrade, and neither a feature nor the drain starts while one is
-# owed, so the window is one agent step. The checks are named by rule, the name the ledger already
-# keys an entry by; the owner has nothing to do for any of them.
 FILL_FIRST = frozenset(
     {
         "signs",
@@ -95,8 +59,6 @@ Key = tuple[str, str, str]
 
 @dataclass(frozen=True, order=True)
 class Entry:
-    """One finding the project owes: sorted by file, then check, then problem."""
-
     path: str
     rule: str
     problem: str
@@ -104,20 +66,16 @@ class Entry:
 
     @property
     def key(self) -> Key:
-        """What the entry excuses: the check, the file and the problem."""
         return (self.rule, self.path, self.problem)
 
 
 @dataclass(frozen=True)
 class Ledger:
-    """The entries of a ledger, and what keeps it from being read as one."""
-
     entries: tuple[Entry, ...]
     problems: tuple[str, ...]
 
 
 def parse(text: str | None) -> Ledger:
-    """The ledger ``text`` holds: absent or empty, it owes nothing."""
     try:
         data = tomllib.loads(text or "")
     except tomllib.TOMLDecodeError as error:
@@ -139,22 +97,18 @@ def parse(text: str | None) -> Ledger:
 
 
 def read(root: Path) -> Ledger:
-    """The ledger the repository at ``root`` holds."""
     return parse(gatelib.read_text(root / LEDGER))
 
 
 def fill_first(root: Path) -> list[Entry]:
-    """The owed entries an agent fills first: those of a check ``FILL_FIRST`` names."""
     return [entry for entry in read(root).entries if entry.rule in FILL_FIRST]
 
 
 def quoted(value: str) -> str:
-    """``value`` as a TOML basic string."""
     return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
 
 
 def render(entries: Sequence[Entry]) -> str:
-    """The ledger file holding ``entries``, in their sorted order."""
     blocks = [
         f"[[{TABLE}]]\n"
         + "".join(f"{field} = {quoted(getattr(entry, field))}\n" for field in FIELDS)
@@ -164,10 +118,6 @@ def render(entries: Sequence[Entry]) -> str:
 
 
 def excused(keys: Sequence[Key], entries: Sequence[Entry]) -> tuple[list[bool], Counter[Key]]:
-    """Which findings, by key in order, an entry excuses, and the entries left over, by key.
-
-    Each entry excuses one finding. A finding ``never`` names is never excused.
-    """
     left = Counter(entry.key for entry in entries)
     owed = []
     for key in keys:
@@ -178,7 +128,6 @@ def excused(keys: Sequence[Key], entries: Sequence[Entry]) -> tuple[list[bool], 
 
 
 def never(key: Key) -> bool:
-    """Whether a finding with ``key`` is one another gate judges, so no entry may excuse it."""
     rule, path, _ = key
     return (rule, None) in NEVER or (rule, path) in NEVER
 
@@ -187,12 +136,6 @@ BLOCK_START = re.compile(rf"^\[\[{TABLE}\]\]\n", re.MULTILINE)
 
 
 def kept(found: Counter[Key]) -> gatelib.Want:
-    """The want that leaves the ledger as many entries of each key as ``found`` has findings.
-
-    Why: every stale entry goes in this one edit. One edit per entry was a trial each, and the
-    time grew with the square of their number.
-    """
-
     def keep(text: str | None) -> str:
         ledger = parse(text)
         head, *blocks = BLOCK_START.split(text or "")
@@ -215,8 +158,6 @@ def kept(found: Counter[Key]) -> gatelib.Want:
 
 
 def recorded(added: Sequence[Entry]) -> gatelib.Want:
-    """The want that adds ``added`` to the ledger, or writes nothing when there is none."""
-
     def record(text: str | None) -> str:
         ledger = parse(text)
         if not added or ledger.problems:
@@ -227,13 +168,6 @@ def recorded(added: Sequence[Entry]) -> gatelib.Want:
 
 
 def moved(before: str | None, after: str | None, *, floor: str | None) -> plugin_pin.Pin | None:
-    """The pin a change moves to, when it moves to a newer version; ``None`` when it does not.
-
-    ``before`` and ``after`` are the binding at the merge base and at head. Only such a change may
-    add to the ledger. A binding that pinned nothing (an adoption older than the pin) moves to a
-    pin no older than ``floor``, the plugin judging the change: an older plugin would not read
-    the ledger at all.
-    """
     old, new = plugin_pin.pinned(before), plugin_pin.pinned(after)
     if new is None:
         return None
@@ -243,7 +177,6 @@ def moved(before: str | None, after: str | None, *, floor: str | None) -> plugin
 
 
 def below(version: str, floor: str) -> bool:
-    """Whether ``version`` is older than ``floor``, or cannot be ordered against it."""
     return version != floor and plugin_pin.newer(version, floor) is not True
 
 
@@ -291,11 +224,6 @@ def grown(
     floor: str | None,
     exempt: tuple[str | None, Mapping[str, str]] | None = None,
 ) -> list[str]:
-    """Why the ledger at head is more than the one at the merge base allows, one line each.
-
-    An entry may go. One that is new or changed is allowed only when the change moves the pin to
-    a newer version, and then it carries that version as ``since``.
-    """
     problems = [f"{LEDGER}: {problem}" for problem in after.problems]
     first_listed, renamed = exempt or (None, {})
     new = Counter(after.entries) - Counter(before.entries)
@@ -331,15 +259,10 @@ def grown(
 
 
 def pin_name(pin: plugin_pin.Pin | None) -> str:
-    """A pin as the gate's line names it."""
     return f"{pin.version} at {pin.commit[:12]}" if pin else "no pin"
 
 
 def summary(root: Path, *, waiting: Sequence[str] = ()) -> str | None:
-    """The plain line that says how much the project owes, or ``None`` when it owes nothing.
-
-    ``waiting`` names the checks that do not run until what is owed is fixed.
-    """
     ledger = read(root)
     if ledger.problems:
         return (
@@ -377,7 +300,6 @@ def main(argv: list[str]) -> int:
         return 0
     waiting: list[str] = []
     if read(root).entries:
-        # Why: conformance imports this module, and only a project that owes pays for its checks.
         import conformance  # noqa: PLC0415
 
         waiting = conformance.not_running(root, conformance.findings(root))

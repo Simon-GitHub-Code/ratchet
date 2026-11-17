@@ -1,5 +1,3 @@
-"""``lane.py``: only a change of records and pages takes the light lane; any doubt runs it all."""
-
 import os
 import re
 import shutil

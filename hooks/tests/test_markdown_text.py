@@ -1,5 +1,3 @@
-"""Markdown edits: a row or a section of the template in a file that has it or lacks it."""
-
 import re
 from collections.abc import Callable
 
@@ -40,7 +38,6 @@ def compact(rows: list[tuple[str, str]]) -> list[str]:
 
 
 def padded(rows: list[tuple[str, str]], aligns: tuple[str, str] = ("none", "none")) -> list[str]:
-    """A table as a formatter writes it, built here without the code under test."""
     cells = [list(HEADER), *([key, f"`{command}`"] for key, command in rows)]
     widths = [max(3, *(len(row[i]) for row in cells)) for i in range(2)]
 
@@ -78,7 +75,6 @@ def binding(table: list[str], *, newline: bool = True) -> str:
 
 @st.composite
 def entry_points(draw: st.DrawFn) -> tuple[str, bool]:
-    """A binding with an Entry points table, padded or not, and whether it was padded."""
     keys = draw(st.lists(st.sampled_from((*ORDER, *PROJECT_ROWS)), unique=True))
     rows = [(key, draw(st.sampled_from(["just " + key, "make " + key]))) for key in keys]
     is_padded = draw(st.booleans())
@@ -87,7 +83,6 @@ def entry_points(draw: st.DrawFn) -> tuple[str, bool]:
 
 
 def shape(line: str) -> object:
-    """A line with its table cells trimmed and its rule dashes alike: padding is not content."""
     if not line.startswith("|"):
         return line
     return tuple(
@@ -97,7 +92,6 @@ def shape(line: str) -> object:
 
 
 def kept(old: str, new: str) -> bool:
-    """Every line of ``old``, as ``shape`` sees it, is in ``new`` in the same order."""
     later = iter(shape(line) for line in new.split("\n"))
     return all(
         any(line == candidate for candidate in later) for line in map(shape, old.split("\n"))
@@ -295,7 +289,6 @@ def block_of(heading: str, lines: tuple[str, ...] = ("Body.",)) -> str:
 
 @st.composite
 def documents(draw: st.DrawFn) -> str:
-    """A Markdown file of ``## `` sections, template ones and the project's, in any order."""
     headings = draw(st.lists(st.sampled_from((*SECTIONS, *PROJECT_SECTIONS)), unique=True))
     parts = []
     for heading in headings:

@@ -1,69 +1,4 @@
 #!/usr/bin/env python3
-"""The route: the one command the owner types next, decided from the checkout, never guessed.
-
-Four plugins build software on the method. The method's job at every stage is to say which
-keystroke comes next. This script reads the checkout (and the tracker, unless
-``--offline``) and prints that command with its reason and the step after it. The
-``/ratchet:next`` skill relays it, every ratchet skill ends with it, and the session hook prints
-its offline form, so a session never opens without its next step.
-
-The stages, in order; the first that does not hold is the answer:
-
-1. a git repository;
-2. ``AGENTS.md`` naming the method (``/ratchet:init``);
-3. the tracker record ``docs/agents/issue-tracker.md`` (the mattpocock-skills setup);
-4. the binding ``docs/process/binding.md`` with its plugin pin written, which adopt does last of
-   what it binds (``/ratchet:adopt``, again to resume one that stopped);
-5. the commit hooks, which run tier 0 on every commit (``hooks_installed.py`` proves they would;
-   the step is the ``hooks-install`` entry point, which an agent runs, or the owner's command
-   where git config must change, since the guard refuses that from an agent);
-6. a clean tree (finish the change: ``check``, commit on a branch, pull request; nothing is
-   committed on the default branch itself, and records alone left there land through the
-   ``merge`` entry point's ``--records``, which an agent runs, or a pull request on a forge);
-   with no forge, a ``records/<time>`` branch checked out is a ``--records`` run that stopped,
-   and the same command finishes it;
-7. on a working branch already merged into the default branch (its HEAD is in it, as after a
-   hand merge with no forge): ``git switch`` to the default branch; else the pull request is
-   open, else open it, and its merge job merges what the merge judge passes (ADR 0021); with no
-   forge (no ``origin``) the binding's ``merge`` entry point judges the branch, runs ``check``
-   on the merge result and merges it, or says why the merge is the owner's;
-8. on the default branch: a ``records/<time>`` branch not yet merged, which the merge judge is
-   asked about (the owner's merge command with its first reason, or the ``merge`` entry point
-   for an agent when it passes); the glossary and design brief (``grill-with-docs``), then an
-   agent-ready ticket (``to-spec`` and ``to-tickets``) whose blockers are done, its conjecture
-   (``/ratchet:conjecture``), and then the build (``/ratchet:feature`` when the owner steps
-   away, or words the owner says to the session when they stay). With more than one ticket
-   ready the build is the drain: ``/ratchet:feature`` with no ticket builds them all (ADR
-   0023). Before any of these, rows an upgrade left owed that an agent writes from the
-   repository alone (``owed.fill_first``) are ``/ratchet:fill``, which asks the owner nothing
-   (ADR 0050); then
-   a safeguard the repository owes (``triggers.owed``: a kind of code has arrived, or a
-   life event is declared, and a row it fires is still ``later:``) is ``/ratchet:safeguard``,
-   with the step it would otherwise name offered as the alternative (ADR 0028). Before that,
-   an architecture review the repository owes (``triggers.reviews_owed``: a kind that reopens
-   the architecture has arrived for the first time, or such a life event is declared, and no
-   decision record names it) is ``/ratchet:architecture``, with ``/ratchet:safeguard`` after it
-   when rows are owed too, since the review may move where the safeguards go (ADR 0052). After
-   the safeguard, an architecture an upgrade left owed (``quality/owed.toml`` entries of the
-   ``architecture`` check) is ``/ratchet:architecture``, offered the same way (ADR 0049). Last
-   comes the upkeep of the formal model (``formal_model.py``, ADR 0062): a round's ticket, as
-   work; else a ``formal/upkeep-`` branch waiting for the owner's merge; else, when mirrored code
-   changed since ``- Synced:``, ``/ratchet:safeguard``, never red. A row an open ``Formal model:
-   defect`` ticket names is that ticket's to bring, so the safeguard is not named for it.
-
-After the three lines come the ``also:`` lines, when there are any: the upgrade, when the plugin
-in use is newer than the one the binding pins (ADR 0027); each question the owner has answered
-with the recommendation three times running, offered as a standing answer (``questions.py``, ADR
-0022); each life event the tree shows a sign of and the binding does not declare; and each switch
-in ``flags.toml`` past its removal date, as ``flags.py --expired`` lists it, whatever the forge and
-whatever the safeguard rows say (ADR 0061), outranking no step. They are proposals and change
-nothing. ``--decline EVENT`` records that the owner said no to an event, in
-``.ratchet/events.tsv``, so it is not proposed again until a sign of it appears that was not
-there when they said no.
-
-Usage: ``route.py [--root DIR] [--offline] [--json] [--decline EVENT]``.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -134,8 +69,6 @@ SHOWN = 3
 
 @dataclass(frozen=True)
 class Step:
-    """What the owner types next, why, and what follows."""
-
     command: str
     why: str
     then: str
@@ -144,8 +77,6 @@ class Step:
 
 @dataclass(frozen=True)
 class Checkout:
-    """What the script could see."""
-
     root: Path
     branch: str | None
     default_branch: str
@@ -154,12 +85,10 @@ class Checkout:
 
     @property
     def on_default(self) -> bool:
-        """Whether HEAD is the default branch (a detached or unborn HEAD counts as it)."""
         return self.branch in (self.default_branch, None)
 
 
 def observe(root: Path) -> Checkout | None:
-    """The checkout at ``root``, or ``None`` outside a git repository."""
     status = gatelib.git(root, "status", "--porcelain", "--untracked-files=all")
     if status is None:
         return None
@@ -171,7 +100,6 @@ def observe(root: Path) -> Checkout | None:
 
 
 def review(checkout: Checkout) -> str:
-    """How a finished branch reaches the default branch: a pull request, or the entry point."""
     if checkout.forge:
         return PULL_REQUEST
     return (
@@ -189,19 +117,16 @@ def names_method(root: Path) -> bool:
 
 
 def check_command(root: Path) -> str:
-    """The command behind the binding's ``check`` entry point, as its table names it."""
     command = gatelib.entry_point(root, "check")
     return f"`{command}`" if command else CHECK_FALLBACK
 
 
 def merge_command(root: Path, branch: str) -> str:
-    """The binding's ``merge`` entry point for ``branch``, as its table names the command."""
     command = gatelib.entry_point(root, "merge")
     return f"`{command} {branch}`" if command else f"{MERGE_FALLBACK} with `{branch}`"
 
 
 def records_missing(root: Path) -> str | None:
-    """Which of the glossary and the design brief is still a template, if either."""
     glossary = root / GLOSSARY
     if not glossary.is_file():
         return "GLOSSARY.md is missing"
@@ -212,11 +137,7 @@ def records_missing(root: Path) -> str | None:
     return None
 
 
-# --- tickets ---------------------------------------------------------------------------------
-
-
 def tracker_tickets(root: Path, gh: preflight.Runner) -> list[preflight.Ticket] | None:
-    """The open agent-ready issues on the tracker, or ``None`` when gh cannot answer."""
     label = preflight.ready_label(root)
     output = gh(
         ["issue", "list", "--state", "open", "--label", label, "--json", "number,title,body,labels"]
@@ -245,7 +166,6 @@ def tracker_tickets(root: Path, gh: preflight.Runner) -> list[preflight.Ticket] 
 
 
 def local_tickets(root: Path, *, ready: bool = True) -> list[preflight.Ticket]:
-    """The open tickets under ``.scratch``, where there is no tracker: agent-ready, or not."""
     label = preflight.ready_label(root)
     tickets = []
     for path in sorted(root.glob(LOCAL_TICKETS)):
@@ -257,7 +177,6 @@ def local_tickets(root: Path, *, ready: bool = True) -> list[preflight.Ticket]:
 
 
 def triage_step(root: Path) -> Step | None:
-    """Open local tickets, none agent-ready: the first unblocked one is the owner's to agree."""
     waiting = [
         t
         for t in local_tickets(root, ready=False)
@@ -278,18 +197,12 @@ def triage_step(root: Path) -> Step | None:
 
 
 def unsplit_spec(root: Path) -> Step | None:
-    """A local spec with no tickets beside it: ``to-tickets`` splits it before a new spec.
-
-    A spec that states no conjecture or operability goes to ``/ratchet:conjecture`` first.
-    """
     for spec in sorted(root.glob(LOCAL_SPECS)):
         if not any((spec.parent / "issues").glob("*.md")):
             ref = spec.relative_to(root).as_posix()
             text = spec.read_text(encoding="utf-8", errors="replace")
             lacking = unstated(preflight.local_ticket(ref, text), root, lambda _args: None)
             if lacking:
-                # Why: to-tickets writes no Conjecture or Operability, and the preflight accepts
-                # both on the parent, so stating them on the spec first serves every child.
                 return Step(
                     f"{CONJECTURE} {ref}",
                     f"{ref} has no tickets yet, and the spec {lacking}; its tickets inherit both",
@@ -306,7 +219,6 @@ def unsplit_spec(root: Path) -> Step | None:
 
 
 def unstated(ticket: preflight.Ticket, root: Path, gh: preflight.Runner) -> str | None:
-    """What `/ratchet:conjecture` has still to write on the ticket; ``None`` when nothing."""
     if preflight.conjecture_failure(ticket, root, gh) is not None:
         return "states no conjecture"
     if preflight.operability_failure(ticket, root, gh) is not None:
@@ -315,13 +227,11 @@ def unstated(ticket: preflight.Ticket, root: Path, gh: preflight.Runner) -> str 
 
 
 def then_expire(root: Path, ref: str, line: str) -> str:
-    """``line`` with the deletion named in the same command, where ``ref`` is its unit's last."""
     last = documents.closes(documents.work_tree(root), ref)
     return f"{line}, then run `{EXPIRE}`" if last else line
 
 
 def expire_step(root: Path) -> Step | None:
-    """A unit left expired in the tree: ``expire`` deletes it and carries its answers."""
     left = sorted(documents.listed(documents.work_tree(root)))
     if not left:
         return None
@@ -338,7 +248,6 @@ def expire_step(root: Path) -> Step | None:
 
 
 def blocking(tickets: list[preflight.Ticket], root: Path, gh: preflight.Runner) -> Step | None:
-    """When every agent-ready ticket waits on an open blocker: the blocker to finish first."""
     for ticket in tickets:
         for ref in ticket.blockers:
             blocker = preflight.fetch(preflight.blocker_ref(ticket, ref, root), root, gh)
@@ -354,13 +263,6 @@ def blocking(tickets: list[preflight.Ticket], root: Path, gh: preflight.Runner) 
 
 
 def merged_features(root: Path, default_branch: str) -> list[str]:
-    """Feature branches merged into the default branch by a merge made on its own line.
-
-    Each tip is the second parent of a merge on the default branch's first-parent line, as
-    `git merge --no-ff` makes. A branch made and never built points at an old default commit,
-    which no merge on that line brings in. A fast-forward or squash merge leaves no such merge,
-    so the feature skill resolves the ticket in the branch itself.
-    """
     merges = (
         gatelib.git(root, "rev-list", "--merges", "--first-parent", "--parents", default_branch)
         or ""
@@ -374,7 +276,6 @@ def merged_features(root: Path, default_branch: str) -> list[str]:
 
 
 def finished(root: Path, tickets: list[preflight.Ticket], merged: list[str]) -> Step | None:
-    """An open ticket whose branch is already merged: it is done, so it is resolved, not rebuilt."""
     for ticket in tickets:
         branch = own_branch(ticket)
         if branch in merged:
@@ -394,12 +295,6 @@ def finished(root: Path, tickets: list[preflight.Ticket], merged: list[str]) -> 
 def blocked_runs(
     root: Path, default_branch: str, tickets: list[preflight.Ticket] | None = None
 ) -> dict[str, str]:
-    """Branches whose last feature run blocked and whose block still stands, with its stash.
-
-    The feature skill stashes a blocked run as ``<branch>: blocked run``. The block stands until
-    what blocked it changes on the default branch (see ``answered``); any other move, as another
-    ticket agreed or an unrelated binding edit, leaves a rerun to block the same way.
-    """
     by_branch = {own_branch(ticket): ticket for ticket in tickets or []}
     listing = gatelib.git(root, "stash", "list", "--format=%gd%x09%gs") or ""
     found: dict[str, str] = {}
@@ -422,13 +317,6 @@ def blocked_runs(
 
 
 def of_this_run(root: Path, default_branch: str, stash: str, *, note: dict[str, object]) -> bool:
-    """Whether the drain's note is no older than the blocked run's stash.
-
-    Why: a note written before the run blocked records the ticket as it was then, so an edit
-    since would read as an answer to a run that blocked after it. The note counts only when its
-    ``base`` is the commit the stash forked from on the default branch, or one after it; a note
-    with no ``base`` never does, and the run is judged as if the drain had written none.
-    """
     base = note.get("base")
     if not isinstance(base, str):
         return False
@@ -437,25 +325,11 @@ def of_this_run(root: Path, default_branch: str, stash: str, *, note: dict[str, 
 
 
 def asked_paths(ticket: preflight.Ticket | None, causes: list[str], *, recorded: bool) -> list[str]:
-    """The repo paths whose change answers a blocked run: its spec, the causes, and its ticket.
-
-    The ticket's own file counts only when no note recorded its text: with one, ``edited`` has
-    compared the text, so a forge issue is judged as a file is.
-    """
     own = [] if ticket is None else [ticket.parent or ""] + ([] if recorded else [ticket.ref])
     return [path for path in [*own, *causes] if path and not path.lstrip("#").isdigit()]
 
 
 def answered(root: Path, default_branch: str, stash: str, *, asked: list[str]) -> bool:
-    """Whether the default branch changed, since the blocked run, what the run was blocked on.
-
-    Why: a rerun is worth offering only when something the run asked was answered, never for any
-    other move the owner merged (ADR 0031 lets records land alone, and the owner merges more).
-    What it asked is read from durable facts: the ticket's own text and the spec it inherits
-    (an answer, ``## Answers``), and the paths the drain's note recorded as the cause (a guard
-    path it needed, a dispute it filed). A forge ticket has no file, so it is released by the
-    owner dropping the stash.
-    """
     if gatelib.git(root, "merge-base", "--is-ancestor", default_branch, stash) is not None:
         return False
     fork = gatelib.git(root, "merge-base", default_branch, stash) or default_branch
@@ -465,29 +339,17 @@ def answered(root: Path, default_branch: str, stash: str, *, asked: list[str]) -
 
 
 def stalled(ticket: preflight.Ticket, runs: dict[str, str]) -> str | None:
-    """The stash of the blocked run that still holds ``ticket``, if one does.
-
-    Matched by the whole branch name: local ticket numbers repeat across features.
-    """
     return runs.get(own_branch(ticket))
 
 
 def own_branch(ticket: preflight.Ticket) -> str:
-    """The branch the feature preflight names for ``ticket``."""
     return preflight.branch_of(ticket, preflight.slug_of(ticket.title, ticket.number))
 
 
 def releases(hold: queue_notes.Hold, ticket: preflight.Ticket, default_branch: str) -> list[str]:
-    """What the owner does to free a ticket the drain parked, one step for each kind of hold.
-
-    Why: the drain keeps a parked ticket until its text changes, so a bare ``/ratchet:feature``
-    would only be refused again; each kind names the step that changes what it was parked for.
-    """
     ref = ticket.ref
     steps = []
     if queue_notes.SIZE in hold.kinds:
-        # Why: ADR 0046. The agent splits a ticket by size itself; a hold of this kind is left
-        # only where it could not (its plan was refused, or the ticket is already a part).
         steps.append(
             f"change the criteria of ticket {ref} so they divide into parts that fit: the"
             " agent's own split of it was refused (the drain's report says why)"
@@ -497,9 +359,6 @@ def releases(hold: queue_notes.Hold, ticket: preflight.Ticket, default_branch: s
     if queue_notes.GUARD in hold.kinds and hold.based:
         steps.append(f"land the guard edits the run of {ref} named on {default_branch}")
     elif queue_notes.GUARD in hold.kinds:
-        # Why: ADR 0055. A note with no base cannot tell that the edits landed, and its time is no
-        # reliable stand-in (the default branch may have moved either side of it), so a guess
-        # would release a ticket still refused or hold one forever; the ticket's text is the step.
         steps.append(
             f"change ticket {ref}: its hold was written before the drain kept the commit that"
             f" landing the guard edits on {default_branch} is read from, so landing frees nothing"
@@ -519,21 +378,14 @@ def releases(hold: queue_notes.Hold, ticket: preflight.Ticket, default_branch: s
 
 
 def meet_step(ref: str) -> str:
-    """The step that frees a parked ticket whose text is the cause."""
     return f"change ticket {ref} to meet what the drain parked it for"
 
 
 def owner_merge(default: str, name: str) -> str:
-    """The merge the owner types for branch ``name``."""
     return f"`git switch {default} && git merge --no-ff {name}`, typed by the owner"
 
 
 def defect_kind(ticket: preflight.Ticket) -> str | None:
-    """The kind of code a ``Formal model: defect`` ticket's row is asked of, or ``None``.
-
-    Why: ADR 0062. A ticket the drain parks for the kind it was filed to carry is told to change
-    its text, not to run the safeguard, which leaves that row owed until the fix lands.
-    """
     line = ticket.formal_model
     if line is None or line.defect is None:
         return None
@@ -542,18 +394,15 @@ def defect_kind(ticket: preflight.Ticket) -> str | None:
 
 
 def drain_hold(root: Path, ticket: preflight.Ticket) -> queue_notes.Hold | None:
-    """The hold the drain keeps on ``ticket`` from its note, until ``queue_notes.released``."""
     return queue_notes.held(root, own_branch(ticket), ticket)
 
 
 def agent_ready(root: Path, gh: preflight.Runner | None) -> tuple[list[preflight.Ticket], bool]:
-    """The open agent-ready tickets, and whether they are local files or the tracker's."""
     tickets = tracker_tickets(root, gh) if gh is not None else None
     return (local_tickets(root), True) if tickets is None else (tickets, False)
 
 
 def build_step(ready: list[preflight.Ticket], queue: int, checkout: Checkout) -> Step | None:
-    """The build among the tickets that state a conjecture: the drain for several, else the one."""
     if not ready:
         return None
     if queue > 1:
@@ -577,7 +426,6 @@ def build_step(ready: list[preflight.Ticket], queue: int, checkout: Checkout) ->
 
 
 def guard_words(kinds: list[str]) -> str:
-    """The words that offer the guard edits to this session, only where the hold is a guard's."""
     return (
         ", or ask this session to make the guard edits with you here; their merge is yours"
         if queue_notes.GUARD in kinds
@@ -586,12 +434,10 @@ def guard_words(kinds: list[str]) -> str:
 
 
 def blocked_kinds(root: Path, ticket: preflight.Ticket) -> list[str]:
-    """The kinds of hold the queue note records for the run that blocked on ``ticket``."""
     return queue_notes.texts(queue_notes.read_note(root, own_branch(ticket)).get("holds"))
 
 
 def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> Step:
-    """The step among the tickets: write one, give one its conjecture, or build them."""
     tickets, local = agent_ready(root, gh)
     if not tickets:
         return (triage_step(root) or unsplit_spec(root) if local else None) or Step(
@@ -643,7 +489,6 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
             "blocked-run",
         )
     first = tickets[0]
-    # Why: a ticket blocked only by another in the queue is built by the same drain (ADR 0023).
     ready = [ticket for ticket in tickets if ticket in stated]
     return build_step(ready, len(stated), checkout) or Step(
         f"{CONJECTURE} {first.ref}",
@@ -654,24 +499,10 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
     )
 
 
-# --- the route -------------------------------------------------------------------------------
-
-
 def switch_step(checkout: Checkout) -> Step | None:
-    """On a working branch already in the default branch: switch to it; else ``None``.
-
-    Why: ``merge.py`` cut off before it switched the checkout, or unable to switch it, and a merge
-    the owner made from another checkout leave the checkout on the merged branch, and without this
-    the route names the same merge again. A squash merge on a forge leaves HEAD out of the default
-    branch, so the pull request's state decides it.
-    """
     default, root = checkout.default_branch, checkout.root
     if gatelib.git(root, "merge-base", "--is-ancestor", "HEAD", default) is None:
         return None
-    # A branch cut from the default tip and not yet built on equals it; with a forge that is a
-    # branch about to get its pull request. With none a fast-forward merge looks the same, and the
-    # merge entry point run on either changes nothing, so the switch is named for both, with a
-    # reason true of both.
     if (
         checkout.forge
         and gatelib.git(root, "merge-base", "--is-ancestor", default, "HEAD") is not None
@@ -686,7 +517,6 @@ def switch_step(checkout: Checkout) -> Step | None:
 
 
 def pull_request_step(checkout: Checkout, gh: preflight.Runner | None) -> Step:
-    """On a working branch with a clean tree: wait for the review, or open the pull request."""
     if not checkout.forge:
         return Step(
             merge_command(checkout.root, checkout.branch or ""),
@@ -717,13 +547,10 @@ def pull_request_step(checkout: Checkout, gh: preflight.Runner | None) -> Step:
 
 
 def adoption_step(root: Path) -> Step | None:
-    """``/ratchet:adopt`` while the binding is missing or still the template's; else ``None``."""
     binding = root / BINDING
     if not binding.is_file():
         return Step(ADOPT, f"{BINDING} is missing, so no gate is bound", GRILL, "adopt")
     if plugin_pin.pinned(binding.read_text(errors="replace")) is None:
-        # Why: adopt writes the pin last of what it binds (its step 10), so a binding without
-        # one is the template's: an adoption that stopped, which hooks-install cannot finish.
         return Step(
             ADOPT,
             f"{BINDING} has no plugin pin, so an adoption stopped before it bound the gates;"
@@ -735,7 +562,6 @@ def adoption_step(root: Path) -> Step | None:
 
 
 def setup_step(root: Path) -> Step | None:
-    """The step before the work: adoption, then the commit hooks; ``None`` once both hold."""
     if not names_method(root):
         return Step(INIT, "AGENTS.md does not name the method", TRACKER_SETUP, "init")
     agents = root / "AGENTS.md"
@@ -760,11 +586,6 @@ def setup_step(root: Path) -> Step | None:
 
 
 def dirty_step(checkout: Checkout) -> Step:
-    """Uncommitted changes: records land through the merge judge, anything else on a branch.
-
-    Why: nothing is committed on the default branch itself (ADR 0031). Records the owner's
-    conversation wrote there land through the ``merge`` entry point, which an agent runs.
-    """
     root, default = checkout.root, checkout.default_branch
     if not checkout.on_default:
         return Step(
@@ -803,7 +624,6 @@ def dirty_step(checkout: Checkout) -> Step:
 
 
 def records_stopped(checkout: Checkout) -> Step | None:
-    """A ``merge --records`` run that stopped on its records branch, which the same command ends."""
     if checkout.forge or not (checkout.branch or "").startswith(merge.RECORDS):
         return None
     again = merge_command(checkout.root, "--records")
@@ -818,16 +638,10 @@ def records_stopped(checkout: Checkout) -> Step | None:
 
 
 def owned_by_a_run(root: Path, name: str) -> bool:
-    """Whether the drain or a feature run owns ``name``: its note, or the feature branch prefix."""
     return name.startswith(preflight.FEATURE_BRANCHES) or bool(queue_notes.read_note(root, name))
 
 
 def could_be_records(root: Path, default: str, name: str) -> bool:
-    """Whether the branch's change is not empty and every path of it has a record's shape.
-
-    Why: reading the judge's manifest costs far more than a diff, so a branch with a path no
-    record can have is dropped before the judge's read.
-    """
     listed = gatelib.git(root, "diff", "--name-only", "--no-renames", f"{default}...{name}")
     paths = (listed or "").split("\n")
     paths = [path for path in paths if path]
@@ -842,7 +656,6 @@ def first_commit_time(root: Path, default: str, name: str) -> int:
 
 
 def checked_out(root: Path) -> set[str]:
-    """The branches any work tree of the repository has checked out."""
     listed = gatelib.git(root, "worktree", "list", "--porcelain") or ""
     return {
         line.removeprefix("branch refs/heads/")
@@ -852,12 +665,6 @@ def checked_out(root: Path) -> set[str]:
 
 
 def waiting_records(checkout: Checkout) -> list[str]:
-    """Local branches not merged into the default branch whose change holds records alone.
-
-    Why: the name plays no part. An agent that commits tickets on a branch of its own leaves the
-    route as blind to it as to a records branch; a branch a run owns, and one any work tree has
-    checked out, are other steps' to name. The oldest by its first commit comes first.
-    """
     root, default = checkout.root, checkout.default_branch
     listed = gatelib.git(root, "branch", "--no-merged", default, "--format=%(refname:short)")
     held = checked_out(root)
@@ -874,11 +681,6 @@ def waiting_records(checkout: Checkout) -> list[str]:
 
 
 def records_waiting(checkout: Checkout) -> Step | None:
-    """A branch holding records alone that was left unmerged; the judge says whose merge it is.
-
-    Why the judge is asked here: a run stopped while ``check`` ran never heard its answer, and the
-    branch it leaves looks like one the judge left to the owner.
-    """
     root, default = checkout.root, checkout.default_branch
     waiting = waiting_records(checkout)
     if not waiting:
@@ -907,7 +709,6 @@ def records_waiting(checkout: Checkout) -> Step | None:
 
 
 def decide(root: Path, gh: preflight.Runner | None) -> Step:
-    """The owner's next command for the checkout at ``root``; ``gh=None`` stays offline."""
     checkout = observe(root)
     if checkout is None:
         return Step(INIT, f"{root} is not a git repository", TRACKER_SETUP, "init")
@@ -938,12 +739,6 @@ def decide(root: Path, gh: preflight.Runner | None) -> Step:
 
 
 def fill_step(root: Path) -> Step | None:
-    """``/ratchet:fill`` when an upgrade left rows an agent writes from the repository (ADR 0050).
-
-    Why: the rows state what the project's own tree and tools say, so no owner answer is needed;
-    nothing else starts before them (the feature preflight and the drain refuse), so this is the
-    step right after an upgrade, ahead of a safeguard, the architecture, a build and a drain.
-    """
     owing = owed.fill_first(root)
     if not owing:
         return None
@@ -958,16 +753,7 @@ def fill_step(root: Path) -> Step | None:
     )
 
 
-# --- architecture reviews, safeguards and life events (ADR 0028, ADR 0052) -----------------
-
-
 def review_step(root: Path, instead: Step, defects: frozenset[str]) -> Step | None:
-    """``/ratchet:architecture`` when the repository owes a review, before any safeguard.
-
-    Why: ADR 0052. The review decides where the new kind of code lives, and so where its
-    safeguards are bound; like a safeguard it never hides the build, since the change that
-    brought the kind was free and only the next one that adds another waits for the review.
-    """
     owing = triggers.reviews_owed(root)
     if not owing:
         return None
@@ -1003,14 +789,6 @@ def review_step(root: Path, instead: Step, defects: frozenset[str]) -> Step | No
 
 
 def safeguard_step(root: Path, instead: Step, defects: frozenset[str]) -> Step | None:
-    """``/ratchet:safeguard`` when the repository owes a row, offering ``instead`` beside it.
-
-    A row an open defect ticket names (ADR 0062) is the ticket's to bring, not the safeguard's.
-
-    Why: it comes before any build, since the next change that adds an instance of an owed kind
-    is red; it never hides the build, since the owner may be mid-idea and the change that brings a
-    kind is free.
-    """
     owing = [row for row in triggers.owed(root) if row.question not in defects]
     if not owing:
         return None
@@ -1034,8 +812,6 @@ def safeguard_step(root: Path, instead: Step, defects: frozenset[str]) -> Step |
         if code
         else "a declared event is never red"
     )
-    # Why: ``then:`` names the step the route names once the rows are bound; an architecture an
-    # upgrade left owed comes before the work, so it is that step when it is owed.
     then = (architecture_step(root, instead) or instead).command
     return Step(
         SAFEGUARD,
@@ -1045,17 +821,8 @@ def safeguard_step(root: Path, instead: Step, defects: frozenset[str]) -> Step |
     )
 
 
-# --- the formal model's upkeep (ADR 0062) ------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class Upkeep:
-    """What the route reads of the formal model: the rows tickets carry, and its one state.
-
-    ``defects`` are the rows an open ``Formal model: defect`` ticket names. At most one of the
-    round ticket, the waiting branch and the behind reason is set, in that order of precedence.
-    """
-
     defects: frozenset[str] = frozenset()
     ticket: preflight.Ticket | None = None
     stated: bool = True
@@ -1064,14 +831,12 @@ class Upkeep:
 
 
 def formal_tickets(root: Path, gh: preflight.Runner | None) -> list[preflight.Ticket]:
-    """The open tickets that carry a ``Formal model:`` line."""
     ready, local = agent_ready(root, gh)
     unready = local_tickets(root, ready=False) if local else []
     return [ticket for ticket in [*ready, *unready] if ticket.formal_model is not None]
 
 
 def upkeep(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> Upkeep:
-    """The formal model's state: ticket open, round waiting or behind, in that order, or none."""
     formal = formal_model.read(gatelib.read_text(root / BINDING) or "")
     if formal is None and not formal_model.started(root):
         return Upkeep()
@@ -1088,12 +853,6 @@ def upkeep(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> Upkee
 
 
 def formal_step(upkeeping: Upkeep, checkout: Checkout, instead: Step) -> Step | None:
-    """The step for the formal model's state; ``None`` in sync, or with no model.
-
-    Why: ADR 0062. Behind is never red, so the safeguard's upkeep is offered beside the build.
-    A round that found something is a ticket, as work; one that changed the model waits for the
-    owner's merge. A round ticket short of a stated conjecture is left to the ordinary ticket chain.
-    """
     carry = f"Or carry on with {instead.command}: nothing is red for it"
     if upkeeping.ticket is not None:
         ticket = upkeeping.ticket
@@ -1138,12 +897,6 @@ def formal_step(upkeeping: Upkeep, checkout: Checkout, instead: Step) -> Step | 
 
 
 def architecture_step(root: Path, instead: Step) -> Step | None:
-    """``/ratchet:architecture`` when an upgrade left the architecture owed (ADR 0049).
-
-    Why: an adopted repository that predates the asked architecture owes its record and its
-    parts, not as a red gate but as the ledger's entries (ADR 0037). Nothing else proposes owed
-    work, so the route names this one; like a safeguard it never hides the build.
-    """
     owing = [entry for entry in owed.read(root).entries if entry.rule == ARCHITECTURE_RULE]
     if not owing:
         return None
@@ -1159,18 +912,12 @@ def architecture_step(root: Path, instead: Step) -> Step | None:
 
 
 def declined_signs(root: Path) -> set[tuple[str, str]]:
-    """The (event, sign) pairs the owner said no to, from ``.ratchet/events.tsv``."""
     rows = (gatelib.read_text(root / gatelib.STATE / EVENTS_LOG) or "").splitlines()[1:]
     cells = [row.split("\t") for row in rows]
     return {(c[1], c[2]) for c in cells if len(c) == len(EVENTS_HEADER.split("\t"))}
 
 
 def event_proposals(root: Path) -> list[str]:
-    """One sentence per undeclared life event the tree shows a sign of that was not declined.
-
-    Why: a sign is evidence of intent, not of users, so the owner declares the event; a sign
-    already declined is not raised again, so an owner who said no is not asked at every turn.
-    """
     declined = declined_signs(root)
     events = application_types.load().events
     lines = []
@@ -1186,7 +933,6 @@ def event_proposals(root: Path) -> list[str]:
 
 
 def decline(root: Path, event: str) -> int:
-    """Record that the owner said no to ``event`` for every sign of it the tree now shows."""
     signs = application_types.signs_seen(root).get(event, {})
     if not signs:
         print(f"route: no sign of `{event}` is proposed, so there is nothing to decline")
@@ -1202,11 +948,6 @@ def decline(root: Path, event: str) -> int:
 
 
 def pin_proposals(root: Path, plugin: Path = PLUGIN_ROOT) -> list[str]:
-    """The upgrade, offered when the plugin in use is newer than the one the binding pins.
-
-    Why: a newer plugin is red at every tier and says why in each tier's output, which an owner
-    rarely reads; the route is what the owner reads (ADR 0027).
-    """
     pin = plugin_pin.pinned(gatelib.read_text(root / BINDING))
     if pin is None or plugin_pin.relation(pin, plugin) is not plugin_pin.Relation.NEWER:
         return []
@@ -1220,7 +961,6 @@ def pin_proposals(root: Path, plugin: Path = PLUGIN_ROOT) -> list[str]:
 
 
 def expired_switches(root: Path) -> list[str]:
-    """One line per switch in ``flags.toml`` past its removal date; none without the file."""
     text = gatelib.read_text(root / flags.REGISTRY)
     if text is None:
         return []

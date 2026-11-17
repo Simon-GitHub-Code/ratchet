@@ -1,37 +1,11 @@
-"""The plugin names no stack tool anywhere a model reads it (ADR 0042).
-
-A name in the text an agent reads is a default: an agent handed "e.g. a worker pool such as X"
-binds X. So every shipped page, template, prompt and script is searched for the names below,
-whole words and any letter case, and the test is red on each one found. This file is never loaded
-as context, since tests are not part of the method a skill or a hook hands an agent; that is why
-the list lives here and only here.
-
-What this does not name, and why. The plugin's own tools stay (ADR 0042): Python, its runner
-`just`, `git`, the forges' CLIs, the `pre-commit` framework the commit-hook template uses and the
-runner that starts it, and Node for the plugin's own workflow and adapters. Formats tied to no
-stack stay: Cobertura, LCOV, JUnit XML, OTLP, TOML, JSON, YAML. A word that is also plain English
-("express", "black", "render", "go") is left out, so the list misses those tools.
-
-``RESIDUE`` is what still names a tool, file by file, each with the reason it cannot go yet: code
-that must read a tool's own output or files, the guard hook's interpreter lists (its security
-boundary, which a project must not be able to loosen), and lines another change owns. An entry
-that no longer matches is red too, so the residue only shrinks.
-
-What it cannot catch: a tool this list does not name, a name split across a line break or
-written in another spelling, and a name in a file outside ``SHIPPED``.
-"""
-
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# Every place a model reads: the skills (pages, the method, every template), the pipeline's
-# prompts, and the scripts and hooks an agent runs or reads when a gate goes red.
 SHIPPED = ("skills/**/*", "workflows/*.js", "scripts/*", "hooks/*.py", "hooks/ratchet_guards/*")
 
 DENIED = (
-    # test runners, their parallel and shard plugins, property-testing libraries
     "pytest",
     "pytest-xdist",
     "xdist",
@@ -45,7 +19,6 @@ DENIED = (
     "fast-check",
     "proptest",
     "quickcheck",
-    # task runners, monorepo and pipeline engines
     "make -j",
     "turbo",
     "turborepo",
@@ -54,7 +27,6 @@ DENIED = (
     "dagger",
     "earthly",
     "bazel",
-    # formatters, linters, type checkers
     "eslint",
     "biome",
     "oxlint",
@@ -68,7 +40,6 @@ DENIED = (
     "clippy",
     "gofmt",
     "rustfmt",
-    # mutation, coverage, duplication and dependency tools
     "mutmut",
     "cosmic-ray",
     "stryker",
@@ -86,7 +57,6 @@ DENIED = (
     "vulture",
     "deptry",
     "jscpd",
-    # package managers and their manifests
     "npm",
     "pnpm",
     "yarn",
@@ -103,7 +73,6 @@ DENIED = (
     "cargo.toml",
     "go.mod",
     "gemfile",
-    # languages other than the plugin's own, frameworks and runtimes
     "typescript",
     "javascript",
     "rust",
@@ -124,7 +93,6 @@ DENIED = (
     "electron",
     "tauri",
     "flutter",
-    # stores, containers, hosts and their files
     "sqlite",
     "postgres",
     "postgresql",
@@ -145,7 +113,6 @@ DENIED = (
     "railway",
     "wrangler",
     "procfile",
-    # security, browser, load and telemetry tools
     "semgrep",
     "codeql",
     "bandit",
@@ -171,9 +138,6 @@ PATTERN = re.compile(
     r"(?<![\w.-])(" + "|".join(re.escape(name) for name in DENIED) + r")(?![\w-])", re.IGNORECASE
 )
 
-# Why each stays, by file: (the names, lower case, the reason). What the guard hook and its page
-# name stays on purpose and for good: their lists are a security boundary, and a project must not
-# be able to loosen them by writing its own row (ADR 0050). The rest moved into the binding.
 RESIDUE: dict[str, tuple[frozenset[str], str]] = {
     "scripts/parse-js.mjs": (
         frozenset({"javascript", "typescript"}),

@@ -215,7 +215,7 @@ def test_the_runs_go_one_after_another_and_the_table_is_written_after_each(tmp_p
     rows = matrix.run_all([owner("a"), owner("b"), owner("c")], root, launch)
     assert order == ["a", "b", "c"]
     assert seen[0] == ""
-    assert seen[1].count("\n") == 3  # the header, its rule and the first row
+    assert seen[1].count("\n") == 3
     assert [r[0] for r in rows] == ["a", "b", "c"]
     assert rows[1][3] == "no measurements"
     assert rows[2][3] == "exit 7; usable-merged at 61.5 min"
@@ -258,7 +258,6 @@ def test_a_process_runs_to_its_exit_code() -> None:
 
 
 def wait_for(marker: Path) -> None:
-    """Wait until the child has written marker: its signal handler is then in place."""
     deadline = time.monotonic() + 60
     while not marker.exists():
         assert time.monotonic() < deadline, f"the child never wrote {marker.name}"
@@ -321,7 +320,6 @@ def test_an_interrupted_child_that_will_not_stop_is_terminated(
     monkeypatch.setattr(subprocess, "Popen", Watch)
     with pytest.raises(KeyboardInterrupt):
         matrix.launch_process([sys.executable, "-c", stubborn])
-    # the child ignored SIGINT, so the matrix ended it with SIGTERM
     assert Watch.child is not None
     assert Watch.child.returncode == -signal.SIGTERM
 

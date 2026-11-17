@@ -1,5 +1,3 @@
-"""The debugging-pipe driver, against a stand-in browser on a real pipe; see ``browsers.py``."""
-
 import re
 import tempfile
 from pathlib import Path
@@ -57,8 +55,6 @@ def test_a_script_that_throws_is_the_pages_error_not_the_browsers(
 def test_a_page_that_does_not_open_is_a_browser_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, url: str, said: str, answer: float
 ) -> None:
-    # Why: only the page that never loads is about the wait running out; the others must be seen
-    # before it does, which a short wait does not allow on a busy machine.
     browsers.fake(tmp_path, monkeypatch)
     with tab(tmp_path) as page:  # type: ignore[attr-defined]
         monkeypatch.setattr(cdp, "ANSWER", answer)
@@ -129,8 +125,6 @@ def test_the_browser_keeps_its_temporary_files_in_a_short_directory_that_is_remo
     long = tmp_path / ("a-long-name" * 12)
     long.mkdir()
     monkeypatch.setenv("TMPDIR", str(long))
-    # Why: Python reads TMPDIR once and keeps it; this makes it read the long one, as a process
-    # started under it would.
     monkeypatch.setattr(tempfile, "tempdir", None)
     with tab(tmp_path):
         used = Path((tmp_path / "profile" / "tmpdir").read_text(encoding="utf-8"))

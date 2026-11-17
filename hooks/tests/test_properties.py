@@ -1,5 +1,3 @@
-"""Hypothesis properties of the Bash guard: context never unblocks a denied command."""
-
 import shlex
 from collections.abc import Callable
 
@@ -23,11 +21,6 @@ def _context_free(command: str) -> bool:
 
 
 def _sets_a_variable(command: str) -> bool:
-    """Whether the command sets a variable for a later command of its own line.
-
-    A wrapper in front (``sudo S=/x``) hands the assignment to the wrapped program, not to the
-    shell, so the later command no longer meets it and the row is no longer the same command.
-    """
     return any(word in command for word in ("S=", "T=", "export ", "declare "))
 
 
@@ -37,18 +30,11 @@ _SHELL_CHANGERS = frozenset(
 
 
 def _changes_the_shell(command: str) -> bool:
-    """Whether the command's first part changes what a later part of its line means.
-
-    A wrapper in front only of that part (``sudo alias cd=true; cd /tmp``) runs a program, not
-    the builtin, the assignment or the group, so the later part meets a plain shell: another
-    command.
-    """
     first = command.split(maxsplit=1)[0]
     return first in _SHELL_CHANGERS or "=" in first
 
 
 def _prefixes(wrap: Callable[[str], str]) -> bool:
-    """Whether ``wrap`` only puts words in front, so it wraps the first part of a line alone."""
     return wrap("a; b").endswith(" a; b")
 
 
@@ -58,7 +44,6 @@ FLAGGED = [
     if _one_line(command) and P not in expected
 ]
 ON_MAIN = make_guard(FakeRepo(branch="main"))
-# Why: a write the merge judges is refused only where it lands on main, so it is judged there.
 JUDGED: list[tuple[str, list[str], Guard | None]] = [
     (command, expected, None) for command, expected in FLAGGED
 ] + [
@@ -150,7 +135,6 @@ _SEGMENT = st.text(alphabet="abcdefghijklmnopqrstuvwxyz0123456789_-", min_size=1
 
 @st.composite
 def guarded_paths(draw: st.DrawFn) -> str:
-    """A concrete repository path that some manifest pattern guards."""
     pattern = draw(st.sampled_from([p for p in MANIFEST.patterns() if not p.startswith("~/")]))
     parts: list[str] = []
     for part in pattern.split("/"):
@@ -194,7 +178,6 @@ def test_shell_writes_to_product_code_are_allowed(name: str, write: Callable[[st
     assert rules(write(path)) == []
 
 
-# Constructs the guard reads as bash does: a line made only of these has its subshells followed.
 MODELLED = [
     "ls",
     "true",
@@ -220,9 +203,6 @@ MODELLED = [
     "(ls)",
     "(cd /tmp && ls)",
 ]
-# Constructs it does not model: a heredoc, a case, a quote left open or one bash and sh end apart,
-# a `${ cmd; }`, and the commands that run text the line does not show or change what a later
-# word means.
 UNMODELLED = [
     "echo $'\\')'",
     "echo \"${x:-'}'}\"",
@@ -258,7 +238,6 @@ _PLACES = st.sampled_from(["before", "inside", "after"])
 
 
 def _line(parts: list[str], later: str) -> str:
-    """``parts`` as one command line, each part ended so the next starts a command."""
     return "".join(part if part.endswith("\n") else part + later for part in parts)
 
 

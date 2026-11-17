@@ -1,5 +1,3 @@
-"""The route: the next command is decided from the checkout, stage by stage."""
-
 import json
 from collections.abc import Sequence
 from pathlib import Path
@@ -26,7 +24,6 @@ CONJECTURE = (
     "\n\n## Conjecture\n\nOne script decides the route; the refuter is a wrong command on a"
     " known state. Alternatives: the model guesses (killed: it drifts).\n"
 )
-# Why: adopt writes the plugin pin last of what it binds, so a binding without one is unfinished.
 PIN = f"- Ratchet plugin: 999.0.0 at {'0' * 40}\n"
 BINDING = (
     f"# Binding\n\n{PIN}\n- Default branch: `main`\n\n| Entry point | Command |\n| --- | --- |\n"
@@ -44,13 +41,10 @@ ADOPTED = {
 
 @pytest.fixture(autouse=True)
 def hooks_are_installed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every stage below is asked with the commit hooks in place; the hooks stage has its tests."""
     monkeypatch.setattr(hooks_installed, "check", lambda _root: None)
 
 
 class FakeGh:
-    """Answers ``issue list`` and ``pr view`` from a table, remembering the calls."""
-
     def __init__(self, **answers: str | None) -> None:
         self.answers = answers
         self.calls: list[Sequence[str]] = []
@@ -161,7 +155,6 @@ def test_more_than_records_on_the_default_branch_goes_on_a_branch(
 
 
 def test_records_on_a_detached_head_go_on_a_branch(tmp_path: Path) -> None:
-    # Why: `merge --records` lands from the default branch by name, and refuses a detached HEAD.
     root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
     git(root, "checkout", "-q", "--detach")
     write(root, ".scratch/f/spec.md", "# F\n")
@@ -190,8 +183,6 @@ def test_a_records_branch_the_judge_left_to_the_owner_is_named(tmp_path: Path) -
 
 
 def test_a_records_branch_a_stopped_run_committed_is_an_agents_to_merge(tmp_path: Path) -> None:
-    # Why: a run killed while `check` ran on the merge result never heard the judge's answer; the
-    # route asks the judge itself, and says nothing the judge did not say.
     root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
     branch(root, "records/20261113-064145")
     write(root, ".scratch/f/spec.md", "# F\n")
@@ -432,8 +423,6 @@ def test_main_prints_the_three_lines_or_json(tmp_path: Path, capsys: Out) -> Non
 
 
 def test_without_a_forge_the_owner_merges_the_branch(tmp_path: Path) -> None:
-    # Why: `/ratchet:init` keeps a repository local when the owner declines the remote, and a
-    # pull request then has nowhere to go.
     root = repository(tmp_path, ADOPTED)
     write(root, "notes.md", "x\n")
     assert route.decide(root, None).then.startswith("`just merge <branch>` merges it when")
@@ -517,8 +506,6 @@ HELD_TEXT = "# 02: B\n\nStatus: ready-for-agent" + CONJECTURE
 def test_records_an_agent_lands_do_not_release_a_blocked_run(
     tmp_path: Path, path: str, text: str, *, released: bool
 ) -> None:
-    # Why: records alone reach the default branch without the owner (ADR 0031), so the default
-    # branch moving no longer means the owner answered; only a move that could answer does.
     files = {**ADOPTED, "guards/manifest.toml": MANIFEST, HELD: HELD_TEXT}
     root = repository(tmp_path, files)
     git(root, "switch", "-q", "-c", "feature/2-b")
@@ -541,8 +528,6 @@ def blocked(root: Path, branch_name: str = "feature/2-b") -> None:
 
 
 def test_agreeing_another_ticket_does_not_release_a_blocked_run(tmp_path: Path) -> None:
-    # Why: the run's questions were about its own ticket; a change that answers none of them
-    # offered the same build again.
     first, other = ".scratch/f/issues/01-a.md", ".scratch/f/issues/02-b.md"
     files = {
         **ADOPTED,
@@ -596,8 +581,6 @@ def test_a_path_the_drain_recorded_as_the_cause_releases_a_blocked_run(tmp_path:
 
 
 def test_a_run_that_named_no_path_is_released_only_by_dropping_its_stash(tmp_path: Path) -> None:
-    # Why: a forge ticket has no file and a run with no note no cause; an empty list of paths
-    # must not read as "the whole tree".
     root = repository(tmp_path, {**ADOPTED, HELD: HELD_TEXT})
     blocked(root)
     write(root, "package.json", "{}\n")
@@ -612,8 +595,6 @@ FORGE_TEXT = "X." + CONJECTURE
 def test_a_forge_ticket_is_released_by_the_text_the_drain_compares(
     tmp_path: Path, *, answered: bool, stage: str
 ) -> None:
-    # Why: a forge ticket has no file, so only its text, as the drain compares it, can say the
-    # owner answered in the issue.
     root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
     ticket = route.tracker_tickets(root, FakeGh(issues=issues((5, "Five", FORGE_TEXT))))
     assert ticket
@@ -630,9 +611,6 @@ def test_a_forge_ticket_is_released_by_the_text_the_drain_compares(
 def test_a_note_older_than_the_blocked_run_does_not_release_it(
     tmp_path: Path, base: str | None
 ) -> None:
-    # Why: the route model's long run found it. The drain parked the ticket, the owner changed
-    # it, and a feature run then blocked on it: the note's digest differs from the ticket, yet
-    # the run blocked after that edit, so the edit answers nothing it asked.
     root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST, HELD: HELD_TEXT})
     ticket = route.preflight.local_ticket(HELD, HELD_TEXT)
     note: dict[str, object] = {
@@ -803,8 +781,6 @@ def test_a_local_spec_without_tickets_is_split_next(tmp_path: Path) -> None:
 
 
 def test_a_spec_without_a_conjecture_is_stated_before_it_is_split(tmp_path: Path) -> None:
-    # Why: issue 28. to-tickets writes no Conjecture or Operability; the preflight accepts both
-    # on the parent, so the spec states them once and every child inherits them.
     spec = ".scratch/settle/spec.md"
     root = repository(tmp_path, {**ADOPTED, spec: "# Settle\n"})
     step = route.decide(root, None)
@@ -910,8 +886,6 @@ def owing(tmp_path: Path, events: str = "none", **files: str) -> Path:
 
 
 def test_an_owed_safeguard_comes_first_and_offers_the_build_beside_it(tmp_path: Path) -> None:
-    # Why: ADR 0028. The next change that adds a second call is red, so binding comes first; the
-    # owner may be mid-idea, so the step they would otherwise take is named as the alternative.
     root = owing(tmp_path)
     assert route.decide(root, None).command == route.SPEC
     write(root, "src/a.py", "import requests\nrequests.get('http://x')\n")
@@ -937,8 +911,6 @@ ARCHITECTURE_OWED = (
 
 
 def test_an_owed_architecture_comes_next_and_offers_the_build_beside_it(tmp_path: Path) -> None:
-    # Why: ADR 0049. An adopted repository owes its architecture through the ledger, never as a
-    # red; the route makes it next, and the owner may carry on instead.
     root = owing(tmp_path, **{"quality/owed.toml": ARCHITECTURE_OWED})
     step = route.decide(root, None)
     assert step.command == route.ARCHITECTURE
@@ -952,8 +924,6 @@ def test_an_owed_architecture_comes_next_and_offers_the_build_beside_it(tmp_path
 
 
 def test_a_safeguard_names_an_owed_architecture_then(tmp_path: Path) -> None:
-    # Why: ``then:`` is the step the route names once the safeguard is bound; with an upgrade's
-    # architecture owed that is the architecture, not the work it offers beside both.
     root = owing(tmp_path, **{"quality/owed.toml": ARCHITECTURE_OWED})
     write(root, "src/a.py", "import requests\nrequests.get('http://x')\n")
     commit(root, "feat: the first outbound call")
@@ -1012,8 +982,6 @@ def test_a_declared_event_and_an_unadopted_tree_propose_nothing(
 
 
 def test_a_compound_owed_row_is_said_by_its_code_kind(tmp_path: Path) -> None:
-    # Why: ADR 0028. `rolls back safely` fires on a deployed project with a stored format; it is
-    # described by the kind that arrived, not as a declared event.
     binding = BINDING + OWES.format(events="deployed").replace(
         "later: code:outbound-call", "later: life:deployed and code:outbound-call"
     )
@@ -1050,7 +1018,6 @@ SIZE_BLOCK = {
 
 
 def parked(root: Path, result: dict[str, object], *, stash: bool = True) -> None:
-    """The drain's close of the held ticket, as an eval run left it: its note, and its stash."""
     if stash:
         git(root, "switch", "-q", "-c", "feature/2-b")
         write(root, "docs/features/b/spec.md", "draft\n")
@@ -1070,8 +1037,6 @@ def held_root(tmp_path: Path) -> Path:
 def test_a_ticket_parked_as_too_large_names_the_split_not_questions_or_a_rerun(
     tmp_path: Path,
 ) -> None:
-    # Why: an eval run's block was size alone, yet the route asked for answers or guard edits,
-    # and once the stash was dropped it named a bare rerun the drain still refused.
     root = held_root(tmp_path)
     parked(root, SIZE_BLOCK)
     step = route.decide(root, None)
@@ -1119,9 +1084,6 @@ def test_a_ticket_parked_for_guard_edits_is_released_when_they_land_and_not_befo
 def test_a_guard_hold_with_no_base_commit_is_released_by_the_ticket_and_not_by_landing(
     tmp_path: Path,
 ) -> None:
-    # Why: ADR 0055. A note written before the drain kept the default branch's commit cannot
-    # tell that the edits landed, so naming them as the step would leave the owner doing it for
-    # nothing. Its own commit time is no stand-in: the default branch moves either side of it.
     root = held_root(tmp_path)
     parked(root, GUARD_BLOCK, stash=False)
     path = queue_notes.note_path(root, "feature/2-b")
@@ -1240,8 +1202,6 @@ def test_a_note_without_a_hold_leaves_the_ticket_buildable(tmp_path: Path) -> No
 def test_an_adoption_that_stopped_is_resumed_before_the_hooks_are_installed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Why: an eval run's adoption stopped after copying the templates onto a branch, with the
-    # binding still the template's. The route named the hooks install twice, which finishes nothing.
     monkeypatch.setattr(hooks_installed, "check", REAL_CHECK)
     template = "# Binding\n\n- Ratchet plugin: <X.Y.Z> at <ratchet-sha>\n- Default branch: `main`\n"
     root = repository(tmp_path, {**ADOPTED, "docs/process/binding.md": template})
@@ -1276,7 +1236,6 @@ def test_rows_an_upgrade_left_owed_for_an_agent_come_first_and_ask_the_owner_not
     assert (step.command, step.stage) == (route.FILL, "fill")
     assert "nothing asks you" in step.why
     assert "pins" in step.why
-    # Why: a safeguard owed beside them waits; the rows are one agent step and come first.
     write(root, "src/a.py", "import requests\nrequests.get('http://x')\n")
     commit(root, "feat: the first outbound call")
     assert route.decide(root, None).command == route.FILL
@@ -1285,8 +1244,6 @@ def test_rows_an_upgrade_left_owed_for_an_agent_come_first_and_ask_the_owner_not
 def test_a_branch_merged_into_the_default_branch_is_left_by_a_switch_not_merged_again(
     tmp_path: Path,
 ) -> None:
-    # Why: a hand merge with no forge moves `main` by `update-ref` and leaves the checkout on the
-    # branch, so the route used to name the same merge for ever.
     root = repository(tmp_path, ADOPTED)
     branch(root, "chore/adopt-ratchet")
     write(root, "notes.md", "x\n")
@@ -1306,8 +1263,6 @@ def test_a_branch_merged_into_the_default_branch_is_left_by_a_switch_not_merged_
 
 
 def test_a_branch_the_merge_entry_point_merged_is_not_merged_again(tmp_path: Path) -> None:
-    # Why: the eval's owner ran the route's merge, stayed on the branch, and was told to run it
-    # again.
     bound = binding().replace("# Binding\n", f"# Binding\n\n{PIN}\n- Default branch: `main`\n", 1)
     adopted = {**BASE, **ADOPTED, "docs/process/binding.md": bound}
     repository(tmp_path, adopted)
@@ -1323,8 +1278,6 @@ def test_a_branch_the_merge_entry_point_merged_is_not_merged_again(tmp_path: Pat
 
 
 def test_a_branch_cut_from_the_default_tip_is_not_called_merged(tmp_path: Path) -> None:
-    # Why: `/ratchet:feature` cuts its branch before anything is written on it, and a run that
-    # stops there leaves it. Nothing on it is merged, and there is nothing to merge.
     root = repository(tmp_path, ADOPTED)
     branch(root, "feature/1-a")
     step = route.decide(root, None)

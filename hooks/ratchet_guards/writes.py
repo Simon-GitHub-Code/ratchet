@@ -1,16 +1,3 @@
-"""Shell commands that write, move or delete files, and the paths each one touches.
-
-A shell change to a guard path is judged as an Edit of it is: refused for a locked path, and for
-any other where the commit lands on the default branch (ADR 0033). An interpreter writing files
-itself is judged by its program text, not by the paths on its command line
-(``ratchet_guards.interpreters``): ``python3 -c``,
-``python3 - <<'EOF'``, ``node -e``, ``perl -e``, ``ruby -e``, ``deno eval`` and ``bun -e`` are
-denied when the program names a guard path in a string literal and holds a write call.
-``perl -i`` and ``ruby -i`` rewrite the files named on the command line, so they are writers
-here. Still out of reach, and left to diff detection: a script file run by path, a path built
-at run time, a program fetched or decoded before it runs.
-"""
-
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -20,15 +7,12 @@ from ratchet_guards.options import NO_VALUES, Options, Spec, scan
 _COPY = Spec("tSmog", frozenset({"--target-directory"}))
 _MOVE = Spec("tS", frozenset({"--target-directory"}))
 _REMOVE = Spec("s")
-# Why: `--rec` is the shortest unambiguous prefix of `--recursive` (`--reference` shares `--re`).
 _RECURSIVE_SHORTEST = len("--rec")
 _IN_PLACE = Spec("efl", frozenset({"--expression", "--file"}))
 
 
 @dataclass(frozen=True, slots=True)
 class Touched:
-    """Paths a command writes and paths it removes (everything below a removed directory)."""
-
     written: tuple[str, ...] = ()
     removed: tuple[str, ...] = ()
 
@@ -75,12 +59,6 @@ def _in_place(args: Sequence[str]) -> Touched:
 
 
 def _modes(args: Sequence[str]) -> Touched:
-    """``chmod``, ``chown``, ``chgrp``: each operand is written; with ``-R`` it is a whole tree.
-
-    The mode or owner operand never names a guard path, so it needs no parsing out; clearing
-    the execute bit on a git hook switches it off as surely as deleting it. Without ``-R`` only
-    the named path changes, so ``chmod 755 .`` does not touch what lies below ``.``.
-    """
     options = scan(args, NO_VALUES)
     recursive = "-R" in options.flags or any(
         len(flag) >= _RECURSIVE_SHORTEST and "--recursive".startswith(flag)
@@ -118,6 +96,5 @@ WRITERS: dict[str, Callable[[Sequence[str]], Touched]] = {
 
 
 def touched(head: str, args: Sequence[str]) -> Touched:
-    """The paths ``head args`` writes or removes; nothing for a command that is not a writer."""
     writer = WRITERS.get(head)
     return Touched() if writer is None else writer(args)

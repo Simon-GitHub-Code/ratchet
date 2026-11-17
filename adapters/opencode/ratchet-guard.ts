@@ -1,6 +1,3 @@
-// Ratchet guard for OpenCode: translate tool.execute.before into the guard's PreToolUse JSON.
-// scripts/adapter.py opencode --apply copies this file into ~/.config/opencode/plugins/ with the
-// plugin root filled in. The rules live in hooks/guard.py; this file only marshals.
 import { spawnSync } from "node:child_process";
 
 const PLUGIN_ROOT = "__RATCHET_PLUGIN_ROOT__";
@@ -18,7 +15,6 @@ export const RatchetGuard = async ({ directory }: { directory: string }) => ({
     const result = spawnSync("python3", ["-E", "-s", GUARD], { input: JSON.stringify(payload), encoding: "utf8" });
     const stdout = (result.stdout ?? "").trim();
     if (result.status !== 0 && !stdout) {
-      // Why: a guard that cannot run fails closed, as the Claude Code shim does.
       throw new Error(`Ratchet guard could not run: ${(result.stderr ?? "").trim()}`);
     }
     if (!stdout) return;

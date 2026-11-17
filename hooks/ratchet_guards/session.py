@@ -1,21 +1,3 @@
-"""The Claude Code SessionStart and SubagentStart hook: the method in every agent's context.
-
-A directory that is not a git repository gets nothing. A repository on the method (its
-``AGENTS.md`` or ``CLAUDE.md`` names ``ratchet:method`` and ``docs/process/binding.md``
-exists) gets the stance: the section of the method skill that says how to work by the merge
-rule, so the philosophy is in context before the first tool call, in the main session and in
-every subagent. The two states in between get one short message, so an agent starting in a
-bare repository learns that the gates do not exist yet before it writes code nothing checks.
-
-Every message ends with the route's next step: ``scripts/route.py`` decides from the checkout
-alone (offline, so the hook stays fast) which command the owner types next, and the hook
-prints it so a session never opens without one.
-
-``SessionStart`` reads plain stdout as context; ``SubagentStart`` reads the JSON field
-``hookSpecificOutput.additionalContext``. ``render`` picks the form from the event name.
-Antigravity reads neither: its ``SessionStart`` takes ``injectSteps``, a system message.
-"""
-
 import json
 import subprocess
 import sys
@@ -26,7 +8,7 @@ from ratchet_guards import events
 from ratchet_guards.hook import PLUGIN_ROOT, common_directory, repository_root
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-import plugin_pin  # -- the pin check lives beside the gate scripts
+import plugin_pin
 
 BINDING = Path("docs/process/binding.md")
 INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md")
@@ -63,7 +45,6 @@ Runner = Callable[[list[str]], str | None]
 
 
 def run_route(argv: list[str]) -> str | None:
-    """The route script's stdout, or ``None`` when it fails, hangs or is missing."""
     try:
         completed = subprocess.run(  # noqa: S603 # -- the plugin's own script, a fixed argv
             argv, capture_output=True, text=True, check=False, timeout=ROUTE_TIMEOUT
@@ -74,7 +55,6 @@ def run_route(argv: list[str]) -> str | None:
 
 
 def child_interpreter() -> list[str]:
-    """This interpreter with the options that keep its environment variables and user site out."""
     argv = [sys.executable]
     if sys.flags.ignore_environment:
         argv.append("-E")
@@ -84,7 +64,6 @@ def child_interpreter() -> list[str]:
 
 
 def next_step(root: Path, plugin_root: Path = PLUGIN_ROOT, run: Runner = run_route) -> str:
-    """The route's next command for ``root`` as one sentence, or empty when it cannot be had."""
     script = plugin_root / ROUTE_SCRIPT
     if not script.is_file():
         return ""
@@ -103,7 +82,6 @@ def next_step(root: Path, plugin_root: Path = PLUGIN_ROOT, run: Runner = run_rou
 
 
 def names_method(root: Path) -> bool:
-    """Whether ``AGENTS.md`` or ``CLAUDE.md`` at ``root`` tells agents to load the method."""
     for name in INSTRUCTION_FILES:
         path = root / name
         if path.is_file() and STANZA in path.read_text(encoding="utf-8", errors="replace"):
@@ -112,7 +90,6 @@ def names_method(root: Path) -> bool:
 
 
 def stance(plugin_root: Path = PLUGIN_ROOT) -> str:
-    """The stance section of the method skill, heading included, or empty when unavailable."""
     path = plugin_root / METHOD_SKILL
     if not path.is_file():
         return ""
@@ -126,7 +103,6 @@ def stance(plugin_root: Path = PLUGIN_ROOT) -> str:
 
 
 def unpinned(root: Path, plugin_root: Path) -> str:
-    """One line when ``plugin_root`` is not the release ``root``'s binding pins, else empty."""
     pin = plugin_pin.pinned((root / BINDING).read_text(encoding="utf-8", errors="replace"))
     if pin is None or pin.tree is None or plugin_pin.copy_tree_id(plugin_root) == pin.tree:
         return ""
@@ -134,7 +110,6 @@ def unpinned(root: Path, plugin_root: Path) -> str:
 
 
 def message(cwd: Path, plugin_root: Path = PLUGIN_ROOT, run: Runner = run_route) -> str | None:
-    """The context to add for the checkout holding ``cwd``, if any."""
     root = repository_root(cwd)
     if not (root / ".git").exists():
         return None
@@ -149,7 +124,6 @@ def message(cwd: Path, plugin_root: Path = PLUGIN_ROOT, run: Runner = run_route)
 
 
 def render(event: str, text: str, *, antigravity: bool = False) -> str:
-    """``text`` in the form the hook event reads: JSON for a subagent, plain text otherwise."""
     if antigravity:
         return json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": text}}]})
     if event == SUBAGENT_EVENT:
@@ -159,13 +133,6 @@ def render(event: str, text: str, *, antigravity: bool = False) -> str:
 
 
 def record_plugin(cwd: Path, plugin_root: Path) -> None:
-    """Record ``plugin_root`` in the git common directory of an adopted repository holding ``cwd``.
-
-    The file is ``events.PLUGIN_RECORD`` and holds the path and a newline, so a gate recipe in the
-    repository finds the plugin this session runs from. Nothing is written outside a repository or
-    in one with no binding. The file is replaced whole, so a link or FIFO at the path is replaced
-    and not written through, and any failure is dropped.
-    """
     common = common_directory(cwd)
     if common is None or not (repository_root(cwd) / BINDING).is_file():
         return
@@ -176,7 +143,6 @@ def record_plugin(cwd: Path, plugin_root: Path) -> None:
 
 
 def main(root: Path, event: str, *, antigravity: bool = False) -> int:
-    """Print the context for ``root`` in the form ``event`` reads, or nothing."""
     text = message(root)
     if text:
         print(render(event, text, antigravity=antigravity))

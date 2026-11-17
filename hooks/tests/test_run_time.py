@@ -1,5 +1,3 @@
-"""``run_time``: the run's time, stamped at its start and end, stated as one line."""
-
 import json
 from pathlib import Path
 

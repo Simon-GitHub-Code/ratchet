@@ -1,5 +1,3 @@
-"""The feature preflight: red with the exact failure before any agent spawns, green otherwise."""
-
 import functools
 import json
 import os
@@ -54,8 +52,6 @@ def issue(
 
 
 class FakeGh:
-    """A ``gh`` that answers every call with one output and remembers the calls."""
-
     def __init__(self, output: str | None) -> None:
         self.output = output
         self.calls: list[Sequence[str]] = []
@@ -77,7 +73,6 @@ def run(
     base: str = "main",
     branch: str | None = None,
 ) -> preflight.Report:
-    # Why: no test reaches the real tracker; a ticket number with no runner given is not found.
     runner = gh_returning(None) if gh is None else gh
     return preflight.preflight(ref, root, base=base, branch=branch, gh=runner)
 
@@ -133,8 +128,6 @@ def test_a_placeholder_conjecture_is_no_conjecture(tmp_path: Path, body: str) ->
 
 
 class ParentGh:
-    """A ``gh`` that serves the ticket and, when asked, its parent spec."""
-
     def __init__(self, ticket: str, parent: str | None) -> None:
         self.ticket, self.parent = ticket, parent
         self.calls: list[Sequence[str]] = []
@@ -161,7 +154,6 @@ def spec(body: str) -> str:
     ],
 )
 def test_a_parent_line_reads_a_path_before_a_number(line: str, parent: str) -> None:
-    # Why: a file name that starts with digits is a path, not the number it starts with.
     assert preflight.local_ticket(TICKET, f"# T\n\n{line}\n").parent == parent
 
 
@@ -267,8 +259,6 @@ ASTRAY = [
     "ref", [*ASTRAY, ".scratch/f/issues/../ticket.md", ".scratch/f/issues/linked.md"]
 )
 def test_a_local_ticket_is_only_a_file_the_guard_asks_about(tmp_path: Path, ref: str) -> None:
-    # Why: the guard asks the owner before an agent writes the agent-ready label only on
-    # `.scratch/<feature>/issues/<name>.md`; a label anywhere else may be the agent's own.
     text = "# T\n\nStatus: ready-for-agent" + CONJECTURE
     root = repository(tmp_path, dict.fromkeys([TICKET, *ASTRAY], text))
     (root / ".scratch/f/issues/linked.md").symlink_to(root / "notes/idea.md")
@@ -288,7 +278,6 @@ def test_a_ticket_outside_the_checkout_is_refused(tmp_path: Path) -> None:
 
 
 def test_a_ticket_with_a_second_name_is_refused(tmp_path: Path) -> None:
-    # Why: a hard link lets the agent write the label through a name the guard does not keep.
     root = repository(tmp_path, {TICKET: "# T\n\nStatus: ready-for-agent" + CONJECTURE})
     (root / "notes.md").hardlink_to(root / TICKET)
     git(root, "add", "-A")
@@ -430,7 +419,6 @@ def test_main_prints_json_and_the_verdict(
 
 
 def test_a_parent_section_names_the_spec_as_to_tickets_writes_it(tmp_path: Path) -> None:
-    # Why: mattpocock-skills' ticket template has a `## Parent` section, not a `Parent:` line.
     root = repository(tmp_path)
     for body in ("## Parent\n\n#12\n", "## Parent\n\nhttps://github.com/o/r/issues/12\n"):
         child = issue(body=body + "\n## What to build\n\nA slice.\n", labels=("ready-for-agent",))
@@ -439,8 +427,6 @@ def test_a_parent_section_names_the_spec_as_to_tickets_writes_it(tmp_path: Path)
 
 
 def test_a_local_ticket_inherits_from_its_feature_spec_without_naming_it(tmp_path: Path) -> None:
-    # Why: the local tracker files tickets at `<feature>/issues/NN-<slug>.md` beside
-    # `<feature>/spec.md`, and its template omits the Parent section.
     files = {
         ".scratch/f/spec.md": "# F\n\n## Solution\n\nX." + CONJECTURE,
         ".scratch/f/issues/01-a.md": "# 01: A\n\n**Status:** ready-for-agent\n\nBody.\n",
@@ -535,7 +521,6 @@ def adopted(
     gh: Gh | None = None,
     extra: tuple[str, str] = ("- Life events: deployed\n", ""),
 ) -> preflight.Report:
-    """An adopted repository; ``extra`` is the binding's lines before ``## Gates`` and its rows."""
     life, rows = extra
     binding = f"# Binding\n\n{life}\n## Gates\n\n- Application types: {types}\n{rows}"
     root = repository(tmp_path, {"docs/process/binding.md": binding})
@@ -695,19 +680,13 @@ def test_the_critic_runs_only_for_a_project_that_is_depended_on(tmp_path: Path) 
         report = adopted(tmp_path / name, "library", BODY, extra=events(named), gh=gh)
         assert not report.critic
         assert "declares no `depended-on` life event" in report.critic_reason
-    # Why: a binding with no events line may be a deployed 0.10 adoption, so the critic stays on.
     assert adopted(tmp_path / "unlined", "library", BODY, extra=("", ""), gh=gh).critic
     bare = run(repository(tmp_path / "bare"), "4", gh)
     assert not bare.critic
     assert json.loads(json.dumps(asdict(asked)))["critic"] is True
 
 
-# --- what a ticket reads (ADR 0031) ------------------------------------------------------------
-
-
 class Opened:
-    """The files this process opens while a test watches: the audit hook sees every ``open``."""
-
     paths: list[str] | None = None
 
 
@@ -722,7 +701,6 @@ def watching() -> type[Opened]:
 
 
 def opened_by(root: Path, read: Callable[[], object]) -> set[str]:
-    """The files under ``root`` that ``read`` opens, relative and normalised."""
     watch = watching()
     watch.paths = []
     try:
@@ -734,9 +712,7 @@ def opened_by(root: Path, read: Callable[[], object]) -> set[str]:
         posixpath.normpath(os.path.relpath(path, root))
         for path in seen
         if os.path.normpath(path).startswith(f"{root}{os.sep}")
-        # Why: the drain's notes are untracked state, which no change to the tracker can steer.
         and not os.path.relpath(path, root).startswith(".ratchet")
-        # Why: the owed ledger is an upgrade's record, which no change to the tracker can steer.
         and os.path.relpath(path, root) != "quality/owed.toml"
     }
 
@@ -782,8 +758,6 @@ BUILT = ".scratch/thing/issues/04-d.md"
 def test_the_readers_of_a_ticket_read_only_what_reads_names(
     tmp_path: Path, *, lines: str, whole: set[str], status: set[str]
 ) -> None:
-    # Why: the judge freezes what `reads` names while the ticket carries the label, so a reader
-    # that opens a file `reads` does not name would let a records-only change steer the build.
     ticket = f"# 04: D\n\nStatus: ready-for-agent\n\n{lines}\n"
     repository(tmp_path, {**TRACKER, BUILT: ticket})
     parsed = preflight.local_ticket(BUILT, ticket)
@@ -810,8 +784,6 @@ def test_the_readers_of_a_ticket_read_only_what_reads_names(
 def test_a_ticket_that_states_a_size_over_the_product_ceiling_is_refused_before_a_spec_run(
     tmp_path: Path,
 ) -> None:
-    # Why: ADR 0045. The ticket's own estimate is the earliest size there is, and a spec run costs
-    # several agents; the part of the work the agent splits is named in `produce`.
     root = repository(
         tmp_path,
         {

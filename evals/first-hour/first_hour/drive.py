@@ -1,18 +1,3 @@
-"""The Agent SDK side of a first-hour run: the product session and the owner model.
-
-What a run does and measures is decided in ``harness.py`` and the modules beside it; this module
-turns those calls into Claude Code sessions and nothing more. Each session runs with the run's
-environment and throwaway home, with no MCP server, no connector, no user settings, the plugin
-under test and the three companions loaded from the run, and a tool list (``policy.TOOLS``)
-outside which nothing is approved. Every command the session runs goes through the sandbox's
-shell prefix (``sandbox.py``). Every tool call passes ``policy.decide`` in a PreToolUse hook that
-blocks when it fails, and every prompt passes it again in ``can_use_tool`` before the owner
-answers.
-
-It needs ``claude-agent-sdk``, which ``run.py`` declares; the unit suite does not install it, so
-coverage omits this file and the suite drives ``harness.py`` with fakes instead.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -47,8 +32,6 @@ SETTLE_S = 20.0
 IDLE_S = 30 * 60.0
 WAITED_TASKS = frozenset({"local_workflow", "local_agent", "remote_agent"})
 TERMINAL = frozenset({"completed", "failed", "stopped", "killed", "error"})
-# Why: these ask nothing of the owner and the hook judges each call; prompting for them would
-# count prompts no real owner sees.
 AUTO = tuple(
     name
     for name, tool in policy.TOOLS.items()
@@ -57,10 +40,7 @@ AUTO = tuple(
 
 
 class SdkOwner:
-    """The scripted owner: a small model in character, with no tools, and the rule applied."""
-
     def __init__(self, run: harness.Run, token: str) -> None:
-        """An owner for this run."""
         self.run = run
         self.token = token
         self.usd = 0.0
@@ -93,7 +73,6 @@ class SdkOwner:
         return found
 
     async def answer(self, question: owner.Question, channel: owner.Channel) -> owner.Answer:
-        """Answer one question in character, logged with its class."""
         prompt = owner.question_prompt(question)
         verdict = None
         for _ in range(2):
@@ -109,7 +88,6 @@ class SdkOwner:
         return reply
 
     async def read_turn(self, text: str) -> owner.Reply:
-        """Whether a turn's last message asks the owner something."""
         for _ in range(2):
             try:
                 return owner.parse_reply(
@@ -126,8 +104,6 @@ class SdkOwner:
 
 
 class SdkSession:
-    """The product session: one Claude Code session the owner types into."""
-
     def __init__(
         self,
         run: harness.Run,
@@ -136,7 +112,6 @@ class SdkSession:
         *,
         decide: Callable[[str, dict[str, Any]], policy.Decision] | None = None,
     ) -> None:
-        """The session's options; ``decide`` replaces the policy (the probe allows less)."""
         self.run = run
         self.owner = owner_
         self.scope = run.layout.scope()
@@ -185,12 +160,10 @@ class SdkSession:
         return policy.decide(tool, tool_input, self.scope, agents=self.agents)
 
     async def connect(self) -> None:
-        """Connect, and start reading the session's messages."""
         await self.client.connect()
         self.pump = asyncio.create_task(self._pump())
 
     async def close(self) -> None:
-        """Stop reading and disconnect, which ends the session's sandbox and all inside it."""
         if self.pump is not None:
             self.pump.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -219,7 +192,6 @@ class SdkSession:
     async def guard(
         self, data: dict[str, Any], _id: str | None, _ctx: HookContext
     ) -> dict[str, Any]:
-        """Judge every tool call before anything else does; deny what the policy refuses."""
         tool = str(data.get("tool_name", ""))
         tool_input = data.get("tool_input") or {}
         decision = self.decide(tool, tool_input)
@@ -238,7 +210,6 @@ class SdkSession:
     async def can_use_tool(
         self, tool_name: str, tool_input: dict[str, Any], context: ToolPermissionContext
     ) -> PermissionResultAllow | PermissionResultDeny:
-        """Answer a prompt as the owner, after the policy; answer a question dialog."""
         decision = self.decide(tool_name, tool_input)
         if not decision.allowed:
             why = self._deny(tool_name, tool_input, decision=decision, where="prompt")
@@ -266,9 +237,6 @@ class SdkSession:
         return PermissionResultAllow()
 
     def _track(self, message: object) -> None:
-        # Why: the SDK says not to replace the set with a snapshot, which can miss an agent
-        # moved to the background later; ids are added from either and cleared on a terminal
-        # status only, and IDLE_S bounds an id nothing ever clears.
         if isinstance(message, TaskStartedMessage):
             self.agents.add(message.task_id)
             if message.task_type in WAITED_TASKS:
@@ -290,7 +258,6 @@ class SdkSession:
                 self.waiting.discard(str(message.data.get("task_id")))
 
     async def turn(self, text: str, deadline: float) -> str:
-        """Type ``text``; return the last result once no workflow or agent runs behind it."""
         await self.client.query(text)
         settled = False
         quiet_since = time.monotonic()
@@ -330,7 +297,6 @@ class SdkSession:
 
 
 def run_plugins(run: harness.Run) -> list[sandbox.Plugin]:
-    """The companion plugins the run copied in, from its own registry."""
     registry = json.loads((run.layout.plugins / "installed_plugins.json").read_text("utf-8"))
     markets = json.loads((run.layout.plugins / "known_marketplaces.json").read_text("utf-8"))
     return [
@@ -341,27 +307,18 @@ def run_plugins(run: harness.Run) -> list[sandbox.Plugin]:
 
 
 class SdkModels:
-    """Starts the run's owner model and product session through the Agent SDK."""
-
     def __init__(self, token: str) -> None:
-        """Models signed in with the operator's current model access token."""
         self.token = token
 
     def owner(self, run: harness.Run) -> SdkOwner:
-        """The owner model."""
         return SdkOwner(run, self.token)
 
     async def session(self, run: harness.Run, owner_: harness.OwnerModel) -> SdkSession:
-        """The product session, connected."""
         session = SdkSession(run, owner_, self.token)
         await session.connect()
         return session
 
 
-# Why: three values say whether the launch holds: gh's config is the run's, the session is not
-# the launcher's, and the model token is not handed to the session's shell. The last two lines
-# print only a login state and a count: whether gh is signed in, and how many processes the shell
-# can see whose environment holds the token (the Claude Code process itself, if it is visible).
 PROBE_COMMANDS = (
     (
         'echo "GH_CONFIG_DIR=$GH_CONFIG_DIR CLAUDE_CODE_SESSION_ID=$CLAUDE_CODE_SESSION_ID'
@@ -379,8 +336,6 @@ PROBE = (
 
 
 async def probe(run: harness.Run, token: str) -> dict[str, object]:
-    """One session with the run's launch, allowed nothing but the probe's printing commands."""
-
     def decide(tool: str, tool_input: dict[str, Any]) -> policy.Decision:
         if tool == "Bash" and str(tool_input.get("command", "")).strip() in PROBE_COMMANDS:
             return policy.ALLOW

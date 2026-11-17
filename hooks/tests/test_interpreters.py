@@ -1,13 +1,3 @@
-"""Interpreters given an inline program that writes a guard path are judged like any shell write.
-
-The 2026-11-09 trial: a subagent changed ``DESIGN.md`` with ``python3 - <<'EOF' ... EOF`` and
-the hook let it through, so the owner's approval never fired. Each row runs in ``/repo`` against
-a manifest that guards ``DESIGN.md``, ``pyproject.toml`` and a directory, and ``LOCKED.md`` that
-only the owner changes. A write to the first three is refused where the commit lands on ``main``
-and gets no verdict on a branch (the merge judge reads it); a write to ``LOCKED.md`` is refused
-on any branch.
-"""
-
 from pathlib import Path
 
 import pytest

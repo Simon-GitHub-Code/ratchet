@@ -1,10 +1,3 @@
-"""The acceptance harness under signals: whatever is interrupted, nothing it started is left behind.
-
-Each test signals a real ``acceptance.py`` while it boots a product that holds its start, then
-looks for what is left: a process naming the test's directory, a session directory, a
-temporary directory, an address that still answers.
-"""
-
 import json
 import os
 import signal
@@ -24,7 +17,6 @@ SCRIPT = Path(acceptance.__file__)
 
 
 def started(root: Path, tmp_path: Path, *args: str) -> subprocess.Popen[str]:
-    """``acceptance.py`` run as the owner runs it, with a temporary directory of its own."""
     scratch = tmp_path / "scratch"
     scratch.mkdir(exist_ok=True)
     return subprocess.Popen(  # noqa: S603 # -- this interpreter and the harness
@@ -36,7 +28,6 @@ def started(root: Path, tmp_path: Path, *args: str) -> subprocess.Popen[str]:
 
 
 def slow(tmp_path: Path) -> Path:
-    """A product that writes its process id as it starts and then waits a minute to listen."""
     return products.make(tmp_path / "product", env=f"BOOTING={tmp_path / 'booting'} DELAY=60")
 
 
