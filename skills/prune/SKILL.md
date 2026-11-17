@@ -28,9 +28,9 @@ The owner is asked nothing. Pruning is reversible, and git holds every cut. A re
 
 4. **Split off the records.** Move every decision record the batch wrote onto its own branch, `chore/prune-records-<n>`, as a change of its own. Its merge is the owner's. The code changes merge without them.
 
-5. **Have it reviewed.** Start a fresh agent as the reviewer. Give it the diff and these instructions only: "For each removed comment, find the test, type, rule or record that now states what it said, or state that it only narrated the code. Approve only when nothing is lost that no file now states. List each removal you cannot place." Fix what it lists, and ask again. Record its approval as `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/merge_ready.py" record --root .` with `{"slug": "prune-comments", "verdict": "approve", "unresolved": [], "openQuestions": []}` on its input.
+5. **Have it reviewed.** Start a fresh agent as the reviewer. Give it the diff and these instructions only: "For each removed comment, find the test, type, rule or record that now states what it said, or state that it only narrated the code. Approve only when nothing is lost that no file now states. List each removal you cannot place." Fix what it lists, and ask again.
 
-6. **Open the change.** Commit with the subject `refactor(prune): <the files, in a few words>`. Open it as [feature step 5](../feature/SKILL.md) opens a change, or with no forge run `just merge <branch>`. The merge judge passes it on the review's verdict.
+6. **Open the change.** Commit with the subject `refactor(prune): <the files, in a few words>`. Then record the review's approval as `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/merge_ready.py" record --root .` with `{"slug": "prune-comments", "verdict": "approve", "unresolved": [], "openQuestions": []}` on its input, and commit the record alone, last. Open it as [feature step 5](../feature/SKILL.md) opens a change, or with no forge run `just merge <branch>`. The merge judge passes it on the review's verdict.
 
 ## Steps for `pages`
 
@@ -45,9 +45,9 @@ The owner is asked nothing. Pruning is reversible, and git holds every cut. A re
 
 3. **Check the citations.** Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/documents.py" cited --root . <the description file>`. It is red when a cited path is not in the tree, or does not hold the symbol as a whole word. Fix each line it names.
 
-4. **Have it reviewed.** Start a fresh agent as the reviewer. Give it the diff and the change description only, with these instructions: "For each cut passage, open the path and symbol its line names, and check that they say what the passage said. Approve only when nothing is lost that no file now states. List each cut you cannot place." Fix what it lists, and ask again. Record its approval as `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/merge_ready.py" record --root .` with `{"slug": "prune-pages", "verdict": "approve", "unresolved": [], "openQuestions": []}` on its input.
+4. **Have it reviewed.** Start a fresh agent as the reviewer. Give it the diff and the change description only, with these instructions: "For each cut passage, open the path and symbol its line names, and check that they say what the passage said. Approve only when nothing is lost that no file now states. List each cut you cannot place." Fix what it lists, and ask again.
 
-5. **Open the change.** Commit with the subject `docs(prune): <the pages, in a few words>`. That subject marks the pass for the route. Open it as for `comments`. When the pass cuts nothing, open no change. Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/documents.py" passed --root .`, so the route counts from here.
+5. **Open the change.** Commit with the subject `docs(prune): <the pages, in a few words>`. That subject marks the pass for the route. Then record the review's approval as `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/merge_ready.py" record --root .` with `{"slug": "prune-pages", "verdict": "approve", "unresolved": [], "openQuestions": []}` on its input, and commit the record alone, last. Open it as for `comments`. When the pass cuts nothing, open no change. Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/documents.py" passed --root .`, so the route counts from here.
 
 ## Hand over
 

@@ -63,7 +63,7 @@ Debugging enters at stage 7: `diagnosing-bugs`, which an agent may call, or `/ps
 19. **More than one ticket states a conjecture:** the drain. **One:** its build.
 20. **Otherwise:** `/ratchet:conjecture` for the first ticket.
 
-Steps 9 to 13 wrap the step beneath them, the first of 14 to 20 that holds. The route names the first of 9 to 12 that is owed, and its `why:` line offers the step beneath: `Or carry on with <command>: <cost>`. Its `then:` names the next of 9 to 13 still owed, else the step beneath.
+Steps 9 to 13 wrap the step beneath them, the first of 14 to 20 that holds. The route names the first of 9 to 13 that is owed, and its `why:` line offers the step beneath: `Or carry on with <command>: <cost>`. Its `then:` names the next of 9 to 13 still owed, else the step beneath.
 
 The formal model's upkeep is never red: a change to mirrored code may leave the model true, and only a round can tell. A round waits for the owner because it moves `- Synced:` and may change the model, both guard paths. A ticket from a round comes first: the update it keeps fails until the fix lands, and no pull-request run would show that, since tier 2 runs only on the default branch.
 
