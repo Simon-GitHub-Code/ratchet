@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 Adoption binds the floor (`always`) and the rows whose trigger has already fired in this tree, and writes every other row `later: <trigger>`. `/ratchet:safeguard` binds each one when the route says it is owed.
 
-Load the `ratchet:method` skill first: this skill assumes its vocabulary. Templates live in `${CLAUDE_SKILL_DIR}/templates/` and mirror the repository layout; the `justfile` and `.github/` among them are the `just` and GitHub examples, and each template's comments say what its placeholders need. Read nothing else of the plugin: the templates' comments, the output of the scripts this skill runs and the pages it links hold every rule you need, and a red gate's line names its repair.
+Load the `ratchet:method` skill first: this skill assumes its vocabulary. Templates live in `${CLAUDE_SKILL_DIR}/templates/` and mirror the repository layout; the `justfile` and `.github/` among them are the `just` and GitHub examples, and a placeholder's `bind:` words say what it needs. Read nothing else of the plugin: the templates, the output of the scripts this skill runs and the pages it links hold every rule you need, and a red gate's line names its repair.
 
 The method ships the questions, its own gates and three gates for any service, and no tool for any stack: the application types decide which questions apply, and the tool behind each one is proposed by you now, from what is current, and chosen in the architecture round of step 3 ([architecture.md](../method/architecture.md)).
 
@@ -145,8 +145,8 @@ Tell the owner this before step 1. It is not a question.
    Done when every entry point names a command, no Tool cell is empty, the architecture record exists, `AGENTS.md` holds the non-negotiables and the stack rules and no `## Layers` section, and neither file holds an angle-bracket placeholder outside Speed.
 
 8. **Fill the manifest, then generate the permission rules.**
-   - Add this stack's tool configs (the dependency manifest and its lockfile among them), fitness tests and gate tools to `guards/manifest.toml`, so no group has an empty `paths`. A path may be listed before its file exists.
-   - Bind the three `[[door]]` tables, the one-way doors the merge judge sends to the owner. A door with no path here keeps `paths = []` and says why in `none = "<reason>"`.
+   - Fill each empty `paths` of the groups in `guards/manifest.toml` with this stack's globs: `tool-config` takes the config file of every gate tool, the dependency manifest and its lockfile among them, `fitness` the fitness test directories, and `gate-tools` the directories of the gate tools the project writes. A path may be listed before its file exists. Where a project-local verification skill exists, add its directory to `formal`.
+   - Bind the three `[[door]]` tables, the one-way doors the merge judge sends to the owner: `one-way` takes the migrations, schema definitions and infrastructure code, `stored-data` the golden fixtures `data-compat` loads, and `contracts` the artefacts `contracts-check` and `api-check` diff. A door with no path here keeps `paths = []` and says why in `none = "<reason>"`.
    - Run `just settings` last, so the permission rules switch on only once every guard file is in place. It creates `.claude/settings.json` and writes its `deny` and `ask` lists. Never edit them by hand.
 
    Two things stay apart: the guard hook reads its path rules from the manifest on the default branch, so they start with the adoption's merge, while the permission rules come from the work tree's `.claude/settings.json` and start the moment `just settings` writes it.
@@ -174,7 +174,7 @@ Tell the owner this before step 1. It is not a question.
    - a `later:` row with `@echo "later: <trigger>"`, the same words as its Tool cell;
    - a row bound `none` with `@echo "none: <reason>"`.
 
-   The two `@echo` bodies exit 0. Set `test_runner` to the command that runs the test files named after it, and make the recipe of every suite the suites table lists take files the same way. The test runner's configuration includes the test directories and the Critique tests directory.
+   The two `@echo` bodies exit 0. Give the `flags` recipe `--used-in` with each source directory the Architecture table names, so a flag leaves the registry with its code. Set `test_runner` to the command that runs the test files named after it, and make the recipe of every suite the suites table lists take files the same way. The test runner's configuration includes the test directories and the Critique tests directory.
 
    **Test paths.** Fill the binding's `## Test paths` section from what you know of this stack: the globs of every file that is a test, a fixture or test support, the Critique tests directory included, so the change-size gate counts product code against the product ceiling and tests against their own. The gate counts every line as product while the section is unfilled.
 
@@ -183,18 +183,19 @@ Tell the owner this before step 1. It is not a question.
    **Fill the four stack sections of the binding from the tools you bound.** The method names no package manager, lockfile, linter or directive, so each fact below is yours to state, from what you know of the tools you chose and what the human decided, in plain terms and without copying from this text.
    - `## Install`: say whether a fresh checkout must install the tools before a recipe runs one.
      - **It must:** bind the `install` recipe to an install frozen to the lockfile you name that does nothing once it has run. List every recipe that runs a tool the install provides, make each depend on `install`, and put it after `plugin-pin` in each tier, so a tier installs once before its gates start.
-     - **It need not:** write `none` with the reason.
+     - **It need not:** write `none` with the reason, and leave the `install` recipe's `@true` body.
    - `## Dependencies`: name the globs of the manifests and of the lockfiles, any registry the lockfiles do not use yet, and write the `dependencies` recipe, which reads the files under the directory it is given as data and prints the records the section defines. Or write `none` with the reason.
    - `## Suppressions`: one row per kind of directive that tells a bound tool to skip a finding, and per marker that narrows a suite, each with its pattern and its rule. Then, for each bound question the catalogue marks `directives`, a line naming the kinds that silence it, or `none` with the reason.
-   - `## Comments`: one row per kind of tracked file other than Markdown, `listed` or `none` with the reason, and the `comments-list` recipe, which reads the files it is given as data and prints a record for every line a comment occupies, as the section says. List every directive the files carry in `## Suppressions`, `kept` where it silences no gate. Then run `just comments --record`. While the merge base binds no lister, it reads every tracked file a `listed` row matches and records each comment it finds as owed. A comment with no text is deleted instead, since the ledger cannot hold one. From the next change on, `just comments` judges only the changed files a `listed` row matches, by the merge base's table.
+   - `## Comments`: one row per kind of tracked file other than Markdown, `listed` or `none` with the reason, and the `comments-list` recipe, which reads the files it is given as data and prints a record for every line a comment occupies, as the section says. List every directive the files carry in `## Suppressions`, `kept` where it silences no gate. The version note after a workflow's pinned action needs no row: the gate reads it as the pins gate does. Then run `just comments --record`. While the merge base binds no lister, it reads every tracked file a `listed` row matches and records each comment it finds as owed. A comment with no text is deleted instead, since the ledger cannot hold one. From the next change on, `just comments` judges only the changed files a `listed` row matches, by the merge base's table.
 
    `just merge` and CI start from a fresh checkout: a recipe that is green here only because you installed by hand is red there. In `quality/bites.toml` the `setup` of a stack with a real install is `just install`, not a second copy of the command. `conformance` is red on a section that is missing, unfilled or contradicted by the justfile.
 
-   **Boot.** Fill `boot`, `ready` and `service` at the top of the `justfile` for every type that boots, whether or not its code has arrived, as the template's comments say: the command this stack's conventions imply for the file `AGENTS.md` names, and where it answers.
+   **Boot.** Fill `boot`, `ready` and `service` at the top of the `justfile` for every type that boots, whether or not its code has arrived: the command this stack's conventions imply for the file `AGENTS.md` names, and where it answers.
    - The boot command builds what it runs and stays in the foreground. Raise `boot_timeout` when the build is slow, and write `{port}` where the port goes (`$PORT` also works in `boot`).
+   - `ready` is the URL that answers below 400 once the deliverable is up, with `{port}` for its port. A `cli`, `job` or `app` answers no URL and sets `ready` to `"none"`. A `library` sets `boot`, `ready` and `service` to `"none"`.
    - On an empty repository that file does not exist yet, and nothing is red for it: every row that boots is `later:`, so only `just start` and step 12's rehearsal run `boot` before the first entry point arrives.
-   - `flags_on` stays `"none"` until the flag seam exists.
-   - Where an entry point has arrived, bind its rows: for a service, `smoke`, `load-smoke` and `telemetry-e2e` need only a `--url` per route worth overlapping. A gate that requests routes from outside boots through `{{probed}}`, every flag due for removal on; `smoke` and the end-to-end suite judge the defaults. The other types bind those rows as the table says, a `none` with the cell step 3 printed. `{{booted}}` waits for a URL and refuses a `ready` of `"none"`, so a `cli`, `job` or `app` writes its `smoke` as a run of `boot` itself, to its exit. `telemetry_sink.py` wraps any command after `--`.
+   - `flags_on` stays `"none"` until the flag seam exists. Then it is the override the seam reads, each key `flags.py --temporary` prints set on, built by the shell on every run, such as `'FLAG_OVERRIDES=$(' + plugin_py + ' "' + ratchet_plugin + '/scripts/flags.py" --temporary | sed "s/$/=true/" | paste -sd, -)'`.
+   - Where an entry point has arrived, bind its rows: for a service, `smoke`, `load-smoke` and `telemetry-e2e` need only a `--url` per route worth overlapping. `load-smoke` takes its `--concurrency` and `--seconds` from the binding's Limits; while the one route is the readiness URL, it runs with `--health-only` in place of `--url`. A gate that requests routes from outside boots through `{{probed}}`, every flag due for removal on; `smoke` and the end-to-end suite judge the defaults. The other types bind those rows as the table says, a `none` with the cell step 3 printed. `{{booted}}` waits for a URL and refuses a `ready` of `"none"`, so a `cli`, `job` or `app` writes its `smoke` as a run of `boot` itself, to its exit. `telemetry_sink.py` wraps any command after `--`, and `--require traces` narrows it to the signals the deliverable emits.
 
    | Type | `smoke` | `load-smoke`, `load` | `telemetry-e2e` |
    | --- | --- | --- | --- |
@@ -207,7 +208,7 @@ Tell the owner this before step 1. It is not a question.
    **A gate with nothing to run is red.** No test, benchmark, fuzz target or scenario: the recipe fails and says what is missing, even where the tool's own exit code would pass. A row is bound only once its trigger has fired, so what it judges already has a member.
 
    **A bite for every gate you bind.**
-   - With each recipe, add its `[[bite]]` to `quality/bites.toml` as its header says: the smallest fault the gate exists to catch, and the words it prints for it. A collection gate gets a second bite that removes the collection.
+   - With each recipe, add its `[[bite]]` to `quality/bites.toml` in the form [tiers.md](../method/tiers.md#every-bound-gate-is-shown-to-bite) gives: the smallest fault the gate exists to catch, and the words it prints for it. A collection gate gets a second bite that removes the collection.
    - A row whose question requires a proof by name (`[proofs]` in `application-types.toml`: telemetry emitted, changed flags off and on, load smoke) gets a bite that plants that fault and claims it with `proof = "<name>"`.
    - A shipped service gate bound now needs one, since its row names your `boot`: `smoke` a deliverable that exits, `load-smoke` a route that answers with an error, `telemetry-e2e` a deliverable that exports nothing.
    - A `later:` row needs none.
@@ -220,14 +221,14 @@ Tell the owner this before step 1. It is not a question.
 10. **Speed.** Build it in while nothing is slow ([tiers.md](../method/tiers.md#speed)).
     - Turn on the parallel mode of the test runner, provisioned or bound, and of the mutation tool where it is bound, in the committed configuration.
     - Keep the template's `[ceilings.change]` in `quality/thresholds.toml` as it is. Never set it from the adoption's own size.
-    - Have each long gate hand `{{shard}}` and `{{shards}}` to its tool.
+    - Have each long gate hand `{{shard}}` and `{{shards}}` to its tool, and name it in its tier's `tier1_sharded` or `tier2_sharded` list.
     - Add a gate to its tier's list at the top of the `justfile` and nowhere else: CI reads the same lists.
     - Run `tier0-tree` and `tier1` three times each. A gate red in parallel and green alone shares state, which tiers.md says how to separate.
-    - Fill each `bind:` cache line of the CI templates with this stack's caches, a compiled stack's content-addressed compiler cache outside the tree included, keyed on its lockfiles and tool configs, and keep their shape.
+    - Fill each cache of the CI templates with this stack's caches, and keep their shape. Its `path` names, in place of `.cache`, the dependency directory and every tool cache its job writes: in `deep.yml` the mutation cache and the fuzz corpus too, and for a compiled stack the content-addressed compiler cache outside the tree. Its `key` hashes this stack's lockfiles and tool configs in place of `**/*.lock`.
     - Fill the binding's Speed section, one line per concept, saying how this stack will meet it where nothing is bound yet. Leave `- Shards: 1`.
     - Run `just budget tier0 --set` and `just budget tier1 --set` once. Take those readings on a quiet machine or the CI runner, and vet each with `pstack:benchmark-checklist`. On a shared machine, cap the gates with `RATCHET_JOBS`.
 
-    Done when the parallel modes are on, no CI cache line is left at `bind:`, the Speed section has no placeholder, three runs of each are green, and `[ceilings.seconds]` has a key per tier.
+    Done when the parallel modes are on, every CI cache names this stack's paths and lockfiles, the Speed section has no placeholder, three runs of each are green, and `[ceilings.seconds]` has a key per tier.
 
 11. **Records and CI.**
     - Write `docs/design-brief.md` from step 3's answers, dated, and under `## In the owner's words` each question the owner answered here with the answer word for word, after init's answers as `AGENTS.md` and `PRODUCT.md` hold them.
@@ -236,11 +237,11 @@ Tell the owner this before step 1. It is not a question.
     - **It has none:** do not create `DESIGN.md`. Write under slice one that the first surface is built with `impeccable shape`, and that an agent runs `impeccable document` once it merges.
     - Write the plugin's version (from `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`) and its commit (`git -C "${CLAUDE_PLUGIN_ROOT}" rev-parse HEAD` when that is a checkout, else the latest commit of `Simon-GitHub-Code/ratchet` that changed that file) and the tree id of that commit (`<commit>^{tree}`; for a copy with no history, the id the template justfile computes) into the binding's `- Ratchet plugin: <version> at <commit> tree <tree id>` line.
     - Write the same commit into every `ref: "<ratchet-sha>"` of `ci.yml`, `deep.yml`, `weekly.yml` and `merge.yml`, so CI and every local tier run the plugin's gates at one version, which `just plugin-pin` and the conformance gate hold.
-    - Add the toolchain setup, pinned by commit SHA with the version in a trailing comment, so `just pins` stays green.
-    - Where a suite's gate sits in a later tier, set up what that suite needs in the `tier1` job of `ci.yml`, under `if: matrix.gate == 'tests-changed'`, as `deep.yml` sets up the whole suite, then delete the bind line there. Delete it as well where no suite sits in a later tier.
-    - Set the nightly hour in `deep.yml`.
+    - Replace each `bind: toolchain setup` step with the toolchain setup, pinned by commit SHA with the version in a trailing comment and the setup action's own cache on, so `just pins` stays green. A `bind:` step exits 1, so CI is red while one stands.
+    - Where a suite's gate sits in a later tier, replace the `bind:` step for later-tier suites in the `tier1` job of `ci.yml` with the setup that suite needs, under `if: matrix.gate == 'tests-changed'`, as `deep.yml` sets up the whole suite. Delete that step where no suite sits in a later tier.
+    - Set the nightly hour in `deep.yml` to one when nobody works on the repository. Cron reads it in UTC.
 
-    Done when the brief is dated and holds the owner's words, the ADRs and glossary entries are written and the glossary names the project, with user-interface surfaces `DESIGN.md` exists, with none there is no `DESIGN.md` and slice one says the first surface is built with `impeccable shape` and that an agent runs `impeccable document` once it merges, the binding names the plugin's version and commit, and the workflows name no placeholder.
+    Done when the brief is dated and holds the owner's words, the ADRs and glossary entries are written and the glossary names the project, with user-interface surfaces `DESIGN.md` exists, with none there is no `DESIGN.md` and slice one says the first surface is built with `impeccable shape` and that an agent runs `impeccable document` once it merges, the binding names the plugin's version and commit, and the workflows name no placeholder and hold no `bind:` step.
 
 12. **Prove it.**
     - Commit first: the change-size gate knows the adoption by its subjects, and in a bite the change is what the tree holds beyond `HEAD`.

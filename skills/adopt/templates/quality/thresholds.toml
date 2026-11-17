@@ -1,38 +1,3 @@
-# Ratcheted thresholds (Ratchet method). Values only rise, except ceilings, which only fall; `just ratchet` raises each to its
-# measured value and `just ratchet-lowered` fails any key that is lower or missing than at the
-# merge base. Absolute layers are not listed: they are held at 100% by the coverage tool itself.
-
-# One table per coverage group: its paths are globs over repository-relative paths, and every
-# measured file must fall in some group. `absolute = true` is held at 100% by the coverage gate
-# itself, with no number to lower and no exclusion allowed in its files; the others ratchet.
-# [<language>.coverage.<group>]
-# paths = ["src/<group>/**"]
-# line = 0.0
-# branch = 0.0
-
-# [<language>.coverage.core]
-# paths = ["src/core/**"]
-# absolute = true
-
-# [<language>.mutation]
-# score = 0.0
-
-# Wall-clock ceilings in seconds, one per tier and per gate with its own runner. `just budget <key>`
-# measures against them and `budget --set` records the first ones from a measured run; afterwards
-# they only fall. Raising one is a loosening and needs an ADR.
-# [ceilings.seconds]
-# tier0 = 60
-# tier1 = 600
-# tier2 = 3600
-# bite-all = 3600
-# bite-run = 900
-
-# The change-size ceilings per pull request, against the merge base (ADR 0045). The first two bound
-# the product code a change brings: files, and added-plus-deleted lines of what is not a test. The
-# third only stops a runaway of test lines. Which paths are tests is the binding's `- Test paths:`
-# row; without it every changed line counts as product. They only fall; the plugin's
-# `scripts/change_size.py --set --product-files N --product-lines N --test-lines N` writes lower
-# ones. The adoption's own commits are exempt.
 [ceilings.change]
 product_files = 25
 product_lines = 1000

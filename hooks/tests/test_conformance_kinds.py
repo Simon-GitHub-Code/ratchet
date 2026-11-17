@@ -464,8 +464,8 @@ def old_plugin_justfile(repo: Path) -> str:
     template = (repo / JUSTFILE).read_text(encoding="utf-8")
     line = conformance.PLUGIN_LINE.search(template)
     assert line
-    start = template.index("# The one guard")
-    end = template.index("# Every tier starts here")
+    start = template.index(f"[no-exit-message]\n{conformance.PLUGIN_GUARD}:")
+    end = template.index(f"plugin-pin: {conformance.PLUGIN_GUARD}")
     old = (template[:start] + template[end:]).replace(line.group(0), OLD_PLUGIN_LINE)
     old = old.replace(f": {conformance.PLUGIN_GUARD}\n", ":\n").replace(
         f" {conformance.PLUGIN_GUARD}\n", "\n"

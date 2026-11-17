@@ -29,7 +29,7 @@ BINDING = "docs/process/binding.md"
 LEDGER = str(owed.LEDGER)
 WEEKLY = ".github/workflows/weekly.yml"
 DEEP = ".github/workflows/deep.yml"
-MARKER = "      # bind: toolchain setup, pinned, with the setup action's own cache on\n"
+MARKER = conformance.TOOLCHAIN_PLACEHOLDER + "\n"
 NEXT = "      - name: Run the weekly gates\n"
 TEMPLATES = PLUGIN_ROOT / "skills/adopt/templates"
 VERSION = str(plugin_pin.version_of(PLUGIN_ROOT))
@@ -223,7 +223,7 @@ def test_a_finding_whose_line_moves_stays_owed(
     edit(repo / WEEKLY, MARKER, "      # a comment the project added\n" + MARKER)
     code, out = checked(repo, capsys)
     assert code == 0, out
-    assert f"owed: {WEEKLY}: line 40 in job `weekly` still says" in out
+    assert f"owed: {WEEKLY}: line 37 in job `weekly` still says" in out
 
 
 # --- what no entry excuses ----------------------------------------------------------------------
@@ -325,7 +325,7 @@ def test_an_entry_whose_finding_is_fixed_goes_and_the_count_drops(
     edit(repo / WEEKLY, MARKER, "      - run: ./scripts/install-toolchain\n")
     code, out = checked(repo, capsys)
     assert code == 1, "an entry that excuses nothing is red until it goes"
-    assert "an entry owes 'in job `weekly` still says '# bind: toolchain setup'" in out
+    assert "an entry owes 'in job `weekly` still says 'bind: toolchain setup'" in out
     assert "`upgrade.py --apply` makes 1 of them" in out
     assert upgrade.main(["upgrade.py", "--root", str(repo), "--apply"]) == 0
     assert "write down" not in capsys.readouterr().out

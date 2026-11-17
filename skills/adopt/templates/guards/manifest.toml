@@ -1,28 +1,7 @@
-# Guard paths (Ratchet method): the single list of files that define, run or record the quality gates.
-# Globs are matched against repository-relative paths; `*` stays within a segment, `**` spans any.
-# A `~/` pattern matches against the home directory. Edit-time control stays for exactly the files
-# whose effect comes before the merge; everything else is judged at merge. On a branch an agent
-# changes a guard path with no prompt: the merge judge reads the change and sends it to the owner.
-# Where the commit would land on the default branch the hook refuses it, since no judge reads that.
-# `edit = "deny"` locks a group the owner edits by hand. Two kinds of file act before any merge and
-# need no group here: the hook asks the owner before each write it reads of a CI workflow (a file
-# directly under `.github/workflows/`) or of an agent-instruction file at any depth (`CLAUDE.md`,
-# `CLAUDE.local.md`, `AGENTS.md`, `GEMINI.md`, anything under a `.claude/` directory), on every
-# branch. `edit = "append"` marks records an agent may add to: on the default branch a new glossary
-# term, a new `_Avoid_` item or a new ADR still passes. The hook, the merge judge, `just guard-diff`
-# and a fitness test read this file as the default branch holds it. Once it is there, an agent only
-# adds to it, with an Edit or Write on a branch: a path after the others in a group's or a door's
-# `paths`, or a whole `[[group]]` or `[[door]]` after the ones here. A path that also matches a
-# pattern of a group below it, and any other change, is the owner's. If the
-# default branch loses this file, the hook locks every path its last version named until the owner
-# puts it back. The hook is a check on ordinary writes, not a boundary (ADR 0033).
-
 [[group]]
 name = "tool-config"
 reason = "Rule sets, limits and thresholds of every gate: loosening one silently weakens every later check."
-paths = [
-    # bind: the config files of every gate tool
-]
+paths = []
 
 [[group]]
 name = "gate-commands"
@@ -45,7 +24,6 @@ name = "ci"
 reason = "CI config and the pull-request template decide what runs before a change merges, and the merge job is the one agent path to the default branch."
 paths = [
     ".github/**",
-    # bind: the CI config paths of another forge
 ]
 
 [[group]]
@@ -91,23 +69,18 @@ paths = [
 [[group]]
 name = "fitness"
 reason = "Architectural fitness tests encode the ADRs as executable checks."
-paths = [
-    # bind: the fitness test directories
-]
+paths = []
 
 [[group]]
 name = "gate-tools"
 reason = "Home-grown checkers behind the gates."
-paths = [
-    # bind: tools/ directories that implement gates
-]
+paths = []
 
 [[group]]
 name = "formal"
 reason = "Formal models and the project-local verification skill are the design the code must mirror."
 paths = [
     "formal/**",
-    # bind: the project-local verification skill, e.g. .claude/skills/<area>/**
 ]
 
 [[group]]
@@ -133,34 +106,19 @@ paths = [
     "DESIGN.md",
 ]
 
-# One-way doors: paths whose change cannot be taken back once it ships. A door is no guard: an
-# agent edits these paths without a prompt. The merge judge (`just merge-ready`) reads the doors,
-# and a change that goes through one waits for the owner. `on` says what shuts a door: "change"
-# is any change, "rewrite" a change to or deletion of a file the default branch holds, "removal"
-# a deletion or a change that does more than add. An addition behind a "removal" door is new
-# surface: it merges without the owner only when the change also declares or names a flag that is
-# off (`unflagged`, ADR 0025 of the plugin). A door this repository has no path for keeps
-# `paths = []` and says why: `none = "<the reason>"`.
-
 [[door]]
 name = "one-way"
 reason = "A migration, a schema change or an infrastructure change cannot be taken back once it has run."
-paths = [
-    # bind: migrations, schema definitions, infrastructure code
-]
+paths = []
 
 [[door]]
 name = "stored-data"
 reason = "Fixtures of data that earlier versions wrote: rewriting one hides that old data no longer loads."
 on = "rewrite"
-paths = [
-    # bind: the golden fixtures the data-compat gate loads
-]
+paths = []
 
 [[door]]
 name = "contracts"
 reason = "Contract artefacts and public-surface snapshots: a line removed is a consumer broken."
 on = "removal"
-paths = [
-    # bind: the artefacts the contracts-check and api-check gates diff
-]
+paths = []

@@ -31,10 +31,7 @@ JUSTFILE = "justfile"
 CI = ".github/workflows/ci.yml"
 DEEP = ".github/workflows/deep.yml"
 OVER = ' --over "$OVER"'
-OVER_LINES = (
-    "  # Why: runners vary, so a ceiling reports on a pull request and blocks on the default"
-    " branch.\n  OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}\n"
-)
+OVER_LINES = "  OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}\n"
 FLAG_ROW = "| flag | `flags.toml` | `^\\[\\[flag\\]\\]` |"
 FLAG = (
     '[[flag]]\nkey = "{}"\nowner = "the owner"\ndefault = false\nremove-by = 2099-01-01\n'
@@ -147,7 +144,7 @@ def test_a_change_ceiling_that_is_only_a_comment_becomes_the_method_s_live_one(r
 def test_a_thresholds_file_with_no_change_ceiling_gains_the_method_s_below_its_text(
     repo: Path,
 ) -> None:
-    replace(THRESHOLDS, LIVE_CEILING, "")(repo)
+    replace(THRESHOLDS, LIVE_CEILING, "[ceilings.seconds]\ntier0 = 60\nbite-all = 600\n")(repo)
     before = text(repo, THRESHOLDS).rstrip()
     assert settle(repo) == []
     assert text(repo, THRESHOLDS) == f"{before}\n\n{LIVE_CEILING}"

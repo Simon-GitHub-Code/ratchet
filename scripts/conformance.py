@@ -255,9 +255,12 @@ GUARD_DIFF_CALL = re.compile(
     r"\{\{plugin_py\}\} -P -c 'import sys; sys\.path[^\n]*?\{\{ratchet_plugin\}\}/hooks\""
 )
 NO_EXIT_MESSAGE = "[no-exit-message]"
-TOOLCHAIN_MARKER = "# bind: toolchain setup"
-SUITE_SETUP_MARKER = "# bind: the setup each later-tier suite needs"
-TOOLCHAIN_PLACEHOLDER = f"      {TOOLCHAIN_MARKER}, pinned, with the setup action's own cache on"
+TOOLCHAIN_MARKER = "bind: toolchain setup"
+SUITE_SETUP_MARKER = "bind: the setup each later-tier suite needs"
+TOOLCHAIN_PLACEHOLDER = (
+    f'      - {{ name: "{TOOLCHAIN_MARKER}, pinned, with the setup action\'s own cache on",'
+    " run: exit 1 }"
+)
 TOOLCHAIN_STEP = "      - run: ./scripts/install-toolchain"
 RULE_VERBS = {
     "Bash": ("runs", "run"),
@@ -1966,12 +1969,7 @@ def budget_flags(workflow: str) -> gatelib.Want:
     over = ' --over "$OVER"' if workflow == "ci.yml" else ""
     flags = {OLD_TIER0_BUDGET: over, OLD_GATE_BUDGET: f" --tier {tier}{over}"}
     template = template_file(f".github/workflows/{workflow}").splitlines()
-    variable = [line for line in template if line.startswith("  OVER:")]
-    said = (
-        template[template.index(variable[0]) - 1 : template.index(variable[0]) + 1]
-        if variable
-        else []
-    )
+    said = [line for line in template if line.startswith("  OVER:")][:1]
 
     def want(current: str | None) -> str:
         lines = (current or "").split("\n")
@@ -2363,25 +2361,27 @@ def check_toolchain(root: Path) -> Iterable[Finding]:
         unbound = set(after_marker(template.splitlines()).values())
         lines = path.read_text(encoding="utf-8").splitlines()
         for number, following in after_marker(lines).items():
-            if following in unbound:
-                # Why: the line moves when one is added above it, the job does not, so an owed
-                # entry names the job and excuses no placeholder in another (ADR 0037).
-                marker = (
-                    SUITE_SETUP_MARKER
-                    if SUITE_SETUP_MARKER in lines[number - 1]
-                    else TOOLCHAIN_MARKER
-                )
+            line = lines[number - 1]
+            marker = SUITE_SETUP_MARKER if SUITE_SETUP_MARKER in line else TOOLCHAIN_MARKER
+            if not is_comment(line):
                 unset = (
-                    f"in job `{job_of(lines, number)}` still says '{marker}' and the"
+                    f"in job `{job_of(lines, number)}` still says '{marker}',"
+                    " so no step sets up the project's toolchain"
+                )
+            elif following in unbound or is_marker(following):
+                unset = (
+                    f"in job `{job_of(lines, number)}` still says '# {marker}' and the"
                     " next line is the template's, so no step sets up the project's toolchain"
                 )
-                yield Finding(
-                    str(path.relative_to(root)),
-                    f"line {number} {unset}; add the steps that install it, pinned by commit SHA",
-                    Agent(),
-                    identity=unset,
-                    stops=WEEKLY_CHECKS if path.name == WEEKLY_WORKFLOW else "",
-                )
+            else:
+                continue
+            yield Finding(
+                str(path.relative_to(root)),
+                f"line {number} {unset}; add the steps that install it, pinned by commit SHA",
+                Agent(),
+                identity=unset,
+                stops=WEEKLY_CHECKS if path.name == WEEKLY_WORKFLOW else "",
+            )
 
 
 def job_of(lines: list[str], number: int) -> str:
@@ -2394,12 +2394,16 @@ def job_of(lines: list[str], number: int) -> str:
     return "?"
 
 
+def is_marker(line: str) -> bool:
+    return TOOLCHAIN_MARKER in line or SUITE_SETUP_MARKER in line
+
+
 def after_marker(lines: list[str]) -> dict[int, str]:
     """Each line (counted from 1) that holds the toolchain marker, with the line after it."""
     return {
-        number: lines[number]
+        number: lines[number] if number < len(lines) else ""
         for number, line in enumerate(lines, start=1)
-        if (TOOLCHAIN_MARKER in line or SUITE_SETUP_MARKER in line) and number < len(lines)
+        if is_marker(line)
     }
 
 
@@ -4563,7 +4567,7 @@ def record_mutations() -> list[Mutation]:
     ]
 
 
-UNBOUND_GROUP = re.compile(r"paths = \[\n(?:\s*# bind:[^\n]*\n)+\]")
+UNBOUND_GROUP = re.compile(r"^paths = \[\]$", re.MULTILINE)
 TYPES_PLACEHOLDER = re.compile(r"^- Application types: <[^\n]*>$", re.MULTILINE)
 EMPTY_TOOL_CELL = re.compile(r"^(\| [^|\n]+ \|) \|", re.MULTILINE)
 TEST_PATHS_PLACEHOLDER = re.compile(r"^- Tests: <[^\n]*>$", re.MULTILINE)
@@ -4592,9 +4596,7 @@ REPORTS_PLACEHOLDER = re.compile(r"^\| `suite` \|[^\n]*$", re.MULTILINE)
 SELF_TEST_REPORTS = "| none: the self-test shares no report | none | none | none | none |"
 SUITES_PLACEHOLDER = re.compile(r"^\| <suite name> \|[^\n]*$", re.MULTILINE)
 SELF_TEST_SUITES = "| none: the self-test has no tests | none | none | none |"
-LATER_SETUP_PLACEHOLDER = re.compile(
-    r"^ *# bind: the setup each later-tier suite needs[^\n]*\n", re.MULTILINE
-)
+LATER_SETUP_PLACEHOLDER = re.compile(rf"^[^\n]*{SUITE_SETUP_MARKER}[^\n]*\n", re.MULTILINE)
 DECISION_PLACEHOLDER = re.compile(r"^- Decision: <[^\n]*>$", re.MULTILINE)
 PARTS_PLACEHOLDER = re.compile(r"^\| <part> \|[^\n]*$", re.MULTILINE)
 SELF_TEST_RECORD = "docs/adr/0002-the-tool-is-one-command-over-its-rules.md"

@@ -26,8 +26,17 @@ GONE = (
 )
 COMMITTED = "Guard paths come from guards/manifest.toml"
 EXTRA_GROUP = '\n[[group]]\nname = "extra"\nreason = "More guard paths."\npaths = ["extra/**"]\n'
-TOOL_BIND = "    # bind: the config files of every gate tool\n"
 EXTRA_DOOR = '\n[[door]]\nname = "schema"\nreason = "A schema ships once."\npaths = ["db/**"]\n'
+
+
+def unbound(name: str) -> str:
+    start = TEMPLATE.index(f'name = "{name}"\n')
+    return TEMPLATE[start : TEMPLATE.index("paths = []\n", start) + len("paths = []\n")]
+
+
+def bound(name: str, pattern: str) -> str:
+    table = unbound(name)
+    return TEMPLATE.replace(table, table.replace("paths = []", f"paths = [\n    {pattern},\n]"))
 
 
 def answer(root: Path, tool: str, **tool_input: str) -> dict[str, str]:
@@ -147,11 +156,11 @@ def test_a_patch_cannot_delete_or_change_the_manifest_on_a_branch(adopted: Path)
         (TEMPLATE.replace('on = "rewrite"\n', ""), "changes, removes or reorders a [[door]]"),
         (EXTRA_GROUP + TEMPLATE, "changes, removes or reorders a [[group]]"),
         (
-            TEMPLATE.replace(TOOL_BIND, '    ".claude/settings.json",\n'),
+            bound("tool-config", '".claude/settings.json"'),
             "'.claude/settings.json' in [[group]] 'tool-config' also matches paths of 'harness'",
         ),
         (
-            TEMPLATE.replace(TOOL_BIND, '    ".c*/**",\n'),
+            bound("tool-config", '".c*/**"'),
             "'.c*/**' in [[group]] 'tool-config' also matches paths of 'harness'",
         ),
     ],
@@ -184,7 +193,7 @@ def test_a_write_or_edit_that_appends_whole_groups_or_doors_passes_on_a_branch(
 ) -> None:
     assert write(adopted, MANIFEST, TEMPLATE + EXTRA_GROUP + EXTRA_DOOR) == {}
     assert write(adopted, MANIFEST, "# the owner's words\n" + TEMPLATE + EXTRA_GROUP) == {}
-    last = "    # bind: the artefacts the contracts-check and api-check gates diff\n]\n"
+    last = 'on = "removal"\npaths = []\n'
     edit = answer(
         adopted,
         "Edit",
@@ -197,24 +206,23 @@ def test_a_write_or_edit_that_appends_whole_groups_or_doors_passes_on_a_branch(
 
 
 @pytest.mark.parametrize(
-    ("bind", "pattern"),
+    ("name", "pattern"),
     [
-        (TOOL_BIND, '"eslint.config.js"'),
-        ("    # bind: the fitness test directories\n", '"tests/fitness/**"'),
-        ("    # bind: migrations, schema definitions, infrastructure code\n", '"db/migrations/**"'),
+        ("tool-config", '"eslint.config.js"'),
+        ("fitness", '"tests/fitness/**"'),
+        ("one-way", '"db/migrations/**"'),
     ],
 )
 def test_an_edit_that_adds_a_path_to_a_group_or_door_passes_on_a_branch(
-    adopted: Path, bind: str, pattern: str
+    adopted: Path, name: str, pattern: str
 ) -> None:
-    # Why: /ratchet:safeguard adds a new tool's config to the tool-config group, and a binding
-    # fills the template's `# bind:` lines; neither takes a path from a group below.
+    table = unbound(name)
     edit = answer(
         adopted,
         "Edit",
         file_path=str(adopted / MANIFEST),
-        old_string=bind,
-        new_string=f"    {pattern},\n",
+        old_string=table,
+        new_string=table.replace("paths = []", f"paths = [{pattern}]"),
     )
     assert edit == {}
 
