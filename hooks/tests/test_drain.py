@@ -1231,6 +1231,32 @@ def test_a_mechanical_reason_that_keeps_coming_back_becomes_the_owners(
     capsys.readouterr()
 
 
+def test_a_mechanical_reason_is_retried_twice_and_the_third_time_it_is_the_owners(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    build(root, BRANCH_A, {"src/b.py": "B = 1\n"})
+    red = "gates: `just check` is red on the merge result (exit 1)"
+    for _ in range(2):
+        drain.close(
+            root,
+            drain.preflight.fetch(ALPHA, root, offline(root).tracker),
+            outcome="waits",
+            reasons=[red],
+        )
+        assert states(root)[BRANCH_A] == "built"
+    drain.close(
+        root,
+        drain.preflight.fetch(ALPHA, root, offline(root).tracker),
+        outcome="waits",
+        reasons=[red],
+    )
+    entry = next(e for e in drain.plan(offline(root)).tickets if e.branch == BRANCH_A)
+    assert entry.state == "held"
+    capsys.readouterr()
+
+
 def test_a_run_that_keeps_erroring_is_retried_and_then_the_owners(
     tmp_path: Path, capsys: Out
 ) -> None:
