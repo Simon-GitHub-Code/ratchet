@@ -1932,14 +1932,15 @@ def check_incremental(root: Path) -> Iterable[Finding]:
             yield Finding(
                 "justfile",
                 f"the binding's '- Incremental:' line says `none`, and `{INCREMENTAL_VARIABLE}`"
-                ' names a mode; set it to "", which is what a tool with none needs',
+                ' names a mode; set it to "": a tool with no incremental mode has no option to add',
                 Agent(start=template_definition(INCREMENTAL_VARIABLE)),
             )
         return
     if held is None:
         problem = (
             f"has no `{INCREMENTAL_VARIABLE}` variable, which holds the mutation tool's incremental"
-            " mode for the recipe `mutation-changed` and is empty in CI; add the template's"
+            " mode for the recipe `mutation-changed` and is empty in CI and in the bite proof's"
+            " copy; add the template's"
         )
         does = f"add the template's `{INCREMENTAL_VARIABLE}`, left for the project to bind"
         want = justfile_text.with_variable(
@@ -1955,9 +1956,9 @@ def check_incremental(root: Path) -> Iterable[Finding]:
     if not all(part in held for part in CI_SWITCH):
         yield Finding(
             "justfile",
-            f"`{INCREMENTAL_VARIABLE}` is not empty in CI and in the bite proof's copy; both run"
-            " without the cache, so give it the template's switch on the `CI` and"
-            " `RATCHET_BITING` environment variables, which is empty when either is set",
+            f"`{INCREMENTAL_VARIABLE}` is not empty when `CI` or `RATCHET_BITING` is set; CI and"
+            " the bite proof's copy both run without the cache, so give it the template's switch,"
+            " which is empty when either is set",
             start,
         )
     if justfile_text.BINDS in held:

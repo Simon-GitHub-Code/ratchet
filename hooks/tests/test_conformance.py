@@ -1289,9 +1289,9 @@ def test_an_incremental_variable_that_is_not_empty_in_ci_or_the_bite_is_found(re
         replace("justfile", switch, kept)(repo)
         assert justfile_findings(repo) == [
             (
-                "justfile: `mutation_incremental` is not empty in CI and in the bite proof's copy;"
-                " both run without the cache, so give it the template's switch on the `CI` and"
-                " `RATCHET_BITING` environment variables, which is empty when either is set"
+                "justfile: `mutation_incremental` is not empty when `CI` or `RATCHET_BITING` is"
+                " set; CI and the bite proof's copy both run without the cache, so give it the"
+                " template's switch, which is empty when either is set"
             )
         ]
         replace("justfile", kept, switch)(repo)
@@ -1325,7 +1325,7 @@ def test_an_incremental_line_of_none_wants_the_variable_empty_or_absent(repo: Pa
     assert justfile_findings(repo) == [
         (
             "justfile: the binding's '- Incremental:' line says `none`, and `mutation_incremental`"
-            ' names a mode; set it to "", which is what a tool with none needs'
+            ' names a mode; set it to "": a tool with no incremental mode has no option to add'
         )
     ]
     text = (repo / "justfile").read_text(encoding="utf-8")
