@@ -30,13 +30,11 @@ EXTRA_DOOR = '\n[[door]]\nname = "schema"\nreason = "A schema ships once."\npath
 
 
 def unbound(name: str) -> str:
-    """The template's table ``name`` from its name line through its empty ``paths``."""
     start = TEMPLATE.index(f'name = "{name}"\n')
     return TEMPLATE[start : TEMPLATE.index("paths = []\n", start) + len("paths = []\n")]
 
 
 def bound(name: str, pattern: str) -> str:
-    """The template with ``pattern`` the one path of its table ``name``."""
     table = unbound(name)
     return TEMPLATE.replace(table, table.replace("paths = []", f"paths = [\n    {pattern},\n]"))
 
@@ -218,8 +216,6 @@ def test_a_write_or_edit_that_appends_whole_groups_or_doors_passes_on_a_branch(
 def test_an_edit_that_adds_a_path_to_a_group_or_door_passes_on_a_branch(
     adopted: Path, name: str, pattern: str
 ) -> None:
-    # Why: /ratchet:safeguard adds a new tool's config to the tool-config group, and a binding
-    # fills the template's empty `paths`; neither takes a path from a group below.
     table = unbound(name)
     edit = answer(
         adopted,

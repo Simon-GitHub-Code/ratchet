@@ -1061,3 +1061,39 @@ def test_the_binding_template_has_an_incremental_line_naming_the_justfile_variab
     assert "`none: <reason>`" in line
     assert "mutation_incremental :=" in JUSTFILE
     assert "`mutation_incremental` option" in recipe("mutation-changed")
+
+
+HASH_COMMENTED = sorted(
+    path
+    for root in ("skills/adopt/templates", "skills/init/templates", "skills/method")
+    for path in (PLUGIN_ROOT / root).rglob("*")
+    if path.is_file()
+    and (path.suffix in {".yml", ".yaml", ".toml"} or path.name in {"justfile", "gitignore"})
+)
+
+
+def prose_comment_lines(text: str) -> list[int]:
+    found = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        stripped = line.lstrip()
+        if stripped.startswith("#!"):
+            continue
+        note = line[line.index(" # ") + 1 :] if " # " in line else ""
+        if stripped.startswith("#") or (note and not pins.VERSION_COMMENT.match(note)):
+            found.append(number)
+    return found
+
+
+@pytest.mark.parametrize(
+    "path", HASH_COMMENTED, ids=lambda path: str(path.relative_to(PLUGIN_ROOT))
+)
+def test_a_template_or_catalogue_file_ships_no_comment_but_a_pin_note(path: Path) -> None:
+    assert prose_comment_lines(path.read_text(encoding="utf-8")) == []
+
+
+def test_a_comment_planted_in_a_template_is_found_and_a_pin_note_is_not() -> None:
+    planted = JUSTFILE + "# a reason\nlint:\n    true  # a reason\n"
+    pinned = "      - uses: owner/action@" + "0" * 40 + " # v4.2.2\n"
+    lines = len(JUSTFILE.splitlines())
+    assert prose_comment_lines(planted) == [lines + 1, lines + 3]
+    assert prose_comment_lines("#!/bin/sh\n" + pinned) == []
