@@ -321,3 +321,21 @@ def test_a_defect_ticket_parked_for_its_own_kind_is_told_to_change_not_to_run_th
 ) -> None:
     parked = preflight.local_ticket("7", f"# T\n\n{line}\n")
     assert route.releases(hold(owes), parked, "main") == expected
+
+
+def test_a_round_ticket_with_no_conjecture_gets_the_ordinary_conjecture_step_first(
+    tmp_path: Path,
+) -> None:
+    root, base = adopted(tmp_path)
+    synced(root, base)
+    text = "# 01: T\n\nStatus: ready-for-agent\n\nFormal model: round\n"
+    write(root, ".scratch/f/issues/01-t.md", text)
+    commit(root, "docs(tracker): a round's ticket with no conjecture")
+    step = route.decide(root, None)
+    assert (step.command, step.stage) == (
+        f"{route.CONJECTURE} .scratch/f/issues/01-t.md",
+        "conjecture",
+    )
+    write(root, ".scratch/f/issues/01-t.md", text + CONJECTURE)
+    commit(root, "docs(tracker): the conjecture is stated")
+    assert route.decide(root, None).stage == "formal-ticket"

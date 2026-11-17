@@ -1026,6 +1026,7 @@ class Upkeep:
 
     defects: frozenset[str] = frozenset()
     ticket: preflight.Ticket | None = None
+    stated: bool = True
     waiting: str | None = None
     behind: formal_model.Behind | None = None
 
@@ -1046,7 +1047,8 @@ def upkeep(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> Upkee
     defects = frozenset(line.defect for _, line in lines if line and line.defect)
     for ticket, line in lines:
         if line and line.round:
-            return Upkeep(defects, ticket=ticket)
+            stated = unstated(ticket, root, gh or (lambda _args: None)) is None
+            return Upkeep(defects, ticket=ticket, stated=stated)
     branch = formal_model.waiting(root, checkout.default_branch)
     if branch is not None or formal is None:
         return Upkeep(defects, waiting=branch)
@@ -1058,11 +1060,13 @@ def formal_step(upkeeping: Upkeep, checkout: Checkout, instead: Step) -> Step | 
 
     Why: ADR 0062. Behind is never red, so the safeguard's upkeep is offered beside the build.
     A round that found something is a ticket, as work; one that changed the model waits for the
-    owner's merge.
+    owner's merge. A round ticket short of a stated conjecture is left to the ordinary ticket chain.
     """
     carry = f"Or carry on with {instead.command}: nothing is red for it"
     if upkeeping.ticket is not None:
         ticket = upkeeping.ticket
+        if not upkeeping.stated:
+            return None
         return Step(
             f"{FEATURE} {ticket.ref}",
             f'ticket {ticket.ref} "{ticket.title}" carries what the formal model\'s last round'
