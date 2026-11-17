@@ -4,6 +4,7 @@ import io
 import json
 import os
 import re
+import select
 import shlex
 import shutil
 import subprocess
@@ -309,6 +310,12 @@ def test_a_line_of_the_longest_escapes_in_every_text_field_still_fits() -> None:
     line = json.loads(raw)
     assert line["truncated"] is True
     assert {line[name] for name in ("tool", "rule", "detail", "branch")} == {widest[: events.CLIP]}
+
+
+@pytest.mark.parametrize("length", [4000, 6000, 100_000])
+def test_a_line_of_any_length_is_one_write_a_pipe_takes_whole(length: int) -> None:
+    event = events.Event("2026-11-15T00:00:00Z", "deny", "Bash", "force-push", "x" * length, "main")
+    assert len(event.line()) <= select.PIPE_BUF
 
 
 WRITER = """
