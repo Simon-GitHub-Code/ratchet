@@ -31,7 +31,9 @@ _SHELL_FLAG = re.compile(r"-[A-Za-z]*c")
 _LITERAL = re.compile(r"""["'](/[^\s"'\\]*|~[^\s"'\\]*|\.\.(?:/[^\s"'\\]*)?)["']""")
 _INTERPRETER = re.compile(r"(?:python[\d.]*|node|deno|bun|perl|ruby)$")
 _SHELL = re.compile(r"(?:ba|da|z)?sh$")
-_SCRIPTED = frozenset({"sed", "awk", "gawk", "mawk", "grep", "egrep", "fgrep", "rg"})
+_SCRIPTED = frozenset({"sed", "awk", "gawk", "mawk", "grep", "egrep", "fgrep", "rg", "printf"})
+_AWKS = frozenset({"awk", "gawk", "mawk"})
+_AWK_VALUE_FLAGS = frozenset({"-v", "-F"})
 _WRAPPERS = frozenset({"env", "command", "exec", "time", "nohup", "sudo", "xargs"})
 _SCRIPT_FLAGS = frozenset({"-e", "--expression", "--regexp"})
 _PUNCTUATION = ";&|()<>\n"
@@ -217,7 +219,7 @@ def _simple(simple: list[str]) -> Iterator[Word]:
     elif _SHELL.match(name) or _INTERPRETER.match(name):
         yield from _program(name, args)
     elif name in _SCRIPTED:
-        yield from _scripted(args)
+        yield from _scripted(args, awk=name in _AWKS)
     else:
         for arg in args:
             yield from _word(arg)
@@ -246,14 +248,14 @@ def _program(name: str, args: list[str]) -> Iterator[Word]:
         previous = arg
 
 
-def _scripted(args: list[str]) -> Iterator[Word]:
+def _scripted(args: list[str], *, awk: bool) -> Iterator[Word]:
     flagged = any(arg in _SCRIPT_FLAGS for arg in args)
     skip_next = False
     skip_first = not flagged
     for arg in args:
         if skip_next:
             skip_next = False
-        elif arg in _SCRIPT_FLAGS:
+        elif arg in _SCRIPT_FLAGS or (awk and arg in _AWK_VALUE_FLAGS):
             skip_next = True
         elif arg.startswith("-"):
             yield from _word(arg)
