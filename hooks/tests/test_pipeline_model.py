@@ -7,6 +7,7 @@ sequence of abstract answers up to the fix loop's bound runs on the model and on
 
 from __future__ import annotations
 
+import dis
 import fcntl
 import functools
 import json
@@ -14,6 +15,7 @@ import os
 import pickle
 from collections import deque
 from dataclasses import replace
+from types import CodeType
 from typing import TYPE_CHECKING
 
 import pytest
@@ -532,3 +534,27 @@ def test_a_run_in_which_a_role_published_ends_approved_on_the_real_workflow() ->
     assert real.calls == (("review-again", "Review"),)
     assert real.raw["result"]["verdict"] == "approve"
     assert real == replays()["approved"], "the script is handed nothing that says a role published"
+
+
+def globals_read(code: CodeType) -> set[str]:
+    inner = (const for const in code.co_consts if isinstance(const, CodeType))
+    loaded = {op.argval for op in dis.get_instructions(code) if op.opname == "LOAD_GLOBAL"}
+    return loaded.union(*(globals_read(each) for each in inner))
+
+
+def test_every_test_that_reads_the_replay_runs_in_the_replays_shard() -> None:
+    codes = {
+        name: getattr(found, "__wrapped__", found).__code__
+        for name, found in globals().items()
+        if hasattr(getattr(found, "__wrapped__", found), "__code__")
+    }
+    readers: set[str] = set()
+    reached = {"played"}
+    while reached != readers:
+        readers = reached
+        reached = readers | {name for name, code in codes.items() if globals_read(code) & readers}
+    tests = sorted(name for name in readers if name.startswith("test_"))
+    assert len(tests) > 1, tests
+    marks = {name: getattr(globals()[name], "pytestmark", []) for name in tests}
+    unmarked = [name for name, marked in marks.items() if REPLAYED.mark not in marked]
+    assert unmarked == [], "each of these plays the replay again in a shard of its own"
