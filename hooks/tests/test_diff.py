@@ -9,6 +9,7 @@ import pytest
 
 from ratchet_guards import diff
 from ratchet_guards.manifest import MANIFEST_PATH, Group, parse
+from tests.repos import branch, commit, git, repository
 from tests.support import MANIFEST_TEXT, PLUGIN_ROOT
 
 BASE_MANIFEST = '[[group]]\nname = "old"\nreason = "r"\npaths = ["dropped/**", "CLAUDE.md"]\n'
@@ -50,6 +51,15 @@ def worktree_with_manifest(tmp_path: Path, text: str | None = None) -> Path:
 def test_changed_paths_merge_tracked_and_untracked() -> None:
     git = fake_git(Path("/w"), "b\0a\0", untracked="c\0a\0")
     assert diff.changed_paths(git, "origin/main") == ["a", "b", "c"]
+
+
+def test_a_guard_file_moved_away_is_a_changed_path(tmp_path: Path) -> None:
+    root = repository(tmp_path, {"guards/x.toml": "a = 1\n"})
+    git(root, "config", "diff.renames", "true")
+    branch(root)
+    git(root, "mv", "guards/x.toml", "x.toml")
+    commit(root, "chore: move the file")
+    assert diff.changed_paths(diff.git_in(root), "main") == ["guards/x.toml", "x.toml"]
 
 
 def test_a_failing_git_is_an_error() -> None:

@@ -389,6 +389,15 @@ def test_the_guards_own_asks_count_as_the_guards() -> None:
     assert (prompts["guard"], prompts["permission"]) == (2, 1)
 
 
+def test_a_write_prompt_with_no_reason_is_the_guard_paths_ask_rule() -> None:
+    run = [
+        {"s": 1, "kind": "prompt", "tool": tool, "decision": "allow", "reason": ""}
+        for tool in ("Edit", "Write", "Bash")
+    ]
+    prompts = reduce.reduce(run)["prompts"]
+    assert (prompts["guard"], prompts["permission"]) == (2, 1)
+
+
 DEEP = """\
 parallel: imports: not run yet (later: code:layer) in 0.1s
 parallel: load: not applicable (none: not a service or a job) in 0.1s

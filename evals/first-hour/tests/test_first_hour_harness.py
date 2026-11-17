@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import contextlib
 import json
 import os
@@ -129,6 +130,22 @@ def test_the_operators_side_is_read_once_from_their_home(tmp_path: Path) -> None
     assert found.tools == {"uv": Path("/usr/bin/env").resolve()}
     assert home / ".claude" / "rules" / "a.md" in found.watched
     assert found.projects == home / ".claude" / "projects"
+
+
+def test_the_run_tests_the_checkouts_head_and_nothing_landing_or_uncommitted_on_it(
+    tmp_path: Path,
+) -> None:
+    checkout = fakes.plugin(tmp_path / "checkout")
+    (checkout / "uncommitted.txt").write_text("x")
+    run = harness.setup(
+        fakes.config(checkout, tmp_path / "run"), fakes.operator(tmp_path), os.environ
+    )
+    (checkout / "landed.txt").write_text("x")
+    fakes.git(checkout, "add", "landed.txt")
+    fakes.git(checkout, "commit", "-q", "-m", "landed mid-run")
+    assert (run.layout.pinned / "scripts" / "route.py").is_file()
+    assert not (run.layout.pinned / "uncommitted.txt").exists()
+    assert not (run.layout.pinned / "landed.txt").exists()
 
 
 def test_the_run_directory_must_be_new_or_empty_and_under_temp(tmp_path: Path) -> None:
@@ -269,6 +286,17 @@ def test_merges_are_logged_even_when_the_step_is_cut_off(tmp_path: Path) -> None
     assert merged[0]["how"] == "agent"
 
 
+def test_a_merge_in_the_runs_first_second_is_logged_at_its_start_not_before(
+    tmp_path: Path,
+) -> None:
+    run, _ = make_run(tmp_path)
+    one = driver(run)
+    asyncio.run(one.session.turn("/ratchet:init", run.deadline))
+    run.log.epoch = time.time() + 0.5
+    one.record_merges()
+    assert [e["s"] for e in events(run) if e["kind"] == "merge"] == [0.0]
+
+
 def test_an_app_check_with_no_branch_or_no_checkout_says_so(tmp_path: Path) -> None:
     run, _ = make_run(tmp_path)
     one = driver(run)
@@ -298,6 +326,15 @@ def test_the_drains_leftover_work_trees_are_removed_and_claude_projects_named(
     assert left["removed_work_trees"] == [str(queue)]
     assert not queue.exists()
     assert left["claude_projects"] == [str(projects / (harness.slug(run.layout.root) + "-app"))]
+
+
+def test_the_operators_claude_projects_are_listed_and_never_deleted(tmp_path: Path) -> None:
+    run, _ = make_run(tmp_path)
+    projects = tmp_path / "projects"
+    mine = projects / (harness.slug(run.layout.root) + "-app")
+    mine.mkdir(parents=True)
+    assert harness.tidy(run, projects)["claude_projects"] == [str(mine)]
+    assert mine.is_dir()
 
 
 def test_an_sdk_message_is_kept_whole_and_its_events_logged(tmp_path: Path) -> None:
@@ -378,6 +415,15 @@ def test_a_red_gate_in_a_merge_is_not_run_again(tmp_path: Path) -> None:
     assert [r["attempt"] for r in events(run) if r["kind"] == "gates"] == [1]
 
 
+def test_a_pastes_saved_output_is_where_reduce_parses_its_gates_again(tmp_path: Path) -> None:
+    run, _ = make_run(tmp_path)
+    red = "printf 'parallel: lint: red (exit 1) in 0.1s\\n' # merge"
+    driver(run).paste([red], "route")
+    recorded = [e for e in events(run) if e["kind"] != "gates"]
+    again = [e for e in reduce.reread(recorded, run.layout.logs) if e["kind"] == "gates"]
+    assert [g["gates"] for g in again] == [[{"name": "lint", "status": "red", "trigger": ""}]]
+
+
 def test_the_app_check_starts_the_app_with_the_projects_installed_packages(
     tmp_path: Path,
 ) -> None:
@@ -395,6 +441,25 @@ def test_the_app_check_starts_the_app_with_the_projects_installed_packages(
     assert not first.started
     assert second is not None
     assert second.started
+
+
+def test_a_halt_during_the_app_check_ends_the_app(tmp_path: Path) -> None:
+    run, _ = make_run(tmp_path)
+    one = driver(run)
+    asyncio.run(one.session.turn("/ratchet:init", run.deadline))
+    app = run.layout.app
+    start = "python3 -c \"import pathlib, time; pathlib.Path('READY').touch(); time.sleep(300)\""
+    (app / "README.md").write_text(f"```\n{start} serve\n```\n")
+    fakes.git(app, "commit", "-q", "-am", "an app that never listens")
+    ready = run.layout.appcheck / "halted" / "READY"
+    with concurrent.futures.ThreadPoolExecutor(1) as pool:
+        checking = pool.submit(one.app_check, "halted")
+        deadline = time.monotonic() + 60
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert run.halt() == 1
+        with pytest.raises(harness.Deadline):
+            checking.result(timeout=60)
 
 
 def test_a_second_signal_while_the_run_stops_changes_nothing() -> None:

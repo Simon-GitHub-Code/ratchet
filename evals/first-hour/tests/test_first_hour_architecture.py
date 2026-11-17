@@ -1,4 +1,5 @@
 import json
+import tomllib
 from pathlib import Path
 
 from first_hour import architecture, audit
@@ -84,6 +85,16 @@ def test_the_architecture_question_in_the_adoption_round_is_found() -> None:
     assert found["took_recommended"]
     assert found["answer"] == "Plain (Recommended)"
     assert found["change_questions"] == 0
+
+
+def test_the_registered_architecture_questions_are_the_words_that_find_them() -> None:
+    registry = Path(__file__).resolve().parents[3] / "skills/method/questions.toml"
+    asks = {a["key"]: a["text"] for a in tomllib.loads(registry.read_text("utf-8"))["ask"]}
+    system = question(asks["architecture.system"], options=["a", "b"])
+    tools = question(asks["architecture.tools"], options=["x"])
+    found = architecture.asked([system, tools])
+    assert found["asked"]
+    assert found["tools_asked"]
 
 
 def test_a_question_that_was_not_asked_reads_as_not_asked() -> None:

@@ -519,6 +519,19 @@ def test_the_plugins_own_ci_reports_a_ceiling_on_a_pull_request_as_the_template_
     assert own.count("budget.py") == 2
 
 
+def test_the_plugins_own_checkers_are_held_at_every_line_with_only_tests_omitted() -> None:
+    config = tomllib.loads((PLUGIN_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    coverage = config["tool"]["coverage"]
+    assert coverage["report"]["fail_under"] == 100
+    assert coverage["run"]["branch"] is True
+    assert coverage["run"]["source"] == ["scripts", "hooks", "evals/first-hour/first_hour"]
+    assert coverage["run"]["omit"] == [
+        "*/hooks/tests/*",
+        "*/evals/first-hour/first_hour/drive.py",
+    ]
+    assert coverage["run"]["patch"] == ["subprocess"]
+
+
 def test_the_weekly_workflow_is_scheduled_and_may_only_read_and_write_issues() -> None:
     assert "on:\n  schedule:\n" in WEEKLY
     assert "\npermissions:\n  contents: read\n" in WEEKLY
