@@ -1585,6 +1585,16 @@ def test_a_file_the_methods_own_kinds_match_needs_no_row(repo: Path) -> None:
     assert not any("docs/features/slug/spec.md" in line for line in red(repo))
 
 
+def test_a_no_forge_change_description_is_a_markdown_file_of_a_kind(repo: Path) -> None:
+    git(repo, "init", "-q")
+    replace(BINDING, DOCUMENTS_ROW, "| pages | `docs/pages/*.md` | `never` |")(repo)
+    write(".scratch/changes/feature-4-thing.md", "# Thing\n\n## Why\n\nA reason.\n")(repo)
+    write(".scratch/stray.md", "# Stray\n")(repo)
+    lines = red(repo)
+    assert no_kind(".scratch/stray.md") in lines
+    assert no_kind(".scratch/changes/feature-4-thing.md") not in lines
+
+
 def test_a_pass_row_keeping_a_heading_its_files_lack_is_not_a_finding(repo: Path) -> None:
     replace(BINDING, DOCUMENTS_ROW, "| pages | `**/*.md` | `pass` keeping `## Nowhere` |")(repo)
     assert red(repo) == []
