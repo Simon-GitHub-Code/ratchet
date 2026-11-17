@@ -7,6 +7,7 @@ import inspect
 import json
 import os
 import shlex
+import shutil
 import signal
 import socket
 import subprocess
@@ -356,3 +357,22 @@ def test_a_stop_asked_for_before_the_server_is_up_is_honoured_once_it_is() -> No
         acceptance_proxy.STOP.set()
         stopping.join()
         acceptance_proxy.STOP.clear()
+
+
+def test_a_proxy_whose_session_directory_is_removed_stops_and_seals_nothing(
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "session"
+    directory.mkdir()
+    (directory / "session.json").write_text(json.dumps({"session": SESSION}), encoding="utf-8")
+    nothing = f"http://127.0.0.1:{gatelib.free_port()}/"
+    process = run_proxy(tmp_path, str(directory), env={gatelib.READY_ENV: nothing})
+    try:
+        products.wait_for(directory / "proxy.json")
+        shutil.rmtree(directory)
+        assert process.wait(timeout=30) == 1
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+    assert not directory.exists()
