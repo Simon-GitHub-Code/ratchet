@@ -735,7 +735,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
             "In plain words:",
             (
                 "This project would move from Ratchet 0.8.2 to"
-                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 80 changes in 13"
+                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 81 changes in 13"
                 " files. The project owes 105 things since the upgrade. None of them turns a check"
                 " red or stops a merge, and between upgrades the list only gets shorter. Nothing"
                 " fixes them by itself: ask an agent to. Each is in a guard path: an agent can"
