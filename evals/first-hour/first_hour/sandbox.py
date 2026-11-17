@@ -245,6 +245,7 @@ def argv(
     for tool in sorted({*tools, *layout.toolchains}):
         args += ["--ro-bind", str(tool), str(tool)]
     args += ["--remount-ro", "/home"]
+    args += ["--unsetenv", "XDG_RUNTIME_DIR"]
     args += ["--unshare-pid", "--unshare-ipc", "--die-with-parent", "--new-session"]
     return [*args, "--", *command]
 
