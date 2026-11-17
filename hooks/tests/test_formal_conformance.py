@@ -195,3 +195,38 @@ def test_a_binding_without_a_triggers_section_leaves_the_kinds_to_the_triggers_c
     root, _ = project(tmp_path, "# Binding\n\n- Application types: service\n")
     assert found(root, conformance.check_trigger_kinds) == []
     assert formal_model.read("# Binding\n") is None
+
+
+def fired_row(question: str, trigger: str) -> conformance.Finding:
+    kind = trigger.removeprefix("code:")
+    fired = conformance.Fired({kind: ["src/a.py:1"]}, frozenset())
+    return conformance.dropped_row(
+        "the Gates table has no row", question, trigger=trigger, fired=fired
+    )
+
+
+@pytest.mark.parametrize(
+    ("question", "trigger"),
+    [
+        ("formal verification of concurrency", "code:concurrency"),
+        ("formal verification of untrusted input", "code:untrusted-input"),
+        ("formal verification of state", "code:state-machine"),
+    ],
+)
+def test_a_fired_formal_row_is_written_later_so_it_is_owed_at_once(
+    question: str, trigger: str
+) -> None:
+    found = fired_row(question, trigger)
+    assert found.problem.endswith(
+        f"add the template's row as `later: {trigger}`: it has fired here, so the row is owed"
+    )
+    assert isinstance(found.fix, conformance.Edit)
+    assert found.fix.does == f"add the '{question}' row as `later: {trigger}`"
+
+
+def test_a_fired_row_that_is_not_formal_is_still_bound_and_never_written_later() -> None:
+    found = fired_row("race and memory detectors", "code:concurrency")
+    assert found.problem.endswith(
+        "add the template's row and bind it: its trigger `code:concurrency` has fired here"
+    )
+    assert isinstance(found.fix, conformance.Agent)
