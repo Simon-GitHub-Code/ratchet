@@ -153,7 +153,7 @@ def test_a_pass_with_no_start_recorded_writes_no_note(tmp_path: Path) -> None:
     outside.mkdir()
     queue_notes.pass_feature_start(outside, BRANCH_A)
     assert list(outside.iterdir()) == []
-    root = project(tmp_path / "repo")
+    root = project(tmp_path)
     queue_notes.pass_feature_start(root, BRANCH_A)
     path = queue_notes.feature_start_path(root, BRANCH_A)
     assert path is not None
