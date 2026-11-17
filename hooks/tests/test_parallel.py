@@ -18,6 +18,7 @@ import pytest
 import budget
 import gatelib
 import parallel
+import runrecord
 from tests.repos import git
 from tests.servers import gone
 
@@ -463,9 +464,11 @@ def test_the_report_has_the_records_budget_writes(tmp_path: Path) -> None:
     ours = tmp_path / "ours.jsonl"
     green, red = gate(EXIT, 0), gate(EXIT, 2)
     assert run("--report", str(ours), "--", green, red) == 1
-    budget.report(report, budget.Outcome("lint", 1.0, None, 0))
+    budget.report(report, budget.Outcome("lint", 1.0, None, 0), runrecord.stamp(tmp_path, "tree"))
     template = json.loads(report.read_text())
-    records = [json.loads(line) for line in ours.read_text().splitlines()]
+    records = [
+        json.loads(line) for line in ours.read_text().splitlines() if "key" in json.loads(line)
+    ]
     assert {record["key"] for record in records} == {green, red}
     assert all(set(record) == set(template) for record in records)
     by_key = {record["key"]: record for record in records}
