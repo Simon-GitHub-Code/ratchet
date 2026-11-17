@@ -2,6 +2,8 @@
 
 import hashlib
 import http.client
+import http.server
+import inspect
 import json
 import os
 import shlex
@@ -333,3 +335,24 @@ def test_a_client_that_hangs_up_mid_request_does_not_stop_the_proxy(
         with socket.create_connection((host, int(port))) as hung:
             hung.sendall(b"POST /items HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n")
         assert products.request(url)[0] == 200
+
+
+def test_the_proxy_settles_within_the_grace_the_service_gate_gives_it() -> None:
+    grace = inspect.signature(gatelib.stop_group).parameters["grace"].default
+    assert grace > acceptance_proxy.SETTLE
+
+
+def test_a_stop_asked_for_before_the_server_is_up_is_honoured_once_it_is() -> None:
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), acceptance_proxy.Nothing)
+    acceptance_proxy.STOP.set()
+    try:
+        stopping = threading.Thread(
+            target=acceptance_proxy.until_stopped, args=(server, lambda: True)
+        )
+        stopping.start()
+        stopping.join(timeout=10)
+        assert not stopping.is_alive()
+    finally:
+        acceptance_proxy.STOP.set()
+        stopping.join()
+        acceptance_proxy.STOP.clear()

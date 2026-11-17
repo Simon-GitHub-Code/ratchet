@@ -5,6 +5,7 @@ import datetime as dt
 import fcntl
 import hashlib
 import http.client
+import inspect
 import json
 import os
 import shutil
@@ -966,3 +967,9 @@ def test_a_boot_log_that_says_nothing_known_still_gives_a_sentence(tmp_path: Pat
     log.write_text("with_service: red\n", encoding="utf-8")
     assert acceptance.what_it_did(log) == "it never answered, and printed nothing"
     assert acceptance.what_it_did(tmp_path / "none.log") == "it never answered, and printed nothing"
+
+
+def test_the_supervisor_waits_for_the_service_gate_to_stop_the_proxy_and_then_the_product() -> None:
+    grace = inspect.signature(gatelib.stop_group).parameters
+    one_stop = grace["grace"].default + grace["settle"].default
+    assert 2 * one_stop <= acceptance.STOP_GRACE
