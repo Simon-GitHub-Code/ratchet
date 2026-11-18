@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import gatelib
+import owed
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import dependencies
@@ -19,6 +20,7 @@ RECORDS = [
     "docs/features/**/verdict.json",
     "docs/disputes/**/*.md",
     ".scratch/**/*.md",
+    str(owed.LEDGER),
 ]
 SECTION = "## Test paths"
 LABEL = "Tests"
