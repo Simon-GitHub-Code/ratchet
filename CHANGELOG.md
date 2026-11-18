@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.13.2
+
+A defect of 0.13.0 and 0.13.1 is fixed, which an upgrade of a real project found in CI. Every upgrade from 0.12.x to either version was red on the tier 1 gate `bite`. The upgrade owes the bite gaps it cannot write, in `quality/owed.toml` under the rule `bites`, and conformance accepts them as owed. But `project_bite.py` read no ledger, so `bite` was red on the same gaps. Every such upgrade hit it, since the `comments` gate is new in 0.13.0 and no project upgrading from 0.12.x has a bite for it.
+
+Upgrade from 0.13.0 or 0.13.1 as the README's Upgrading section says: the upgrade moves the pin to 0.13.2, in the binding's pin line and in the workflows that check the plugin out at it, and changes nothing else in the project. From an earlier version, the 0.13.0 notes apply too.
+
+If a pull request that upgrades to 0.13.0 or 0.13.1 is still open, close it and upgrade the default branch afresh. Running the upgrade again on that open branch turns `ratchet-lowered` red on every entry the first upgrade owed (issue #287, to be fixed in 0.13.3).
+
+- The bite gate excuses a gap that `quality/owed.toml` owes under the key conformance builds for the same finding. It prints each owed gap, then their count and the version they are owed since, such as `bite: 2 gaps owed since 0.13.2, listed in quality/owed.toml`. Then it proves the bites the registry holds, as before.
+- It stays red on any gap no entry owes. A ledger it cannot read is red only when there is a gap to excuse.
+- ADR 0075 amends ADR 0037, which said a finding that another tier 0 or tier 1 gate is red on is never owed. Held to here, that rule kept every upgrade red, the state ADR 0037 was written to end. The owed list still only shrinks: `ratchet-lowered` and the guard on `quality/owed.toml` hold its growth.
+
 ## 0.13.1
 
 A defect of the route is fixed, one 0.12.4 and 0.13.0 share, which the first-hour evaluation of 0.13.0 found. When a parked ticket's guard edits sat on a branch whose merge the merge judge leaves to the owner, the route could not see that branch from the default branch, and the owner's answer on the ticket released the whole park, its guard part with it. So the route named `/ratchet:feature` for a ticket still held, and the owner went round the same hold again. Upgrade from 0.13.0 as the README's Upgrading section says: the upgrade moves the pin to 0.13.1, in the binding's pin line and in the workflows that check the plugin out at it, and changes nothing else in the project. From an earlier version, the 0.13.0 notes apply too.
