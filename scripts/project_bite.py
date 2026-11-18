@@ -644,6 +644,8 @@ def owed_key(problem: str) -> owed.Key:
 
 
 def owing(root: Path, problems: Sequence[str]) -> tuple[list[str], list[str]]:
+    if not problems:
+        return [], []
     ledger = owed.read(root)
     entries = [entry for entry in ledger.entries if entry.rule == RULE]
     hits, _ = owed.excused([owed_key(problem) for problem in problems], entries)

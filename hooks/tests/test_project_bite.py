@@ -9,6 +9,7 @@ import threading
 import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -1071,11 +1072,10 @@ def test_a_gate_dropped_by_gate_does_not_hide_a_registry_gap_under_changed(
 
 
 def owe_what_conformance_finds(root: Path, *, keep: Callable[[str], bool]) -> None:
-    rule = conformance.rule_of(conformance.check_bites)
+    bites = conformance.rule_of(conformance.check_bites)
+    keys = [replace(found, rule=bites).key() for found in conformance.check_bites(root)]
     entries = [
-        owed.Entry(found.path, rule, found.problem, "0.13.1")
-        for found in conformance.check_bites(root)
-        if keep(found.problem)
+        owed.Entry(path, rule, problem, "0.13.1") for rule, path, problem in keys if keep(problem)
     ]
     write(root, str(owed.LEDGER), owed.render(entries))
 
@@ -1129,6 +1129,15 @@ def test_a_ledger_that_does_not_parse_excuses_nothing_and_is_red(
     out = shown(capsys).splitlines()
     assert out[0].startswith(f"{owed.LEDGER}: does not parse")
     assert out[1:] == [f"{REGISTRY}: {TESTS_GAP}", f"{REGISTRY}: {SLOW_GAP}", "bite: red"]
+
+
+def test_a_ledger_that_does_not_parse_is_not_red_in_a_bite_gate_with_nothing_to_excuse(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = targeted(tmp_path)
+    write(root, str(owed.LEDGER), "[[owed]\n")
+    assert prove(root, "--gate", "lint") == 0
+    assert "does not parse" not in shown(capsys)
 
 
 def test_a_pull_request_with_nothing_to_compare_with_proves_the_gates(
