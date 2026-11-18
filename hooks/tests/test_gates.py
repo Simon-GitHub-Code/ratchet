@@ -375,6 +375,34 @@ def test_change_size_does_not_count_the_methods_own_records(tmp_path: Path) -> N
     assert change_size.measure(root, "main") == change_size.Size(2, 2), "code, and no record"
 
 
+def owed_entries(count: int) -> str:
+    return "".join(
+        f'[[owed]]\nrule = "comments"\npath = "src/m{n}.py"\nproblem = "c{n}"\nsince = "1.0.0"\n\n'
+        for n in range(count)
+    )
+
+
+def test_change_size_does_not_count_the_ledger_of_owed_findings(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = repository(
+        tmp_path,
+        {
+            "docs/process/binding.md": BINDING_WITH_ROW.format(row="`tests/**`"),
+            "quality/thresholds.toml": CEILINGS,
+            "quality/owed.toml": owed_entries(3),
+        },
+    )
+    commit(root, "feat(core): second")
+    branch(root)
+    write(root, "src/a.py", "a = 1\n")
+    write(root, "quality/owed.toml", owed_entries(400)[len(owed_entries(1)) :])
+    commit(root, "chore(method): bind the comments lister")
+    assert change_size.measure(root, "main") == change_size.Size(1, 1), "the code, no ledger line"
+    assert run(change_size, root) == 0
+    assert "1 product files (ceiling 2), 1 product lines (ceiling 5)" in capsys.readouterr().out
+
+
 def test_change_size_does_not_count_the_lockfiles_the_merge_bases_binding_names(
     tmp_path: Path,
 ) -> None:
