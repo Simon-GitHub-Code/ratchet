@@ -13,7 +13,9 @@ from pathlib import Path
 
 import pytest
 
+import conformance
 import gatelib
+import owed
 import project_bite
 from tests import repos
 from tests.repos import branch, commit, git, repository, write
@@ -1066,6 +1068,67 @@ def test_a_gate_dropped_by_gate_does_not_hide_a_registry_gap_under_changed(
     replaced(root, BINDING, "| tests | a tool | 1 |", "| tests | a tool | 0 |")
     assert prove(root, "--changed", "--gate", "lint") == 1
     assert "gate 'tests' (tests) is bound to a tool and no [[bite]]" in shown(capsys)
+
+
+def owe_what_conformance_finds(root: Path, *, keep: Callable[[str], bool]) -> None:
+    rule = conformance.rule_of(conformance.check_bites)
+    entries = [
+        owed.Entry(found.path, rule, found.problem, "0.13.1")
+        for found in conformance.check_bites(root)
+        if keep(found.problem)
+    ]
+    write(root, str(owed.LEDGER), owed.render(entries))
+
+
+def upgraded(tmp_path: Path) -> Path:
+    root = targeted(tmp_path, registry=bite("lint", WORD))
+    replaced(root, BINDING, "| lint | a tool | 0 |", "| lint | a newer tool | 0 |")
+    return root
+
+
+TESTS_GAP = "gate 'tests' (tests) is bound to a tool and no [[bite]] plants a fault for it"
+SLOW_GAP = "gate 'slow' (slow) is bound to a tool and no [[bite]] plants a fault for it"
+
+
+def test_a_gap_an_upgrade_owes_is_excused_named_and_the_rest_is_proven(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = upgraded(tmp_path)
+    owe_what_conformance_finds(root, keep=lambda _: True)
+    assert prove(root, "--changed") == 0
+    out = shown(capsys).splitlines()
+    assert out[:3] == [
+        f"bite: owed: {REGISTRY}: {TESTS_GAP}",
+        f"bite: owed: {REGISTRY}: {SLOW_GAP}",
+        f"bite: 2 gaps owed since 0.13.1, listed in {owed.LEDGER}",
+    ]
+    assert proved(out) == ["lint"]
+    assert out[-1].startswith("bite: green: 1 of 1 faults bit")
+
+
+def test_a_gap_no_entry_owes_is_still_red_beside_one_that_is_owed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = upgraded(tmp_path)
+    owe_what_conformance_finds(root, keep=lambda problem: problem == TESTS_GAP)
+    assert prove(root, "--changed") == 1
+    assert shown(capsys).splitlines() == [
+        f"bite: owed: {REGISTRY}: {TESTS_GAP}",
+        f"bite: 1 gap owed since 0.13.1, listed in {owed.LEDGER}",
+        f"{REGISTRY}: {SLOW_GAP}",
+        "bite: red",
+    ]
+
+
+def test_a_ledger_that_does_not_parse_excuses_nothing_and_is_red(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = upgraded(tmp_path)
+    write(root, str(owed.LEDGER), "[[owed]\n")
+    assert prove(root, "--changed") == 1
+    out = shown(capsys).splitlines()
+    assert out[0].startswith(f"{owed.LEDGER}: does not parse")
+    assert out[1:] == [f"{REGISTRY}: {TESTS_GAP}", f"{REGISTRY}: {SLOW_GAP}", "bite: red"]
 
 
 def test_a_pull_request_with_nothing_to_compare_with_proves_the_gates(
