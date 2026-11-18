@@ -50,7 +50,7 @@ The owner is asked nothing: every row is yours to propose and write, from your k
 
 6. **Land it.**
    - Commit the change on the branch.
-   - With a forge, push and open the pull request.
+   - With a forge, push and open the pull request. When a change that moves the plugin pin lands on the default branch while it is open, move the ledger onto the new pin, or `ratchet-lowered` is red on every `comments` entry. Fetch and merge `origin/<default>` in. Run `git checkout origin/<default> -- quality/owed.toml` to take the default branch's ledger. Run `just comments --record` again, so the `comments` entries are owed since the new pin. Run step 5's `upgrade.py --apply` again, to drop the entries this change already settles.
    - With no forge, write the change description at `.scratch/changes/<branch>.md` (the branch's `/` written as `-`) and run `just merge <branch>`.
 
    The binding is a guard path, so the merge judge leaves the merge to the owner, who reads one change.
