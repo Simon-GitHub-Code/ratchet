@@ -11,7 +11,7 @@ The ceiling has three reasons, and tests serve none of the first. It bounds how 
 
 ## Decision
 
-**The ceiling counts product code.** `[ceilings.change]` holds `product_files` and `product_lines`, which bound the files and the added-plus-deleted lines of what is not a test, and `test_lines`, a separate and much looser ceiling that only stops a runaway of tests. Records, lockfiles, the adoption exemption and rename handling are as before.
+**The ceiling counts product code.** `[ceilings.change]` holds `product_files` and `product_lines`, which bound the files and the added-plus-deleted lines of what is not a test, and `test_lines`, a separate and much looser ceiling that only stops a runaway of tests. Records, lockfiles, the adoption exemption and rename handling are as before. Amended by ADR 0076: the owed ledger is not counted either.
 
 **Which paths are tests is the binding's, not the plugin's.** The binding's `## Test paths` section holds `- Tests:` with the globs of every test, fixture and test-support file in backticks, or `none: <reason>`. The adopting agent writes it from what it knows of the stack, as it writes the Dependencies section (ADR 0044); the plugin names no stack. The gate reads the section at the merge base, so a change cannot widen what it exempts. Conformance is red on a missing, unfilled or malformed section, and `upgrade.py` adds the template's section, which an agent fills.
 
