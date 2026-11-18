@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, NamedTuple
 import application_types
 import budget
 import gatelib
+import owed
 import plugin_pin
 import report
 import suites
@@ -38,6 +39,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
 
 REGISTRY = Path("quality/bites.toml")
+RULE = "bites"
 MISSING = "missing; every gate bound to a tool needs a [[bite]]"
 PATCHES = "quality/bites/"
 KINDS = ("write", "patch", "remove", "replace")
@@ -635,6 +637,29 @@ def inspect(root: Path) -> tuple[list[Row], Registry, list[str], list[str]]:
 def failures(root: Path) -> list[str]:
     _, _, problems, gaps = inspect(root)
     return [f"{REGISTRY}: {problem}" for problem in problems + gaps]
+
+
+def owed_key(problem: str) -> owed.Key:
+    return (RULE, str(REGISTRY), problem)
+
+
+def owing(root: Path, problems: Sequence[str]) -> tuple[list[str], list[str]]:
+    if not problems:
+        return [], []
+    ledger = owed.read(root)
+    entries = [entry for entry in ledger.entries if entry.rule == RULE]
+    hits, _ = owed.excused([owed_key(problem) for problem in problems], entries)
+    judged = list(zip(problems, hits, strict=True))
+    excused = [problem for problem, hit in judged if hit]
+    red = [f"{owed.LEDGER}: {problem}" for problem in ledger.problems]
+    red += [f"{REGISTRY}: {problem}" for problem, hit in judged if not hit]
+    if not excused:
+        return red, []
+    keys = {owed_key(problem) for problem in excused}
+    since = ", ".join(sorted({entry.since for entry in entries if entry.key in keys}))
+    gaps = "gap" if len(excused) == 1 else "gaps"
+    notes = [f"bite: owed: {REGISTRY}: {problem}" for problem in excused]
+    return red, [*notes, f"bite: {len(excused)} {gaps} owed since {since}, listed in {owed.LEDGER}"]
 
 
 class Run(NamedTuple):
@@ -1428,8 +1453,11 @@ def main(argv: list[str]) -> int:
     root = options.root.resolve()
     rows, registry, problems, gaps = inspect(root)
     problems += [] if options.gate and not options.changed else gaps
-    if problems:
-        return gatelib.report("bite", [f"{REGISTRY}: {problem}" for problem in problems])
+    red, notes = owing(root, problems)
+    for line in notes:
+        print(line)
+    if red:
+        return gatelib.report("bite", red)
     chosen = pull_request_gates(rows) if options.pull_request_gates else rows
     if options.changed:
         found = changed_gates(root, rows)
