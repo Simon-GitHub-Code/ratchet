@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.13.3
+
+A defect of 0.13.0 to 0.13.2 is fixed, which a real project's `/ratchet:fill` found. The fill binds the comments lister, and `just comments --record` writes every comment the project already has into `quality/owed.toml` as owed. On that project it wrote 1,917 entries, 11,493 lines. The tier 1 gate `change-size` counted the ledger as product code, so the fill change was red at 11,937 lines against a ceiling of 1,500. The change cannot be split, since only the change that binds the lister may record. A project with a few hundred comments hits it.
+
+Upgrade from 0.13.2 as the README's Upgrading section says: the upgrade moves the pin to 0.13.3, in the binding's pin line and in the workflows that check the plugin out at it, and changes nothing else in the project. From an earlier version, the earlier 0.13 notes apply too. Land the upgrade before the fill.
+
+If the fill's pull request is open when the upgrade lands, move its ledger onto the new pin, or `ratchet-lowered` is red on every `comments` entry. The fill skill's step 6 now says how: merge the default branch in, take its `quality/owed.toml`, run `just comments --record` again, then run `upgrade.py --apply` again to drop the entries the fill already settles. On a copy of the project, that path left the comments owed since 0.13.3, with `ratchet-lowered` and conformance green and `change-size` at 279 lines.
+
+- `change-size` does not count `quality/owed.toml`, in either direction, as it does not count the method's records and the lockfiles (ADR 0076, amending ADR 0045). The ledger's growth is still held. `ratchet-lowered` is red on an entry a change adds, save on a pin move, in the change that binds the lister, or on a rename. The ledger is a guard path, and the merge judge passes it without the owner only when entries go and the pin does not move.
+- A `/ratchet:prune comments` batch is sized by the comments it deletes and what encodes them, not by the ledger lines it drops. An owed comment holds about six ledger lines, so a batch under the ceiling now holds about seven times as many comments.
+
 ## 0.13.2
 
 A defect of 0.13.0 and 0.13.1 is fixed, which an upgrade of a real project found in CI. Every upgrade from 0.12.x to either version was red on the tier 1 gate `bite`. The upgrade owes the bite gaps it cannot write, in `quality/owed.toml` under the rule `bites`, and conformance accepts them as owed. But `project_bite.py` read no ledger, so `bite` was red on the same gaps. Every such upgrade hit it, since the `comments` gate is new in 0.13.0 and no project upgrading from 0.12.x has a bite for it.
