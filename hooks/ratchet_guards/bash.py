@@ -431,12 +431,17 @@ class _Checker:
             previous = command.then
         verdicts += [_CROWDED] if crowded else []
         verdicts += [] if parsed.closed else [_UNCLOSED]
-        inside = self._nested(parsed.nested, seen[:MAX_STATES])
+        inside = self._nested(parsed, seen[:MAX_STATES])
         return list(dict.fromkeys([*inside, *verdicts]))
 
-    def _nested(self, scripts: Sequence[str], places: Sequence[Context]) -> list[Verdict]:
+    def _nested(self, parsed: Script, places: Sequence[Context]) -> list[Verdict]:
         inner = self._deeper()
-        return [v for script in scripts for place in places for v in inner.script(script, place)]
+        return [
+            replace(v, expanded=True) if index in parsed.expanded else v
+            for index, script in enumerate(parsed.nested)
+            for place in places
+            for v in inner.script(script, place)
+        ]
 
     def _command(
         self, pipeline: Sequence[SimpleCommand], heredocs: Sequence[str], context: Context

@@ -21,6 +21,10 @@ WITHOUT_REWRITING = (
     "Bring the branch up to date without rewriting it: merge the default branch into it, or "
     "add a new commit. The merge job lands it, or with no forge the `merge` entry point does."
 )
+EXPANDED_BODY = (
+    "The command sits in a heredoc body whose delimiter is unquoted, so bash runs it; quote "
+    "the delimiter (`<<'EOF'`) and bash keeps the body as text."
+)
 SWITCH_ALONE = (
     "Run the branch switch in a tool call of its own and make the change in the next one: the "
     "guard reads the branch then."
@@ -146,6 +150,7 @@ class Verdict:
     rule: str
     detail: str
     source: str = ""
+    expanded: bool = False
 
     @property
     def decision(self) -> Decision:
@@ -157,7 +162,8 @@ class Verdict:
 
     @property
     def way_out(self) -> str:
-        return RULES[self.rule].way_out
+        way_out = RULES[self.rule].way_out
+        return f"{EXPANDED_BODY} {way_out}" if self.expanded else way_out
 
 
 def strictest(verdicts: Iterable[Verdict]) -> Verdict | None:
