@@ -1909,7 +1909,13 @@ GROUPS = {
 NAME_SPAN = re.compile(r"`V[a-z]+0`")
 PLACEHOLDER = re.compile(r"<[^<>\n]+>")
 COMMAND_LINES = 40
-OPTION_SHAPED = ["--output=pwned", "--exec=touch${IFS}pwned", "-cimport os; os.mknod('pwned')", "-", "--"]
+OPTION_SHAPED = [
+    "--output=pwned",
+    "--exec=touch${IFS}pwned",
+    "-cimport os; os.mknod('pwned')",
+    "-",
+    "--",
+]
 GIT_OR_GH = re.compile(r"\b(git [a-z-]+|gh [a-z]+ [a-z]+)", re.IGNORECASE)
 CODE_SPAN = re.compile(r"`([^`\n]+)`")
 PUBLISHING = re.compile(r"\b(?:git (?:commit|push)|gh pr)\b")
@@ -2212,7 +2218,8 @@ def test_git_reads_each_quoted_range_as_the_branch_against_its_base(tmp_path: Pa
         for line, argv in zip(lines, argvs, strict=True):
             ran, direct = _bash(line, root), _git(root, argv)
             split = _git(root, [*argv[:-1], *re.split(r"\.\.\.?", argv[-1])])
-            assert direct.returncode == 0 and direct.stdout != split.stdout, argv
+            assert direct.returncode == 0, argv
+            assert direct.stdout != split.stdout, f"the repository tells {argv} from two words"
             assert (ran.returncode, ran.stdout) == (0, direct.stdout), f"{label}: {line}"
     assert not (root / "landed").exists()
     assert not (root / "also").exists()

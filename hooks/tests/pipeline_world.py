@@ -42,6 +42,7 @@ from tests.test_pipeline import (
     _case,
     _departure,
     _quoted,
+    _role_commands,
 )
 
 if TYPE_CHECKING:
@@ -224,19 +225,16 @@ const source = fs.readFileSync(process.argv[1], 'utf8').replace('export const me
 const pipeline = vm.runInContext(
   `(async function (args, agent, phase, log) {\\n${source}\\n})`, vm.createContext({}))
 const { catalogue, runs } = JSON.parse(fs.readFileSync(0, 'utf8'))
-const COMMAND = /`(git [a-z-]+|gh [a-z]+ [a-z]+)/g
-const PUBLISHING = /\\b(?:git (?:commit|push)|gh pr)\\b/g
 const ROUNDS = /\\(round \\d+ of (\\d+)\\)/
-const commands = {}
+const prompts = {}
 const scanned = new Set()
 function scan(label, prompt) {
   const seen = `${label} ${prompt.length}`
   if (scanned.has(seen)) return
   scanned.add(seen)
   const role = label.replace(/-\\d+$/, '')
-  commands[role] = commands[role] || new Set()
-  for (const found of [...prompt.matchAll(COMMAND)].map(m => m[1])) commands[role].add(found)
-  for (const found of prompt.match(PUBLISHING) || []) commands[role].add(found)
+  prompts[role] = prompts[role] || []
+  prompts[role].push(prompt)
 }
 const CHECKED = new Set([
   'type', 'properties', 'required', 'items', 'enum', 'pattern', 'minItems', 'anyOf',
@@ -358,9 +356,9 @@ async function main() {
       played.push({ calls, told, error: { name: error.name, message: String(error.message) } })
     }
   }
-  const effects = Object.fromEntries(
-    Object.entries(commands).map(([role, found]) => [role, [...found].sort()]))
-  console.log(JSON.stringify({ played, effects, broken, shapes: Object.values(shapes) }))
+  const shown = Object.fromEntries(
+    Object.entries(prompts).map(([role, found]) => [role, [...found]]))
+  console.log(JSON.stringify({ played, shown, broken, shapes: Object.values(shapes) }))
 }
 main()
 """
@@ -425,7 +423,10 @@ def play(
         )
         for raw in out["played"]
     ]
-    effects = {Role(role): frozenset(found) for role, found in out["effects"].items()}
+    effects = {
+        Role(role): frozenset().union(*map(_role_commands, prompts))
+        for role, prompts in out["shown"].items()
+    }
     return Batch(played, effects, out["shapes"])
 
 

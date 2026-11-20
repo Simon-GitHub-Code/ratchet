@@ -42,6 +42,51 @@ let SLUG = ''
 let CRITIC = true
 let CRITIC_REASON = ''
 let NAMED_GATES = namedGatesOf(REJUDGE ? REJUDGE.namedGates : ARGS.namedGates)
+const CONFLICTS = REJUDGE ? (REJUDGE.conflicts || []).filter(Boolean).map(String) : []
+
+const AN_OPTION = [/^-/, 'starts with "-", so the command it goes into would read it as an option']
+const A_CONTROL = [/[\x00-\x1f\x7f]/, 'holds a control character']
+const PATH_RULES = [AN_OPTION, A_CONTROL]
+const REF_NAME_RULES = [
+  AN_OPTION,
+  [/[\x00-\x20\x7f]/, 'holds a space or a control character'],
+  [/[~^:?*[\\]/, 'holds one of ~ ^ : ? * [ \\'],
+  [/\.\./, 'holds ".."'],
+  [/@\{/, 'holds "@{"'],
+  [/^@$/, 'is "@" alone'],
+  [/^\/|\/$|\/\//, 'starts or ends with "/" or holds "//"'],
+  [/(^|\/)\./, 'has a part that starts with "."'],
+  [/\.lock(\/|$)/, 'has a part that ends with ".lock"'],
+  [/\.$/, 'ends with "."'],
+]
+const REF_NAME_PRODUCE = 'a name git accepts as a ref name (git check-ref-format) that does not start with "-": a branch, a remote-tracking branch or an object id'
+const PATH_PRODUCE = 'a value that does not start with "-" (a relative path can start with ./) and holds no control character'
+
+function unfitArgument() {
+  const slots = [
+    ['ticket', REF, PATH_RULES, PATH_PRODUCE],
+    ['root', ROOT, PATH_RULES, PATH_PRODUCE],
+    ['preflight', PREFLIGHT_SCRIPT, PATH_RULES, PATH_PRODUCE],
+    ['base', BASE, REF_NAME_RULES, REF_NAME_PRODUCE],
+    ['branch', BRANCH, REF_NAME_RULES, REF_NAME_PRODUCE],
+    ...CONFLICTS.map(path => ['conflict', path, [A_CONTROL], 'a conflicted path with no control character']),
+  ]
+  for (const [slot, value, rules, produce] of slots) {
+    const broken = value ? rules.find(([pattern]) => pattern.test(value)) : null
+    if (!broken) continue
+    const detail = `the ${slot} ${JSON.stringify(value)} ${broken[1]}`
+    return {
+      verdict: 'blocked',
+      ...FINDINGS_SO_FAR,
+      preflight: { ok: false, failures: [{ check: slot, detail, produce }] },
+      requiredByOrchestrator: [`Pass ${produce}; the pipeline places the ${slot} into commands its roles run, and refused ${detail}`],
+    }
+  }
+  return null
+}
+
+const unfitArgs = unfitArgument()
+if (unfitArgs) return unfitArgs
 
 function namedGatesOf(list) {
   const seen = new Map()
@@ -60,9 +105,11 @@ function namedGatesList() {
   return `- The gates the criteria name, as code spans: ${names}. A gate of tier 2 or later, or any other gate \`check\` does not run, is the one the rule below sends to a role.`
 }
 
-const ROOT_HINT = ROOT
-  ? `the repository root (${ROOT}, the directory holding AGENTS.md)`
-  : 'the repository root (the directory holding AGENTS.md)'
+const ROOT_HINT = 'the repository root (the directory holding AGENTS.md)'
+
+function enterRoot(indent) {
+  return ROOT ? ` This line enters it:\n\n${indent}cd ${shellWord(ROOT)}\n` : ''
+}
 
 const PREAMBLE = 'Load the `ratchet:method` skill (the method this repository follows), then read AGENTS.md, docs/process/binding.md and GLOSSARY.md (or GLOSSARY-MAP.md). Obey them. The binding\'s Entry points table gives the command behind every entry point named below (`check`, `guard-diff`); "run `check`" means run that command from the repository root.'
 
@@ -254,16 +301,17 @@ function commonRules(role, rebasing) {
   const uncommitted = rebasing
     ? `- The branch holds the change as commits. Every edit you make stays uncommitted on the
   working tree; the orchestrator commits it. The git commands you run are read-only, plus the
-  \`git switch\` above and the three that carry out the rebase below: \`git rebase\`,
-  \`git add <a file you resolved>\` and \`git rebase --continue\`.`
+  \`git switch\` above and the three that carry out the rebase below: \`git rebase\` onto
+  \`${BASE}\`, as its line below runs it, \`git add <a file you resolved>\` and
+  \`git rebase --continue\`.`
     : `- Every change you make stays uncommitted on the working tree; the orchestrator commits and
   publishes. The git commands you run are read-only, plus the \`git switch\` above.`
   return `
 Ground rules for every agent in this pipeline:
-- Work in ${ROOT_HINT} on branch \`${BRANCH}\`.
+- Work in ${ROOT_HINT} on branch \`${BRANCH}\`.${enterRoot('      ')}
   First run \`git rev-parse --abbrev-ref HEAD\`; if it does not print \`${BRANCH}\`, run
 
-      git switch ${shellWord(BRANCH)}
+      git switch --end-of-options ${shellWord(BRANCH)}
 
   The orchestrator creates the branch, never you: if it does not exist, stop and return an
   error saying so.
@@ -822,7 +870,7 @@ function ticketHint() {
   return `the file \`${REF}\` as \`${BASE}\` holds it, not the copy in the working tree, which an
   agent of this run may have changed. Read it, from ${ROOT_HINT}, with
 
-      git show ${shellWord(`${BASE}:${REF}`)}
+      git show --end-of-options ${shellWord(`${BASE}:${REF}`)}
 `
 }
 
@@ -872,7 +920,7 @@ with the safe answer.
 Read these two and nothing else (no code, no tests, no other record), and edit nothing:
 - The ticket, with its comments and its \`## Answers\` section: what the owner asked for and
   agreed. It is ${ticketHint()}
-- The spec: \`${spec.specPath}\` under ${ROOT_HINT}.
+- The spec: \`${spec.specPath}\` under ${ROOT_HINT}.${enterRoot('    ').trimEnd()}
 
 1. ${PROMISE_READINGS}
 2. ${INPUT_READINGS}
@@ -894,11 +942,13 @@ do not write one.
 `
   const branchFlag = BRANCH ? ` --branch ${shellWord(BRANCH)}` : ''
   const baseFlag = BASE ? ` --base ${shellWord(BASE)}` : ''
-  return `You run one command and relay its output. You decide nothing.
+  const where = ROOT ? `these two lines: the first enters ${ROOT_HINT}, the second runs the check` : `this line in ${ROOT_HINT}`
+  const enter = ROOT ? `    cd ${shellWord(ROOT)}\n` : ''
+  return `You run one check and relay its output. You decide nothing.
 ${found}
-In ${ROOT_HINT}, run, in a single Bash call:
+Run, in a single Bash call, ${where}:
 
-    ${PLUGIN_PY} ${script} ${shellWord(REF)} --root .${baseFlag}${branchFlag}
+${enter}    ${PLUGIN_PY} ${script} ${shellWord(REF)} --root .${baseFlag}${branchFlag}
 
 It prints a JSON object on stdout ({ ok, ref, failures: [{ check, detail, produce }], number,
 title, slug, branch, base, label, critic, critic_reason }) and a verdict line on stderr. Return that JSON's fields in the
@@ -1196,6 +1246,15 @@ critic's tests pass and \`check\` exits 0; otherwise return with \`checkPasses: 
 explain.`
 }
 
+function stagingLines(conflicts) {
+  if (!conflicts.length) return 'The rebase stopped on no path when it was tried.\n'
+  return `The rebase stopped on these paths when it was tried. Once you have resolved one, its line
+stages it:
+
+${conflicts.map(path => `      git add -- ${shellWord(path)}`).join('\n')}
+`
+}
+
 function reconcilePrompt(spec, conflicts) {
   return `${PREAMBLE}
 You are the RECONCILE agent for feature \`${spec.slug}\` of this repository. The feature was
@@ -1207,23 +1266,22 @@ Inputs you may read:
 - The branch's own change, the first line below, and what merged meanwhile, the second, and
   its diff:
 
-      git diff ${shellWord(`${BASE}...${BRANCH}`)}
-      git log --oneline ${shellWord(`${BRANCH}..${BASE}`)}
+      git diff --end-of-options ${shellWord(`${BASE}...${BRANCH}`)}
+      git log --oneline --end-of-options ${shellWord(`${BRANCH}..${BASE}`)}
 
 - AGENTS.md, GLOSSARY.md, docs/process/binding.md, docs/adr/
-Paths the rebase stopped on when it was tried: ${JSON.stringify(conflicts)}
-
+${stagingLines(conflicts)}
 Do this, in order:
 1. Run the first line below. If it fails, run the second.
 
-       git merge-base --is-ancestor ${shellWord(BASE)} HEAD
-       git rebase ${shellWord(BASE)}
+       git merge-base --is-ancestor --end-of-options ${shellWord(BASE)} HEAD
+       git rebase --end-of-options ${shellWord(BASE)}
 
    At each stop, resolve every conflicted file so that both changes hold: both flags stay in the
    registry, both terms in the glossary, both routes in the application. Where the two cannot
    both hold, \`${BASE}\` stands as it is and this feature's code adapts to it. Then
-   \`git add\` each file you resolved and \`git rebase --continue\`. Never \`--skip\` a commit
-   and never take one side of a whole file.
+   \`git add --\` each file you resolved, its path one quoted word, and \`git rebase --continue\`.
+   Never \`--skip\` a commit and never take one side of a whole file.
 2. Run \`check\`. A red gate is answered by changing this feature's code, never the other
    change's and never a gate. A number the other change took first (a decision record, a
    migration) is the other change's: give this feature's file the next free one. A test of
@@ -1381,13 +1439,13 @@ Inputs you may read, and nothing else:
 - The diff: the change is on branch \`${BRANCH}\`, uncommitted unless this is a second review.
   Enumerate it with these three (untracked files are new files: read them):
 
-      git diff ${shellWord(BASE)} --stat
-      git diff ${shellWord(BASE)}
+      git diff --stat --end-of-options ${shellWord(BASE)}
+      git diff --end-of-options ${shellWord(BASE)}
       git status --porcelain
 
   If the branch has commits, this one is equivalent:
 
-      git diff ${shellWord(`${BASE}...${BRANCH}`)}
+      git diff --end-of-options ${shellWord(`${BASE}...${BRANCH}`)}
 
 - AGENTS.md, GLOSSARY.md, docs/adr/, docs/process/binding.md, docs/disputes/, DESIGN.md
 - Any generated contract artefacts that binding.md names
@@ -1958,15 +2016,14 @@ if (REJUDGE) {
   if (!SLUG || !spec.specPath || !BRANCH) {
     throw new Error('rejudge needs args.branch and args.rejudge = { slug, specPath }: pass what the first run returned')
   }
-  const conflicts = (REJUDGE.conflicts || []).filter(Boolean)
   let reconcile = null
-  if (conflicts.length > 0 || REJUDGE.checkRed === true) {
+  if (CONFLICTS.length > 0 || REJUDGE.checkRed === true) {
     phase('Reconcile')
     reconcile = must(
-      await agent(reconcilePrompt(spec, conflicts), { label: 'reconcile', phase: 'Reconcile', schema: IMPLEMENT_SCHEMA }),
+      await agent(reconcilePrompt(spec, CONFLICTS), { label: 'reconcile', phase: 'Reconcile', schema: IMPLEMENT_SCHEMA }),
       'reconcile',
     )
-    log(`Reconcile: ${conflicts.length} conflicted path(s), check=${reconcile.checkPasses}`)
+    log(`Reconcile: ${CONFLICTS.length} conflicted path(s), check=${reconcile.checkPasses}`)
     const reconcileStop = noRoom('the reconcile', reconcile.changeSize, false)
     if (reconcileStop) return tooLarge(reconcileStop, spec, { rejudged: true, filesChanged: reconcile.filesChanged, disputes: reconcile.disputes || [], checkOutput: reconcile.checkOutput })
   }
@@ -2046,6 +2103,8 @@ if (!preflight.ok) {
 SLUG = preflight.slug
 BRANCH = BRANCH || preflight.branch
 BASE = BASE || preflight.base || ''
+const unfitPreflight = unfitArgument()
+if (unfitPreflight) return unfitPreflight
 CRITIC = preflight.critic !== false
 CRITIC_REASON = String(preflight.critic_reason || '')
 if (!SLUG || !BRANCH) throw new Error(`preflight returned ok without a slug and branch: ${JSON.stringify(preflight)}`)
