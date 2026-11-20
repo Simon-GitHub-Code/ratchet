@@ -1821,6 +1821,7 @@ def lint_config_changed(root: Path) -> None:
 )
 def test_the_proof_records_each_fault_with_its_gate_its_seconds_and_whether_it_passes_args(
     tmp_path: Path,
+    *,
     monkeypatch: pytest.MonkeyPatch,
     prepare: Callable[[Path], None] | None,
     flags: tuple[str, ...],
@@ -2659,7 +2660,7 @@ def test_a_fault_inside_a_repository_setup_made_is_not_planted(
 def fingerprint(root: Path) -> list[tuple[str, int, bytes]]:
     entries = []
     for path in sorted(root.rglob("*")):
-        if ".git" in path.relative_to(root).parts:
+        if {".git", gatelib.STATE.name} & set(path.relative_to(root).parts):
             continue
         mode = path.lstat().st_mode
         held = (

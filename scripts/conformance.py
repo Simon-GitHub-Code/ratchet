@@ -3277,15 +3277,7 @@ def check_bite_all_ceiling(root: Path) -> Iterable[Finding]:
 
 
 def check_cache_written(root: Path) -> Iterable[Finding]:
-    lines = (gatelib.read_text(root / gatelib.STATE / "timing.jsonl") or "").splitlines()
-    records = []
-    for line in lines:
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(record, dict):
-            records.append(record)
+    records = runrecord.read(root / runrecord.TIMING)
     tiers = [at for at, record in enumerate(records) if record.get("kind") == runrecord.TIER]
     after = records[tiers[-1] + 1 :] if tiers else []
     for record in after:
@@ -3314,12 +3306,8 @@ def full_proof_problem(root: Path, text: str) -> str:
 
 def last_full_proof(root: Path) -> float | None:
     seconds = None
-    for line in (gatelib.read_text(root / gatelib.STATE / "timing.jsonl") or "").splitlines():
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(record, dict) and record.get("key") == budget.FULL_PROOF:
+    for record in runrecord.read(root / runrecord.TIMING):
+        if record.get("key") == budget.FULL_PROOF:
             value = record.get("seconds")
             seconds = float(value) if isinstance(value, int | float) else seconds
     return seconds
@@ -3571,6 +3559,8 @@ def run(root: Path) -> int:
         print(f"owed: {finding}")
     for unchecked in bites.unchecked:
         print(f"not checked: {project_bite.REGISTRY}: {unchecked}")
+    for slow in project_bite.recorded_slow(root):
+        print(f"slow: {slow}")
     autos = sum(isinstance(finding.fix, Auto) for finding in [*red, *owing])
     fixer = f"; `upgrade.py --apply` makes {autos} of them" if autos else ""
     since = f"; {len(owing)} owed since an upgrade, listed in {owed.LEDGER}" if owing else ""

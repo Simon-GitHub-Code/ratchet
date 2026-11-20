@@ -29,6 +29,7 @@ import gatelib
 import owed
 import plugin_pin
 import report
+import runrecord
 import suites
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
@@ -76,6 +77,11 @@ MAX_LANES = 4
 GATE_ROW_CELLS = 5
 GATE_LIMIT = 900.0
 RUN_CEILING = "bite-run"
+SLOW_CEILING = "tier0"
+CURE = (
+    "a bite of a whole-tree gate is narrowed: its args name one file, one target or one mutant,"
+    " or its `whole` says why it cannot be"
+)
 SLOW = 2.0
 SLOW_FLOOR = 1.0
 WAKE = 0.1
@@ -461,6 +467,7 @@ class Bite:
     args: tuple[str, ...] = ()
     commit: bool = False
     proof: str = ""
+    whole: str = field(default="", compare=False)
 
     def plant(self, copy: Tree) -> None:
         self.fault.plant(copy)
@@ -551,7 +558,8 @@ def read_fault(table: dict[str, object]) -> Fault:
 
 
 def read_bite(table: dict[str, object]) -> Bite:
-    unknown = sorted(set(table) - {"gate", "name", "expect", "args", "commit", "proof", *KINDS})
+    keys = {"gate", "name", "expect", "args", "commit", "proof", "whole", *KINDS}
+    unknown = sorted(set(table) - keys)
     if unknown:
         message = f"unknown key '{unknown[0]}'"
         raise ValueError(message)
@@ -559,14 +567,20 @@ def read_bite(table: dict[str, object]) -> Bite:
     if not isinstance(commit, bool):
         message = "'commit' is true or false"
         raise ValueError(message)  # noqa: TRY004 # -- one kind for all that is wrong in a bite
+    args = strings(table, "args")
+    whole = text(table, "whole") if "whole" in table else ""
+    if args and whole:
+        message = "a bite narrows its gate with 'args' or says in 'whole' why it cannot, not both"
+        raise ValueError(message)
     return Bite(
         gate=text(table, "gate"),
         name=text(table, "name"),
         expect=text(table, "expect"),
         fault=read_fault(table),
-        args=strings(table, "args"),
+        args=args,
         commit=commit,
         proof=text(table, "proof") if "proof" in table else "",
+        whole=whole,
     )
 
 
@@ -927,6 +941,17 @@ class Outcome:
         )
         return "\n".join([head, *(f"  {line}" for line in self.detail.splitlines())])
 
+    def record(self) -> dict[str, object]:
+        return {
+            "kind": runrecord.FAULT,
+            "gate": self.bite.gate,
+            "bite": self.bite.name,
+            "seconds": round(self.seconds, 3),
+            "narrowed": bool(self.bite.args),
+            "verdict": self.verdict.value,
+            "lane": self.lane,
+        }
+
     def unproven(self, later: Run) -> Outcome:
         if later.timed_out:
             return replace(self.timed_out(later.output), red_seconds=later.seconds)
@@ -1219,9 +1244,45 @@ def run_limit(root: Path, override: float | None) -> tuple[float, str]:
     return GATE_LIMIT, f"bite: limit: {GATE_LIMIT:g}s a run; no {key}"
 
 
+def slow_ceiling(root: Path) -> float | None:
+    try:
+        return budget.ceiling_of(gatelib.read_text(root / gatelib.THRESHOLDS) or "", SLOW_CEILING)
+    except tomllib.TOMLDecodeError:
+        return None
+
+
+def slow_line(bite: Bite, seconds: float, ceiling: float) -> str:
+    cure = f"whole on purpose: {bite.whole}" if bite.whole else CURE
+    return (
+        f"{bite.gate}: {bite.name}: {seconds:.1f}s with no args, over the {SLOW_CEILING}"
+        f" ceiling of {ceiling:g}s; {cure}"
+    )
+
+
+def recorded_slow(root: Path) -> list[str]:
+    ceiling = slow_ceiling(root)
+    if ceiling is None:
+        return []
+    last = {
+        (record.get("gate"), record.get("bite")): record
+        for record in runrecord.read(root / runrecord.TIMING)
+        if record.get("kind") == runrecord.FAULT
+    }
+    registry, _ = read_registry(gatelib.read_text(root / REGISTRY) or "")
+    lines = []
+    for bite in registry.bites:
+        record = last.get((bite.gate, bite.name), {})
+        seconds = record.get("seconds")
+        whole = record.get("narrowed") is False and not (bite.args or bite.whole)
+        if whole and isinstance(seconds, float) and seconds > ceiling:
+            lines.append(f"{REGISTRY}: {slow_line(bite, seconds, ceiling)}")
+    return lines
+
+
 def run_lanes(
     root: Path, registry: Registry, tasks: Sequence[Task], *, lanes: int, limit: float
 ) -> list[Outcome]:
+    stamp = runrecord.stamp(root)
     pending: queue.SimpleQueue[Task] = queue.SimpleQueue()
     for row, bites in tasks:
         pending.put((replace(row, limit=limit), bites))
@@ -1239,6 +1300,7 @@ def run_lanes(
             for outcome in copy.prove(row, bites):
                 with printing:
                     print(outcome.lines(), flush=True)
+                    runrecord.append(root / runrecord.TIMING, {**outcome.record(), **stamp})
                 outcomes.append(outcome)
         return outcomes
 
@@ -1283,6 +1345,11 @@ def proof(
     except gatelib.Interrupted as stop:
         print(f"bite: red: {stop}")
         return 128 + stop.signum
+    ceiling = slow_ceiling(root)
+    if ceiling is not None:
+        for outcome in outcomes:
+            if not outcome.bite.args and outcome.seconds > ceiling:
+                print(f"bite: slow: {slow_line(outcome.bite, outcome.seconds, ceiling)}")
     unseen = [outcome for outcome in outcomes if outcome.verdict is not Verdict.BITES]
     print(
         f"bite: {'red' if unseen else 'green'}: {len(outcomes) - len(unseen)} of {len(outcomes)} "
