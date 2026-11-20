@@ -5,7 +5,7 @@ import re
 import shutil
 import subprocess
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tests.pipeline_model import (
     Action,
@@ -43,6 +43,9 @@ from tests.test_pipeline import (
     _departure,
     _quoted,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 TICKET_FILE = ".scratch/list/issues/01-save-a-link.md"
 BRANCH = "feature/4-expiry"
@@ -395,14 +398,16 @@ def scripted(actions: list[Action], *, local: bool = False) -> dict[str, object]
     return {"args": args, "answers": {action.label: key(action.answer) for action in answers}}
 
 
-def play(runs: list[list[Action]], local: list[list[Action]] | None = None) -> Batch:
+def play(
+    runs: list[list[Action]], local: list[list[Action]] | None = None, pipeline: Path = PIPELINE
+) -> Batch:
     batch = [scripted(actions) for actions in runs]
     batch += [scripted(actions, local=True) for actions in local or []]
     catalogue = {key(answer): concrete for answer, concrete in CONCRETE.items()}
     node = shutil.which("node")
     assert node, "node runs the workflow script"
     ran = subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
-        [node, "-e", HARNESS, str(PIPELINE)],
+        [node, "-e", HARNESS, str(pipeline)],
         input=json.dumps({"catalogue": catalogue, "runs": batch}),
         capture_output=True,
         text=True,
