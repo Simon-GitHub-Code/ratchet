@@ -241,22 +241,60 @@ def copy_seen(root: Path, target: Path) -> dict[str, str]:
             foreign[name] = "leads outside the repository"
         elif lands.is_dir():
             foreign[name] = f"is in the submodule {name}"
-    git_checked(target, "init", "-q")
+    share_history(root, target, "HEAD")
     git_checked(target, "add", "--all", "--force")
     return foreign
+
+
+def share_history(root: Path, target: Path, head: str) -> None:
+    common = git_checked(
+        root, "rev-parse", "--path-format=absolute", "--git-common-dir", ok=(0, 128)
+    ).strip()
+    if not common:
+        git_checked(target, "init", "-q")
+        return
+    held = Path(common)
+    formats = git_checked(root, "rev-parse", "--show-object-format").strip()
+    reftable = git_checked(root, "rev-parse", "--show-ref-format").strip() == "reftable"
+    storage = {"GIT_DEFAULT_REF_FORMAT": "reftable" if reftable else "files"}
+    git_bytes(target, "init", "-q", f"--object-format={formats}", variables=storage)
+    mine = target / ".git"
+    (mine / "objects/info/alternates").write_text(f"{held / 'objects'}\n", encoding="utf-8")
+    for name in ("shallow", "info/exclude", "logs/HEAD"):
+        if (held / name).is_file():
+            (mine / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(held / name, mine / name)
+    listed = git_bytes(root, "for-each-ref", "--format=%(objectname) %(refname) %(symref)")
+    refs = [line.split(b" ") for line in listed.splitlines()]
+    plain = [(oid, ref) for oid, ref, symref in refs if not symref]
+    if reftable:
+        git_bytes(
+            target,
+            "update-ref",
+            "--stdin",
+            stdin=b"".join(b"update %s %s\n" % (ref, oid) for oid, ref in plain),
+        )
+    else:
+        (mine / "packed-refs").write_bytes(b"".join(b"%s %s\n" % pair for pair in plain))
+    for _, ref, symref in refs:
+        if symref:
+            git_checked(target, "symbolic-ref", os.fsdecode(ref), os.fsdecode(symref))
+    branch = git_checked(root, "symbolic-ref", "-q", head, ok=(0, 1, 128)).strip()
+    if branch:
+        git_checked(target, "symbolic-ref", "HEAD", branch)
+        return
+    commit = git_checked(root, "rev-parse", "--verify", "-q", f"{head}^{{commit}}", ok=(0, 1))
+    if commit:
+        git_checked(target, "update-ref", "--no-deref", "HEAD", commit.strip())
 
 
 def export(root: Path, ref: str, target: Path) -> None:
     listed = git_checked(root, "ls-tree", "-r", "-z", "--full-tree", ref).split("\0")
     entries = [(line.split("\t", 1)[0].split(), line.split("\t", 1)[1]) for line in listed if line]
     blobs = [(mode, sha, name) for (mode, _, sha), name in entries if mode != "160000"]
-    batch = subprocess.run(
-        ["git", "-C", str(root), "cat-file", "--batch"],
-        input="".join(f"{sha}\n" for _, sha, _ in blobs).encode(),
-        capture_output=True,
-        check=True,
-        env={k: v for k, v in os.environ.items() if k not in REPOSITORY_VARIABLES},
-    ).stdout
+    batch = git_bytes(
+        root, "cat-file", "--batch", stdin="".join(f"{sha}\n" for _, sha, _ in blobs).encode()
+    )
     at = 0
     for mode, _, name in blobs:
         header_end = batch.index(b"\n", at)
@@ -271,8 +309,21 @@ def export(root: Path, ref: str, target: Path) -> None:
         path.write_bytes(data)
         path.chmod(0o755 if mode == "100755" else 0o644)
     target.mkdir(parents=True, exist_ok=True)
-    git_checked(target, "init", "-q")
+    share_history(root, target, ref)
     git_checked(target, "add", "--all", "--force")
+
+
+def git_bytes(
+    root: Path, *args: str, stdin: bytes = b"", variables: dict[str, str] | None = None
+) -> bytes:
+    environment = {k: v for k, v in os.environ.items() if k not in REPOSITORY_VARIABLES}
+    return subprocess.run(
+        ["git", "-C", str(root), *args],
+        input=stdin,
+        capture_output=True,
+        check=True,
+        env={**environment, **(variables or {})},
+    ).stdout
 
 
 def git_checked(root: Path, *args: str, ok: tuple[int, ...] = (0,)) -> str:
