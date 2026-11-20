@@ -496,10 +496,8 @@ def test_a_product_the_justfile_says_listens_wider_on_purpose_is_served_and_said
 ) -> None:
     root = products.make(tmp_path / "product", env="HOST=0.0.0.0", extra='listens := "0.0.0.0"')
     try:
-        code = acceptance.main(
-            ["acceptance.py", "up", "--slug", SLUG, "--ticket", str(root / "ticket.md")]
-            + ["--root", str(root)]
-        )
+        ticket = ["--ticket", str(root / "ticket.md"), "--root", str(root)]
+        code = acceptance.main(["acceptance.py", "up", "--slug", SLUG, *ticket])
         seen = capsys.readouterr()
         assert code == 0, seen
         assert products.request(seen.out.splitlines()[0])[0] == 200

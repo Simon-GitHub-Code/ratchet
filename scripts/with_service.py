@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import http.client
+import ipaddress
 import os
 import re
 import signal
@@ -24,6 +25,40 @@ SENDING_POLL = 0.01
 TAIL = 30
 HEAD = 30
 PORT_TOKEN = "{port}"  # noqa: S105 # -- a placeholder, not a credential
+HOST_TOKEN = "{host}"  # noqa: S105 # -- a placeholder, not a credential
+LOOPBACK = "127.0.0.1"
+CURE = f"bind it to {LOOPBACK}, which the boot command gets as {HOST_TOKEN} and $HOST"
+
+
+def judged(process: subprocess.Popen[bytes], options: argparse.Namespace) -> list[str]:
+    ready = urlsplit(options.ready)
+    seen = listeners.bound(process.pid, ready.port or (443 if ready.scheme == "https" else 80))
+    if isinstance(seen, str):
+        print(f"with_service: where the product listens was not checked: {seen}", flush=True)
+        return []
+    notes, problems = [], []
+    for address, port in seen:
+        plain = getattr(address, "ipv4_mapped", None) or address
+        host = f"[{address}]" if ":" in str(address) else str(address)
+        where = f"{host}:{port}"
+        what = "every interface" if plain.is_unspecified else "not a loopback address"
+        said = f"the product listens on {where}, {what}, so the network can reach it"
+        if plain.is_loopback:
+            continue
+        if address == options.listens:
+            notes.append(
+                f"the product listens on {where}, as --listens declares, so the network can "
+                "reach it while it runs"
+            )
+        elif options.loopback_only:
+            problems.append(
+                f"{said} around the command after --; {CURE}, or name the address with --listens"
+            )
+        else:
+            notes.append(f"note: {said} while it runs; {CURE}")
+    for note in notes:
+        print(f"with_service: {note}", flush=True)
+    return problems
 
 
 def probe(url: str) -> str | None:
@@ -200,6 +235,8 @@ def serve(
                     code = 1 if problems else 0
                 elif not_ready:
                     problems = [not_ready]
+                elif refused := judged(process, options):
+                    problems = refused
                 elif command and options.graceful is not None:
                     code, problems = run_signalled(process, options, command, env=env)
                 elif command:
@@ -239,6 +276,17 @@ def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     )
     parser.add_argument("--signal-after", type=float, default=1.0, metavar="S")
     parser.add_argument("--refuses", action="append", default=[], metavar="NAME")
+    parser.add_argument(
+        "--loopback-only",
+        action="store_true",
+        help="refuse to run the command while the service listens beyond the loopback address",
+    )
+    parser.add_argument(
+        "--listens",
+        type=ipaddress.ip_address,
+        metavar="ADDRESS",
+        help="an address the service listens on on purpose: said, and never refused",
+    )
     rest = argv[1:]
     split = rest.index("--") if "--" in rest else len(rest)
     options = parser.parse_args(rest[:split])
@@ -261,12 +309,14 @@ def main(argv: list[str]) -> int:
     picked = any(PORT_TOKEN in text for text in texts)
 
     def attempt(missing: str | None = None) -> tuple[int, list[str], bool]:
-        env = dict(os.environ)
+        env = {**os.environ, "HOST": LOOPBACK}
         if picked:
             env["PORT"] = str(gatelib.free_port())
 
         def expand(text: str) -> str:
-            return text.replace(PORT_TOKEN, env.get("PORT", PORT_TOKEN))
+            return text.replace(PORT_TOKEN, env.get("PORT", PORT_TOKEN)).replace(
+                HOST_TOKEN, LOOPBACK
+            )
 
         ran = argparse.Namespace(**{**vars(options), "boot": expand(options.boot)})
         ran.ready, ran.refuses = expand(options.ready), missing

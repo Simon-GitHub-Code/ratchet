@@ -362,7 +362,7 @@ def test_each_listener_of_each_process_the_boot_command_started_is_judged(
     lines = out.splitlines(keepends=True)
     assert code == 0
     assert len(lines) == 3, out
-    for where in ("0.0.0.0", "[::]"):
+    for where in ("0.0.0.0", "[::]"):  # noqa: S104 # -- the wide listeners under test
         assert any(re.fullmatch(noted(where, "every interface"), line) for line in lines), out
     assert lines[2] == "with_service: green\n"
 
@@ -400,7 +400,7 @@ def test_loopback_only_refuses_a_product_listening_wider_and_never_runs_the_comm
     [("0.0.0.0", "0.0.0.0", 0), ("0.0.0.0", "::", 1), ("::", "127.0.0.1", 0)],  # noqa: S104 # -- under test
 )
 def test_an_address_declared_with_listens_is_allowed_said_and_held_to(
-    declared: str, address: str, code: int, capsys: pytest.CaptureFixture[str]
+    declared: str, address: str, capsys: pytest.CaptureFixture[str], *, code: int
 ) -> None:
     ran, out = run(
         *("--boot", listening_on(address), "--ready", READY, "--loopback-only"),
@@ -432,8 +432,10 @@ def test_where_the_product_listens_is_not_checked_where_it_cannot_be_read(
     )
     assert (code, out) == (
         0,
-        f"with_service: where the product listens was not checked: {listeners.UNREADABLE}\n"
-        "with_service: green\n",
+        (
+            f"with_service: where the product listens was not checked: {listeners.UNREADABLE}\n"
+            "with_service: green\n"
+        ),
     )
     assert ran.exists(), "an address that cannot be read neither refuses nor passes in silence"
 

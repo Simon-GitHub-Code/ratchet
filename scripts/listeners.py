@@ -4,6 +4,7 @@ import contextlib
 import ctypes
 import errno
 import functools
+import ipaddress
 import itertools
 import os
 import select
@@ -43,6 +44,12 @@ NONE_FOUND = (
     "no process the boot command started, nor any child of one, was listening on a TCP port "
     "just before the signal, as when the server runs in a container"
 )
+UNREADABLE = "this system has no /proc/<pid>/net/tcp or tcp6 to read a listener's address from"
+NOT_FOUND = (
+    "no process the boot command started, nor any child of one, listens on a TCP port this "
+    "system shows, and nothing here listens on the ready URL's port"
+)
+Address = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 
 def parse(stat: bytes) -> tuple[str, bytes, int, int, int]:
@@ -143,16 +150,44 @@ def points(descriptor: Path, link: str) -> bool:
         return False
 
 
-def tcp_listeners(pid: int) -> dict[str, int]:
-    found: dict[str, int] = {}
+def address(hexadecimal: str) -> Address:
+    raw = bytes.fromhex(hexadecimal)
+    words = (raw[at : at + 4] for at in range(0, len(raw), 4))
+    return ipaddress.ip_address(
+        b"".join(int.from_bytes(word, sys.byteorder).to_bytes(4) for word in words)
+    )
+
+
+def bound_at(field: str) -> tuple[Address, int]:
+    where, _, port = field.rpartition(":")
+    return address(where), int(port, 16)
+
+
+def tcp_listeners(pid: int) -> dict[str, tuple[Address, int]] | None:
+    found: dict[str, tuple[Address, int]] | None = None
     for kind in ("tcp", "tcp6"):
         with contextlib.suppress(OSError), Path(f"{PROC}/{pid}/net/{kind}").open() as rows:
+            found = found or {}
             next(rows)
             listening = itertools.takewhile(
                 lambda fields: fields[3] == LISTENING, map(str.split, rows)
             )
-            found.update((f"socket:[{f[9]}]", int(f[1].rpartition(":")[2], 16)) for f in listening)
+            found.update((f"socket:[{f[9]}]", bound_at(f[1])) for f in listening)
     return found
+
+
+def bound(group: int, port: int) -> list[tuple[Address, int]] | str:
+    own = tcp_listeners(os.getpid())
+    if own is None:
+        return UNREADABLE
+    found = {link: at for link, at in own.items() if at[1] == port}
+    sockets, _ = Service(group, {group}).scan(everyone=False)
+    listening = functools.cache(tcp_listeners)
+    for link, descriptors in sockets.items():
+        rows = listening(int(descriptors[0].parents[1].name)) or {}
+        if link in rows:
+            found[link] = rows[link]
+    return list(dict.fromkeys(found.values())) or NOT_FOUND
 
 
 def copy_of(descriptor: Path) -> socket.socket:
@@ -201,9 +236,10 @@ def grab(group: int) -> list[Listener] | str:
     listening = functools.cache(tcp_listeners)
     found: list[Listener] = []
     for link, descriptors in sockets.items():
-        port = listening(int(descriptors[0].parents[1].name)).get(link)
-        if port is None:
+        at = (listening(int(descriptors[0].parents[1].name)) or {}).get(link)
+        if at is None:
             continue
+        port = at[1]
         try:
             copied = first_copy(descriptors)
         except OSError as error:

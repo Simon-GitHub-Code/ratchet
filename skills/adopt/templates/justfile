@@ -75,7 +75,7 @@ export RATCHET_PLUGIN_CHECKED := replace_regex(plugin_choice, '(?s)^R.*', '')
 ratchet_plugin := "$RATCHET_PLUGIN_DIR"
 export RATCHET_RUN := env_var_or_default("RATCHET_RUN", uuid())
 
-boot := "bind: the command that builds and starts the deliverable in the foreground, such as ./server --port {port}"
+boot := "bind: the command that builds and starts the deliverable in the foreground, such as ./server --host {host} --port {port}"
 ready := "bind: the URL that answers once it is up, such as http://127.0.0.1:{port}/health"
 boot_timeout := "30"
 service := "bind: the service.name every signal carries"
@@ -98,7 +98,7 @@ default:
 
 start *args:
     @{{ if ready =~ '^https?://' { "echo 'open " + replace(ready, "{port}", port) + " once it is up; Ctrl-C stops it'" } else { "true" } }}
-    export PORT={{port}}; {{ replace(boot, "{port}", port) }} {{args}}
+    export HOST=127.0.0.1 PORT={{port}}; {{ replace(replace(boot, "{port}", port), "{host}", "127.0.0.1") }} {{args}}
 
 test-files *files:
     {{test_runner}} {{files}}
