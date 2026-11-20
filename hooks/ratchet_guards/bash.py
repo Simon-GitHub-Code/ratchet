@@ -81,10 +81,8 @@ _BRANCHING = RESERVED - {"{", "}", "!"}
 _FORGETTERS = frozenset({"unset", "for", "select"})
 _KEEPS = frozenset({";", "&&", "||", "\n", ""})
 _CROWDED = Verdict("unreadable", "the command line moves between too many directories")
-_HIDDEN_SWITCH = re.compile(
-    r"(?<![\w.-])git(?![\w.-]).*(?<![\w-])(?:switch|checkout|symbolic-ref|bisect)(?![\w-])",
-    re.DOTALL,
-)
+_GIT_WORD = re.compile(r"(?<![\w.-])git(?![\w.-])")
+_SWITCH_WORD = re.compile(r"(?<![\w-])(?:switch|checkout|symbolic-ref|bisect)(?![\w-])")
 _XARGS = "xargs"
 _PATH_REFUSALS = frozenset({"guard-path-write", "guard-path-default", "guard-path-unseen-switch"})
 
@@ -206,7 +204,7 @@ _Read = tuple[Script, bool, list[tuple[str, str]]]
 
 def _read(text: str) -> _Read:
     parsed = _followed(text)
-    switching = any(map(_HIDDEN_SWITCH.search, parsed.nested))
+    switching = any(map(_switches, parsed.nested))
     found = enumerate(parsed.nested)
     nested = list(dict.fromkeys((script, parsed.expanded.get(i, "")) for i, script in found))
     return parsed, switching, nested
@@ -365,10 +363,15 @@ def _mover(words: Sequence[str]) -> list[str]:
 
 def _hides_switch(words: Sequence[str], rest: Sequence[str], cwd: Path) -> bool:
     if not rest or _name(rest[0]) != "git":
-        return bool(_HIDDEN_SWITCH.search(" ".join(words)))
+        return _switches(" ".join(words))
     fed = _XARGS in map(_name, words[: len(words) - len(rest)])
     texts = [" ".join(rest)] if fed else git.scripts(rest, cwd)
-    return any(map(_HIDDEN_SWITCH.search, texts))
+    return any(map(_switches, texts))
+
+
+def _switches(text: str) -> bool:
+    found = _GIT_WORD.search(text)
+    return found is not None and _SWITCH_WORD.search(text, found.end()) is not None
 
 
 def _directories(words: Sequence[str]) -> list[str]:
