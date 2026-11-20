@@ -1,3 +1,4 @@
+import os
 import re
 import shutil
 import subprocess
@@ -506,7 +507,11 @@ def criteria_digest(command: str, body: str, tmp_path: Path) -> str:
     bash = shutil.which("bash")
     assert bash
     done = subprocess.run(  # noqa: S603 # -- the page's own command, run on a file the test wrote
-        [bash, "-c", run], capture_output=True, text=True, check=True
+        [bash, "-c", run],
+        env={**os.environ, "CLAUDE_PLUGIN_ROOT": str(SKILLS.parent)},
+        capture_output=True,
+        text=True,
+        check=True,
     )
     return done.stdout.strip()
 
@@ -519,8 +524,8 @@ def test_a_conjecture_is_drafted_again_when_its_criteria_change_and_only_then(
     found = re.search(r"\*\*The body is a file\*\*.*`([^`]+)`$", reference, re.MULTILINE)
     assert found, "the page gives the command for a body in a file"
     command = found.group(1)
-    rest = command.split("< <file> | ", 1)[1]
-    forge = f"`gh issue view <n> --json body --jq .body | tr -d '\\r' | {rest}`"
+    assert command.endswith(" '<heading>' <file>")
+    forge = f"`gh issue view <n> --json body --jq .body | {command.removesuffix(' <file>')}`"
     assert forge in reference
     written = criteria_digest(command, CRITERIA_BODY, tmp_path)
     assert re.fullmatch(r"[0-9a-f]{40}", written)
@@ -538,8 +543,36 @@ def test_a_conjecture_is_drafted_again_when_its_criteria_change_and_only_then(
     changed = CRITERIA_BODY.replace("is refused", "is kept twice")
     assert criteria_digest(command, changed, tmp_path) != written
     step_1 = conjecture_step(1)
-    assert "**The command prints another digest than the line names:**" in step_1
+    assert "**The command prints another digest than the line names, or exits 3:**" in step_1
     assert "Redraft it: run steps 2 to 5" in step_1
+    assert "**It exits any other way:** stop" in step_1
+    assert "redraft nothing" in step_1
+
+
+@pytest.mark.parametrize("via", ["file", "stdin"])
+def test_a_digest_command_that_cannot_run_is_not_read_as_changed_criteria(
+    via: str, tmp_path: Path
+) -> None:
+    page = (SKILLS / "conjecture/SKILL.md").read_text(encoding="utf-8")
+    reference = page.split("\n## The criteria digest\n", 1)[1]
+    found = re.search(r"\*\*The body is a file\*\*.*`([^`]+)`$", reference, re.MULTILINE)
+    assert found, "the page gives the command for a body in a file"
+    path = tmp_path / "ticket.md"
+    path.write_text(CRITERIA_BODY, encoding="utf-8")
+    command = found.group(1).replace("<heading>", "## Acceptance criteria")
+    run = (
+        command.replace("<file>", str(path))
+        if via == "file"
+        else f"cat {path} | {command.removesuffix(' <file>')}"
+    )
+    bash = shutil.which("bash")
+    assert bash
+    unset = {name: value for name, value in os.environ.items() if name != "CLAUDE_PLUGIN_ROOT"}
+    done = subprocess.run(  # noqa: S603 # -- the page's own command with the plugin root unset
+        [bash, "-c", run], env=unset, capture_output=True, text=True, check=False
+    )
+    assert done.stdout == ""
+    assert done.returncode not in (0, 3), done.stderr
 
 
 def test_a_redraft_keeps_the_answers_and_shows_the_owner_what_changed() -> None:
@@ -726,3 +759,30 @@ def test_adopt_hands_over_its_assumptions_without_question_keys() -> None:
     step_13 = ADOPT.split("13. **Hand over.**", 1)[1]
     assert re.search(r"`(?:adopt|init|event|safeguard)\.[a-z-]+`", step_13) is None
     assert "no question key, type name or other method term in it" in step_13
+
+
+ARGUMENT_PLACEHOLDER = re.compile(r"\$(?:ARGUMENTS(?:\[\d+\])?|\d+)")
+
+
+def frontmatter(text: str) -> str:
+    return text.split("---\n", 2)[1] if text.startswith("---\n") else ""
+
+
+def test_no_skill_holds_text_the_harness_replaces_with_its_argument() -> None:
+    pages = {
+        path.relative_to(SKILLS): path.read_text(encoding="utf-8")
+        for path in SKILLS.rglob("SKILL.md")
+    }
+    replaced = [
+        f"{page}:{number}: {match.group(0)}"
+        for page, text in sorted(pages.items())
+        for number, line in enumerate(text.splitlines(), 1)
+        for match in ARGUMENT_PLACEHOLDER.finditer(line)
+    ]
+    assert not replaced, f"the harness puts the skill's argument in place of: {replaced}"
+    named = [
+        str(page)
+        for page, text in pages.items()
+        if re.search(r"^arguments:", frontmatter(text), re.MULTILINE)
+    ]
+    assert not named, f"each `$name` these declare is replaced by an argument too: {named}"
