@@ -126,6 +126,7 @@ POLL = 0.05
 ALONE = -1
 RECENT = 5
 WINDOW = 2**20
+UNREADABLE = (ValueError, TypeError, KeyError, OverflowError, RecursionError)
 NO_RECORD: Mapping[str, float] = MappingProxyType({})
 WAITING = re.compile(r"(?P<standing>later|none): \S.*")
 
@@ -232,10 +233,12 @@ def plan(
 
 def recent_lines(report: Path) -> list[bytes]:
     try:
+        if not report.is_file():
+            return []
         with report.open("rb") as handle:
-            start = max(0, handle.seek(0, os.SEEK_END) - WINDOW)
+            start = max(0, handle.seek(0, os.SEEK_END) - WINDOW - 1)
             handle.seek(start)
-            lines = handle.read(WINDOW).split(b"\n")
+            lines = handle.read(WINDOW + 1).split(b"\n")
     except OSError:
         return []
     return lines[1:] if start else lines
@@ -247,7 +250,7 @@ def measured(line: bytes) -> tuple[str, float] | None:
         key, value = record["key"], record["seconds"]
         number = isinstance(value, int | float) and not isinstance(value, bool)
         seconds = float(value) if number else math.nan
-    except Exception:  # noqa: BLE001 # -- a line that cannot be read says nothing
+    except UNREADABLE:
         return None
     if isinstance(key, str) and 0 < seconds < math.inf:
         return key, seconds
