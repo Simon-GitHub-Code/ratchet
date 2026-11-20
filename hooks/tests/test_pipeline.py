@@ -1893,6 +1893,124 @@ def test_every_command_a_role_is_told_to_run_is_a_line_of_its_own_with_no_backti
     assert seen == 7, "preflight, critique and review in two runs, and the second review"
 
 
+SENTINELS = {"base": "Vbase0", "branch": "Vbranch0", "ref": "Vref0", "plugin": "Vplugin0"}
+PLACEHOLDER = re.compile(r"<[^<>\n]+>")
+COMMAND_SPAN = re.compile(r"`([a-z][\w.-]* [^`\n]*)`")
+FAILING_KEPT = {
+    **CRITIQUED,
+    "findings": [{"severity": "minor", "title": "records a HEAD as a GET", "testFails": True}],
+    "testsAdded": ["tests/test_method.py"],
+}
+
+
+def _every_prompt(values: dict[str, str]) -> dict[str, str]:
+    args = {
+        "ref": values["ref"],
+        "base": values["base"],
+        "branch": values["branch"],
+        "preflight": f"/opt/{values['plugin']}/scripts/feature_preflight.py",
+    }
+    built = {**DEPTH, "critique": FAILING_KEPT, "critique-1": CRITIQUED}
+    conflicted = {**REJUDGE, "conflicts": ["flags.toml"]}
+    runs = [
+        _run(args, preflight=PREFLIGHT, spec=SPECIFIED, **built),
+        _run({**args, "rejudge": conflicted}, reconcile=IMPLEMENTED, **{"review-again": REVIEW}),
+    ]
+    return {label: prompt for ran in runs for label, prompt in ran["prompts"].items()}
+
+
+def _blocks(prompt: str) -> list[str]:
+    found, fenced, previous = [], False, ""
+    for line in prompt.splitlines():
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+        elif fenced or (re.match(r" {4,}\S", line) and (not previous.strip() or previous in found)):
+            found.append(line)
+        previous = line
+    return found
+
+
+def _shell_words(line: str, cwd: Path) -> tuple[list[str], int]:
+    shell = shutil.which("bash")
+    assert shell, "bash reads a command line as the agent's shell does"
+    (cwd / "a file the shell could glob").touch()
+    standin = "printf '%s\\0' " + PLACEHOLDER.sub("PLACEHOLDER", line.strip())
+    run = subprocess.run(  # noqa: S603 # -- the line under test is the shell's input
+        [shell, "-c", standin], cwd=cwd, capture_output=True, text=True, check=False
+    )
+    return run.stdout.split("\0")[:-1], run.returncode
+
+
+def test_the_prompts_show_no_inline_command_that_carries_a_run_time_value() -> None:
+    prompts = _every_prompt(SENTINELS)
+    roles = ["preflight", "spec", "ticket-check", "implement", "critique", "fix-1", "critique-1"]
+    assert sorted(prompts) == sorted([*roles, "review", "reconcile", "review-again"])
+    inline = [
+        f"{label}: `{span}`"
+        for label, prompt in prompts.items()
+        for span in COMMAND_SPAN.findall(prompt)
+        if any(sentinel in span for sentinel in SENTINELS.values())
+    ]
+    assert not inline, "a command that carries a value goes on a line of its own:\n" + "\n".join(
+        inline
+    )
+
+
+@pytest.mark.parametrize("hostile", HOSTILE)
+def test_a_shell_hands_every_command_line_each_value_as_one_word_unchanged(
+    hostile: str, tmp_path: Path
+) -> None:
+    marker = tmp_path / "expanded"
+    value = hostile.format(marker=marker)
+    values = {
+        "base": f"base-{value}",
+        "branch": f"feature/{value}",
+        "ref": f"docs/{value}.md",
+        "plugin": value,
+    }
+    plain, awkward = _every_prompt(SENTINELS), _every_prompt(values)
+    assert sorted(plain) == sorted(awkward)
+    seen = 0
+    for label, prompt in plain.items():
+        lines = _blocks(prompt)
+        assert len(_blocks(awkward[label])) == len(lines), label
+        for template, line in zip(lines, _blocks(awkward[label]), strict=True):
+            seen += 1
+            expected, _ = _shell_words(template, tmp_path)
+            for name, sentinel in SENTINELS.items():
+                expected = [word.replace(sentinel, values[name]) for word in expected]
+            assert _shell_words(line, tmp_path) == (expected, 0), f"{label}: {line}"
+    assert seen >= 4, "the preflight, the quote checks and the git commands"
+    assert not marker.exists(), "the shell ran a command out of a command line"
+
+
+def test_git_reads_the_quoted_range_as_the_branch_against_its_base(tmp_path: Path) -> None:
+    name = "feature/$HOME;touch${IFS}landed'`touch${IFS}also`"
+    root = repository(tmp_path / "repo")
+    branch(root, name)
+    write(root, "src/a.py", "x = 2\n")
+    commit(root, "feat(thing): the change")
+    args = {"ref": "4", "base": "main", "branch": name, "rejudge": {**REJUDGE, "checkRed": True}}
+    prompt = _run(args, reconcile=IMPLEMENTED, **{"review-again": REVIEW})["prompts"]["reconcile"]
+    [line] = [line for line in _blocks(prompt) if "git diff" in line]
+    shell = shutil.which("bash")
+    assert shell, "bash reads a command line as the agent's shell does"
+    run = subprocess.run(  # noqa: S603 # -- the line under test is the shell's input
+        [shell, "-c", line.strip()], cwd=root, capture_output=True, text=True, check=False
+    )
+    direct = subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
+        ["git", "diff", f"main...{name}"],  # noqa: S607 # -- git is resolved from PATH on purpose
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "+x = 2" in direct.stdout
+    assert (run.returncode, run.stdout) == (0, direct.stdout), line
+    assert not (root / "landed").exists()
+    assert not (root / "also").exists()
+
+
 def test_no_skill_runs_a_plugin_script_with_a_bare_python3() -> None:
     pages = sorted((PLUGIN_ROOT / "skills").glob("*/SKILL.md"))
     assert pages
