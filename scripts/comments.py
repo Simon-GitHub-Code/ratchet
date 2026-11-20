@@ -364,7 +364,7 @@ def record(root: Path, verdict: Verdict, *, since: str, base: str | None) -> int
     renamed = gatelib.renamed(root, base) if base else {}
     found = Counter(key(r) for r in verdict.found)
     mine = []
-    for entry in sorted(owed.brought(held, owed.parse(text).entries, renamed).elements()):
+    for entry in sorted(owed.brought(held, owed.parse(text).entries, renamed)[0].elements()):
         if entry.rule == RULE and found[entry.key] > 0:
             found[entry.key] -= 1
             mine.append(entry)

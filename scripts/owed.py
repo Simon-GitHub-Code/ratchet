@@ -183,9 +183,10 @@ def next_base(root: Path, branch: str | None = None) -> str | None:
 
 def brought(
     before: Sequence[Entry], after: Sequence[Entry], renamed: Mapping[str, str]
-) -> Counter[Entry]:
+) -> tuple[Counter[Entry], list[tuple[Entry, Entry]]]:
     new = Counter(after) - Counter(before)
     left = Counter(before) - Counter(after)
+    edits = []
     for entry in sorted(new.elements()):
         held = next(
             (
@@ -199,7 +200,8 @@ def brought(
         if held is not None:
             left[held] -= 1
             new[entry] -= 1
-    return +new
+            edits.append((entry, held))
+    return +new, edits
 
 
 def moved(before: str | None, after: str | None, *, floor: str | None) -> plugin_pin.Pin | None:

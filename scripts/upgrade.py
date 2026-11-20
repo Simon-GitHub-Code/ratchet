@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TypeVar
 
@@ -296,10 +296,15 @@ def owing(
     if pin is None:
         return []
     held = owed.parse(gatelib.show(root, base, str(owed.LEDGER)) if base else None).entries
-    brought = owed.brought(
+    brought, edits = owed.brought(
         held, owed.read(sandbox).entries, gatelib.renamed(root, base) if base else {}
     )
     mine = sorted(entry for entry in brought.elements() if entry.rule not in owed.GATE_RULES)
+    undated = [
+        (entry, was.since)
+        for entry, was in edits
+        if entry.since != was.since and entry.rule not in owed.GATE_RULES
+    ]
     red, _ = conformance.owed_split(sandbox, left)
     allowed = red_at_base(root, base, plugin)
     added = []
@@ -320,9 +325,23 @@ def owing(
             f" upgrade from the gate's base {str(base)[:12]} would not write: "
             + "; ".join(f"'{problem}' for {path} ({rule})" for rule, path, problem in dropped)
         )
+    if undated:
+        count = len(undated)
+        does.append(
+            f"set back the since of {count} {'entry' if count == 1 else 'entries'} the gate's base"
+            f" {str(base)[:12]} holds, to the since it holds there: "
+            + "; ".join(
+                f"'{e.problem}' for {e.path} ({e.rule}) from '{e.since}' to '{since}'"
+                for e, since in undated
+            )
+        )
     if not does:
         return []
-    return [Finding(str(owed.LEDGER), "", Auto("; ".join(does), owed.recorded(added, mine)))]
+    restored = [replace(entry, since=since) for entry, since in undated]
+    gone = [*mine, *(entry for entry, _ in undated)]
+    return [
+        Finding(str(owed.LEDGER), "", Auto("; ".join(does), owed.recorded([*added, *restored], gone)))
+    ]
 
 
 def red_at_base(root: Path, base: str | None, plugin: Path) -> Counter[owed.Key]:
