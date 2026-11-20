@@ -11,6 +11,7 @@ HEADING = "## Acceptance criteria"
 EMPTY_BLOB = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
 NO_HEADING = 3
 DID_NOT_RUN = 2
+ID_WIDTH = {"sha1": 40, "sha256": 64}
 SHELL_PIPELINE = (
     "tr -d '\\r' | awk -v h=\"$1\" '/^## /{f=($0==h)} f && NF' | git hash-object --stdin"
 )
@@ -72,7 +73,7 @@ def shell_pipeline(heading: str, body: bytes, cwd: Path | None = None) -> str:
     return done.stdout.decode().strip()
 
 
-def printed(body: str, tmp_path: Path, via: str = "stdin", cwd: Path | None = None) -> str:
+def printed(body: str, tmp_path: Path, via: str = "stdin", *, cwd: Path | None = None) -> str:
     done = digest(body.encode(), via, tmp_path, cwd=cwd)
     assert done.returncode == 0, done.stderr
     assert done.stderr == b""
@@ -109,13 +110,13 @@ def repository_of(object_format: str, tmp_path: Path) -> Path:
 
 
 @pytest.mark.parametrize("via", VIAS)
-@pytest.mark.parametrize(("object_format", "width"), [("sha1", 40), ("sha256", 64)])
+@pytest.mark.parametrize("object_format", ["sha1", "sha256"])
 def test_the_digest_is_the_id_the_shell_pipeline_printed_in_that_repository(
-    object_format: str, width: int, via: str, tmp_path: Path
+    object_format: str, via: str, tmp_path: Path
 ) -> None:
     root = repository_of(object_format, tmp_path)
     old = shell_pipeline(HEADING, BODY.encode(), cwd=root)
-    assert len(old) == width
+    assert len(old) == ID_WIDTH[object_format]
     assert printed(BODY, tmp_path, via, cwd=root) == f"{old}\n"
 
 
@@ -155,9 +156,7 @@ def test_a_changed_criterion_changes_the_digest_and_a_section_after_it_does_not(
 
 
 @pytest.mark.parametrize("via", VIAS)
-def test_a_body_without_the_heading_prints_no_digest_and_says_so(
-    via: str, tmp_path: Path
-) -> None:
+def test_a_body_without_the_heading_prints_no_digest_and_says_so(via: str, tmp_path: Path) -> None:
     body = BODY.replace(HEADING, "## Criteria")
     assert shell_pipeline(HEADING, body.encode()) == EMPTY_BLOB
     done = digest(body.encode(), via, tmp_path)

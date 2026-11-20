@@ -16,8 +16,9 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` from what the o
    - Run `gh issue view <n> --json number,title,body,comments` in one Bash call, or read the file.
    - Read its parent spec too: the one a `Parent:` line or a `## Parent` section names, or, for a local ticket under `<feature>/issues/`, the `<feature>/spec.md` beside that directory.
    - **The ticket, or its parent, states a conjecture:** check that it is current. Run the digest command of [The criteria digest](#the-criteria-digest) on the body that holds the conjecture, with the heading its `- Criteria:` line names.
-     - **The command prints another digest than the line names, or none:** the criteria changed after the conjecture was written. Redraft it: run steps 2 to 5, each as its *redraft* case says. The case below does not apply.
+     - **The command prints another digest than the line names, or exits 3:** the criteria changed after the conjecture was written. Redraft it: run steps 2 to 5, each as its *redraft* case says. The case below does not apply.
      - **It prints the same digest, or the conjecture has no `- Criteria:` line:** the conjecture is current, and the case below decides.
+     - **It exits any other way:** stop, report the command and its output, and redraft nothing.
    - **The ticket, or its parent, already states a current conjecture and its operability, and the ticket states no `## Size`:** it was written before sizes were. Write the size alone: estimate it by the `## Size` block of step 2, write that block as step 4 says, and hand over as step 5 says, with the two size lines in place of the conjecture. Ask nothing, and draft nothing else.
    - **The ticket, or its parent, already states a current conjecture and its operability, and the ticket states its `## Size`, or the argument is a spec:** there is nothing to write. Say so and stop.
 
@@ -145,4 +146,4 @@ The `- Criteria:` line records which criteria a conjecture was drafted against, 
 - The digest is what this command prints:
   - **The body is a file** (a local ticket or spec, or the file step 4 passes to `gh issue edit`): `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/criteria_digest.py" '<heading>' <file>`
   - **The body is a forge issue's:** `gh issue view <n> --json body --jq .body | python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/criteria_digest.py" '<heading>'`
-- No line of the body is the heading: the command prints no digest and exits 1.
+- No line of the body is the heading: the command prints no digest and exits 3, and step 4 writes no line. Any other exit without a digest means it could not run.
