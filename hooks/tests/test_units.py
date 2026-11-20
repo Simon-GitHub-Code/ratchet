@@ -376,6 +376,20 @@ def test_past_its_cap_on_work_the_guard_stops_and_asks(command: str) -> None:
 @pytest.mark.parametrize(
     "command",
     [
+        "echo " + "$(\n" * 400,
+        "echo " + "$(" * 400 + "x" + ")" * 400,
+        "cat <<E\n" + "$(\n" * 400 + "E",
+        "cat <<E\n$(" * 200 + "x" + ")\nE\n" * 200,
+        "echo " + "${ " * 400 + "x" + "; }" * 400,
+    ],
+)
+def test_nesting_deeper_than_the_reader_follows_asks_as_past_the_cap(command: str) -> None:
+    assert details(command) == [TOO_MUCH]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
         "cat <<'EOF' > data.txt\n" + "line of text, $5 and `code`\n" * 4000 + "EOF",
         "git commit -m \"$(cat <<'EOF'\n" + "a line of the message\n" * 2000 + 'EOF\n)"',
         "cat <<EOF > notes.md\n" + "Run `just check` before $(date).\n" * 300 + "EOF",
