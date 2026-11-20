@@ -1923,17 +1923,20 @@ def test_a_split_on_a_detached_head_says_so_and_what_to_do(tmp_path: Path, capsy
     ) in capsys.readouterr().out.splitlines()
 
 
+@pytest.mark.parametrize(
+    ("body", "code"), [("exit 3", 1), ("git checkout -q -b hooked", 0)], ids=["refuses", "moves"]
+)
 def test_a_commit_hook_that_refuses_and_prints_nothing_is_named_with_the_exit(
-    tmp_path: Path, capsys: Out
+    tmp_path: Path, capsys: Out, body: str, code: int
 ) -> None:
     root = project(tmp_path, **WHOLE)
     run(root, "open", ALPHA)
-    hook_script(root / ".git/hooks", "pre-commit", "exit 3")
+    hook_script(root / ".git/hooks", "pre-commit", body)
     capsys.readouterr()
     assert run(root, "split", ALPHA, "--plan", str(plan_file(tmp_path, HALVES))) == drain.NOT_LANDED
     assert (
-        "records: the parts were not committed: a commit hook refused them and printed nothing"
-        " (`git commit` exited 1)"
+        f"records: the parts were not committed: `git commit` exited {code} and printed nothing:"
+        f" a commit hook refused them, or moved the commit off `{LANDING}`"
     ) in capsys.readouterr().out.splitlines()
 
 

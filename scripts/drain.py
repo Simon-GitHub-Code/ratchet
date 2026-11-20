@@ -107,7 +107,10 @@ HOOKS_EMPTIED = (
     "not landed: the commit hooks took the parts out of the commit, so `{}` holds a commit that"
     " adds nothing, and it stays as it is: delete it"
 )
-HOOKS_SILENT = "a commit hook refused them and printed nothing (`git commit` exited {})"
+HOOKS_SILENT = (
+    "`git commit` exited {} and printed nothing: a commit hook refused them, or moved the commit"
+    " off `{}`"
+)
 INDEX_LOCKED = (
     "not landed: the parts are on `{}`, and `{}` locks the checkout's index, so the merge could"
     " not move it: once no git command runs in this repository, delete that file"
@@ -1757,7 +1760,7 @@ def commit_parts(root: Path, base: str, *, landing: str, made: list[str]) -> tup
     if held in {None, base}:
         gatelib.git(root, "update-ref", "-d", f"{merge.HEADS}{landing}", base)
         said = " / ".join((done.stdout + done.stderr).strip().splitlines()[-merge.HOOK_LINES :])
-        said = said or HOOKS_SILENT.format(done.returncode)
+        said = said or HOOKS_SILENT.format(done.returncode, landing)
         print(f"records: the parts were not committed: {said}")
         return None, IN_CHECKOUT
     kept = merge.hashed(root, made)
