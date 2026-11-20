@@ -376,14 +376,14 @@ def test_git_repo_state(tmp_path: Path) -> None:
         "-m",
         "x",
     )
-    assert state.current_branch(tmp_path) == "trunk"
+    assert hook.GitRepoState().current_branch(tmp_path) == "trunk"
     assert state.head_is_pushed(tmp_path) is False
     assert state.full_name(tmp_path, "trunk") == "refs/heads/trunk"
     assert state.full_name(tmp_path, "HEAD") == "refs/heads/trunk"
     assert state.full_name(tmp_path, "nope") is None
     assert state.full_name(tmp_path, "trunk@{upstream}") is None
     _git(tmp_path, "tag", "trunk")
-    assert state.current_branch(tmp_path) == "trunk"
+    assert hook.GitRepoState().current_branch(tmp_path) == "trunk"
     assert state.full_name(tmp_path, "trunk") is None
     _git(tmp_path, "tag", "-d", "trunk")
     _git(tmp_path, "update-ref", "refs/remotes/origin/trunk", "HEAD")
@@ -402,7 +402,7 @@ def test_git_repo_state(tmp_path: Path) -> None:
     )
     assert state.head_is_pushed(tmp_path) is False
     _git(tmp_path, "checkout", "-q", "--detach")
-    assert state.current_branch(tmp_path) is None
+    assert hook.GitRepoState().current_branch(tmp_path) is None
 
 
 def test_git_repo_state_survives_a_missing_git(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -431,11 +431,14 @@ def test_one_state_reads_each_checkout_once(tmp_path: Path) -> None:
     root = checkout(tmp_path)
     state = hook.GitRepoState()
     assert (state.checked_out(root), state.default_branches(root)) == ("main", {"main", "master"})
+    assert state.current_branch(root) == "main"
     switch_to_a_branch(root)
     _git(root, "update-ref", "refs/remotes/origin/trunk", "HEAD")
     _git(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
     assert (state.checked_out(root), state.default_branches(root)) == ("main", {"main", "master"})
+    assert state.current_branch(root) == "main"
     fresh = hook.GitRepoState()
+    assert fresh.current_branch(root) == "feature/x"
     assert fresh.checked_out(root) == "feature/x"
     assert fresh.default_branches(root) == {"main", "master", "trunk"}
 

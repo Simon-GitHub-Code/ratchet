@@ -238,10 +238,13 @@ class GitRepoState:
     def __init__(self) -> None:
         self._heads: dict[Path, str | None] = {}
         self._defaults: dict[Path, frozenset[str]] = {}
+        self._branches: dict[Path, str | None] = {}
 
     def current_branch(self, cwd: Path) -> str | None:
-        head = _git(cwd, "symbolic-ref", "HEAD")
-        return head.removeprefix(_HEADS) if head else None
+        if cwd not in self._branches:
+            head = _git(cwd, "symbolic-ref", "HEAD")
+            self._branches[cwd] = head.removeprefix(_HEADS) if head else None
+        return self._branches[cwd]
 
     def checked_out(self, root: Path) -> str | None:
         if root not in self._heads:
