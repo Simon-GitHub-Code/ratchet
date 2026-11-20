@@ -388,7 +388,47 @@ def test_an_answer_reads_back_as_it_was_written() -> None:
         json.dumps(
             {"runs": [{"commit": OFF, "state": "amber", "at": EARLY, "name": "n"}], "start": START}
         ),
+        json.dumps(
+            {"runs": [{"commit": OFF, "state": "red", "at": EARLY, "name": "\ud800"}], "start": ""}
+        ),
+        json.dumps(
+            {"runs": [{"commit": OFF, "state": "red", "at": EARLY, "name": "a\nb"}], "start": ""}
+        ),
+        json.dumps({"runs": [], "start": "a start\udcff"}),
+        json.dumps({"runs": [], "start": "a start\nbehind: a line"}),
     ],
 )
 def test_an_answer_that_does_not_read_is_not_known(text: str | None) -> None:
     assert unproven.answer(None if text is None else text.encode()).runs is None
+
+
+@pytest.mark.parametrize(
+    ("text", "seen"),
+    [
+        ("2026-11-20T09:00:00Z", "2026-11-20T09:00:00+00:00"),
+        ("2026-11-20T09:00:00+00:00", "2026-11-20T09:00:00+00:00"),
+        ("2026-11-20T09:00:00.5Z", "2026-11-20T09:00:00.500000+00:00"),
+        ("2026-11-20T09:00:00.123456-05:30", "2026-11-20T09:00:00.123456-05:30"),
+        ("2026-11-20T09:00:00", None),
+        ("2026-W47-5T09:00:00Z", None),
+        ("2026-324T09:00:00Z", None),
+        ("20261120T090000Z", None),
+        ("2026-11-20 09:00:00Z", None),
+        ("2026-11-20t09:00:00Z", None),
+        ("2026-11-20T09:00Z", None),
+        ("2026-11-20T09Z", None),
+        ("2026-11-20T09:00:00,5Z", None),
+        ("2026-11-20T09:00:00.1234567Z", None),
+        ("2026-11-20T09:00:00+0000", None),
+        ("2026-11-20T09:00:00+05:30:15", None),
+        ("2026-11-20T09:00:00Z\n", None),
+        ("\uff12026-11-20T09:00:00Z", None),
+        ("2026-13-20T09:00:00Z", None),
+        (None, None),
+    ],
+)
+def test_a_time_is_an_instant_only_in_the_one_form_the_adapter_writes(
+    text: str | None, seen: str | None
+) -> None:
+    when = unproven.instant(text)
+    assert (None if when is None else when.isoformat()) == seen

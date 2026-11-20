@@ -3,6 +3,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -2451,6 +2452,9 @@ NOT_KNOWN = "tier2: tier 2 on the default branch is not known: "
         "past the size",
         "a time that does not parse",
         "a time with no offset",
+        "a week date",
+        "a name that is not text",
+        "a name over two lines",
         "unreadable",
         "a directory",
     ],
@@ -2474,6 +2478,15 @@ def test_an_answer_file_the_judge_cannot_read_is_not_known(
         "a time with no offset": json.dumps(
             {"runs": [listed(tip, "green", 1, at="2026-11-20T09:00:00")], "start": STARTS}
         ).encode(),
+        "a week date": json.dumps(
+            {"runs": [listed(tip, "green", 1, at="2026-W47-5T09:00:00Z")], "start": STARTS}
+        ).encode(),
+        "a name that is not text": json.dumps(
+            {"runs": [listed(tip, "green", 1) | {"name": "run \ud800"}], "start": STARTS}
+        ).encode(),
+        "a name over two lines": json.dumps(
+            {"runs": [listed(tip, "green", 1) | {"name": "run\nbehind: x"}], "start": STARTS}
+        ).encode(),
     }
     if kind in written:
         path.write_bytes(written[kind])
@@ -2485,6 +2498,45 @@ def test_an_answer_file_the_judge_cannot_read_is_not_known(
     code, out = verdict(repo, path, capsys)
     assert (code, out[0]) == (1, "merge: owner"), out
     assert out[1].startswith(NOT_KNOWN), out
+
+
+@pytest.mark.parametrize(
+    "locale",
+    [{"PYTHONIOENCODING": "utf-8:strict", "LC_ALL": "C.UTF-8"}, {"LC_ALL": "C"}],
+    ids=["strict", "C"],
+)
+def test_the_judge_answers_an_answer_file_of_hostile_text_in_any_locale(
+    tmp_path: Path, locale: dict[str, str]
+) -> None:
+    repo = tmp_path / "repo"
+    tip, *_ = landed(repo)
+    path = answered_as(tmp_path, listed(tip, "red", 1) | {"name": "run \ud800"})
+    kept = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("PYTHON", "LC_", "LANG"))
+    }
+    for data in (path.read_bytes(), path.read_bytes().replace(b"run \\ud800", b"run \xff")):
+        path.write_bytes(data)
+        done = subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
+            [sys.executable, merge_ready.__file__, "--root", str(repo), "--deep", str(path)],
+            capture_output=True,
+            check=False,
+            env=kept | locale,
+        )
+        assert (done.returncode, done.stderr) == (1, b""), done.stderr[-400:]
+        assert done.stdout.decode().splitlines()[1].startswith(NOT_KNOWN)
+
+
+def test_the_judge_loads_no_forge_adapter() -> None:
+    loaded = subprocess.run(
+        [sys.executable, "-c", "import merge_ready, sys; print('forge_runs' in sys.modules)"],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=Path(merge_ready.__file__).parent,
+    )
+    assert loaded.stdout == "False\n"
 
 
 @pytest.mark.parametrize(
