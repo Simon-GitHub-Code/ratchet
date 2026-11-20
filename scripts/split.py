@@ -132,13 +132,6 @@ def free(folder: Path, name: str) -> bool:
     )
 
 
-def matching(folder: Path, body: str) -> str | None:
-    return next(
-        (p.name for p in sorted(folder.glob("*.md")) if p.read_text(encoding="utf-8") == body),
-        None,
-    )
-
-
 def untouched(
     folder: Path, parent: preflight.Ticket, parts: list[Part], *, filed: list[str], label: str
 ) -> list[str]:
@@ -146,10 +139,9 @@ def untouched(
     for index in range(len(parts)):
         body = body_of(parent, parts, names, index=index, label=label)
         recorded = Path(filed[index]).name if len(filed) == len(parts) else None
-        name = recorded if filed else matching(folder, body)
-        if name is None or gatelib.read_text(folder / name) != body:
+        if recorded is None or gatelib.read_text(folder / recorded) != body:
             return []
-        names.append(name)
+        names.append(recorded)
     return names
 
 
@@ -187,8 +179,6 @@ def file_locally(  # noqa: PLR0913 -- the parts, where they were filed, and who 
             and all(number_of(n) != number_of(recorded) for n in names)
         ):
             name = recorded
-        elif not filed and (found := matching(folder, body)) is not None:
-            name = found
         else:
             slug = SLUG.sub("-", part.title.lower()).strip("-")[:40].strip("-") or "part"
             number = max([next_number(folder), *(int(number_of(n) or 0) + 1 for n in names)])
