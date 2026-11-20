@@ -241,7 +241,7 @@ def test_lexer_reads_every_heredoc_body() -> None:
 
 def test_an_unquoted_heredoc_body_is_read_as_bash_reads_it() -> None:
     body = "$(a) `b` \\$(c) \\`c\\` \\\\$(d) '$(e)' \"$(f)\" ${x:-$(g)} $(h $(i))"
-    assert lex(f"cat <<E\n{body}\nE")[1] == ("a", "b", "d", "e", "f", "g", "h $(i)")
+    assert lex(f"cat <<E\n{body}\nE")[1] == ("a", "b", "d", "e", "f", "g", "i", "h $(i)")
     assert lex("cat <<E\na\\\nb\\\\\n\\$x\nE")[2] == ("ab\\\n$x",)
     assert lex("cat <<E\nE\\\n\nx\nE")[2] == ("",)
     assert lex("cat <<-E\n\tE\\\n\nx\nE")[2] == ("",)
@@ -263,6 +263,8 @@ def test_a_quoted_heredoc_delimiter_keeps_the_body_as_text(opener: str) -> None:
         ),
         ("x=$(cat <<EOF\n# Notes\nRun `gh pr merge 1` here.\nEOF\n)", "x=$(gh pr merge 1)", "EOF"),
         ("cat <<-E\n\t$(echo hi > AGENTS.md)\n\tE", "echo hi > AGENTS.md", "E"),
+        ("cat <<E\n${ git push -f; }\nE", "git push -f", "E"),
+        ("cat <<E >x\nsee ${ echo $(git push -f); }\nE", "git push -f", "E"),
     ],
 )
 def test_a_finding_in_an_unquoted_heredoc_body_names_the_delimiter_to_quote(
@@ -282,25 +284,16 @@ def test_a_finding_in_an_unquoted_heredoc_body_names_the_delimiter_to_quote(
         "cat <<E | bash\n$(git push -f)\nE",
         "cat <<E\n$(git push -f)\nE\ngit push -f",
         "(( x = 1 << y ))\n$(git push -f)\ny",
+        "cat <<E\n${ git push -f; }\nE\ngit push -f",
+        "cat <<E\nx\\\nE\n$(git push -f)\nE",
+        "for ((i=0;i<1;i++)); do cat <<'EOF'\nsee: cat <<X\n`git push -f`\nX\nEOF\ndone",
+        "cat <<E''\n$(cat <<F\n$(git push -f)\nF\n)\nE",
     ],
 )
 def test_the_heredoc_cure_is_not_named_where_quoting_the_delimiter_leaves_the_finding(
     command: str,
 ) -> None:
     assert "heredoc body" not in _message(command)
-
-
-@pytest.mark.parametrize(
-    ("command", "delimiter"),
-    [
-        ("for ((i=0;i<1;i++)); do cat <<'EOF'\nsee: cat <<X\n`git push -f`\nX\nEOF\ndone", "X"),
-        ("cat <<E''\n$(cat <<F\n$(git push -f)\nF\n)\nE", "F"),
-    ],
-)
-def test_where_the_guard_is_unsure_of_a_heredoc_the_cure_names_the_inner_delimiter(
-    command: str, delimiter: str
-) -> None:
-    assert f"delimiter `{delimiter}` is unquoted" in _message(command)
 
 
 def _message(command: str) -> str:
@@ -329,14 +322,19 @@ def _reads(monkeypatch: pytest.MonkeyPatch, command: str) -> list[str]:
         lambda n: "echo " + "$(\n" * n,
         lambda n: "echo " + "$(" * n + "x" + ")" * n,
         lambda n: "cat <<E\n" + "$(" * n + "x" + ")" * n + "\nE",
+        lambda n: (
+            "echo "
+            + "".join(f"$(cat <<F{i}\n" for i in range(n))
+            + "x"
+            + "".join(f"\nF{i}\n)" for i in reversed(range(n)))
+        ),
     ],
 )
-def test_the_scripts_the_guard_reads_grow_at_most_linearly_with_nesting(
+def test_the_scripts_the_guard_reads_grow_linearly_with_nesting(
     monkeypatch: pytest.MonkeyPatch, shape: Callable[[int], str]
 ) -> None:
-    shallow = len(_reads(monkeypatch, shape(5)))
-    deep = len(_reads(monkeypatch, shape(10)))
-    assert deep <= 2 * shallow, (shallow, deep)
+    read = [len(_reads(monkeypatch, shape(nesting))) for nesting in (20, 40, 60)]
+    assert read[2] - read[1] <= read[1] - read[0], read
 
 
 @pytest.mark.parametrize(
@@ -354,49 +352,51 @@ def test_the_guard_reads_identical_nested_scripts_once(
     assert len(_reads(monkeypatch, shape(1000))) == len(_reads(monkeypatch, shape(1)))
 
 
-TOO_MUCH = (
-    "the command is too long or nests scripts too deeply or too widely for the guard to read; "
-    "put the script in a file and run that"
+FORCE = "git push -f"
+
+
+@pytest.mark.parametrize("depth", [9, 10, 12, 20, 40])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        lambda inner, depth: "echo " + "$(a " * depth + f"$({inner})" + ")" * depth,
+        lambda inner, depth: "cat <<E\n" + "$(a " * depth + f"$({inner})" + ")" * depth + "\nE",
+        lambda inner, depth: (
+            "echo "
+            + "".join(f"$(cat <<F{i}\n" for i in range(depth))
+            + f"$({inner})"
+            + "".join(f"\nF{i}\n)" for i in reversed(range(depth)))
+        ),
+    ],
 )
+def test_a_command_nested_deeper_than_the_guard_follows_is_still_judged(
+    shape: Callable[[str, int], str], depth: int
+) -> None:
+    assert "force-push" in rules(shape(FORCE, depth))
+
+
+PROSE = "This line of the note explains a step, with `code`, $5 and a path like src/app/main.py.\n"
+
+
+def _filled(size: int) -> str:
+    return (PROSE * (size // len(PROSE) + 1))[:size]
 
 
 @pytest.mark.parametrize(
     "command",
     [
-        "cat <<E\n" + " ".join(f"`a{index}`" for index in range(3000)) + "\nE",
-        "echo " + " ".join(f"$(a{index})" for index in range(3000)),
-        "cd a; cd b; cd c; cd d; cd e; cd f; echo " + " ".join(f"`a{i}`" for i in range(100)),
-        "echo " + "x" * 300_000,
+        "git commit -m \"$(cat <<'EOF'\n" + _filled(60_000) + '\nEOF\n)"',
+        "gh pr create --title t --body \"$(cat <<'EOF'\n" + _filled(60_000) + '\nEOF\n)"',
+        "for f in "
+        + " ".join(f"src/module_{i:04d}/file_{i:04d}.py" for i in range(3000))
+        + '; do wc -l "$f"; done',
+        "cat > notes.md <<'EOF'\n" + _filled(140_000) + "\nEOF",
+        "cat > notes.md <<'EOF'\n" + _filled(149_000) + "\nEOF",
+        "cat > notes.md <<'EOF'\n" + _filled(1_000_000) + "\nEOF",
     ],
 )
-def test_past_its_cap_on_work_the_guard_stops_and_asks(command: str) -> None:
-    assert details(command) == [TOO_MUCH]
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        "echo " + "$(\n" * 400,
-        "echo " + "$(" * 400 + "x" + ")" * 400,
-        "cat <<E\n" + "$(\n" * 400 + "E",
-        "cat <<E\n$(" * 200 + "x" + ")\nE\n" * 200,
-        "echo " + "${ " * 400 + "x" + "; }" * 400,
-    ],
-)
-def test_nesting_deeper_than_the_reader_follows_asks_as_past_the_cap(command: str) -> None:
-    assert details(command) == [TOO_MUCH]
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        "cat <<'EOF' > data.txt\n" + "line of text, $5 and `code`\n" * 4000 + "EOF",
-        "git commit -m \"$(cat <<'EOF'\n" + "a line of the message\n" * 2000 + 'EOF\n)"',
-        "cat <<EOF > notes.md\n" + "Run `just check` before $(date).\n" * 300 + "EOF",
-    ],
-)
-def test_a_long_ordinary_command_stays_under_the_cap(command: str) -> None:
-    assert TOO_MUCH not in details(command)
+def test_a_long_ordinary_command_is_allowed(command: str) -> None:
+    assert rules(command) == []
 
 
 class _Scanned:
