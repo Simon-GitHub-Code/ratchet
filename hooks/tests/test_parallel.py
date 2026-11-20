@@ -727,7 +727,10 @@ def seconds_of_a(value: bytes) -> bytes:
         None,
         b"",
         b"\0\xff\xfe not a record\n",
-        b'{not json\n[1, 2]\n{"key": 3, "seconds": 9}\n{"key": "x", "seconds": "slow"}\n',
+        (
+            b'{not json\n[1, 2]\n{"seconds": 9}\n'
+            b'{"key": 3, "seconds": 9}\n{"key": "x", "seconds": "slow"}\n'
+        ),
         DEEP + b"\n",
         seconds_of_a(DEEP),
         seconds_of_a(b"9" * 309),
@@ -838,6 +841,46 @@ def test_a_record_far_larger_than_its_last_runs_is_read_only_at_its_end(tmp_path
     assert run("--jobs", "1", "--report", str(report), "--", a, b, early) == 0
     starts = [line for line in log.read_text().splitlines() if line.startswith("+")]
     assert starts == ["+early", "+a", "+b"], "a time 64 MiB before the end was read"
+
+
+def test_a_record_whose_window_starts_on_a_line_keeps_that_line(tmp_path: Path) -> None:
+    log, report = tmp_path / "log", tmp_path / "timing.jsonl"
+    first, other = gate(LOG, log, "first"), gate(LOG, log, "other")
+    lines = b"".join(
+        json.dumps({"key": name, "seconds": seconds}).encode() + b"\n"
+        for name, seconds in ((first, 1.0), (other, 3.0))
+    )
+    report.write_bytes(b"{}\n" + lines + b"\n" * (parallel.WINDOW - len(lines)))
+    assert run("--jobs", "1", "--report", str(report), "--", first, other) == 0
+    starts = [line for line in log.read_text().splitlines() if line.startswith("+")]
+    assert starts == ["+other", "+first"], "the whole first line of the window was dropped"
+
+
+def test_a_record_that_is_a_pipe_leaves_the_order_given(tmp_path: Path) -> None:
+    log, report = tmp_path / "log", tmp_path / "timing.jsonl"
+    gates = [gate(LOG, log, name) for name in ("a", "b", "c")]
+    os.mkfifo(report)
+    seen: list[list[str]] = []
+    held: list[int] = []
+
+    def lines() -> list[str]:
+        return log.read_text().splitlines() if log.exists() else []
+
+    def release() -> None:
+        until(lambda: any(line.startswith("+") for line in lines()))
+        seen.append([line for line in lines() if line.startswith("+")])
+        held.append(os.open(report, os.O_RDWR | os.O_NONBLOCK))
+
+    thread = threading.Thread(target=release)
+    thread.start()
+    try:
+        assert run("--jobs", "1", "--report", str(report), "--", *gates) == 0
+    finally:
+        thread.join()
+        for handle in held:
+            os.close(handle)
+    assert seen[0] == ["+a"], f"gates started before the pipe was opened: {seen[0]}"
+    assert [line for line in lines() if line.startswith("+")] == ["+a", "+b", "+c"]
 
 
 def test_a_signal_stops_every_gate_and_what_they_forked(
