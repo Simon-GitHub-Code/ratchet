@@ -137,6 +137,9 @@ class ParentGh:
         return self.parent if args[2] == "12" else self.ticket
 
 
+SPEC_URL = "https://example.com/o/r/blob/main/docs/spec.md"
+
+
 def spec(body: str) -> str:
     return json.dumps(
         {"number": 12, "title": "The spec", "body": body, "labels": [], "state": "OPEN"}
@@ -148,13 +151,29 @@ def spec(body: str) -> str:
     [
         ("Parent: 02-b.md", ".scratch/f/issues/02-b.md"),
         ("Parent: ./02-b.md", ".scratch/f/issues/02-b.md"),
-        ("Parent: `../spec.md`", ".scratch/f/issues/../spec.md"),
+        ("Parent: `../spec.md`", ".scratch/f/spec.md"),
+        ("Parent: ../../g/./spec.md", ".scratch/g/spec.md"),
         ("Parent: 02", "02"),
         ("Parent: #2", "#2"),
+        (f"Parent: {SPEC_URL}", SPEC_URL),
     ],
 )
 def test_a_parent_line_reads_a_path_before_a_number(line: str, parent: str) -> None:
     assert preflight.local_ticket(TICKET, f"# T\n\n{line}\n").parent == parent
+
+
+def test_a_forge_tickets_parent_is_kept_as_written_unless_it_is_a_path(tmp_path: Path) -> None:
+    for index, (line, parent) in enumerate(
+        (
+            (SPEC_URL, SPEC_URL),
+            ("#12", "#12"),
+            ("12", "12"),
+            ("docs/specs/./notes.md", "docs/specs/notes.md"),
+        )
+    ):
+        child = issue(body=f"**Parent:** {line}\n\n## What to build\n\nA slice.\n" + CONJECTURE)
+        report = run(repository(tmp_path / str(index)), "4", gh_returning(child))
+        assert report.parent == parent, line
 
 
 def test_a_ticket_inherits_the_conjecture_of_its_parent_spec(tmp_path: Path) -> None:
@@ -621,6 +640,8 @@ def test_a_ticket_inherits_the_operability_of_its_parent_spec(tmp_path: Path) ->
         report = adopted(tmp_path / name, "service", "", gh=ParentGh(child, parent))
         assert "operability" in checks(report), name
         assert "4: `## Operability` lacks `Flag:`" in report.failures[-1].detail
+    gone = adopted(tmp_path / "unread", "service", "", gh=ParentGh(child, None))
+    assert "; its parent #12 could not be read; write each" in gone.failures[-1].detail
 
 
 def test_a_repository_that_is_not_adopted_is_not_asked_for_hooks(tmp_path: Path) -> None:
@@ -667,6 +688,280 @@ def test_the_flag_line_is_asked_whatever_the_life_events_and_its_row(tmp_path: P
     held = adopted(tmp_path / "held", "cli", BODY, extra=(LIVE, waiting))
     assert "lacks `Flag:`" in held.failures[0].detail
     assert adopted(tmp_path / "said", "cli", BODY + FLAGGED, extra=events("none")).ok
+
+
+LACKS_FLAG = (
+    "4: `## Operability` lacks `Flag:` (the flag the behaviour ships behind); write each, or"
+    " `none` and why"
+)
+
+
+@pytest.mark.parametrize(
+    "bare",
+    [
+        "none",
+        "NONE",
+        "`none`",
+        "**none**",
+        "- none",
+        "_none_",
+        "`none`.",
+        "**none**:",
+        "none -",
+        "none \u2014",
+        "none \u2013",
+        "none!",
+        "none?",
+        "none\u2026",
+        "(none)",
+        "[none]",
+        '"none"',
+        "'none'",
+        "> none",
+        "1. none",
+        "~~none~~",
+        "none<br>",
+        "none <br />",
+        "none&nbsp;",
+        "\u200bnone",
+        "no\u200bne",
+        "none\ufeff",
+        "*",
+        "none: none",
+        "none: n/a",
+        "none: -",
+        "none \u2014 (none)",
+    ],
+)
+def test_a_none_with_no_reason_is_refused_in_any_markup(tmp_path: Path, bare: str) -> None:
+    report = adopted(tmp_path, "cli", BODY + f"\n## Operability\n\n- Flag: {bare}\n")
+    assert [failure.detail for failure in report.failures] == [LACKS_FLAG]
+
+
+@pytest.mark.parametrize(
+    "given",
+    [
+        "none: the command only reads",
+        "`none`: the command only reads",
+        "**none**: the command only reads",
+        "- none: the command only reads",
+        "none, the command only reads",
+        "none \u2014 the command only reads",
+        "none - the command only reads",
+        "none; the command only reads",
+        "none (the command only reads)",
+        "none because the command only reads",
+        "`none` \u2014 the command only reads",
+        "none: tbd",
+        "nothing a user meets changes",
+    ],
+)
+def test_a_none_with_a_reason_is_accepted_in_any_markup(tmp_path: Path, given: str) -> None:
+    assert adopted(tmp_path, "cli", BODY + f"\n## Operability\n\n- Flag: {given}\n").ok
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "- Flag: `notes`, off until the owner switches it on",
+        "- **Flag:** `notes`, off until the owner switches it on",
+        "- **Flag**: `notes`, off until the owner switches it on",
+        "* flag: `notes`, off until the owner switches it on",
+        "Flag: `notes`, off until the owner switches it on",
+    ],
+)
+def test_a_line_written_as_the_pages_show_it_is_read(tmp_path: Path, line: str) -> None:
+    assert adopted(tmp_path, "cli", BODY + f"\n## Operability\n\n{line}\n").ok
+
+
+@pytest.mark.parametrize(
+    "prose",
+    ["Flagged rows are red.", "**Flag** rows are red.", "- Flags `notes` stay off", "- Flags: one"],
+)
+def test_a_sentence_that_begins_with_the_name_is_not_the_line(tmp_path: Path, prose: str) -> None:
+    report = adopted(tmp_path, "cli", BODY + f"\n## Operability\n\n{prose}\n")
+    assert [failure.detail for failure in report.failures] == [LACKS_FLAG]
+
+
+FLAG = "- Flag: `notes`, off until the owner switches it on\n"
+SIGNAL = "- **Signal:** a span per request, `notes.list`\n"
+LOAD = "- Load: the list route joins the load smoke\n"
+SECURITY = "* security: one read route and no new input\n"
+OPERATED = "## Operability\n\n"
+
+
+def operated(tmp_path: Path, own: str, inherited: str) -> preflight.Report:
+    binding = f"# Binding\n\n{LIVE}\n## Gates\n\n- Application types: service\n"
+    files = {
+        "docs/process/binding.md": binding,
+        ".scratch/f/spec.md": f"# F\n\n## Solution\n\nX.{CONJECTURE}\n{OPERATED}{inherited}",
+        TICKET: f"# 01: T\n\nStatus: ready-for-agent\n\nParent: ../spec.md\n\n{OPERATED}{own}",
+    }
+    root = repository(tmp_path, files)
+    install_hooks(root)
+    return run(root, TICKET)
+
+
+def test_a_line_the_ticket_lacks_is_read_from_its_parent(tmp_path: Path) -> None:
+    report = operated(tmp_path / "split", FLAG + SIGNAL, LOAD + SECURITY)
+    assert report.ok, report.failures
+    neither = operated(tmp_path / "neither", FLAG + SIGNAL, LOAD)
+    assert [failure.detail for failure in neither.failures] == [
+        (
+            f"{TICKET}: `## Operability` lacks `Security:` (the surface it adds: routes, inputs,"
+            " who may call); write each, or `none` and why"
+        )
+    ]
+
+
+def test_a_ticket_that_lacks_the_flag_line_takes_its_specs(tmp_path: Path) -> None:
+    rest = SIGNAL + LOAD + SECURITY
+    assert operated(tmp_path / "said", rest, FLAG).ok
+    for name, inherited in (("bare", "- Flag: none\n"), ("silent", "")):
+        report = operated(tmp_path / name, rest, inherited)
+        assert [failure.detail for failure in report.failures] == [
+            (
+                f"{TICKET}: `## Operability` lacks `Flag:` (the flag the behaviour ships behind);"
+                " write each, or `none` and why"
+            )
+        ], name
+
+
+def test_a_prose_line_is_not_the_line_its_spec_does_not_state(tmp_path: Path) -> None:
+    report = operated(tmp_path, "Flagged rows are red.\n", SIGNAL + LOAD + SECURITY)
+    assert [failure.detail for failure in report.failures] == [
+        (
+            f"{TICKET}: `## Operability` lacks `Flag:` (the flag the behaviour ships behind);"
+            " write each, or `none` and why"
+        )
+    ]
+
+
+def test_a_parent_that_cannot_be_read_is_named(tmp_path: Path) -> None:
+    binding = f"# Binding\n\n{LIVE}\n## Gates\n\n- Application types: service\n"
+    ticket = f"# 01: T\n\nStatus: ready-for-agent\n\nParent: ../nope.md\n{CONJECTURE}\n{OPERATED}"
+    files = {"docs/process/binding.md": binding, TICKET: ticket + FLAG + SIGNAL}
+    root = repository(tmp_path, files)
+    install_hooks(root)
+    assert [failure.detail for failure in run(root, TICKET).failures] == [
+        (
+            f"{TICKET}: `## Operability` lacks `Load:` (the route or input the load gates gain),"
+            " `Security:` (the surface it adds: routes, inputs, who may call); its parent"
+            " .scratch/f/nope.md could not be read; write each, or `none` and why"
+        )
+    ]
+
+
+@pytest.mark.parametrize("line", ["Parent: ../../../../outside.md", "Parent: {absolute}"])
+def test_a_parent_outside_the_repository_is_refused_and_not_read(tmp_path: Path, line: str) -> None:
+    outside = tmp_path / "outside.md"
+    outside.write_text(f"# O{CONJECTURE}\n{OPERATED}{FLAG}{SIGNAL}{LOAD}{SECURITY}")
+    binding = f"# Binding\n\n{LIVE}\n## Gates\n\n- Application types: service\n"
+    ticket = f"# 01: T\n\nStatus: ready-for-agent\n\n{line.format(absolute=outside)}\n\nBody.\n"
+    root = repository(tmp_path / "repo", {"docs/process/binding.md": binding, TICKET: ticket})
+    install_hooks(root)
+    report = run(root, TICKET)
+    named = "../outside.md" if ".." in line else str(outside)
+    assert checks(report) == ["parent", "conjecture", "operability"]
+    assert report.failures[0].detail == (
+        f"{TICKET}: its parent {named} is outside the repository, so the preflight does not read it"
+    )
+    assert f"its parent {named} is outside the repository" in report.failures[1].detail
+    assert f"its parent {named} is outside the repository" in report.failures[2].detail
+    assert "not found" not in report.failures[1].detail
+    assert "could not be read" not in report.failures[2].detail
+
+
+UNRESOLVABLE = {
+    "a NUL byte": "a\x00b.md",
+    "a path longer than the system allows": "a/" * 2100 + "x.md",
+    "a name longer than 255 bytes": "x" * 300 + ".md",
+    "a symlink loop": "loop.md",
+    "a path through a file": "docs/process/binding.md/x.md",
+    "a lone surrogate": "\ud800.md",
+}
+
+
+@pytest.mark.parametrize("parent", UNRESOLVABLE.values(), ids=UNRESOLVABLE.keys())
+def test_a_parent_the_check_cannot_resolve_is_refused_as_outside(
+    tmp_path: Path, parent: str
+) -> None:
+    binding = f"# Binding\n\n{LIVE}\n## Gates\n\n- Application types: service\n"
+    root = repository(tmp_path, {"docs/process/binding.md": binding})
+    install_hooks(root)
+    (root / "loop.md").symlink_to("loop.md")
+    body = f"Parent: {parent}\n\n## What to build\n\nA slice.\n"
+    gh = gh_returning(issue(body=body, labels=("ready-for-agent",)))
+    report = run(root, "4", gh)
+    assert report.failures[0].check == "parent"
+    assert report.failures[0].detail == (
+        f"4: its parent {parent} is outside the repository, so the preflight does not read it"
+    )
+    ticket = preflight.fetch("4", root, gh)
+    assert ticket is not None
+    assert ticket.parent == parent
+    assert preflight.operability_failure(ticket, root, gh) is not None
+    assert route.unstated(ticket, root, gh) == "states no conjecture"
+
+
+def test_a_parent_that_leaves_the_repository_and_comes_back_is_named_from_its_root(
+    tmp_path: Path,
+) -> None:
+    whole = FLAG + SIGNAL + LOAD + SECURITY
+    binding = f"# Binding\n\n{LIVE}\n## Gates\n\n- Application types: service\n"
+    ticket = "# 01: T\n\nStatus: ready-for-agent\n\nParent: ../../../../repo/spec.md\n\nBody.\n"
+    files = {
+        "docs/process/binding.md": binding,
+        "spec.md": f"# S{CONJECTURE}\n{OPERATED}{whole}",
+        TICKET: ticket,
+    }
+    root = repository(tmp_path / "repo", files)
+    install_hooks(root)
+    report = run(root, TICKET)
+    assert report.ok, report.failures
+    assert report.parent == "spec.md"
+    assert git(root, "show", f"HEAD:{report.parent}").startswith("# S")
+
+
+def test_the_tickets_own_line_wins_over_its_parents(tmp_path: Path) -> None:
+    whole = FLAG + SIGNAL + LOAD + SECURITY
+    assert operated(tmp_path / "said", whole, "- Flag: <flag>\n").ok
+    bare = operated(tmp_path / "bare", "- Flag: `none`\n", whole)
+    assert [failure.detail for failure in bare.failures] == [
+        (
+            f"{TICKET}: `## Operability` lacks `Flag:` (the flag the behaviour ships behind);"
+            " write each, or `none` and why"
+        )
+    ]
+
+
+def test_the_report_names_the_parent_as_a_path_git_reads(tmp_path: Path) -> None:
+    report = operated(tmp_path / "local", FLAG + SIGNAL + LOAD + SECURITY, "")
+    assert report.parent == ".scratch/f/spec.md"
+    assert git(tmp_path / "local", "show", f"HEAD:{report.parent}").startswith("# F")
+    assert json.loads(json.dumps(asdict(report)))["parent"] == ".scratch/f/spec.md"
+    files = {
+        ".scratch/f/spec.md": "# F\n\n## Solution\n\nX." + CONJECTURE,
+        TICKET: "# 01: T\n\nStatus: ready-for-agent\n\nBody.\n",
+    }
+    assert run(repository(tmp_path / "beside", files), TICKET).parent == ".scratch/f/spec.md"
+    child = issue(body="**Parent:** #12\n\n## What to build\n\nA slice.\n")
+    forge = run(repository(tmp_path / "forge"), "4", ParentGh(child, spec("X." + CONJECTURE)))
+    assert forge.parent == "#12"
+    assert run(repository(tmp_path / "orphan"), "4", gh_returning(issue())).parent is None
+
+
+def test_the_report_says_whether_the_project_is_deployed(tmp_path: Path) -> None:
+    for name, extra, deployed in (
+        ("live", events("irreplaceable-data, deployed"), True),
+        ("young", events("none"), False),
+        ("other", events("depended-on"), False),
+        ("unlined", ("", ""), True),
+    ):
+        report = adopted(tmp_path / name, "library", BODY, extra=extra)
+        assert report.deployed is deployed, name
+        assert json.loads(json.dumps(asdict(report)))["deployed"] is deployed, name
+    assert run(repository(tmp_path / "bare"), "4", gh_returning(issue())).deployed is False
 
 
 def test_the_critic_runs_only_for_a_project_that_is_depended_on(tmp_path: Path) -> None:
