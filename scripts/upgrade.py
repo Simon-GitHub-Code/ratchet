@@ -73,6 +73,8 @@ class Plan:
     waiting: tuple[str, ...] = ()
     approved: int = 0
     shallow: bool = False
+    branch: str | None = None
+    head: str = ""
 
     @property
     def edits(self) -> int:
@@ -284,6 +286,8 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
         approved=approved,
         shallow=gatelib.git(root, "rev-parse", "--is-shallow-repository") == "true"
         and base == gatelib.git(root, "rev-parse", "--verify", "-q", "HEAD"),
+        branch=gatelib.git(root, "symbolic-ref", "--short", "-q", "HEAD"),
+        head=str(gatelib.git(root, "rev-parse", "--verify", "-q", "HEAD"))[:12],
     )
 
 
@@ -560,6 +564,14 @@ def plain(result: Plan, *, applied: bool) -> str:
     assumed = list(dict.fromkeys(finding.fix.assumed for finding in result.owner))
     if assumed:
         lines += ["Assumed until you say otherwise:", *(f"- {line}" for line in assumed)]
+    if str(owed.LEDGER) in result.changes:
+        lines.append(
+            f"Commit this on {result.branch}; to commit it on another branch, run the upgrade"
+            " again there first."
+            if result.branch
+            else f"Commit this on the detached HEAD at {result.head}; to commit it on a branch,"
+            " run the upgrade again there first."
+        )
     if result.changes:
         lines.append("Your one step is the merge.")
     return "\n".join(lines)
