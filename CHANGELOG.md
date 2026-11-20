@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.13.4
+
+Two defects are fixed that every release from 0.12.4 to 0.13.3 shares. A real project's `/ratchet:feature` and `/ratchet:conjecture` runs found them.
+
+`/ratchet:feature` could stop before the spec (issue #311). The pipeline's first step runs the feature preflight, and its command line held the script's path inside Markdown backticks. A shell reads backticks as a command to run first, so an agent that ran the line as written started the preflight with no ticket and then asked Python to open the ticket as a script. The run came back `blocked` on the `script` check, and its advice was to install a plugin that was installed.
+
+`/ratchet:conjecture` recorded a digest of nothing (issue #312). The `- Criteria:` line holds a digest of the criteria a conjecture was drafted against, so that a later run tells from one command whether they changed. The command in the skill spelled a token that an agent harness replaces with the skill's argument. The command an agent ran therefore hashed no text, every line it wrote held `e69de29bb2d1d6434b8b29ae775ad8c2e48c5391`, and a conjecture never read as out of date after its criteria changed.
+
+Upgrade from 0.13.3 as the README's Upgrading section says: the upgrade moves the pin to 0.13.4, in the binding's pin line and in the workflows that check the plugin out at it, and changes nothing else in the project. From an earlier version, the earlier 0.13 notes apply too.
+
+A conjecture whose `- Criteria:` line holds `e69de29bb2d1d6434b8b29ae775ad8c2e48c5391` is redrafted once, the next time `/ratchet:conjecture <ticket>` reads it. Whether its criteria changed since it was written cannot be known, so the redraft is the safe path. Every line under `## Answers` stays, and no question is asked unless the criteria now open a fork or contradict an answer. The skill will say the criteria changed since the conjecture was written, which may not be so. On a forge the issue is edited in place. With a local tracker the rewrite lands as any ticket write does, and a ticket that already carries the agent-ready label lands by the owner's merge.
+
+- Every value the pipeline places on a command line a role runs as written is one quoted shell word: the preflight's script path, ticket, base and branch, and the quote check's script path. A space, a `$`, a quote or a backtick in any of them reaches the script unchanged.
+- When the preflight prints no result, the failure says which side is at fault. A script Python cannot open is the install. Anything else is the command the pipeline built, and the advice is to report it.
+- `scripts/criteria_digest.py` prints the criteria digest, and the conjecture skill runs it in place of the one-line command. Git computes the digest, as the one-line command meant it to, so a line recorded correctly still matches, in a SHA-1 and in a SHA-256 repository.
+- The skill reads three outcomes. A digest is compared with the line. No criteria heading in the body means the criteria changed. A command that could not run is reported, and nothing is redrafted.
+- The plugin's tests hold both classes. Each command line a role prompt shows is run through a real shell with hostile values, and no skill page may hold text a harness replaces with the skill's argument.
+
 ## 0.13.3
 
 A defect of 0.13.0 to 0.13.2 is fixed, which a real project's `/ratchet:fill` found. The fill binds the comments lister, and `just comments --record` writes every comment the project already has into `quality/owed.toml` as owed. On that project it wrote 1,917 entries, 11,493 lines. The tier 1 gate `change-size` counted the ledger as product code, so the fill change was red at 11,937 lines against a ceiling of 1,500. The change cannot be split, since only the change that binds the lister may record. A project with a few hundred comments hits it.
