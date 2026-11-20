@@ -1784,7 +1784,113 @@ def test_no_role_prompt_runs_a_plugin_script_with_a_bare_python3() -> None:
     for label, prompt in ran["prompts"].items():
         assert not re.search(r"python3 (?!-E -s )\S*scripts/", prompt), label
         assert not re.search(r"python3 (?!-E -s )", prompt), label
-    assert f"{PLUGIN_PY} `/plugin/scripts/feature_preflight.py`" in ran["prompts"]["preflight"]
+    assert f"{PLUGIN_PY} '/plugin/scripts/feature_preflight.py'" in ran["prompts"]["preflight"]
+
+
+AWKWARD = '/opt/my plugins/it\'s "$HOME"/scripts/'
+CLOSED = {"check": "ticket", "detail": "closed", "produce": "reopen it"}
+STOPPED = {"ok": False, "failures": [CLOSED]}
+
+
+def _commands(prompt: str) -> list[str]:
+    return [line for line in prompt.splitlines() if PLUGIN_PY in line]
+
+
+HOSTILE = [
+    "a b",
+    "$HOME",
+    "$(touch {marker})",
+    "`touch {marker}`",
+    'x"y',
+    "it's",
+    "a;b",
+    "*",
+    "a\\b",
+]
+
+
+def _words(line: str, cwd: Path) -> list[str]:
+    shell = shutil.which("bash")
+    assert shell, "bash reads a command line as the agent's shell does"
+    assert line.lstrip().startswith(PLUGIN_PY), line
+    standin = line.replace(PLUGIN_PY, "printf '%s\\0'", 1)
+    standin = standin.replace("<that file>", "THAT").replace("<ticket file>", "TICKET")
+    (cwd / "a file the shell could glob").touch()
+    run = subprocess.run(  # noqa: S603 # -- the line under test is the shell's input
+        [shell, "-c", standin], cwd=cwd, capture_output=True, text=True, check=True
+    )
+    return run.stdout.split("\0")[:-1]
+
+
+@pytest.mark.parametrize("hostile", HOSTILE)
+def test_a_shell_hands_the_preflight_each_value_as_one_word_unchanged(
+    hostile: str, tmp_path: Path
+) -> None:
+    marker = tmp_path / "expanded"
+    value = hostile.format(marker=marker)
+    args = {
+        "ref": f"docs/{value}.md",
+        "preflight": f"/opt/{value}/scripts/feature_preflight.py",
+        "base": f"base-{value}",
+        "branch": f"feature/{value}",
+    }
+    [line] = _commands(_run(args, preflight=STOPPED)["prompts"]["preflight"])
+    assert _words(line, tmp_path) == [
+        args["preflight"],
+        args["ref"],
+        "--root",
+        ".",
+        "--base",
+        args["base"],
+        "--branch",
+        args["branch"],
+    ], line
+    assert not marker.exists(), f"the shell ran a command out of {line}"
+
+
+@pytest.mark.parametrize("hostile", HOSTILE)
+def test_a_shell_hands_the_quote_check_its_script_path_as_one_word_unchanged(
+    hostile: str, tmp_path: Path
+) -> None:
+    marker = tmp_path / "expanded"
+    value = hostile.format(marker=marker)
+    named = {"ref": "4", "preflight": f"/opt/{value}/scripts/feature_preflight.py"}
+    again = {"review-again": REVIEW}
+    runs = [
+        _run(named, preflight=PREFLIGHT, spec=SPECIFIED, **DEPTH, critique=CRITIQUED),
+        _run({**named, "branch": "feature/4-expiry", "rejudge": REJUDGE}, **again),
+    ]
+    checked = [f"/opt/{value}/scripts/quotes.py", "THAT", "--root", "."]
+    lines = [
+        (label, line)
+        for ran in runs
+        for label, prompt in ran["prompts"].items()
+        if label != "preflight"
+        for line in _commands(prompt)
+    ]
+    assert [label for label, _ in lines] == ["critique", "review", "review-again"]
+    for label, line in lines:
+        record = [] if label == "critique" else ["--record", "ticket=TICKET"]
+        assert _words(line, tmp_path) == [*checked, *record], f"{label}: {line}"
+    assert not marker.exists(), "the shell ran a command out of a quote-check line"
+
+
+def test_every_command_a_role_is_told_to_run_is_a_line_of_its_own_with_no_backtick() -> None:
+    named = {"ref": "4", "preflight": f"{AWKWARD}feature_preflight.py"}
+    again = {"review-again": REVIEW}
+    runs = [
+        _run(named, preflight=PREFLIGHT, spec=SPECIFIED, **DEPTH, critique=CRITIQUED),
+        _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **DEPTH, critique=CRITIQUED),
+        _run({**named, "branch": "feature/4-expiry", "rejudge": REJUDGE}, **again),
+    ]
+    seen = 0
+    for ran in runs:
+        for label, prompt in ran["prompts"].items():
+            for line in _commands(prompt):
+                seen += 1
+                assert line.lstrip().startswith(PLUGIN_PY), f"{label}: prose around it: {line}"
+                assert "`" not in line, f"{label}: a backtick in a command line: {line}"
+    assert seen == 7, "preflight, critique and review in two runs, and the second review"
 
 
 def test_no_skill_runs_a_plugin_script_with_a_bare_python3() -> None:
@@ -1939,7 +2045,7 @@ def test_the_prompts_state_the_fork_test_and_the_quote_rule_for_each_role_that_n
 def test_the_quote_check_runs_beside_the_preflight_script_when_the_skill_names_it() -> None:
     args = {"ref": "4", "preflight": "/plugin/scripts/feature_preflight.py"}
     ran = _run(args, preflight=PREFLIGHT, spec=SPECIFIED, **DEPTH, critique=CRITIQUED)
-    quotes_line = f"{PLUGIN_PY} `/plugin/scripts/quotes.py` <that file> --root ."
+    quotes_line = f"{PLUGIN_PY} '/plugin/scripts/quotes.py' <that file> --root ."
     assert quotes_line in ran["prompts"]["critique"]
     assert "--record ticket=" in ran["prompts"]["review"]
     assert "--record ticket=" not in ran["prompts"]["critique"]
