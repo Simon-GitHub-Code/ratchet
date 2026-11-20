@@ -241,9 +241,40 @@ def copy_seen(root: Path, target: Path) -> dict[str, str]:
             foreign[name] = "leads outside the repository"
         elif lands.is_dir():
             foreign[name] = f"is in the submodule {name}"
-    git_checked(target, "init", "-q")
+    share_history(root, target, "HEAD")
     git_checked(target, "add", "--all", "--force")
     return foreign
+
+
+def share_history(root: Path, target: Path, head: str) -> None:
+    common = git_checked(
+        root, "rev-parse", "--path-format=absolute", "--git-common-dir", ok=(0, 128)
+    ).strip()
+    if not common:
+        git_checked(target, "init", "-q")
+        return
+    held = Path(common)
+    formats = git_checked(root, "rev-parse", "--show-object-format").strip()
+    git_checked(target, "init", "-q", f"--object-format={formats}")
+    mine = target / ".git"
+    (mine / "objects/info/alternates").write_text(f"{held / 'objects'}\n", encoding="utf-8")
+    for name in ("shallow", "info/exclude", "logs/HEAD"):
+        if (held / name).is_file():
+            (mine / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(held / name, mine / name)
+    listed = git_checked(root, "for-each-ref", "--format=%(refname) %(objectname) %(symref)")
+    refs = [line.split(" ") for line in listed.splitlines()]
+    updates = "".join(f"update {ref} {oid}\n" for ref, oid, symref in refs if not symref)
+    git_checked(target, "update-ref", "--stdin", stdin=updates)
+    for ref, _, symref in refs:
+        if symref:
+            git_checked(target, "symbolic-ref", ref, symref)
+    branch = git_checked(root, "symbolic-ref", "-q", head, ok=(0, 1)).strip()
+    if branch:
+        git_checked(target, "symbolic-ref", "HEAD", branch)
+    else:
+        commit = git_checked(root, "rev-parse", "--verify", f"{head}^{{commit}}").strip()
+        git_checked(target, "update-ref", "--no-deref", "HEAD", commit)
 
 
 def export(root: Path, ref: str, target: Path) -> None:
@@ -271,11 +302,13 @@ def export(root: Path, ref: str, target: Path) -> None:
         path.write_bytes(data)
         path.chmod(0o755 if mode == "100755" else 0o644)
     target.mkdir(parents=True, exist_ok=True)
-    git_checked(target, "init", "-q")
+    share_history(root, target, ref)
     git_checked(target, "add", "--all", "--force")
 
 
-def git_checked(root: Path, *args: str, ok: tuple[int, ...] = (0,)) -> str:
+def git_checked(
+    root: Path, *args: str, ok: tuple[int, ...] = (0,), stdin: str | None = None
+) -> str:
     environment = {k: v for k, v in os.environ.items() if k not in REPOSITORY_VARIABLES}
     result = subprocess.run(
         ["git", "-C", str(root), *args],
@@ -283,6 +316,7 @@ def git_checked(root: Path, *args: str, ok: tuple[int, ...] = (0,)) -> str:
         text=True,
         check=False,
         env=environment,
+        input=stdin,
     )
     if result.returncode not in ok:
         raise subprocess.CalledProcessError(result.returncode, result.args, result.stderr)
