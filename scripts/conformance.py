@@ -4507,6 +4507,8 @@ def fill_placeholders(root: Path) -> None:
     registry = root / project_bite.REGISTRY
     registry.write_text(registry.read_text() + fill_registry(binding.read_text()))
     (root / SELF_TEST_RECORD).write_text(SELF_TEST_ARCHITECTURE)
+    (root / "collection").mkdir(exist_ok=True)
+    (root / "collection/case").write_text("the collection a remove bite empties\n")
     pinned = {PLUGIN_CHECKOUT_PLACEHOLDER: "0" * 40, TOOLCHAIN_PLACEHOLDER: TOOLCHAIN_STEP}
     fills = {
         "GLOSSARY.md": {GLOSSARY_PLACEHOLDER: "the project"},

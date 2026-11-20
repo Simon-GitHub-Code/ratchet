@@ -813,7 +813,9 @@ def test_a_change_that_affects_only_a_tier_2_gate_says_so_and_proves_nothing(
 
 
 LINES = "first\nsecond\nthird\nfourth\nfifth\nsixth\n"
-SECOND = "--- a/src/code.txt\n+++ b/src/code.txt\n@@ -1,3 +1,3 @@\n first\n-second\n+planted\n third\n"
+SECOND = (
+    "--- a/src/code.txt\n+++ b/src/code.txt\n@@ -1,3 +1,3 @@\n first\n-second\n+planted\n third\n"
+)
 BROKEN = (
     "bite 'deep fault' of gate 'slow' cannot be planted: quality/bites/p.patch no longer applies:"
     " error: patch failed: src/code.txt:1; error: src/code.txt: patch does not apply; make the"
@@ -828,20 +830,24 @@ def deep(tmp_path: Path, fault: str, *, setup: str = "") -> Path:
 
 
 @pytest.mark.parametrize(
-    ("fault", "edit", "says"),
+    "case",
     [
         ('patch = "quality/bites/p.patch"', ("first\n", "renamed\n"), BROKEN),
         (
             'replace = { path = "src/code.txt", old = "second", new = "planted" }',
             ("second\n", "2nd\n"),
-            "bite 'deep fault' of gate 'slow' cannot be planted: src/code.txt no longer holds the"
-            " text the fault replaces; write 'old' as the file has it now: 'second'",
+            (
+                "bite 'deep fault' of gate 'slow' cannot be planted: src/code.txt no longer holds"
+                " the text the fault replaces; write 'old' as the file has it now: 'second'"
+            ),
         ),
         (
             'remove = ["bench/**"]',
             None,
-            "bite 'deep fault' of gate 'slow' cannot be planted: no file git sees matches bench/**;"
-            " write the globs to match the collection as it is now",
+            (
+                "bite 'deep fault' of gate 'slow' cannot be planted: no file git sees matches"
+                " bench/**; write the globs to match the collection as it is now"
+            ),
         ),
     ],
     ids=["a patch whose context line was renamed", "a replace whose text is gone", "a remove"],
@@ -849,11 +855,11 @@ def deep(tmp_path: Path, fault: str, *, setup: str = "") -> Path:
 def test_a_change_that_breaks_a_tier_2_fault_is_red_before_any_gate_runs(
     tmp_path: Path,
     scratch: Path,
+    *,
     capsys: pytest.CaptureFixture[str],
-    fault: str,
-    edit: tuple[str, str] | None,
-    says: str,
+    case: tuple[str, tuple[str, str] | None, str],
 ) -> None:
+    fault, edit, says = case
     root = deep(tmp_path, fault)
     assert project_bite.failures(root) == []
     if edit is None:
@@ -881,8 +887,10 @@ def test_the_check_reads_the_work_tree_as_git_sees_it(tmp_path: Path) -> None:
     assert project_bite.failures(root) == []
     write(root, ".gitignore", "ignored/\n*.secret\nsrc/new.txt\n")
     assert project_bite.failures(root) == [
-        f"{REGISTRY}: bite 'new' of gate 'slow' cannot be planted: src/new.txt is not a file git"
-        " sees, and a fault plants only into what git sees"
+        (
+            f"{REGISTRY}: bite 'new' of gate 'slow' cannot be planted: src/new.txt is not a file"
+            " git sees, and a fault plants only into what git sees"
+        )
     ]
 
 
@@ -900,8 +908,10 @@ def test_a_fault_on_a_file_setup_makes_is_not_checked_and_says_so(
     )
     replaced(root, REGISTRY, "setup = [\"sh -c 'echo made > src/made.txt'\"]\n", "")
     assert project_bite.failures(root) == [
-        f"{REGISTRY}: bite 'deep fault' of gate 'slow' cannot be planted: src/made.txt is not a"
-        " file git sees, and a fault plants only into what git sees"
+        (
+            f"{REGISTRY}: bite 'deep fault' of gate 'slow' cannot be planted: src/made.txt is not"
+            " a file git sees, and a fault plants only into what git sees"
+        )
     ]
 
 
@@ -1808,6 +1818,10 @@ def test_conformance_hears_of_every_gap_in_the_registry(tmp_path: Path) -> None:
         (
             "quality/bites.toml: gate 'tests' (unit, property and fitness tests) judges a "
             "collection and no [[bite]] uses 'remove' to show it red when the collection is empty"
+        ),
+        (
+            "quality/bites.toml: bite 'no benchmark' of gate 'perf' cannot be planted: no file git"
+            " sees matches bench/**; write the globs to match the collection as it is now"
         ),
     ]
     (root / "quality/bites.toml").unlink()
