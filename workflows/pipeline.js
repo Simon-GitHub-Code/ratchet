@@ -198,13 +198,19 @@ sizes, locales, roles, screen shapes, classes of input), write one line under
 default is every value the neighbouring test uses. A narrower set is an assumption, with its reason.
 It is a question only when the fork test gives it to the owner.`
 
-function quotesScript() {
-  if (PREFLIGHT_SCRIPT) return `\`${PREFLIGHT_SCRIPT.replace(/[^/]*$/, 'quotes.py')}\``
-  return 'the ratchet plugin\'s `scripts/quotes.py` (beside `feature_preflight.py`; `find` it, do not write one)'
+function shellWord(value) {
+  return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
 function quoteRule(spec, list, ticketFile) {
-  const ticket = ticketFile ? ' and `--record ticket=<a file holding the ticket text>`' : ''
+  const script = PREFLIGHT_SCRIPT ? shellWord(PREFLIGHT_SCRIPT.replace(/[^/]*$/, 'quotes.py')) : '<quotes.py>'
+  const named = ['<that file> its path']
+  if (ticketFile) named.push('<ticket file> a file holding the ticket text')
+  if (!PREFLIGHT_SCRIPT) named.push(`<quotes.py> the path of the ratchet plugin's \`scripts/quotes.py\` as one
+  shell word (beside \`feature_preflight.py\`; \`find\` it, do not write one)`)
+  const last = named.pop()
+  const placeholders = named.length ? `${named.join(',\n  ')}\n  and ${last}` : last
+  const record = ticketFile ? ' --record ticket=<ticket file>' : ''
   return `- Every blocker or major in \`${list}\` carries \`breaks\`: \`record\` names the record it breaks and
   \`quote\` is the promise, criterion, non-negotiable or rule it breaks. The records are the ticket,
   spec.md (name it by its path, \`${spec.specPath}\`), AGENTS.md, \`docs/process/binding.md\`, a decision
@@ -213,7 +219,10 @@ function quoteRule(spec, list, ticketFile) {
   list item, heading, table cell or line. A blocker or major with no quote is not a finding: return it
   as an \`unstated\` entry.
 - Before you return, write \`${list}\` as the JSON list you return, in that order, to a file in a
-  \`mktemp -d\` directory outside the repository, and run \`${PLUGIN_PY} ${quotesScript()} <that file> --root .\`${ticket}.
+  \`mktemp -d\` directory outside the repository. Run this, with ${placeholders}:
+
+      ${PLUGIN_PY} ${script} <that file> --root .${record}
+
   Return what it printed, verbatim, as \`quoteOutput\`. Correct every quote it reports not found, and
   run it again, before you return.`
 }
@@ -869,23 +878,31 @@ script, not a human: return only the structured object.`
 }
 
 function preflightPrompt() {
-  const script = PREFLIGHT_SCRIPT
-    ? `\`${PREFLIGHT_SCRIPT}\``
-    : 'the ratchet plugin\'s `scripts/feature_preflight.py` (the newest version under `~/.claude/plugins/cache/*/ratchet/*/scripts/`, or wherever the plugin is installed; `find` it, do not write one)'
-  const branchFlag = BRANCH ? ` --branch "${BRANCH}"` : ''
-  const baseFlag = BASE ? ` --base "${BASE}"` : ''
+  const script = PREFLIGHT_SCRIPT ? shellWord(PREFLIGHT_SCRIPT) : '<feature_preflight.py>'
+  const found = PREFLIGHT_SCRIPT ? '' : `
+In the command below, put in place of <feature_preflight.py> the path of the ratchet plugin's
+\`scripts/feature_preflight.py\` as one shell word: the newest version under
+\`~/.claude/plugins/cache/*/ratchet/*/scripts/\`, or wherever the plugin is installed. \`find\` it,
+do not write one.
+`
+  const branchFlag = BRANCH ? ` --branch ${shellWord(BRANCH)}` : ''
+  const baseFlag = BASE ? ` --base ${shellWord(BASE)}` : ''
   return `You run one command and relay its output. You decide nothing.
-
+${found}
 In ${ROOT_HINT}, run, in a single Bash call:
 
-    ${PLUGIN_PY} ${script} "${REF}" --root .${baseFlag}${branchFlag}
+    ${PLUGIN_PY} ${script} ${shellWord(REF)} --root .${baseFlag}${branchFlag}
 
 It prints a JSON object on stdout ({ ok, ref, failures: [{ check, detail, produce }], number,
 title, slug, branch, base, label, critic, critic_reason }) and a verdict line on stderr. Return that JSON's fields in the
 structured result, verbatim, plus the full output. Do not fix, label, edit or commit anything,
-and do not re-run with different arguments. If the script cannot be found or Python refuses
-it, return ok: false with one failure { check: "script", detail: <what happened>, produce:
-"install the ratchet plugin; the skill passes the script path as args.preflight" }.`
+and do not re-run with different arguments. If it prints no JSON object, return ok: false with
+one failure { check: "script", detail: <what it printed, verbatim>, produce: <one of these two> }.
+When Python cannot open the script itself, produce is "install the ratchet plugin; the skill
+passes the script path as args.preflight". When anything else went wrong (a usage error from
+the script, a file other than the script that cannot be opened), the command line is at fault,
+not the install: produce is "the pipeline built a wrong preflight command; report this command
+line and its output against the ratchet plugin".`
 }
 
 const SAFE_ANSWER = 'the safe answer, the narrowest that keeps the app safe (an empty value: nothing ' +
