@@ -1667,7 +1667,7 @@ def test_no_split_run_loses_a_commit_another_records_branch_held(
         touched |= mine
         git(root, "switch", "-q", *((own,) if mine else ("-c", f"records/s{n}", "main")))
         someone_else(root, n, edits, texts=texts)
-    kept = f"--exclude=refs/heads/{own}" if own and not touched else "--exclude=none"
+    kept = f"--exclude={own}" if own and not touched else "--exclude=none"
     before = set(git(root, "rev-list", kept, "--branches").splitlines())
     for green in greens:
         green_check(root, green=green)
