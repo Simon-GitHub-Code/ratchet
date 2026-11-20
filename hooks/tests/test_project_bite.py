@@ -915,6 +915,100 @@ def test_a_fault_on_a_file_setup_makes_is_not_checked_and_says_so(
     ]
 
 
+SETUP = "setup = [\"sh -c 'echo made > src/made.txt'\"]\n"
+MADE = "--- a/src/made.txt\n+++ b/src/made.txt\n@@ -1 +1 @@\n-made\n+planted\n"
+NOT_CHECKED = (
+    "bite 'deep fault' of gate 'slow': nothing git sees is at src/made.txt, and the registry's"
+    " `setup` may make it in the scratch copy; the full proof plants it"
+)
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        ('patch = "quality/bites/p.patch"', BROKEN),
+        (
+            'replace = [{ path = "src/made.txt", old = "made", new = "planted" },'
+            ' { path = "src/code.txt", old = "first", new = "planted" },'
+            ' { path = "src/made.txt", old = "planted", new = "made" }]',
+            (
+                "bite 'deep fault' of gate 'slow' cannot be planted: src/code.txt no longer holds"
+                " the text the fault replaces; write 'old' as the file has it now: 'first'"
+            ),
+        ),
+    ],
+    ids=["a patch", "a replace"],
+)
+def test_with_setup_every_part_of_a_fault_that_git_sees_is_still_checked(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], fault: tuple[str, str]
+) -> None:
+    text, says = fault
+    root = deep(tmp_path, text, setup=SETUP)
+    write(root, "quality/bites/p.patch", SECOND + MADE)
+    commit(root, "test(bite): the fault reaches a file setup makes")
+    assert project_bite.failures(root) == []
+    conformance.run(root)
+    assert f"not checked: {REGISTRY}: {NOT_CHECKED}\n" in capsys.readouterr().out
+    replaced(root, "src/code.txt", "first\n", "renamed\n")
+    commit(root, "feat(core): an edit the fault leans on")
+    assert project_bite.failures(root) == [f"{REGISTRY}: {says}"]
+
+
+MOVED = "if the file moved, {}, or else remove the bite and add one that plants"
+
+
+@pytest.mark.parametrize("setup", ["", SETUP], ids=["no setup", "a setup"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        (
+            'patch = "quality/bites/p.patch"',
+            "quality/bites/p.patch changes src/code.txt, which is not a file git sees; "
+            + MOVED.format("make the patch again against its new name"),
+        ),
+        (
+            'replace = { path = "src/code.txt", old = "second", new = "planted" }',
+            "src/code.txt is not a file git sees, and a fault plants only into what git sees; "
+            + MOVED.format("point 'path' at its new name"),
+        ),
+        (
+            'remove = ["bench/**"]',
+            "no file git sees matches bench/**; write the globs to match the collection as it is now",
+        ),
+    ],
+    ids=["a patch", "a replace", "a remove"],
+)
+def test_a_change_that_moves_what_a_fault_reaches_is_red_and_says_what_to_do(
+    tmp_path: Path, setup: str, fault: tuple[str, str]
+) -> None:
+    text, says = fault
+    root = deep(tmp_path, text, setup=setup)
+    git(root, "mv", "src/code.txt", "src/moved.txt")
+    git(root, "mv", "bench", "benchmarks")
+    commit(root, "refactor(core): move the code and the benchmarks")
+    prefix = "bite 'deep fault' of gate 'slow' cannot be planted"
+    assert project_bite.failures(root) == [f"{REGISTRY}: {prefix}: {says}"]
+
+
+def test_a_patch_on_a_file_git_ignores_is_red_as_its_plant_is(
+    tmp_path: Path, scratch: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fault = 'patch = "quality/bites/p.patch"'
+    registry = bite("lint", "on an ignored file", fault) + bite("tests", WORD) + bite("slow", WORD)
+    patch = SECOND.replace("src/code.txt", "src/made.secret")
+    files = {"quality/bites/p.patch": patch, "src/made.secret": LINES}
+    root = targeted(tmp_path, registry=registry, files=files)
+    assert (root / "src/made.secret").is_file()
+    assert project_bite.failures(root) == [
+        f"{REGISTRY}: bite 'on an ignored file' of gate 'lint' cannot be planted: "
+        "quality/bites/p.patch changes src/made.secret, which is not a file git sees; "
+        + MOVED.format("make the patch again against its new name")
+    ]
+    assert prove(root, "--gate", "lint") == 1
+    assert "on an ignored file: THE FAULT WAS NOT PLANTED" in shown(capsys)
+    assert list(scratch.iterdir()) == []
+
+
 def test_a_change_that_reaches_a_tier_2_fault_says_its_plant_was_checked(
     tmp_path: Path, scratch: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -924,7 +1018,8 @@ def test_a_change_that_reaches_a_tier_2_fault_says_its_plant_was_checked(
     assert shown(capsys) == (
         "bite: a gate may have changed (src/code.txt)\n"
         "bite: slow: src/code.txt is changed by bite `deep fault`; a gate of tier 2, which a pull"
-        " request does not prove, and each of its faults was checked to still plant\n" + NOTHING
+        " request does not prove, and each of its patch, replace and remove faults was checked"
+        " to still plant\n" + NOTHING
     )
     assert list(scratch.iterdir()) == []
 
