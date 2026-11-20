@@ -22,7 +22,7 @@ import pytest
 import acceptance
 import gatelib
 from tests import products
-from tests.servers import SERVE, gone, pid_of, python
+from tests.servers import HIDES, SERVE, gone, pid_of, python
 
 SLUG = "save-link"
 SCRIPT = Path(acceptance.__file__)
@@ -470,17 +470,19 @@ def test_a_boot_that_does_not_answer_is_a_blocker_that_says_what_it_did(
 
 
 REACHABLE = (
-    r"It was started with `{boot}`, and it listens on 0\.0\.0\.0:\d+, every interface, so a "
-    r"request could reach it around the session's proxy and leave no line in its log\. Bind it "
-    r"to 127\.0\.0\.1, which `boot` gets as \{{host\}} and \$HOST; if it listens there on purpose, "
-    r'name that address in the justfile as `listens := "0\.0\.0\.0"`\.'
+    r"It was started with `{boot}`, and it listened on 0\.0\.0\.0:\d+, every interface, so a "
+    r"request could reach it around the session's proxy and leave no line in its log\. To keep "
+    r"it on loopback, pass \{{host\}}, which stands for the ready URL's host, in the boot line "
+    r"where the product takes its address; if it listens there on purpose, add the address to "
+    r'the justfile\'s `listens`, as `listens := "0\.0\.0\.0"`\.'
 )
 
 
+@pytest.mark.parametrize("extra", ["", 'listens := "none"'], ids=["no listens", "none"])
 def test_a_product_reachable_around_the_proxy_does_not_start_a_session(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], extra: str
 ) -> None:
-    root = products.make(tmp_path / "product", env="HOST=0.0.0.0")
+    root = products.make(tmp_path / "product", env="HOST=0.0.0.0", extra=extra)
     boot = acceptance.read_binding(root).boot
     assert boot is not None
     code, out = up(root, capsys)
@@ -491,10 +493,12 @@ def test_a_product_reachable_around_the_proxy_does_not_start_a_session(
     assert products.processes_naming(str(tmp_path)) == []
 
 
+@pytest.mark.parametrize("declared", ["0.0.0.0", " 0.0.0.0  :: "])  # noqa: S104 # -- under test
 def test_a_product_the_justfile_says_listens_wider_on_purpose_is_served_and_said_to(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], declared: str
 ) -> None:
-    root = products.make(tmp_path / "product", env="HOST=0.0.0.0", extra='listens := "0.0.0.0"')
+    extra = f'listens := "{declared}"'
+    root = products.make(tmp_path / "product", env="HOST=0.0.0.0", extra=extra)
     try:
         ticket = ["--ticket", str(root / "ticket.md"), "--root", str(root)]
         code = acceptance.main(["acceptance.py", "up", "--slug", SLUG, *ticket])
@@ -504,22 +508,52 @@ def test_a_product_the_justfile_says_listens_wider_on_purpose_is_served_and_said
     finally:
         down(root, capsys)
     assert re.fullmatch(
-        r"with_service: the product listens on 0\.0\.0\.0:\d+, as --listens declares, so the "
-        r"network can reach it while it runs\n",
+        r"with_service: the product listened on 0\.0\.0\.0:\d+ when it first answered, as "
+        r"declared\nwith_service: when the product first answered, each of its listeners was on "
+        r"loopback or declared; one opened later is not seen\n",
         seen.err,
     ), seen.err
 
 
-def test_a_listens_that_is_not_an_address_gives_no_way_to_start(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize(
+    ("listens", "said"),
+    [
+        ("everywhere", "names `everywhere`, which is not an IP address"),
+        ("0.0.0.0 0.0.0.0/0", "names `0.0.0.0/0`, which is not an IP address"),
+        ("", "is empty"),
+        ("  ", "is empty"),
+    ],
+)
+def test_a_listens_that_is_not_a_list_of_addresses_gives_no_way_to_start(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], listens: str, said: str
 ) -> None:
-    root = products.make(tmp_path / "product", extra='listens := "everywhere"')
+    root = products.make(tmp_path / "product", extra=f'listens := "{listens}"')
     code, out = up(root, capsys)
     assert code == 1
     assert out[0] == (
-        "The project gives no way to start it: its justfile's `listens` is `everywhere`, "
-        "which is not an IP address."
+        f"The project gives no way to start it: its justfile's `listens` {said}. Name each "
+        "address the product listens on on purpose, separated by spaces, such as "
+        '`listens := "0.0.0.0 ::"`, or write `none`.'
     )
+
+
+def test_a_product_the_harness_could_not_check_does_not_start_a_session(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    hid = tmp_path / "hid"
+    app = f"exec {sys.executable} {tmp_path / 'product' / 'app.py'}"
+    boot = f"{python(HIDES)} {hid} & while [ ! -e {hid} ]; do sleep 0.05; done; {app}"
+    root = products.make(tmp_path / "product", boot=boot)
+    code, out = up(root, capsys)
+    assert code == 1
+    assert re.fullmatch(
+        rf"It was started with `{re.escape(boot)}`, and where it listens could not be checked, so "
+        r"a request might reach it around the session's proxy and leave no line in its log, and "
+        r"no session starts on that: the gate is not allowed to look at the open files of process "
+        r"\d+ .*",
+        out[0],
+    ), out[0]
+    assert products.processes_naming(str(tmp_path)) == []
 
 
 def test_replay_of_a_product_reachable_around_the_proxy_says_why_it_did_not_run(

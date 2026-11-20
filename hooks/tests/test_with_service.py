@@ -4,6 +4,7 @@ import os
 import re
 import shlex
 import signal
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -14,7 +15,18 @@ import gatelib
 import listeners
 import with_service
 from tests import servers
-from tests.servers import FORGE, LISTENS, NEEDS, SERVE, STOPS, gone, pid_of, python
+from tests.servers import (
+    FORGE,
+    HIDES,
+    LISTENS,
+    NAMES_ITSELF,
+    NEEDS,
+    SERVE,
+    STOPS,
+    gone,
+    pid_of,
+    python,
+)
 
 READY = "http://127.0.0.1:{port}/"
 SERVING = python(SERVE)
@@ -301,31 +313,85 @@ def listening_on(*addresses: str) -> str:
     return f"exec {python(LISTENS)} {' '.join(addresses)}"
 
 
-CURE = "bind it to 127.0.0.1, which the boot command gets as {host} and $HOST"
+CURE = (
+    "pass {host}, which stands for the ready URL's host, in the boot line where the product "
+    "takes its address"
+)
+HOSTED = "point the ready URL at a loopback address, which {host} stands for"
 
 
-def noted(where: str, what: str) -> str:
+def noted(where: str, what: str, cure: str = CURE) -> str:
     return (
-        rf"with_service: note: the product listens on {re.escape(where)}:(\d+), {what}, so the "
-        rf"network can reach it while it runs; {re.escape(CURE)}\n"
+        rf"with_service: note: the product listened on {re.escape(where)}:(\d+), {what}, when it "
+        rf"first answered, so the network could reach it; {re.escape(cure)}\n"
     )
 
 
-def test_the_boot_command_is_offered_the_loopback_address_beside_the_port(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def machine_address() -> str:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route:
+        route.connect(("192.0.2.1", 9))
+        return str(route.getsockname()[0])
+
+
+@pytest.mark.parametrize(
+    ("ready", "host"),
+    [(READY, "127.0.0.1"), ("http://[::1]:{port}/", "::1"), ("http://localhost:{port}/", "localhost")],
+)
+def test_host_stands_for_the_ready_urls_host_and_nothing_is_exported(
+    ready: str,
+    host: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
+    monkeypatch.delenv("HOST", raising=False)
     seen = tmp_path / "seen"
-    boot = f'printf "%s %s " "$HOST" {{host}} > {seen}; {listening_on("{host}")}'
-    appends = "import os, sys\nopen(sys.argv[1], 'a').write(os.environ['K'])"
+    boot = f'printf "%s|%s|" {{host}} "${{HOST-unset}}" > {seen}; {listening_on("{host}")}'
+    appends = "import os, sys\nopen(sys.argv[1], 'a').write(os.environ['K'] + sys.argv[2])"
     code, out = run(
-        *("--boot", boot, "--ready", READY, "--env", "K={host}"),
-        *("--", sys.executable, "-c", appends, str(seen)),
+        *("--boot", boot, "--ready", ready, "--env", "K={host}"),
+        *("--", sys.executable, "-c", appends, str(seen), "|{host}"),
         capsys=capsys,
     )
     assert (code, out) == (0, "with_service: green\n")
-    assert seen.read_text(encoding="utf-8") == "127.0.0.1 127.0.0.1 127.0.0.1", (
-        "the boot command gets $HOST and {host}, and --env gets {host}"
+    assert seen.read_text(encoding="utf-8") == f"{host}|unset|{host}|{host}", (
+        "the boot command, --env and the command get the ready URL's host as {host}, and no "
+        "variable is exported"
     )
+
+
+def test_a_ready_url_cannot_hold_the_host_it_stands_for(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as caught:
+        with_service.main(["with_service.py", "--boot", "true", "--ready", "http://{host}:1/"])
+    assert caught.value.code == 2
+    assert "{host} stands for the ready URL's host" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("boot", "ready", "said"),
+    [
+        (listening_on('"${HOST:-::}"'), "http://[::1]:{port}/", noted("[::]", "every interface")),
+        (
+            listening_on('"${HOST:-0.0.0.0}"'),
+            "http://{machine}:{{port}}/",
+            noted("0.0.0.0", "every interface"),
+        ),
+        (f"exec {python(NAMES_ITSELF)}", "http://localhost:{port}/", ""),
+    ],
+    ids=["binds HOST, ready on IPv6 loopback", "binds HOST, ready on the machine", "HOST a name"],
+)
+def test_a_boot_line_without_host_boots_as_it_did_before_host_existed(
+    boot: str,
+    ready: str,
+    said: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv("HOST", raising=False)
+    url = ready.format(machine=machine_address()) if "{machine}" in ready else ready
+    code, out = run("--boot", boot, "--ready", url, "--timeout", "10", capsys=capsys)
+    assert re.fullmatch(said + "with_service: green\n", out), out
+    assert code == 0
 
 
 @pytest.mark.parametrize(
@@ -370,9 +436,28 @@ def test_each_listener_of_each_process_the_boot_command_started_is_judged(
 def test_a_listener_on_an_address_other_machines_reach_is_named(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(listeners, "bound", lambda *_: [(ipaddress.ip_address("192.0.2.7"), 8080)])
+    seen = listeners.Seen([(ipaddress.ip_address("192.0.2.7"), 8080)], [], [])
+    monkeypatch.setattr(listeners, "bound", lambda *_: seen)
     code, out = run("--boot", listening_on("127.0.0.1"), "--ready", READY, capsys=capsys)
     assert re.fullmatch(noted("192.0.2.7", "not a loopback address") + "with_service: green\n", out)
+    assert code == 0
+
+
+def test_a_listener_on_an_ipv4_mapped_address_is_named_as_the_ipv4_address(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code, out = run("--boot", listening_on("::ffff:0.0.0.0"), "--ready", READY, capsys=capsys)
+    assert re.fullmatch(noted("0.0.0.0", "every interface") + "with_service: green\n", out), out
+    assert code == 0
+
+
+def test_the_cure_of_a_boot_line_that_passes_host_is_the_ready_url(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    ready = "http://0.0.0.0:{port}/"  # noqa: S104 # -- the wide ready URL under test
+    code, out = run("--boot", listening_on("{host}"), "--ready", ready, capsys=capsys)
+    said = noted("0.0.0.0", "every interface", HOSTED) + "with_service: green\n"
+    assert re.fullmatch(said, out), out
     assert code == 0
 
 
@@ -388,48 +473,157 @@ def test_loopback_only_refuses_a_product_listening_wider_and_never_runs_the_comm
     assert code == 1
     assert not ran.exists(), "the command after -- ran while the product listened wider"
     said = (
-        r"the product listens on 0\.0\.0\.0:\d+, every interface, so the network can reach it "
-        rf"around the command after --; {re.escape(CURE)}, or name the address with --listens\n"
+        r"the product listened on 0\.0\.0\.0:\d+, every interface, when it first answered, so the "
+        rf"network could reach it around the command after --; {re.escape(CURE)}, or declare the "
+        r"address with --listens\n"
     )
     assert re.match(said, out), out
     assert out.endswith("with_service: red\n")
 
 
+def test_loopback_only_says_what_it_looked_at_and_when(capsys: pytest.CaptureFixture[str]) -> None:
+    code, out = run(
+        *("--boot", listening_on("127.0.0.1"), "--ready", READY, "--loopback-only"),
+        *("--", "true"),
+        capsys=capsys,
+    )
+    assert (code, out) == (
+        0,
+        "with_service: when the product first answered, each of its listeners was on loopback or "
+        "declared; one opened later is not seen\nwith_service: green\n",
+    )
+
+
+DECLARED = r"with_service: the product listened on {where}:\d+ when it first answered, as declared\n"
+
+
 @pytest.mark.parametrize(
-    ("declared", "address", "code"),
-    [("0.0.0.0", "0.0.0.0", 0), ("0.0.0.0", "::", 1), ("::", "127.0.0.1", 0)],  # noqa: S104 # -- under test
+    ("declared", "addresses", "code"),
+    [
+        (["0.0.0.0"], ["0.0.0.0"], 0),  # noqa: S104 # -- under test
+        (["0.0.0.0"], ["::"], 1),  # noqa: S104 # -- under test
+        (["::"], ["127.0.0.1"], 0),
+        (["0.0.0.0 ::"], ["0.0.0.0", "::"], 0),  # noqa: S104 # -- under test
+        (["0.0.0.0", "::"], ["0.0.0.0", "::"], 0),  # noqa: S104 # -- under test
+    ],
+    ids=["the address", "another address", "loopback", "a list", "the flag twice"],
 )
-def test_an_address_declared_with_listens_is_allowed_said_and_held_to(
-    declared: str, address: str, capsys: pytest.CaptureFixture[str], *, code: int
+def test_the_addresses_declared_with_listens_are_allowed_said_and_held_to(
+    declared: list[str], addresses: list[str], capsys: pytest.CaptureFixture[str], *, code: int
 ) -> None:
+    flags = [word for each in declared for word in ("--listens", each)]
     ran, out = run(
-        *("--boot", listening_on(address), "--ready", READY, "--loopback-only"),
-        *("--listens", declared),
+        *("--boot", listening_on(*addresses), "--ready", READY, "--loopback-only", *flags),
         capsys=capsys,
     )
     assert ran == code, out
-    if address == declared:
-        said = (
-            r"with_service: the product listens on 0\.0\.0\.0:\d+, as --listens declares, so the "
-            r"network can reach it while it runs\nwith_service: green\n"
-        )
-        assert re.fullmatch(said, out), out
     if code:
-        assert re.match(r"the product listens on \[::\]:\d+, every interface", out), out
-    if address == "127.0.0.1":
-        assert out == "with_service: green\n"
+        assert re.match(r"the product listened on \[::\]:\d+, every interface", out), out
+        return
+    lines = out.splitlines(keepends=True)
+    wide = [where for where in ("0.0.0.0", "[::]") if where.strip("[]") in addresses]  # noqa: S104 # -- under test
+    for where in wide:
+        assert any(re.fullmatch(DECLARED.format(where=re.escape(where)), line) for line in lines)
+    assert len(lines) == len(wide) + 2, out
+
+
+def test_a_declared_address_is_matched_whole_not_by_its_start(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seen = listeners.Seen([(ipaddress.ip_address("192.0.2.17"), 8080)], [], [])
+    monkeypatch.setattr(listeners, "bound", lambda *_: seen)
+    code, out = run(
+        *("--boot", listening_on("127.0.0.1"), "--ready", READY, "--loopback-only"),
+        *("--listens", "192.0.2.1"),
+        capsys=capsys,
+    )
+    assert code == 1
+    assert out.startswith("the product listened on 192.0.2.17:8080, not a loopback address"), out
+
+
+def test_an_empty_listens_says_what_to_write(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as caught:
+        with_service.main(["with_service.py", "--boot", "true", "--ready", READY, "--listens", ""])
+    assert caught.value.code == 2
+    assert (
+        "--listens names no address: write each address the product listens on on purpose, "
+        "separated by spaces, such as --listens '0.0.0.0 ::'"
+    ) in capsys.readouterr().err
+
+
+def test_a_listener_on_the_ready_port_held_by_another_process_is_said_and_never_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    other = socket.socket(socket.AF_INET6)
+    try:
+        other.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        other.bind(("::", 0))
+        other.listen()
+        port = other.getsockname()[1]
+        boot = f"PORT={port} {listening_on('127.0.0.1')}"
+        ready = f"http://127.0.0.1:{port}/"
+        ran = tmp_path / "ran"
+        code, out = run(
+            *("--boot", boot, "--ready", ready, "--loopback-only", "--", "touch", str(ran)),
+            capsys=capsys,
+        )
+    finally:
+        other.close()
+    assert (code, out.splitlines()[0]) == (
+        0,
+        f"with_service: [::]:{port}, on the ready URL's port, is held by a process the gate did "
+        "not find among the boot command's, so it is not judged as the product's",
+    ), out
+    assert ran.exists(), "another process's listener refused the session"
+
+
+def hidden_beside(tmp_path: Path, *addresses: str) -> str:
+    hid = tmp_path / "hid"
+    return (
+        f"{python(HIDES)} {hid} & while [ ! -e {hid} ]; do sleep 0.05; done; "
+        f"{listening_on(*addresses)}"
+    )
+
+
+UNSEEN = (
+    r"the gate is not allowed to look at the open files of process \d+ \(python3?[\w.]*\), one "
+    r"of the service's \(Permission denied\), as when a process runs as another user or has made "
+    r"itself non-dumpable"
+)
+
+
+def test_a_process_the_gate_cannot_read_hides_no_other_listener_and_is_said(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    boot = hidden_beside(tmp_path, "127.0.0.1", "0.0.0.0")  # noqa: S104 # -- under test
+    code, out = run("--boot", boot, "--ready", READY, capsys=capsys)
+    lines = out.splitlines(keepends=True)
+    assert code == 0
+    assert re.fullmatch(noted("0.0.0.0", "every interface"), lines[0]), out
+    assert re.fullmatch(rf"with_service: where the product listens was not checked: {UNSEEN}\n", lines[1]), out
+    assert lines[2:] == ["with_service: green\n"], out
+
+
+def test_loopback_only_refuses_what_it_could_not_check(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ran = tmp_path / "ran"
+    code, out = run(
+        *("--boot", hidden_beside(tmp_path, "127.0.0.1"), "--ready", READY, "--loopback-only"),
+        *("--", "touch", str(ran)),
+        capsys=capsys,
+    )
+    assert code == 1
+    assert not ran.exists(), "a session started on a product it could not check"
+    said = rf"where the product listens was not checked, so the command after -- did not run: {UNSEEN}\n"
+    assert re.match(said, out), out
 
 
 def test_where_the_product_listens_is_not_checked_where_it_cannot_be_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(listeners, "PROC", str(tmp_path))
-    ran = tmp_path / "ran"
-    code, out = run(
-        *("--boot", listening_on("0.0.0.0"), "--ready", READY, "--loopback-only"),  # noqa: S104 # -- under test
-        *("--", "touch", str(ran)),
-        capsys=capsys,
-    )
+    code, out = run("--boot", listening_on("0.0.0.0"), "--ready", READY, capsys=capsys)  # noqa: S104 # -- under test
     assert (code, out) == (
         0,
         (
@@ -437,7 +631,25 @@ def test_where_the_product_listens_is_not_checked_where_it_cannot_be_read(
             "with_service: green\n"
         ),
     )
-    assert ran.exists(), "an address that cannot be read neither refuses nor passes in silence"
+
+
+def test_a_table_row_that_cannot_be_read_is_not_checked_and_refuses_a_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    net = tmp_path / str(os.getpid()) / "net"
+    net.mkdir(parents=True)
+    (net / "tcp").write_text("header\n   0: 0100007F:1F90\n", encoding="utf-8")
+    monkeypatch.setattr(listeners, "PROC", str(tmp_path))
+    code, out = run(
+        *("--boot", listening_on("127.0.0.1"), "--ready", READY, "--loopback-only"),
+        *("--", "true"),
+        capsys=capsys,
+    )
+    assert code == 1
+    assert out.startswith(
+        "where the product listens was not checked, so the command after -- did not run: a row of "
+        "the system's net/tcp table cannot be read: '0: 0100007F:1F90'\n"
+    ), out
 
 
 def test_a_bad_ready_url_or_env_pair_is_a_usage_error() -> None:

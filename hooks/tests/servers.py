@@ -189,6 +189,27 @@ LISTENS = (
     "    connection.close()\n"
 )
 
+NAMES_ITSELF = (
+    "import os, socket\n"
+    "served = socket.create_server(('127.0.0.1', int(os.environ['PORT'])))\n"
+    "name = os.environ.get('HOST', 'localhost')\n"
+    "while True:\n"
+    "    connection, _ = served.accept()\n"
+    "    lines = connection.recv(65536).decode().split('\\r\\n')\n"
+    "    asked = [line[5:].strip() for line in lines if line.lower().startswith('host:')]\n"
+    "    status = b'200 OK' if asked[0].rpartition(':')[0] == name else b'400 Bad Request'\n"
+    "    connection.sendall(b'HTTP/1.0 ' + status + b'\\r\\nContent-Length: 0\\r\\n\\r\\n')\n"
+    "    connection.close()\n"
+)
+
+HIDES = (
+    "import ctypes, socket, sys, time\n"
+    "held = socket.create_server(('127.0.0.1', 0))\n"
+    "ctypes.CDLL(None).prctl(4, 0, 0, 0, 0)\n"
+    "open(sys.argv[1], 'w').close()\n"
+    "time.sleep(60)\n"
+)
+
 NEEDS = (
     "import os, sys, time\n"
     "MODE = os.environ['MODE']\n"
