@@ -212,7 +212,7 @@ Tell the owner this before step 1. It is not a question.
    - A row whose question requires a proof by name (`[proofs]` in `application-types.toml`: telemetry emitted, changed flags off and on, load smoke) gets a bite that plants that fault and claims it with `proof = "<name>"`.
    - A shipped service gate bound now needs one, since its row names your `boot`: `smoke` a deliverable that exits, `load-smoke` a route that answers with an error, `telemetry-e2e` a deliverable that exports nothing.
    - A `later:` row needs none.
-   - `just bite-one <gate>` proves one gate in a scratch copy. A whole-tree gate's bite narrows it with `args`, and the registry's `setup` holds the build. When the stack compiles, `setup` also fills the compiler cache as [tiers.md](../method/tiers.md#speed) says, before the first bite.
+   - `just bite-one <gate>` proves one gate in a scratch copy. A whole-tree gate's recipe takes optional paths and the bite you register for it passes some in `args` ([tiers.md](../method/tiers.md#what-a-recipe-must-get-right)), and the registry's `setup` holds the build. When the stack compiles, `setup` also fills the compiler cache as [tiers.md](../method/tiers.md#speed) says, before the first bite.
    - A verdict other than `bites` is a defect of the recipe or the fault ([tiers.md](../method/tiers.md#every-bound-gate-is-shown-to-bite)): fix it, never loosen `expect`.
    - A gate you cannot plant a fault for is bound `none`, with its reason and ADR.
 
