@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -174,11 +175,11 @@ def test_an_entry_an_earlier_upgrade_owed_that_the_project_does_not_find_is_drop
 FORMAT = "--format=%(refname) %(objectname) %(symref)"
 
 
-def git_run(root: Path, *args: str, feed: str | None = None) -> subprocess.CompletedProcess[str]:
+def git_run(root: Path, *args: str, feed: bytes = b"") -> subprocess.CompletedProcess[bytes]:
     git = shutil.which("git")
     assert git
     return subprocess.run(  # noqa: S603 # -- a fixed argv against a test repository
-        [git, "-C", str(root), *args], capture_output=True, text=True, input=feed, check=False
+        [git, "-C", str(root), *args], capture_output=True, input=feed, check=False
     )
 
 
@@ -196,11 +197,11 @@ def project(tmp_path: Path, backend: str) -> Path:
 
 def hold(root: Path, backend: str, refs: dict[str, str]) -> None:
     if backend == "files":
-        with (root / ".git/packed-refs").open("a", encoding="utf-8") as packed:
-            packed.writelines(f"{oid} {ref}\n" for ref, oid in refs.items())
+        with (root / ".git/packed-refs").open("ab") as packed:
+            packed.writelines(os.fsencode(f"{oid} {ref}\n") for ref, oid in refs.items())
         return
     feed = "".join(f"create {ref} {oid}\n" for ref, oid in refs.items())
-    assert git_run(root, "update-ref", "--stdin", feed=feed).returncode == 0
+    assert git_run(root, "update-ref", "--stdin", feed=os.fsencode(feed)).returncode == 0
 
 
 def head_of(root: Path) -> str:
@@ -221,6 +222,10 @@ def names_that_differ_in_case(root: Path, backend: str) -> None:
     hold(root, backend, {"refs/remotes/origin/Topic": head, "refs/remotes/origin/topic": head})
 
 
+def a_name_that_is_not_utf8(root: Path, backend: str) -> None:
+    hold(root, backend, {os.fsdecode(b"refs/heads/caf\xe9"): head_of(root)})
+
+
 def hostile(root: Path, backend: str) -> None:
     head = head_of(root)
     repos.git(root, "tag", "-a", "-m", "t", "annotated", head)
@@ -237,18 +242,23 @@ REF_SETS: dict[str, Callable[[Path, str], None]] = {
     "a 300-byte name": a_long_name,
     "2,000 refs": many_refs,
     "names that differ only in case": names_that_differ_in_case,
+    "a name that is not UTF-8": a_name_that_is_not_utf8,
     "symbolic, dangling, tag, tree, blob and broken refs": hostile,
 }
 BACKENDS = ["files", "reftable"]
 
 
-def refs(root: Path) -> str:
+def refs(root: Path) -> bytes:
     return git_run(root, "for-each-ref", FORMAT).stdout
 
 
 def held(root: Path) -> dict[str, bytes]:
     store = root / ".git"
-    return {str(path.relative_to(store)): path.read_bytes() for path in store.rglob("*") if path.is_file()}
+    return {
+        str(path.relative_to(store)): path.read_bytes()
+        for path in store.rglob("*")
+        if path.is_file()
+    }
 
 
 def base_copy(root: Path, target: Path) -> None:
@@ -273,8 +283,47 @@ def test_the_plans_copy_holds_exactly_the_projects_refs_and_leaves_its_store_alo
         target = tmp_path / name / "tree"
         copy(root, target)
         assert refs(target) == refs(root), name
+        checked = git_run(target, "fsck", "--no-progress")
+        assert checked.returncode == 0, checked.stderr
     assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
     assert held(root) == before
+
+
+def told_by_environment(other: str) -> dict[str, str]:
+    return {"GIT_DEFAULT_REF_FORMAT": other}
+
+
+def told_by_config(other: str) -> dict[str, str]:
+    return {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "init.defaultRefFormat",
+        "GIT_CONFIG_VALUE_0": other,
+    }
+
+
+TOLD: dict[str, Callable[[str], dict[str, str]]] = {
+    "environment": told_by_environment,
+    "config": told_by_config,
+}
+
+
+@pytest.mark.parametrize("told", TOLD.values(), ids=TOLD.keys())
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_the_copy_holds_the_refs_whatever_ref_format_git_is_told_to_default_to(
+    *,
+    tmp_path: Path,
+    backend: str,
+    told: Callable[[str], dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = project(tmp_path, backend)
+    names_that_differ_in_case(root, backend)
+    for name, value in told("files" if backend == "reftable" else "reftable").items():
+        monkeypatch.setenv(name, value)
+    for name, copy in COPIES.items():
+        target = tmp_path / name / "tree"
+        copy(root, target)
+        assert refs(target) == refs(root), name
 
 
 def files_in_copies(tmp_path: Path, backend: str, count: int) -> dict[str, int]:
@@ -297,7 +346,7 @@ def test_the_files_a_copy_writes_do_not_grow_with_the_projects_refs(
     assert many == few
 
 
-@pytest.mark.parametrize("ref", ["HEAD~1", "HEAD^{tree}"])
+@pytest.mark.parametrize("ref", ["HEAD~1", "HEAD~1^{tree}"])
 def test_export_takes_any_commit_or_tree_it_took_before(tmp_path: Path, ref: str) -> None:
     root = project(tmp_path, "files")
     repos.write(root, "src/a.txt", "changed\n")
