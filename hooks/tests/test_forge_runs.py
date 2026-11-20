@@ -7,6 +7,7 @@ import pytest
 
 import forge_runs
 import merge_ready
+import unproven
 from tests.repos import commit, git, repository
 
 REPO = "owner/repo"
@@ -450,3 +451,159 @@ def test_help_prints_the_whole_description(capsys: pytest.CaptureFixture[str]) -
         forge_runs.main(["--help"])
     shown = capsys.readouterr().out
     assert "prints ``green``" in shown
+
+
+def answered(
+    root: Path, capsys: pytest.CaptureFixture[str], runs: str
+) -> tuple[unproven.Deep, str]:
+    target = root / "answer.json"
+    argv = ["deep", "--tip", "main", "--repository", REPO, "--root", str(root), "--answer"]
+    assert forge_runs.main([*argv, str(target)], runs) == 0
+    return unproven.answer(target.read_text(encoding="utf-8")), capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"status": "queued"},
+        {"status": "pending"},
+        {"status": "requested"},
+        {"status": "waiting"},
+        {"status": "in_progress"},
+        {"status": "a word the forge adds later"},
+        {"status": None},
+    ],
+)
+def test_an_answer_reads_every_status_but_completed_as_running(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], over: dict[str, object]
+) -> None:
+    at = history(tmp_path)
+    going = tier2(at["tip"], None, html_url="https://forge.example/runs/7", **over)
+    read, out = answered(tmp_path, capsys, page(going, tier2(at["second"], id=2)))
+    assert read.runs is not None
+    assert [(run.commit, run.state, run.name) for run in read.runs] == [
+        (at["tip"], "running", "https://forge.example/runs/7"),
+        (at["second"], "green", "run 2"),
+    ]
+    assert out == ""
+    assert deep(tmp_path, capsys, page(going, tier2(at["second"], id=2))) == "green"
+
+
+@pytest.mark.parametrize(
+    ("conclusion", "state"),
+    [
+        ("success", ["green"]),
+        ("failure", ["red"]),
+        ("timed_out", ["red"]),
+        (None, ["red"]),
+        ("cancelled", []),
+        ("skipped", []),
+    ],
+)
+def test_an_answer_keeps_each_finished_run_but_a_cancelled_or_skipped_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], *, conclusion: str | None, state: list[str]
+) -> None:
+    at = history(tmp_path)
+    read, _ = answered(tmp_path, capsys, page(tier2(at["tip"], conclusion)))
+    assert [run.state for run in read.runs or ()] == state
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        {"head_sha": "--help"},
+        {"head_sha": None},
+        {"event": "pull_request"},
+        {"head_repository": {"full_name": "fork/repo"}},
+    ],
+)
+def test_an_answer_drops_a_run_that_is_not_tier_2_of_this_repository(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], other: dict[str, object]
+) -> None:
+    at = history(tmp_path)
+    read, _ = answered(tmp_path, capsys, page(tier2(at["tip"], **other)))
+    assert read.runs == ()
+
+
+def test_the_answer_asks_for_a_start_when_nothing_proves_the_tip(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    at = history(tmp_path)
+    read, out = answered(tmp_path, capsys, page(tier2(at["second"])))
+    assert out == "start\n"
+    assert read.start
+    assert answered(tmp_path, capsys, page())[1] == "start\n"
+    assert answered(tmp_path, capsys, page(tier2(at["tip"])))[1] == ""
+    going = tier2(at["tip"], None, status="in_progress", id=2)
+    assert answered(tmp_path, capsys, page(going, tier2(at["second"])))[1] == ""
+
+
+@pytest.mark.parametrize(
+    ("runs", "known"),
+    [
+        ("", False),
+        ('{"total_count": 3, "workflow_runs": []}', False),
+        ("A", False),
+        ("B", True),
+        ("C", True),
+    ],
+)
+def test_an_answer_the_forge_cut_short_is_known_only_with_a_finished_run_on_the_chain(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    runs: str,
+    known: bool,
+) -> None:
+    at = history(tmp_path)
+    going = tier2(at["tip"], None, status="queued")
+    pages = {
+        "A": [going, tier2(at["side"])],
+        "B": [going, tier2(at["second"], "failure")],
+        "C": [tier2(at["tip"])],
+    }
+    if runs in pages:
+        runs = json.dumps({"total_count": 250, "workflow_runs": pages[runs]})
+    read, out = answered(tmp_path, capsys, runs)
+    assert (read.runs is not None) == known
+    assert out == ""
+
+
+def spoken(
+    root: Path, capsys: pytest.CaptureFixture[str], runs: str, *, sha: str, state: str
+) -> list[str]:
+    argv = ["speaks", "--tip", "main", "--repository", REPO, "--root", str(root)]
+    assert forge_runs.main([*argv, "--commit", sha, "--state", state], runs) == 0
+    return capsys.readouterr().out.splitlines()
+
+
+def test_a_deep_run_says_which_merges_it_speaks_for(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    at = history(tmp_path)
+    first, second, tip = (at[name][:12] for name in ("first", "second", "tip"))
+    itself = tier2(at["tip"], None, status="in_progress", id=3)
+    red = page(itself, tier2(at["second"], "failure", id=2), tier2(at["first"]))
+    assert spoken(tmp_path, capsys, red, sha=at["tip"], state="red") == [
+        f"deep: red at `{tip}`. The merges of the default branch it speaks for:",
+        f"- `{tip}` feat(core): third",
+        f"- `{second}` feat(core): second",
+    ]
+    green = page(itself, tier2(at["second"], id=2))
+    assert spoken(tmp_path, capsys, green, sha=at["tip"], state="green") == [
+        f"deep: green at `{tip}`. The merges of the default branch it speaks for:",
+        f"- `{tip}` feat(core): third",
+    ]
+    assert spoken(tmp_path, capsys, page(), sha=at["first"], state="red") == [
+        f"deep: red at `{first}`. The merges of the default branch it speaks for:",
+        f"- `{first}` feat(core): the clean state",
+    ]
+    assert spoken(tmp_path, capsys, page(), sha=at["side"], state="red") == [
+        f"deep: red at `{at['side'][:12]}`. The merges of the default branch it speaks for:",
+    ]
+    assert spoken(tmp_path, capsys, "", sha=at["tip"], state="red") == [
+        (
+            f"deep: red at `{tip}`. The forge's answer could not be read, so which merges of the"
+            " default branch it speaks for is not known."
+        ),
+    ]
