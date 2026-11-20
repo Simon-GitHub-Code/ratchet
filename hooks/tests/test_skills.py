@@ -726,3 +726,30 @@ def test_adopt_hands_over_its_assumptions_without_question_keys() -> None:
     step_13 = ADOPT.split("13. **Hand over.**", 1)[1]
     assert re.search(r"`(?:adopt|init|event|safeguard)\.[a-z-]+`", step_13) is None
     assert "no question key, type name or other method term in it" in step_13
+
+
+ARGUMENT_PLACEHOLDER = re.compile(r"\$(?:ARGUMENTS(?:\[\d+\])?|\d+)")
+
+
+def frontmatter(text: str) -> str:
+    return text.split("---\n", 2)[1] if text.startswith("---\n") else ""
+
+
+def test_no_skill_holds_text_the_harness_replaces_with_its_argument() -> None:
+    pages = {
+        path.relative_to(SKILLS): path.read_text(encoding="utf-8")
+        for path in SKILLS.rglob("SKILL.md")
+    }
+    replaced = [
+        f"{page}:{number}: {match.group(0)}"
+        for page, text in sorted(pages.items())
+        for number, line in enumerate(text.splitlines(), 1)
+        for match in ARGUMENT_PLACEHOLDER.finditer(line)
+    ]
+    assert not replaced, f"the harness puts the skill's argument in place of: {replaced}"
+    named = [
+        str(page)
+        for page, text in pages.items()
+        if re.search(r"^arguments:", frontmatter(text), re.MULTILINE)
+    ]
+    assert not named, f"each `$name` these declare is replaced by an argument too: {named}"
