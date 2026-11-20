@@ -385,7 +385,23 @@ def test_a_command_nested_deeper_than_the_guard_follows_is_still_judged(
     assert "force-push" in rules(shape(FORCE, depth))
 
 
-PROSE = "This line of the note explains a step, with `code`, $5 and a path like src/app/main.py.\n"
+def _spelled(values: Callable[[int], str], count: int, then: str) -> str:
+    names = "".join(f"$x{i}" for i in range(count))
+    return "; ".join(values(i) for i in range(count)) + f"; cd {names} && {then}"
+
+
+def test_a_directory_spelled_from_more_readings_than_the_guard_keeps_still_asks() -> None:
+    command = _spelled(lambda i: f"x{i}=a || x{i}=b", 40, "ls")
+    assert rules(command) == ["unreadable"]
+
+
+def test_a_directory_spelled_from_more_combinations_than_the_guard_reads_is_not_followed() -> None:
+    command = _spelled(lambda i: f"x{i}=a || x{i}=aa", 9, "echo hi > .github/workflows/ci.yml")
+    assert "unresolved-directory" in rules(command)
+    assert rules(_spelled(lambda i: f"x{i}=a || x{i}=aa", 8, "echo hi > .github/workflows/ci.yml")) == []
+
+
+PROSE ="This line of the note explains a step, with `code`, $5 and a path like src/app/main.py.\n"
 
 
 def _filled(size: int) -> str:

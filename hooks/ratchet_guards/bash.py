@@ -1,7 +1,7 @@
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import replace
-from itertools import dropwhile, pairwise, product
+from itertools import dropwhile, islice, pairwise, product
 from pathlib import Path, PurePosixPath
 
 from ratchet_guards import environment, gh, git, interpreters, tickets, writes
@@ -59,6 +59,7 @@ _HARNESS_REMOVALS: dict[str, dict[str, tuple[frozenset[str], str]]] = {
 }
 _PI_REMOVALS = frozenset({"remove", "uninstall"})
 MAX_STATES = 64
+_PICKS = 4 * MAX_STATES
 _DIRECTORY_MOVERS = frozenset({"cd", "pushd", "popd"})
 _PUSHD = "pushd"
 _MOVERS = _DIRECTORY_MOVERS | {"git"}
@@ -160,12 +161,22 @@ def _dynamic(value: str) -> bool:
     return any(mark in value for mark in _DYNAMIC) or len(value.split()) != 1
 
 
-def _resolved(target: str, values: Mapping[str, frozenset[str | None]]) -> list[str]:
+def _resolved(target: str, values: Mapping[str, frozenset[str | None]]) -> Iterator[str]:
     names = sorted({m.group(1) or m.group(2) for m in _VARIABLE.finditer(target)} & values.keys())
     options = [sorted(values[name], key=lambda value: value or "") for name in names]
-    return [
-        _substituted(target, dict(zip(names, picks, strict=True))) for picks in product(*options)
-    ]
+    combinations = product(*options)
+    for picks in islice(combinations, _PICKS):
+        yield _substituted(target, dict(zip(names, picks, strict=True)))
+    if next(combinations, None) is not None:
+        yield target
+
+
+def _homed(readings: Iterable[str], homes: Collection[str | None]) -> Iterator[str]:
+    tilded: list[str] = []
+    for word in readings:
+        tilded += [word] if word == "~" or word.startswith("~/") else []
+        yield word
+    yield from (str(PurePosixPath(home, word[2:])) for word in tilded for home in homes if home)
 
 
 def _substituted(target: str, chosen: Mapping[str, str | None]) -> str:
@@ -648,19 +659,15 @@ class _Checker:
         assigned = _assigned(_assignments(words)[0])
         lookups = context.exported | assigned.keys()
         words = _mover(words)
-        readings = _resolved(words[-1], values) if len(words) > 1 else ["~"]
+        spelled = _resolved(words[-1], values) if len(words) > 1 else iter(["~"])
         bare = len(words) == 1 and _HOME in assigned
         homes = {_literal(assigned[_HOME])} if bare else values.get(_HOME, frozenset())
-        readings += [
-            str(PurePosixPath(home, word[2:]))
-            for word in readings
-            if word == "~" or word.startswith("~/")
-            for home in homes
-            if home
-        ]
         stack = _name(words[0]) == _POPD or (_name(words[0]) == _PUSHD and len(words) == 1)
         places: list[Context] = []
-        for word in readings:
+        reached: set[Path] = set()
+        for word in _homed(spelled, homes):
+            if len(reached) > MAX_STATES:
+                break
             target = self.guard.locator.filesystem.expand(word)
             unknown = stack or _unreadable(target)
             if unknown or _CDPATH in lookups or (_HOME in lookups and word.startswith("~")):
@@ -669,6 +676,7 @@ class _Checker:
                 continue
             anchored = PurePosixPath(target).is_absolute()
             moved = context.moved_to(context.cwd / target, anchored=anchored)
+            reached.add(moved.cwd)
             places += [moved] if plain else [context, moved]
         return _distinct(places)
 
