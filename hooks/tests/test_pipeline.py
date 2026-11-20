@@ -2208,6 +2208,7 @@ def test_git_reads_each_quoted_range_as_the_branch_against_its_base(tmp_path: Pa
     root = _scratch(tmp_path / "repo", name)
     args = {"ref": "4", "base": "main", "branch": name, "rejudge": {**REJUDGE, "checkRed": True}}
     prompts = _run(args, reconcile=IMPLEMENTED, **{"review-again": REVIEW})["prompts"]
+    assert "`git rebase` onto\n  `main`, as its line below runs it," in prompts["reconcile"]
     expected = {
         "reconcile": [["diff", f"main...{name}"], ["log", "--oneline", f"{name}..main"]],
         "review-again": [["diff", f"main...{name}"]],
