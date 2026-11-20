@@ -411,8 +411,11 @@ def porcelain(root: Path, *args: str, given: str = "") -> subprocess.CompletedPr
     )
 
 
-def commit_records(root: Path, default: str, paths: list[str]) -> str | Reason:
-    branch = f"{RECORDS}{datetime.now(UTC):%Y%m%d-%H%M%S}"
+def commit_records(
+    root: Path, default: str, paths: list[str], *, branch: str | None = None
+) -> str | Reason:
+    branch = branch or f"{RECORDS}{datetime.now(UTC):%Y%m%d-%H%M%S}"
+    others = set(merge_ready.uncommitted(root)) - set(paths)
     index = gatelib.git(root, "write-tree")
     if index is None or tip(root, branch) is not None:
         return Reason("refs", f"`{branch}` exists already, or the index holds a merge conflict")
@@ -437,7 +440,7 @@ def commit_records(root: Path, default: str, paths: list[str]) -> str | Reason:
         else added
     )
     committed = done.returncode == 0
-    left = merge_ready.uncommitted(root) if committed else []
+    left = [p for p in merge_ready.uncommitted(root) if p not in others] if committed else []
     if committed and not left:
         porcelain(root, "switch", "--quiet", default)
         return branch
@@ -500,7 +503,7 @@ def merge_records(root: Path, branch: str) -> int:
     return code
 
 
-def land_records(root: Path) -> int:
+def land_records(root: Path, *, only: list[str] | None = None, branch: str | None = None) -> int:
     default = local_default(root)
     if gatelib.git(root, "remote", "get-url", "origin") is not None:
         print(
@@ -516,7 +519,7 @@ def land_records(root: Path) -> int:
     if default is None or on_branch(root) != default:
         print("merge: records land from the default branch; on a working branch, commit them there")
         return 2
-    paths = merge_ready.uncommitted(root)
+    paths = [p for p in merge_ready.uncommitted(root) if only is None or p in only]
     strangers = merge_ready.not_records(root, f"{HEADS}{default}", paths)
     if not paths or strangers:
         what = ", ".join(strangers) if strangers else "nothing uncommitted"
@@ -525,12 +528,12 @@ def land_records(root: Path) -> int:
             " on a branch of its own and through `merge <branch>`"
         )
         return 2
-    branch = commit_records(root, default, paths)
-    if isinstance(branch, Reason):
-        print(f"records: {branch}")
+    made = commit_records(root, default, paths, branch=branch)
+    if isinstance(made, Reason):
+        print(f"records: {made}")
         return 1
-    print(f"records: {len(paths)} path(s) committed on `{branch}`", flush=True)
-    return merge_records(root, branch)
+    print(f"records: {len(paths)} path(s) committed on `{made}`", flush=True)
+    return merge_records(root, made)
 
 
 def main(argv: list[str]) -> int:

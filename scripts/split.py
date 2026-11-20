@@ -109,25 +109,56 @@ def next_number(folder: Path) -> int:
     return max(numbers, default=0) + 1
 
 
+def body_of(
+    parent: preflight.Ticket, parts: list[Part], names: list[str], *, index: int, label: str
+) -> str:
+    waits = [names[i] for i in parts[index].after if 0 <= i < index]
+    if index == 0:
+        waits = [*parent.blockers, *waits]
+    return child_body(parent, parts[index], waits=waits, label=label)
+
+
+def number_of(name: str) -> str:
+    return re.sub(r"\D.*", "", name, flags=re.DOTALL).lstrip("0")
+
+
+def free(folder: Path, name: str) -> bool:
+    return (folder / name).is_file() or all(
+        number_of(p.name) != number_of(name) for p in folder.glob("*.md")
+    )
+
+
+def matching(folder: Path, body: str) -> str | None:
+    return next(
+        (p.name for p in sorted(folder.glob("*.md")) if p.read_text(encoding="utf-8") == body),
+        None,
+    )
+
+
 def file_locally(
-    root: Path, parent: preflight.Ticket, parts: list[Part], *, label: str
+    root: Path,
+    parent: preflight.Ticket,
+    parts: list[Part],
+    *,
+    label: str,
+    filed: list[str] | None = None,
 ) -> list[str]:
     folder = (root / parent.ref).parent
+    filed = filed or []
     names: list[str] = []
     for index, part in enumerate(parts):
-        waits = [names[i] for i in part.after if 0 <= i < index]
-        if index == 0:
-            waits = [*parent.blockers, *waits]
-        body = child_body(parent, part, waits=waits, label=label)
-        filed = next(
-            (p.name for p in sorted(folder.glob("*.md")) if p.read_text(encoding="utf-8") == body),
-            None,
-        )
-        if filed is None:
+        body = body_of(parent, parts, names, index=index, label=label)
+        recorded = Path(filed[index]).name if len(filed) == len(parts) else None
+        if recorded is not None and free(folder, recorded):
+            name = recorded
+        elif not filed and (found := matching(folder, body)) is not None:
+            name = found
+        else:
             slug = SLUG.sub("-", part.title.lower()).strip("-")[:40].strip("-") or "part"
-            filed = f"{next_number(folder):02d}-{slug}.md"
-            (folder / filed).write_text(body, encoding="utf-8")
-        names.append(filed)
+            name = f"{next_number(folder):02d}-{slug}.md"
+        if not (folder / name).is_file():
+            (folder / name).write_text(body, encoding="utf-8")
+        names.append(name)
     return [(folder / name).relative_to(root).as_posix() for name in names]
 
 
@@ -136,12 +167,9 @@ def file_on_tracker(
 ) -> list[str]:
     made: list[str] = []
     for index, part in enumerate(parts):
-        waits = [made[i] for i in part.after if 0 <= i < index]
-        if index == 0:
-            waits = [*parent.blockers, *waits]
         scratch = root / gatelib.STATE / "split-body.md"
         scratch.parent.mkdir(parents=True, exist_ok=True)
-        scratch.write_text(child_body(parent, part, waits=waits, label=label), encoding="utf-8")
+        scratch.write_text(body_of(parent, parts, made, index=index, label=label), encoding="utf-8")
         out = preflight.run_gh(
             [
                 "issue",
@@ -172,14 +200,27 @@ def judge(
     return parent, parts, label, problems(parent, parts, label, holds=holds)
 
 
+def bodies(
+    root: Path, ref: str, plan: object, *, filed: list[str], gh: preflight.Runner
+) -> dict[str, str]:
+    parent, parts, label, refused = judge(root, ref, plan, gh=gh)
+    if refused or parent is None:
+        return {}
+    names = [Path(path).name for path in filed]
+    return {
+        path: body_of(parent, parts, names, index=index, label=label)
+        for index, path in enumerate(filed[: len(parts)])
+    }
+
+
 def apply(
-    root: Path, ref: str, plan: object, *, gh: preflight.Runner
+    root: Path, ref: str, plan: object, *, gh: preflight.Runner, filed: list[str] | None = None
 ) -> tuple[list[str], list[str]]:
     parent, parts, label, refused = judge(root, ref, plan, gh=gh)
     if refused or parent is None:
         return [], refused
     if ref.endswith(".md"):
-        return file_locally(root, parent, parts, label=label), []
+        return file_locally(root, parent, parts, label=label, filed=filed), []
     return file_on_tracker(parent, parts, label=label, root=root), []
 
 
