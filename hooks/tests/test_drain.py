@@ -1369,6 +1369,8 @@ KILLS = {
     "the parts written": (drain.split, "file_locally", None),
     "the note written": (drain, "close", None),
     "the parts committed on the records branch": (drain.merge, "porcelain", "commit"),
+    "back on the default branch before the merge": (drain.merge, "commit_records", None),
+    "the merge landed and its branch kept": (drain.merge, "merge", None),
 }
 
 
@@ -1387,6 +1389,24 @@ def test_a_local_split_killed_half_way_and_run_again_files_and_lands_each_part_o
     assert run(root, "split", ALPHA, "--plan", plan) == 0
     children = note(root, BRANCH_A)["children"]
     assert isinstance(children, list)
+    landed_parts(root, children)
+
+
+def test_a_local_split_the_merge_refuses_is_closed_exits_4_and_lands_when_run_again(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, **WHOLE, **{"docs/process/binding.md": binding(MERGE, "false")})
+    run(root, "open", ALPHA)
+    plan = str(plan_file(tmp_path, HALVES))
+    capsys.readouterr()
+    assert run(root, "split", ALPHA, "--plan", plan) == drain.NOT_LANDED
+    printed = capsys.readouterr().out
+    assert "`false` is red on the merge result" in printed
+    children = json.loads(printed.splitlines()[-1])["children"]
+    assert note(root, BRANCH_A)["outcome"] == "split"
+    write(root, "docs/process/binding.md", binding(MERGE))
+    commit(root, "the check is green again")
+    assert run(root, "split", ALPHA, "--plan", plan) == 0
     landed_parts(root, children)
 
 
