@@ -255,39 +255,46 @@ def share_history(root: Path, target: Path, head: str) -> None:
         return
     held = Path(common)
     formats = git_checked(root, "rev-parse", "--show-object-format").strip()
-    git_checked(target, "init", "-q", f"--object-format={formats}")
+    reftable = git_checked(root, "rev-parse", "--show-ref-format").strip() == "reftable"
+    storage = {"GIT_DEFAULT_REF_FORMAT": "reftable" if reftable else "files"}
+    git_bytes(target, "init", "-q", f"--object-format={formats}", variables=storage)
     mine = target / ".git"
     (mine / "objects/info/alternates").write_text(f"{held / 'objects'}\n", encoding="utf-8")
     for name in ("shallow", "info/exclude", "logs/HEAD"):
         if (held / name).is_file():
             (mine / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(held / name, mine / name)
-    listed = git_checked(root, "for-each-ref", "--format=%(refname) %(objectname) %(symref)")
-    refs = [line.split(" ") for line in listed.splitlines()]
-    updates = "".join(f"update {ref} {oid}\n" for ref, oid, symref in refs if not symref)
-    git_checked(target, "update-ref", "--stdin", stdin=updates)
-    for ref, _, symref in refs:
+    listed = git_bytes(root, "for-each-ref", "--format=%(objectname) %(refname) %(symref)")
+    refs = [line.split(b" ") for line in listed.splitlines()]
+    plain = [(oid, ref) for oid, ref, symref in refs if not symref]
+    if reftable:
+        git_bytes(
+            target,
+            "update-ref",
+            "--stdin",
+            stdin=b"".join(b"update %s %s\n" % (ref, oid) for oid, ref in plain),
+        )
+    else:
+        (mine / "packed-refs").write_bytes(b"".join(b"%s %s\n" % pair for pair in plain))
+    for _, ref, symref in refs:
         if symref:
-            git_checked(target, "symbolic-ref", ref, symref)
-    branch = git_checked(root, "symbolic-ref", "-q", head, ok=(0, 1)).strip()
+            git_checked(target, "symbolic-ref", os.fsdecode(ref), os.fsdecode(symref))
+    branch = git_checked(root, "symbolic-ref", "-q", head, ok=(0, 1, 128)).strip()
     if branch:
         git_checked(target, "symbolic-ref", "HEAD", branch)
-    else:
-        commit = git_checked(root, "rev-parse", "--verify", f"{head}^{{commit}}").strip()
-        git_checked(target, "update-ref", "--no-deref", "HEAD", commit)
+        return
+    commit = git_checked(root, "rev-parse", "--verify", "-q", f"{head}^{{commit}}", ok=(0, 1))
+    if commit:
+        git_checked(target, "update-ref", "--no-deref", "HEAD", commit.strip())
 
 
 def export(root: Path, ref: str, target: Path) -> None:
     listed = git_checked(root, "ls-tree", "-r", "-z", "--full-tree", ref).split("\0")
     entries = [(line.split("\t", 1)[0].split(), line.split("\t", 1)[1]) for line in listed if line]
     blobs = [(mode, sha, name) for (mode, _, sha), name in entries if mode != "160000"]
-    batch = subprocess.run(
-        ["git", "-C", str(root), "cat-file", "--batch"],
-        input="".join(f"{sha}\n" for _, sha, _ in blobs).encode(),
-        capture_output=True,
-        check=True,
-        env={k: v for k, v in os.environ.items() if k not in REPOSITORY_VARIABLES},
-    ).stdout
+    batch = git_bytes(
+        root, "cat-file", "--batch", stdin="".join(f"{sha}\n" for _, sha, _ in blobs).encode()
+    )
     at = 0
     for mode, _, name in blobs:
         header_end = batch.index(b"\n", at)
@@ -306,9 +313,20 @@ def export(root: Path, ref: str, target: Path) -> None:
     git_checked(target, "add", "--all", "--force")
 
 
-def git_checked(
-    root: Path, *args: str, ok: tuple[int, ...] = (0,), stdin: str | None = None
-) -> str:
+def git_bytes(
+    root: Path, *args: str, stdin: bytes = b"", variables: dict[str, str] | None = None
+) -> bytes:
+    environment = {k: v for k, v in os.environ.items() if k not in REPOSITORY_VARIABLES}
+    return subprocess.run(
+        ["git", "-C", str(root), *args],
+        input=stdin,
+        capture_output=True,
+        check=True,
+        env={**environment, **(variables or {})},
+    ).stdout
+
+
+def git_checked(root: Path, *args: str, ok: tuple[int, ...] = (0,)) -> str:
     environment = {k: v for k, v in os.environ.items() if k not in REPOSITORY_VARIABLES}
     result = subprocess.run(
         ["git", "-C", str(root), *args],
@@ -316,7 +334,6 @@ def git_checked(
         text=True,
         check=False,
         env=environment,
-        input=stdin,
     )
     if result.returncode not in ok:
         raise subprocess.CalledProcessError(result.returncode, result.args, result.stderr)
