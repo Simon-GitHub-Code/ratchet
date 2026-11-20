@@ -26,6 +26,9 @@ import lowered
 import markdown_text
 import owed
 import plugin_pin
+import project_bite
+import queue_notes
+import unproven
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import dependencies, records, splits
@@ -48,6 +51,7 @@ if TYPE_CHECKING:
 
 AGENT = "merge: agent"
 OWNER = "merge: owner"
+WAIT = "merge: wait"
 MARKER = "<!-- ratchet:merge -->"
 SCHEMA = 1
 THRESHOLDS = gatelib.THRESHOLDS.as_posix()
@@ -87,6 +91,12 @@ SHOWN = 3
 REGULAR = frozenset({"100644", "100755", "000000"})
 IRREGULAR = {"120000": "a symbolic link", "160000": "a submodule"}
 RECORD_MODES = frozenset({"100644", "000000"})
+BOUND_KEY = ("ceilings", "deep", "unproven")
+LEAVES = "The merge judge leaves this pull request to the owner"
+WAITS = (
+    "Nothing here is the owner's to decide: the merge judge holds this pull request until what"
+    " each reason waits for has happened"
+)
 
 
 @dataclass(frozen=True)
@@ -1111,6 +1121,40 @@ class Asked:
     current: bool = False
     tier1: str = "none"
     tier2: str = "none"
+    deep: unproven.Deep | None = None
+
+
+def declared_bound(text: str | None) -> tuple[int | None, str]:
+    try:
+        data: object = tomllib.loads(text or "")
+    except tomllib.TOMLDecodeError:
+        return 0, (
+            f"; {THRESHOLDS} does not parse at the merge base, so `ceilings.deep.unproven` is"
+            " read as 0"
+        )
+    for key in BOUND_KEY:
+        data = data.get(key) if isinstance(data, dict) else None
+    if data is None:
+        return None, ""
+    if isinstance(data, bool) or not isinstance(data, int) or data < 0:
+        return 0, (
+            "; `ceilings.deep.unproven` at the merge base is not a whole number of 0 or more,"
+            " so it is read as 0"
+        )
+    return data, ""
+
+
+def deep_reasons(change: Change, deep: unproven.Deep) -> list[Reason]:
+    gated = any(
+        row.tier == "2" and (row.bound or project_bite.SHIPPED.fullmatch(row.tool))
+        for row in project_bite.gate_rows(change.before(BINDING) or "")
+    )
+    bound, why = declared_bound(change.before(THRESHOLDS))
+    line = unproven.chain(change.root, change.base)
+    hold = unproven.held(line, deep, gated=gated, bound=bound)
+    if hold is None:
+        return []
+    return [Reason(hold.code, hold.text + (why if hold.code == unproven.UNPROVEN else ""))]
 
 
 def setting_reasons(change: Change, base_ref: str, asked: Asked) -> list[Reason]:
@@ -1138,6 +1182,8 @@ def setting_reasons(change: Change, base_ref: str, asked: Asked) -> list[Reason]
                     " owner merges what fixes it",
                 )
             )
+    if asked.deep is not None:
+        reasons.extend(deep_reasons(change, asked.deep))
     return reasons
 
 
@@ -1304,8 +1350,15 @@ def judge(
     ]
 
 
+def verdict(reasons: list[Reason]) -> str:
+    codes = {reason.code for reason in reasons}
+    if unproven.UNPROVEN in codes and codes <= queue_notes.MECHANICAL:
+        return WAIT
+    return OWNER if reasons else AGENT
+
+
 def render(reasons: list[Reason]) -> str:
-    return "\n".join([OWNER if reasons else AGENT, *map(str, reasons)]) + "\n"
+    return "\n".join([verdict(reasons), *map(str, reasons)]) + "\n"
 
 
 def report(reasons: list[Reason], head: str) -> str:
@@ -1314,10 +1367,9 @@ def report(reasons: list[Reason], head: str) -> str:
             f"{MARKER}\n**{AGENT}** at `{head[:12]}`: the merge judge found nothing to wait for.\n"
         )
     rows = "".join(f"- `{reason.code}`: {reason.text}\n" for reason in reasons)
-    return (
-        f"{MARKER}\n**{OWNER}** at `{head[:12]}`. The merge judge leaves this pull request to"
-        f" the owner:\n\n{rows}"
-    )
+    said = verdict(reasons)
+    lead = WAITS if said == WAIT else LEAVES
+    return f"{MARKER}\n**{said}** at `{head[:12]}`. {lead}:\n\n{rows}"
 
 
 def uncommitted(root: Path) -> list[str]:
@@ -1364,14 +1416,18 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--target")
     parser.add_argument("--current", action="store_true")
     parser.add_argument("--tier1", choices=TIER_STATES, default="none")
-    parser.add_argument("--tier2", choices=TIER_STATES, default="none")
+    deep_or_word = parser.add_mutually_exclusive_group()
+    deep_or_word.add_argument("--tier2", choices=TIER_STATES)
+    deep_or_word.add_argument("--deep", type=Path)
     parser.add_argument("--report", type=Path)
     options = parser.parse_args(argv[2:] if recording else argv[1:])
     root = Path(options.root).resolve()
     if recording:
         return write_record(root, sys.stdin.read())
     base = options.base or default_ref(root)
-    asked = Asked(options.target, options.current, tier1=options.tier1, tier2=options.tier2)
+    deep = None if options.deep is None else unproven.answer(gatelib.read_text(options.deep))
+    tier2 = options.tier2 or "none"
+    asked = Asked(options.target, options.current, tier1=options.tier1, tier2=tier2, deep=deep)
     notes: list[str] = []
     reasons = judge(root, base, options.head, asked=asked, notes=notes)
     print(render(reasons), end="")
