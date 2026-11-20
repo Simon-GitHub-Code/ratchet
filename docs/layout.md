@@ -18,6 +18,7 @@ A map of the repository. [The README](../README.md) says what the method is and 
 | `scripts/route.py` | the route engine behind `/ratchet:next`, every hand-over and the session hook's last line |
 | `scripts/drain.py` | the queue behind `/ratchet:feature` with no ticket: the plan, the work trees it makes and removes, the rebase, the local merge (through `scripts/merge.py`) and the report |
 | `scripts/questions.py` | one line per answer the owner gives a skill, and the proposal of a standing answer once the recommended option was taken three times running |
+| `scripts/criteria_digest.py` | the digest of a ticket's or spec's criteria that its conjecture's `- Criteria:` line records, from which `/ratchet:conjecture` tells whether the criteria changed since |
 | `workflows/pipeline.js` | the feature pipeline (preflight, spec, ticket check, implement, review; one fix pass on a review blocker until the project is depended on, the critic and its fix loop after) the feature skill runs, and the reconcile and second review of a change brought up to date behind another merge |
 | `scripts/feature_preflight.py` | what must be true of a ticket and the checkout before the pipeline's first agent spawns |
 | `scripts/publish_check.py` | whether a pipeline role committed, pushed or opened a pull request, judged after the run and before the orchestrator's first commit (ADR 0060), and whether a blocker or major of the run's result quotes what its record does not hold (ADR 0072) |
