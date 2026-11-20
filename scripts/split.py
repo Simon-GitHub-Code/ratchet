@@ -181,7 +181,11 @@ def file_locally(  # noqa: PLR0913 -- the parts, where they were filed, and who 
     for index, part in enumerate(parts):
         body = body_of(parent, parts, names, index=index, label=label)
         recorded = Path(filed[index]).name if len(filed) == len(parts) else None
-        if recorded is not None and free(folder, recorded):
+        if (
+            recorded is not None
+            and free(folder, recorded)
+            and all(number_of(n) != number_of(recorded) for n in names)
+        ):
             name = recorded
         elif not filed and (found := matching(folder, body)) is not None:
             name = found
