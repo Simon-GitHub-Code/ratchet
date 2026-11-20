@@ -1,3 +1,5 @@
+import io
+import json
 from pathlib import Path
 
 import pytest
@@ -6,7 +8,7 @@ import drain
 import feature_preflight as preflight
 import publish_check
 import queue_notes
-from ratchet_guards import bash
+from ratchet_guards import bash, hook
 from ratchet_guards.context import Context
 from ratchet_guards.hook import GitRepoState
 from ratchet_guards.verdict import RULES, Decision, Verdict
@@ -15,12 +17,15 @@ from tests.support import make_guard
 from tests.test_drain import (
     ALPHA,
     BRANCH_A,
+    BRANCH_C,
+    GAMMA,
     Out,
     killed,
     moved,
     project,
     run,
     scratch,  # noqa: F401 # -- an autouse fixture of the drain's tests
+    ticket,
 )
 
 COMMIT = "git commit -m 'feat(core): the change'"
@@ -181,3 +186,114 @@ def test_an_update_cut_off_after_the_orchestrator_committed_parks_nothing(
     said = capsys.readouterr().out
     assert "a role published" not in said
     assert queue_notes.read_note(root, BRANCH_A).get("outcome") != drain.PARKED
+
+
+def hooked(cwd: Path) -> str:
+    case = {"tool_name": "Bash", "tool_input": {"command": COMMIT}, "cwd": str(cwd)}
+    answer = io.StringIO()
+    assert hook.main(cwd, io.StringIO(json.dumps(case)), answer) == 0
+    if not answer.getvalue():
+        return "allowed"
+    said = json.loads(answer.getvalue())["hookSpecificOutput"]
+    return f"{said['permissionDecision']}: {said['permissionDecisionReason']}"
+
+
+def refused(branch: str) -> str:
+    return f"deny: {hook.reason(Verdict('queue-final-check', f'git commit on `{branch}`'))}"
+
+
+def pipeline_preflight(
+    tree: Path, ref: str, branch: str, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(preflight, "run_gh", lambda _args: "[]")
+    argv = ["feature_preflight.py", ref, "--root", str(tree), "--base", "main", "--branch", branch]
+    assert preflight.main(argv) == 0, capsys.readouterr().err
+    capsys.readouterr()
+
+
+def test_a_drains_final_check_lets_through_the_commit_its_pipelines_preflight_started(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "plan") == 0
+    assert run(root, "open", ALPHA) == 0
+    tree = tree_of(root)
+    pipeline_preflight(tree, ALPHA, BRANCH_A, capsys, monkeypatch)
+    assert hooked(tree) == refused(BRANCH_A)
+    assert run(root, "check", ALPHA) == 0
+    assert hooked(tree) == refused(BRANCH_A), "a check without --final passes nothing"
+    assert run(root, "check", ALPHA, "--final") == 0
+    capsys.readouterr()
+    assert hooked(tree) == "allowed"
+
+
+def test_a_final_check_that_refuses_keeps_the_commit_refused(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    tree = tree_of(root)
+    pipeline_preflight(tree, ALPHA, BRANCH_A, capsys, monkeypatch)
+    assert run(root, "check", ALPHA, "--final") == 0
+    moved(root)
+    with pytest.MonkeyPatch.context() as patch:
+        killed(patch, "after_rebase")
+        with pytest.raises(KeyboardInterrupt):
+            run(root, "update", ALPHA)
+    assert run(root, "check", ALPHA, "--final") == drain.UNREAD
+    capsys.readouterr()
+    assert hooked(tree) == refused(BRANCH_A)
+
+
+def test_a_ticket_parked_and_opened_again_waits_for_its_new_final_check(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    tree = tree_of(root)
+    pipeline_preflight(tree, ALPHA, BRANCH_A, capsys, monkeypatch)
+    assert run(root, "check", ALPHA, "--final") == 0
+    assert run(root, "close", ALPHA, "--outcome", "parked", "--reason", "which case?") == 0
+    write(root, ALPHA, ticket(1, "Alpha", "Answered: lower.\n\n"))
+    commit(root, "docs: answer the question")
+    assert run(root, "open", ALPHA) == 0
+    assert hooked(tree) == refused(BRANCH_A)
+    pipeline_preflight(tree, ALPHA, BRANCH_A, capsys, monkeypatch)
+    assert hooked(tree) == refused(BRANCH_A)
+    assert run(root, "check", ALPHA, "--final") == 0
+    capsys.readouterr()
+    assert hooked(tree) == "allowed"
+
+
+def test_two_tickets_open_at_once_each_wait_for_their_own_final_check(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    assert run(root, "open", GAMMA) == 0
+    alpha, gamma = tree_of(root), drain.tree_of(root, BRANCH_C)
+    pipeline_preflight(alpha, ALPHA, BRANCH_A, capsys, monkeypatch)
+    pipeline_preflight(gamma, GAMMA, BRANCH_C, capsys, monkeypatch)
+    assert run(root, "check", ALPHA, "--final") == 0
+    capsys.readouterr()
+    assert hooked(alpha) == "allowed"
+    assert hooked(gamma) == refused(BRANCH_C)
+    assert run(root, "check", GAMMA, "--final") == 0
+    capsys.readouterr()
+    assert hooked(gamma) == "allowed"
+
+
+def test_a_drains_final_check_leaves_a_one_ticket_start_of_another_tree_unpassed(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    git(root, "switch", "-q", "-c", BRANCH_A)
+    pipeline_preflight(root, ALPHA, BRANCH_A, capsys, monkeypatch)
+    assert hooked(root) == refused(BRANCH_A)
+    git(root, "switch", "-q", "main")
+    assert run(root, "open", ALPHA) == 0
+    assert run(root, "check", ALPHA, "--final") == 0
+    assert run(root, "close", ALPHA, "--outcome", "waits", "--reason", "behind: later") == 0
+    capsys.readouterr()
+    git(root, "switch", "-q", BRANCH_A)
+    assert hooked(root) == refused(BRANCH_A)

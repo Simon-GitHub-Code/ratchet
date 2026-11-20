@@ -109,6 +109,14 @@ def test_a_drains_gate_is_as_it_was(tmp_path: Path) -> None:
     assert not (common / events.FEATURE_STARTS).exists()
 
 
+def test_a_drain_note_written_by_hand_does_not_excuse_a_one_ticket_start(tmp_path: Path) -> None:
+    root, saved = started(tmp_path)
+    start = json.loads(saved.read_text(encoding="utf-8"))["start"]
+    note = {"branch": BRANCH, "worktree": str(root), "start": start, "passed": True}
+    queue_notes.write_note(queue_notes.note_path(root, BRANCH), note)
+    assert [v.rule for v in judged(COMMIT, root)] == GATED
+
+
 def test_the_start_is_a_locked_guard_path_in_every_checkout() -> None:
     hit = make_guard().locator.classify(
         Path("/elsewhere/.git") / events.FEATURE_STARTS / "feature-4-x.json", destructive=False
