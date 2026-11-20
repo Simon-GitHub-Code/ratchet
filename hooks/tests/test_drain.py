@@ -2494,7 +2494,7 @@ def test_every_exit_of_a_split_keeps_the_owners_work_and_a_rerun_lands_the_parts
 def test_the_harness_kills_the_split_between_every_two_of_its_writes(
     state: str, capsys: Out
 ) -> None:
-    assert len(kill_points(state)) == KILL_POINTS, "a write was added or removed: count them again"
+    assert len(kill_points(state)) >= KILL_POINTS, "fewer writes than kill slots: lower KILL_POINTS"
     capsys.readouterr()
 
 
@@ -2508,9 +2508,12 @@ def test_the_harness_kills_the_split_between_every_two_of_its_writes(
 def test_a_split_killed_between_any_two_writes_keeps_the_owners_work_and_a_rerun_lands_it(
     tmp_path: Path, capsys: Out, *, state: str, kill: int
 ) -> None:
-    at = kill_points(state)[kill]
-    problems = one_exit(tmp_path, capsys, state=state, exit_="landed", at=at)
-    assert not problems, f"killed at write event {at}:\n" + "\n".join(problems)
+    problems = []
+    for at in kill_points(state)[kill::KILL_POINTS]:
+        (tmp_path / str(at)).mkdir()
+        found = one_exit(tmp_path / str(at), capsys, state=state, exit_="landed", at=at)
+        problems += [f"killed at write event {at}: {p}" for p in found]
+    assert not problems, "\n".join(problems)
 
 
 @pytest.mark.parametrize(
