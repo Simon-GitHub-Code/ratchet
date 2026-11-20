@@ -1641,8 +1641,6 @@ def let_go(root: Path, note: Path, *, landing: str, made: dict[str, str]) -> str
         return None
     if named != landing:
         return FORGED.format(note, named, landing)
-    for line in merge.sweep(root):
-        print(line)
     held = merge.tip(root, landing)
     if held is None:
         return None
