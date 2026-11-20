@@ -1400,6 +1400,32 @@ def test_a_local_split_killed_half_way_and_run_again_files_and_lands_each_part_o
     landed_parts(root, children)
 
 
+def test_a_split_killed_with_its_scratch_work_tree_out_removes_it_and_lands_when_run_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    plan = str(plan_file(tmp_path, HALVES))
+    real = drain.gatelib.git
+
+    def dying(where: Path, *args: str) -> str | None:
+        if args[:2] == ("worktree", "remove") and drain.merge.SCRATCH in args[-1]:
+            raise Killed
+        return real(where, *args)
+
+    with monkeypatch.context() as cut:
+        cut.setattr(drain.gatelib, "git", dying)
+        with pytest.raises(Killed):
+            run(root, "split", ALPHA, "--plan", plan)
+    capsys.readouterr()
+    assert run(root, "split", ALPHA, "--plan", plan) == 0
+    printed = capsys.readouterr().out.splitlines()
+    assert any(line.startswith("merge: removed the work tree ") for line in printed), printed
+    children = note(root, BRANCH_A)["children"]
+    assert isinstance(children, list)
+    landed_parts(root, children)
+
+
 def test_a_local_split_the_merge_refuses_is_closed_exits_4_and_lands_when_run_again(
     tmp_path: Path, capsys: Out
 ) -> None:
