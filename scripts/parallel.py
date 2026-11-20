@@ -59,6 +59,12 @@ Usage::
   one gate runs alone, as CI does. The slowest gate is named in the closing lines either way.
   When the run ends, one more line (``kind`` ``tier``) holds the wall time of the whole run and the
   gate names in the order given.
+* The gates start longest first, so a long gate given last does not wait behind short ones: a
+  gate is expected to take the median of its last five times in the ``--report`` file, and a
+  ``--serial`` group the sum of its gates. Those times include the ones ``budget.py`` measured
+  alone, since the record does not tell them apart. A gate with no time there starts before the
+  rest, and equal times keep the order given, so with no record the gates start in the order
+  given. ``--alone`` gates still run last, in the order given.
 * After the closing lines, each path the binding's ``Local caches`` bullet of ``## Speed`` names
   (its code spans) that does not exist is said in one line, and with ``--report`` has a line of
   its own (``kind`` ``cache-missing``, ``path``) after the tier's.
@@ -86,10 +92,13 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
+import math
 import os
 import re
 import shlex
 import signal
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -98,7 +107,8 @@ from collections import Counter, deque
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import IO
+from types import MappingProxyType
+from typing import IO, TYPE_CHECKING
 
 import application_types
 import budget
@@ -106,8 +116,13 @@ import gatelib
 import project_bite
 import runrecord
 
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
 POLL = 0.05
 ALONE = -1
+RECENT = 5
+NO_RECORD: Mapping[str, float] = MappingProxyType({})
 WAITING = re.compile(r"(?P<standing>later|none): \S.*")
 
 
@@ -174,7 +189,11 @@ def say(text: str) -> None:
 
 
 def plan(
-    gates: list[str], serial: list[list[str]], alone: frozenset[str] = frozenset()
+    gates: list[str],
+    serial: list[list[str]],
+    alone: frozenset[str] = frozenset(),
+    *,
+    seconds: Mapping[str, float] = NO_RECORD,
 ) -> list[tuple[str, ...]]:
     if not gates:
         message = "no gates: name them after '--'"
@@ -198,7 +217,29 @@ def plan(
         message = "a gate is in --alone and in a --serial group; it runs alone already"
         raise ValueError(message)
     single = [(name,) for name in gates if name not in grouped and name not in alone]
-    return sorted([*groups, *single], key=lambda unit: min(gates.index(name) for name in unit))
+
+    def longest_first(unit: tuple[str, ...]) -> tuple[float, int]:
+        known = all(name in seconds for name in unit)
+        expected = sum(seconds[name] for name in unit) if known else math.inf
+        return -expected, min(gates.index(name) for name in unit)
+
+    return sorted([*groups, *single], key=longest_first)
+
+
+def expected_seconds(report: Path | None) -> dict[str, float]:
+    runs: dict[str, list[float]] = {}
+    text = gatelib.read_text(report) if report is not None else None
+    for line in (text or "").splitlines():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        key, seconds = record.get("key"), record.get("seconds")
+        if isinstance(key, str) and isinstance(seconds, int | float) and math.isfinite(seconds):
+            runs.setdefault(key, []).append(float(seconds))
+    return {key: statistics.median(times[-RECENT:]) for key, times in runs.items()}
 
 
 def shares(
@@ -452,9 +493,10 @@ def main(argv: list[str]) -> int:
         parser.error("--jobs is at least 1")
     options.alone = [name for name in gates if name in options.alone]
     options.wide = [name for name in gates if name in options.wide]
+    seconds = expected_seconds(options.report)
     try:
         runner = shlex.split(options.runner)
-        units = plan(gates, options.serial, frozenset(options.alone))
+        units = plan(gates, options.serial, frozenset(options.alone), seconds=seconds)
     except ValueError as error:
         parser.error(str(error))
     scheduler = Scheduler(units, runner, options)
