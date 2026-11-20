@@ -1,5 +1,6 @@
 import json
 import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -1784,7 +1785,58 @@ def test_no_role_prompt_runs_a_plugin_script_with_a_bare_python3() -> None:
     for label, prompt in ran["prompts"].items():
         assert not re.search(r"python3 (?!-E -s )\S*scripts/", prompt), label
         assert not re.search(r"python3 (?!-E -s )", prompt), label
-    assert f"{PLUGIN_PY} `/plugin/scripts/feature_preflight.py`" in ran["prompts"]["preflight"]
+    assert f"{PLUGIN_PY} '/plugin/scripts/feature_preflight.py'" in ran["prompts"]["preflight"]
+
+
+AWKWARD = '/opt/my plugins/it\'s "$HOME"/scripts/'
+CLOSED = {"check": "ticket", "detail": "closed", "produce": "reopen it"}
+STOPPED = {"ok": False, "failures": [CLOSED]}
+
+
+def _commands(prompt: str) -> list[str]:
+    return [line for line in prompt.splitlines() if PLUGIN_PY in line]
+
+
+def test_the_preflight_hands_the_shell_its_script_path_as_one_word() -> None:
+    args = {
+        "ref": "docs/my ticket.md",
+        "preflight": f"{AWKWARD}feature_preflight.py",
+        "base": "main",
+        "branch": "feature/4-$x",
+    }
+    [line] = _commands(_run(args, preflight=STOPPED)["prompts"]["preflight"])
+    assert "`" not in line, f"the shell reads a backtick as command substitution: {line}"
+    assert shlex.split(line) == [
+        *PLUGIN_PY.split(),
+        f"{AWKWARD}feature_preflight.py",
+        "docs/my ticket.md",
+        "--root",
+        ".",
+        "--base",
+        "main",
+        "--branch",
+        "feature/4-$x",
+    ]
+
+
+def test_every_command_a_role_is_told_to_run_is_a_line_of_its_own_with_no_backtick() -> None:
+    named = {"ref": "4", "preflight": f"{AWKWARD}feature_preflight.py"}
+    again = {"review-again": REVIEW}
+    runs = [
+        _run(named, preflight=PREFLIGHT, spec=SPECIFIED, **DEPTH, critique=CRITIQUED),
+        _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **DEPTH, critique=CRITIQUED),
+        _run({**named, "branch": "feature/4-expiry", "rejudge": REJUDGE}, **again),
+    ]
+    seen = 0
+    for ran in runs:
+        for label, prompt in ran["prompts"].items():
+            for line in _commands(prompt):
+                seen += 1
+                assert line.lstrip().startswith(PLUGIN_PY), f"{label}: prose around it: {line}"
+                assert "`" not in line, f"{label}: a backtick in a command line: {line}"
+    assert seen == 7, "preflight, critique and review in two runs, and the second review"
+    quoted = _commands(runs[0]["prompts"]["critique"])[0]
+    assert shlex.split(quoted)[len(PLUGIN_PY.split())] == f"{AWKWARD}quotes.py"
 
 
 def test_no_skill_runs_a_plugin_script_with_a_bare_python3() -> None:
@@ -1939,7 +1991,7 @@ def test_the_prompts_state_the_fork_test_and_the_quote_rule_for_each_role_that_n
 def test_the_quote_check_runs_beside_the_preflight_script_when_the_skill_names_it() -> None:
     args = {"ref": "4", "preflight": "/plugin/scripts/feature_preflight.py"}
     ran = _run(args, preflight=PREFLIGHT, spec=SPECIFIED, **DEPTH, critique=CRITIQUED)
-    quotes_line = f"{PLUGIN_PY} `/plugin/scripts/quotes.py` <that file> --root ."
+    quotes_line = f"{PLUGIN_PY} '/plugin/scripts/quotes.py' <that file> --root ."
     assert quotes_line in ran["prompts"]["critique"]
     assert "--record ticket=" in ran["prompts"]["review"]
     assert "--record ticket=" not in ran["prompts"]["critique"]
