@@ -5,7 +5,6 @@ from dataclasses import dataclass, field, replace
 
 PLACEHOLDER = "_substitution_"
 HEREDOC_MARK = "_heredoc_"
-MAX_NESTING = 64
 _OPERATOR_CHARS = frozenset(";&|<>\n")
 _OPERATORS = (
     *(";;&", "&>>", "<<<"),
@@ -26,6 +25,7 @@ _ARITHMETIC = "(("
 _FUNCTION_SUBSTITUTION = re.compile(r"\$\{[ \t\n|]")
 _BACKTICK_ESCAPE = re.compile(r"\\([$`\\])")
 _CONTINUED = re.compile(r"(?<!\\)(?:\\\\)*\\$")
+_CONTINUED_LINE = re.compile(r"(?<!\\)(?:\\\\)*\\$", re.MULTILINE)
 _EXPANDING = {"": re.compile(r"[\\`]|\$[({]"), '"': re.compile(r"[\\`\"]|\$[({]")}
 _SAME_EITHER_WAY = re.compile(r"'[^'\]\[{}\"\\`$]*'")
 _BRACKETS = {"[": 1, "]": -1}
@@ -42,14 +42,11 @@ _HOISTED = "}"
 _BRACES = {"{": 1, "}": -1}
 
 
-class TooDeepError(Exception):
-    pass
-
-
 @dataclass(frozen=True, slots=True)
 class Token:
     text: str
     operator: bool = False
+    heredoc: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +59,7 @@ class SimpleCommand:
     then: str = ""
     opens: int = 0
     closes: int = 0
+    heredoc: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,22 +80,13 @@ class _Shared:
     allocated: int = 0
     modelled: bool = True
     closed: bool = True
+    unsure: int = 0
 
 
 class _Lexer:
     def __init__(
-        self,
-        text: str,
-        start: int,
-        shared: _Shared,
-        *,
-        closer: str = "",
-        parent: "_Lexer | None" = None,
+        self, text: str, start: int, shared: _Shared, *, closer: str = "", body: bool = False
     ) -> None:
-        self.level: int = 0 if parent is None else parent.level + 1
-        if self.level > MAX_NESTING:
-            raise TooDeepError
-        self.inner: bool = parent is not None and (parent.inner or closer == ")")
         self.text = text
         self.at = start
         self.shared = shared
@@ -110,6 +99,7 @@ class _Lexer:
         self.braces = 0
         self.doubled = 0
         self.closed = False
+        self.body = body
 
     def run(self) -> None:
         while self.at < len(self.text):
@@ -228,7 +218,7 @@ class _Lexer:
         self.at += 1
 
     def _single_in_double(self) -> None:
-        same = _SAME_EITHER_WAY.match(self.text, self.at)
+        same = _SAME_EITHER_WAY.match(self.text, self.at) if self.body else None
         self.shared.closed &= same is not None
         end = self.at + 1 if same is None else same.end()
         self.word.append(self.text[self.at : end])
@@ -236,7 +226,7 @@ class _Lexer:
 
     def _function_substitution(self) -> None:
         self.shared.modelled = False
-        child = _Lexer(self.text, self.at + 3, self.shared, closer=_HOISTED, parent=self)
+        child = _Lexer(self.text, self.at + 3, self.shared, closer=_HOISTED)
         child.run()
         self.shared.closed &= child.closed
         self.tokens += [Token(_HOIST, operator=True), *child.tokens, Token(_HOISTED, operator=True)]
@@ -285,19 +275,15 @@ class _Lexer:
                 end += 2 if self.text[end] == "\\" else 1
             end = min(end, len(self.text))
             self.shared.closed &= end < len(self.text)
-            self._nests(_BACKTICK_ESCAPE.sub(r"\1", self.text[self.at + 1 : end]))
+            self.shared.nested.append(_BACKTICK_ESCAPE.sub(r"\1", self.text[self.at + 1 : end]))
             self.at = end + 1
         else:
-            child = _Lexer(self.text, self.at + 2, self.shared, closer=")", parent=self)
+            child = _Lexer(self.text, self.at + 2, self.shared, closer=")")
             child.run()
             self.shared.closed &= child.closed
-            self._nests(self.text[self.at + 2 : child.at - child.closed])
+            self.shared.nested.append(self.text[self.at + 2 : child.at - child.closed])
             self.at = child.at
         self.word.append(PLACEHOLDER)
-
-    def _nests(self, script: str) -> None:
-        if not self.inner:
-            self.shared.nested.append(script)
 
     def _skip_comment(self) -> None:
         self.at = self._find("\n", self.at)
@@ -343,34 +329,64 @@ class _Lexer:
     def _read_heredoc_bodies(self) -> None:
         hoisted: list[tuple[int, list[Token]]] = []
         for index, delimiter, strip_tabs, sure, after, expands in self.pending:
-            body: list[str] = []
-            while self.at < len(self.text):
-                lines = [self._line()]
-                while expands and _CONTINUED.search(lines[-1]) and self.at < len(self.text):
-                    lines[-1] = lines[-1][:-1]
-                    lines.append(self._line())
-                line = "".join(lines)
-                if (line.lstrip("\t") if strip_tabs else line) == delimiter:
-                    break
-                body.append(line)
-            text = "\n".join(body)
-            self.shared.heredocs[index] = _BACKTICK_ESCAPE.sub(r"\1", text) if expands else text
+            opened = self.at
+            released = self._body(delimiter, strip_tabs=strip_tabs)
+            self.shared.heredocs[index] = released
+            text, beyond = released, False
             if expands:
+                if _CONTINUED_LINE.search(released):
+                    ended, self.at = self.at, opened
+                    text = self._joined(delimiter, strip_tabs=strip_tabs)
+                    beyond = self.at > ended
+                    self.at = min(self.at, ended)
+                if not beyond:
+                    self.shared.heredocs[index] = _BACKTICK_ESCAPE.sub(r"\1", text)
                 first = len(self.shared.nested)
-                reader = _Lexer(text, 0, self.shared, parent=self)
+                reader = _Lexer(text, 0, self.shared, body=True)
                 reader.expand()
-                if sure:
+                cure = delimiter if sure and not beyond and not self.shared.unsure else ""
+                if cure:
                     found = range(first, len(self.shared.nested))
-                    self.shared.expanded.update(dict.fromkeys(found, delimiter))
-                hoisted += [(after, reader.tokens)] if reader.tokens else []
+                    self.shared.expanded.update(dict.fromkeys(found, cure))
+                tokens = [replace(token, heredoc=cure) for token in reader.tokens]
+                hoisted += [(after, tokens)] if tokens else []
             if not sure:
-                reader = _Lexer(text + "\n", 0, self.shared, parent=self)
+                reader = _Lexer(released + "\n", 0, self.shared)
+                self.shared.unsure += 1
                 reader.run()
+                self.shared.unsure -= 1
                 self.tokens += reader.tokens
         if hoisted:
             start = hoisted[0][0]
             self.tokens[start:] = _spliced(self.tokens, hoisted, start)
         self.pending = []
+
+    def _body(self, delimiter: str, *, strip_tabs: bool) -> str:
+        if self.at >= len(self.text):
+            return ""
+        tabs = r"\t*" if strip_tabs else ""
+        line = re.compile(f"^{tabs}{re.escape(delimiter)}$", re.MULTILINE)
+        found = line.search(self.text, self.at)
+        if found is None or found.start() == len(self.text):
+            body = self.text[self.at :].removesuffix("\n")
+            self.at = len(self.text) + (not self.text.endswith("\n"))
+            return body
+        body = self.text[self.at : max(found.start() - 1, self.at)]
+        self.at = found.end() + 1
+        return body
+
+    def _joined(self, delimiter: str, *, strip_tabs: bool) -> str:
+        body: list[str] = []
+        while self.at < len(self.text):
+            lines = [self._line()]
+            while _CONTINUED.search(lines[-1]) and self.at < len(self.text):
+                lines[-1] = lines[-1][:-1]
+                lines.append(self._line())
+            line = "".join(lines)
+            if (line.lstrip("\t") if strip_tabs else line) == delimiter:
+                break
+            body.append(line)
+        return "\n".join(body)
 
     def _line(self) -> str:
         end = self._find("\n", self.at)
@@ -424,6 +440,7 @@ class _Splitter:
     nesting: list[str] = field(default_factory=list)
     opens: int = 0
     closed: bool = False
+    heredoc: str = ""
     held: list[tuple[list[str], list[str], list[int], list[str], str | None]] = field(
         default_factory=list
     )
@@ -498,6 +515,7 @@ class _Splitter:
                 operator,
                 self.opens,
                 closes,
+                self.heredoc,
             )
             self.commands.append(command)
             self.opens = 0
@@ -508,6 +526,7 @@ class _Splitter:
 def split(tokens: list[Token], *, subshells: bool = True) -> list[SimpleCommand]:
     splitter = _Splitter(subshells=subshells)
     for token in tokens:
+        splitter.heredoc = token.heredoc
         if token.operator:
             splitter.operator(token.text)
         else:

@@ -1,19 +1,16 @@
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from itertools import dropwhile, pairwise, product
 from pathlib import Path, PurePosixPath
 
 from ratchet_guards import environment, gh, git, interpreters, tickets, writes
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.options import Options, Spec, scan
-from ratchet_guards.shell import PLACEHOLDER, Script, SimpleCommand, TooDeepError, parse
+from ratchet_guards.shell import PLACEHOLDER, Script, SimpleCommand, parse
 from ratchet_guards.verdict import Verdict
 
 MAX_DEPTH = 8
-MAX_WORK = 150_000
-_JUDGING = 64
-_RUNNING_GIT = 2048
 SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
 WRAPPERS = frozenset(
     {"sudo", "doas", "env", "nohup", "time", "command", "builtin", "exec", "nice", "ionice"}
@@ -94,26 +91,6 @@ _UNCLOSED = Verdict(
     "unreadable", "the guard cannot tell where a quote or a substitution on the command line ends"
 )
 _SHELL = Spec("oO", frozenset({"--rcfile", "--init-file"}))
-_TOO_MUCH = Verdict(
-    "unreadable",
-    "the command is too long or nests scripts too deeply or too widely for the guard to read; "
-    "put the script in a file and run that",
-)
-
-
-class _TooMuchError(Exception):
-    pass
-
-
-@dataclass(slots=True)
-class _Work:
-    done: int = 0
-    judged: dict[tuple[str, Context, int], list[Verdict]] = field(default_factory=dict)
-
-    def spend(self, characters: int) -> None:
-        self.done += characters + _JUDGING
-        if self.done > MAX_WORK:
-            raise _TooMuchError
 
 
 def _name(word: str) -> str:
@@ -211,6 +188,17 @@ def _redefines(command: SimpleCommand) -> bool:
     defines = command.then == _DEFINITION and bool(rest)
     named = [*rest[:1], *(rest[1:] if rest and _name(rest[0]) in WRAPPERS else [])]
     return defines or _FUNCTION in lead or any({w, _name(w)} & _REDEFINERS for w in named)
+
+
+_Read = tuple[Script, bool, list[tuple[str, str]]]
+
+
+def _read(text: str) -> _Read:
+    parsed = _followed(text)
+    switching = any(map(_HIDDEN_SWITCH.search, parsed.nested))
+    found = enumerate(parsed.nested)
+    nested = list(dict.fromkeys((script, parsed.expanded.get(i, "")) for i, script in found))
+    return parsed, switching, nested
 
 
 def _followed(text: str) -> Script:
@@ -397,29 +385,46 @@ def _inner_scripts(head: str, words: Sequence[str]) -> list[str]:
 
 
 class _Checker:
-    def __init__(self, guard: Guard, depth: int, line: str, *, work: _Work) -> None:
+    def __init__(
+        self,
+        guard: Guard,
+        depth: int,
+        line: str,
+        *,
+        judged: dict[tuple[str, Context, int, str], list[Verdict]],
+        parsed: dict[str, _Read],
+    ) -> None:
         self.guard = guard
         self.depth = depth
         self.line = line
-        self.work = work
+        self.judged = judged
+        self.parsed = parsed
         self.modelled = True
 
     def _deeper(self) -> "_Checker":
-        return _Checker(self.guard, self.depth + 1, self.line, work=self.work)
+        return _Checker(
+            self.guard, self.depth + 1, self.line, judged=self.judged, parsed=self.parsed
+        )
 
-    def script(self, text: str, context: Context) -> list[Verdict]:
-        if self.depth > MAX_DEPTH:
-            return [Verdict("unreadable", "the command nests scripts too deeply")]
-        key = (text, context, self.depth)
-        if key not in self.work.judged:
-            self.work.spend(len(text))
-            self.work.judged[key] = self._judged(text, context)
-        return self.work.judged[key]
+    def script(self, text: str, context: Context, heredoc: str = "") -> list[Verdict]:
+        key = (text, context, self.depth, heredoc)
+        if key in self.judged:
+            return self.judged[key]
+        if heredoc:
+            verdicts = [replace(v, heredoc=heredoc) for v in self.script(text, context)]
+        elif self.depth > MAX_DEPTH:
+            verdicts = [Verdict("unreadable", "the command nests scripts too deeply")]
+        else:
+            if text not in self.parsed:
+                self.parsed[text] = _read(text)
+            verdicts = self._judged(self.parsed[text], context)
+        self.judged[key] = verdicts
+        return verdicts
 
-    def _judged(self, text: str, context: Context) -> list[Verdict]:
-        parsed = _followed(text)
+    def _judged(self, read: _Read, context: Context) -> list[Verdict]:
+        parsed, switching, nested = read
         self.modelled = parsed.modelled
-        if any(map(_HIDDEN_SWITCH.search, parsed.nested)):
+        if switching:
             context = context.switching_unseen()
         trusted = not any(map(_redefines, parsed.commands))
         now = chain = seen = [context]
@@ -462,19 +467,18 @@ class _Checker:
             previous = command.then
         verdicts += [_CROWDED] if crowded else []
         verdicts += [] if parsed.closed else [_UNCLOSED]
-        inside = self._nested(parsed, seen[:MAX_STATES])
+        inside = self._nested(nested, seen[:MAX_STATES])
         return list(dict.fromkeys([*inside, *verdicts]))
 
-    def _nested(self, parsed: Script, places: Sequence[Context]) -> list[Verdict]:
+    def _nested(
+        self, nested: Sequence[tuple[str, str]], places: Sequence[Context]
+    ) -> list[Verdict]:
         inner = self._deeper()
-        scripts = dict.fromkeys(
-            (script, parsed.expanded.get(index, "")) for index, script in enumerate(parsed.nested)
-        )
         return [
-            replace(v, heredoc=heredoc) if heredoc else v
-            for script, heredoc in scripts
+            v
+            for script, heredoc in nested
             for place in places
-            for v in inner.script(script, place)
+            for v in inner.script(script, place, heredoc)
         ]
 
     def _command(
@@ -485,7 +489,10 @@ class _Checker:
         verdicts += self.words(command.words, context)
         if _reads_script_from_stdin(command.words):
             verdicts += self._fed(pipeline, heredocs, context)
-        return verdicts + self._fed_interpreter(pipeline, heredocs, context)
+        verdicts += self._fed_interpreter(pipeline, heredocs, context)
+        return (
+            [replace(v, heredoc=command.heredoc) for v in verdicts] if command.heredoc else verdicts
+        )
 
     def _fed(
         self, pipeline: Sequence[SimpleCommand], heredocs: Sequence[str], context: Context
@@ -541,7 +548,6 @@ class _Checker:
         return verdicts + tickets.named(written, self.line, context, guard=self.guard)
 
     def words(self, words: Sequence[str], context: Context) -> list[Verdict]:
-        self.work.spend(sum(map(len, words)))
         assignments, rest = _assignments(words)
         names = _assigned(assignments)
         verdicts = _variables(names) + self._scripts(environment.commands(names), context)
@@ -576,7 +582,6 @@ class _Checker:
 
     def _ruled(self, head: str, words: Sequence[str], context: Context) -> list[Verdict]:
         if head == "git":
-            self.work.spend(_RUNNING_GIT)
             ran = self._scripts(git.scripts(words, context.cwd), context)
             return ran + git.check(words, context, self.guard)
         if head == "gh":
@@ -669,10 +674,7 @@ class _Checker:
 
 
 def check(command: str, context: Context, guard: Guard) -> list[Verdict]:
-    try:
-        verdicts = _Checker(guard, 0, command, work=_Work()).script(command, context)
-    except (_TooMuchError, TooDeepError):
-        return [_TOO_MUCH]
+    verdicts = _Checker(guard, 0, command, judged={}, parsed={}).script(command, context)
     elsewhere = {verdict for verdict in verdicts if not verdict.heredoc}
     verdicts = [v for v in verdicts if not v.heredoc or replace(v, heredoc="") not in elsewhere]
     verdicts = tickets.together(verdicts)
