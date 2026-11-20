@@ -1,13 +1,12 @@
 import re
 import shlex
-import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
 
-from ratchet_guards import bash, gh, git, gitcall, hook
+from ratchet_guards import bash, gh, git, gitcall, hook, shell
 from ratchet_guards.context import Context
 from ratchet_guards.manifest import (
     DoorRule,
@@ -21,7 +20,15 @@ from ratchet_guards.manifest import (
 from ratchet_guards.options import NO_VALUES, Spec, scan
 from ratchet_guards.paths import Hit, Locator
 from ratchet_guards.refs import MAIN_BRANCHES
-from ratchet_guards.shell import HEREDOC_MARK, PLACEHOLDER, SimpleCommand, lex, unquote
+from ratchet_guards.shell import (
+    HEREDOC_MARK,
+    PLACEHOLDER,
+    Script,
+    SimpleCommand,
+    Token,
+    lex,
+    unquote,
+)
 from ratchet_guards.shell import parse as parse_shell
 from ratchet_guards.verdict import (
     DISPUTE,
@@ -234,7 +241,7 @@ def test_lexer_reads_every_heredoc_body() -> None:
 
 def test_an_unquoted_heredoc_body_is_read_as_bash_reads_it() -> None:
     body = "$(a) `b` \\$(c) \\`c\\` \\\\$(d) '$(e)' \"$(f)\" ${x:-$(g)} $(h $(i))"
-    assert lex(f"cat <<E\n{body}\nE")[1] == ("a", "b", "d", "e", "f", "g", "i", "h $(i)")
+    assert lex(f"cat <<E\n{body}\nE")[1] == ("a", "b", "d", "e", "f", "g", "h $(i)")
     assert lex("cat <<E\na\\\nb\\\\\n\\$x\nE")[2] == ("ab\\\n$x",)
     assert lex("cat <<E\nE\\\n\nx\nE")[2] == ("",)
     assert lex("cat <<-E\n\tE\\\n\nx\nE")[2] == ("",)
@@ -246,62 +253,174 @@ def test_a_quoted_heredoc_delimiter_keeps_the_body_as_text(opener: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("command", "outside"),
+    ("command", "outside", "delimiter"),
     [
-        ("cat <<EOF > notes.md\nRun `git push -f` to publish.\nEOF", "git push -f"),
-        ("cat <<EOF > notes.md\nRun `git push -f` to publish.\nEOF", 'echo "$(git push -f)"'),
-        ("x=$(cat <<EOF\n# Notes\nRun `gh pr merge 1` here.\nEOF\n)", "x=$(gh pr merge 1)"),
-        ("cat <<E\n$(echo hi > AGENTS.md)\nE", "echo hi > AGENTS.md"),
+        ("cat <<EOF > notes.md\nRun `git push -f` to publish.\nEOF", "git push -f", "EOF"),
+        (
+            "cat <<EOF > notes.md\nRun `git push -f` to publish.\nEOF",
+            'echo "$(git push -f)"',
+            "EOF",
+        ),
+        ("x=$(cat <<EOF\n# Notes\nRun `gh pr merge 1` here.\nEOF\n)", "x=$(gh pr merge 1)", "EOF"),
+        ("cat <<-E\n\t$(echo hi > AGENTS.md)\n\tE", "echo hi > AGENTS.md", "E"),
     ],
 )
-def test_a_finding_in_an_unquoted_heredoc_body_says_quoting_the_delimiter_keeps_it_text(
-    command: str, outside: str
+def test_a_finding_in_an_unquoted_heredoc_body_names_the_delimiter_to_quote(
+    command: str, outside: str, delimiter: str
 ) -> None:
-    def message(text: str) -> str:
-        verdict = strictest(verdicts(text))
-        assert verdict is not None, text
-        return hook.reason(verdict)
-
-    cure = "quote the delimiter (`<<'EOF'`)"
-    inside = message(command)
-    assert "heredoc body" in inside, inside
-    assert cure in inside, inside
-    assert cure not in message(outside)
-
-
-def _cpu_seconds(command: str) -> float:
-    guard = make_guard()
-    start = time.thread_time()
-    bash.check(command, Context(ROOT), guard)
-    return time.thread_time() - start
+    inside = _message(command)
+    assert f"heredoc body whose delimiter `{delimiter}` is unquoted" in inside, inside
+    assert f"(`'{delimiter}'`)" in inside, inside
+    assert "heredoc body" not in _message(outside)
 
 
 @pytest.mark.parametrize(
-    "line",
-    ["x\\\n", "price $5 and $HOME and ${name} and $$ end\n", "$" * 63 + "\n", "\\" * 64 + "x\n"],
+    "command",
+    [
+        "bash <<E\n$(git push -f)\nE",
+        "sh <<E\n$(git push -f)\nE",
+        "cat <<E | bash\n$(git push -f)\nE",
+        "cat <<E\n$(git push -f)\nE\ngit push -f",
+        "(( x = 1 << y ))\n$(git push -f)\ny",
+    ],
 )
-def test_the_guard_reads_an_unquoted_heredoc_body_in_time_linear_in_its_size(line: str) -> None:
-    lines, floor = 2048, 0.005
-    small: list[float] = []
-    large: list[float] = []
-    for _ in range(5):
-        small.append(_cpu_seconds(f"cat <<E\n{line * lines}E"))
-        large.append(_cpu_seconds(f"cat <<E\n{line * 4 * lines}E"))
-    assert min(large) < 8 * max(min(small), floor), (min(small), min(large))
+def test_the_heredoc_cure_is_not_named_where_quoting_the_delimiter_leaves_the_finding(
+    command: str,
+) -> None:
+    assert "heredoc body" not in _message(command)
 
 
-def test_the_guard_reads_many_heredocs_on_one_line_in_time_linear_in_their_number() -> None:
-    def command(count: int) -> str:
-        opened = " ".join(f"<<E{index}" for index in range(count))
-        return f"cat {opened}\n" + "".join(f"b\nE{index}\n" for index in range(count))
+@pytest.mark.parametrize(
+    ("command", "delimiter"),
+    [
+        ("for ((i=0;i<1;i++)); do cat <<'EOF'\nsee: cat <<X\n`git push -f`\nX\nEOF\ndone", "X"),
+        ("cat <<E''\n$(cat <<F\n$(git push -f)\nF\n)\nE", "F"),
+    ],
+)
+def test_where_the_guard_is_unsure_of_a_heredoc_the_cure_names_the_inner_delimiter(
+    command: str, delimiter: str
+) -> None:
+    assert f"delimiter `{delimiter}` is unquoted" in _message(command)
 
-    count, floor = 2000, 0.005
-    small: list[float] = []
-    large: list[float] = []
-    for _ in range(5):
-        small.append(_cpu_seconds(command(count)))
-        large.append(_cpu_seconds(command(4 * count)))
-    assert min(large) < 8 * max(min(small), floor), (min(small), min(large))
+
+def _message(command: str) -> str:
+    verdict = strictest(verdicts(command))
+    assert verdict is not None, command
+    return hook.reason(verdict)
+
+
+def _reads(monkeypatch: pytest.MonkeyPatch, command: str) -> list[str]:
+    read: list[str] = []
+    original = bash.parse
+
+    def reading(text: str, *, subshells: bool = True) -> Script:
+        read.append(text)
+        return original(text, subshells=subshells)
+
+    monkeypatch.setattr(bash, "parse", reading)
+    bash.check(command, Context(ROOT), make_guard())
+    return read
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        lambda n: "cat <<E\n" + "$(\n" * n + "E",
+        lambda n: "echo " + "$(\n" * n,
+        lambda n: "echo " + "$(" * n + "x" + ")" * n,
+        lambda n: "cat <<E\n" + "$(" * n + "x" + ")" * n + "\nE",
+    ],
+)
+def test_the_scripts_the_guard_reads_grow_at_most_linearly_with_nesting(
+    monkeypatch: pytest.MonkeyPatch, shape: Callable[[int], str]
+) -> None:
+    shallow = len(_reads(monkeypatch, shape(5)))
+    deep = len(_reads(monkeypatch, shape(10)))
+    assert deep <= 2 * shallow, (shallow, deep)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        lambda n: "cat <<E\n" + "``" * n + "\nE",
+        lambda n: "echo " + "``" * n,
+        lambda n: "echo " + "$(ls) " * n,
+        lambda n: "cat <<E\n" + "$(ls) " * n + "\nE",
+    ],
+)
+def test_the_guard_reads_identical_nested_scripts_once(
+    monkeypatch: pytest.MonkeyPatch, shape: Callable[[int], str]
+) -> None:
+    assert len(_reads(monkeypatch, shape(1000))) == len(_reads(monkeypatch, shape(1)))
+
+
+TOO_MUCH = (
+    "the command is too long or nests scripts too deeply or too widely for the guard to read; "
+    "put the script in a file and run that"
+)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat <<E\n" + " ".join(f"`a{index}`" for index in range(3000)) + "\nE",
+        "echo " + " ".join(f"$(a{index})" for index in range(3000)),
+        "cd a; cd b; cd c; cd d; cd e; cd f; echo " + " ".join(f"`a{i}`" for i in range(100)),
+        "echo " + "x" * 300_000,
+    ],
+)
+def test_past_its_cap_on_work_the_guard_stops_and_asks(command: str) -> None:
+    assert details(command) == [TOO_MUCH]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat <<'EOF' > data.txt\n" + "line of text, $5 and `code`\n" * 4000 + "EOF",
+        "git commit -m \"$(cat <<'EOF'\n" + "a line of the message\n" * 2000 + 'EOF\n)"',
+        "cat <<EOF > notes.md\n" + "Run `just check` before $(date).\n" * 300 + "EOF",
+    ],
+)
+def test_a_long_ordinary_command_stays_under_the_cap(command: str) -> None:
+    assert TOO_MUCH not in details(command)
+
+
+class _Scanned:
+    def __init__(self, pattern: re.Pattern[str]) -> None:
+        self.pattern = pattern
+        self.characters = 0
+
+    def search(self, text: str) -> re.Match[str] | None:
+        self.characters += len(text)
+        return self.pattern.search(text)
+
+
+@pytest.mark.parametrize("line", ["x\\\n", "\\\\\\\n"])
+def test_the_reader_scans_continued_body_lines_once_each(
+    monkeypatch: pytest.MonkeyPatch, line: str
+) -> None:
+    scanned = _Scanned(vars(shell)["_CONTINUED"])
+    monkeypatch.setattr(shell, "_CONTINUED", scanned)
+    body = line * 2048
+    lex(f"cat <<E\n{body}E")
+    assert scanned.characters <= len(body), scanned.characters
+
+
+def test_the_reader_finds_many_heredocs_on_one_line_without_searching_its_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compared: list[object] = []
+    original = Token.__eq__
+
+    def comparing(token: Token, other: object) -> bool:
+        compared.append(other)
+        return original(token, other)
+
+    monkeypatch.setattr(Token, "__eq__", comparing)
+    count = 2000
+    opened = " ".join(f"<<E{index}" for index in range(count))
+    lex(f"cat {opened}\n" + "".join(f"b\nE{index}\n" for index in range(count)))
+    assert len(compared) <= count, len(compared)
 
 
 def test_lexer_survives_unterminated_constructs() -> None:
