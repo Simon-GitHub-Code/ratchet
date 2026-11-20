@@ -1742,6 +1742,220 @@ def test_a_commit_hook_that_writes_a_file_and_reads_an_ignored_folder_lets_the_p
     assert git(root, "status", "--porcelain") == "?? docs/hooked.md"
 
 
+STAGED_WORK = {"src/old.py": "O = 1\n", "src/gone.py": "G = 1\n", "src/partial.py": "P = 1\n"}
+DESTROYING = {"clean": "git clean -fdq", "checkout": "git checkout -- .", "stash": "git stash -q"}
+RESTORING = {
+    "stash and pop": "git stash push -q --keep-index && git stash pop -q",
+    "patch and apply": 'git diff --binary > "$TMPDIR/p.patch" && git checkout -- .'
+    ' && git apply "$TMPDIR/p.patch"',
+}
+LINK = "src/link"
+HARMED = re.compile(
+    r"records: the commit hooks (deleted|changed|restored) `([^`]+)`(?:.* object ([0-9a-f]+): )?"
+)
+
+
+def stage_everything(root: Path) -> None:
+    write(root, "src/added.py", "N = 1\n")
+    git(root, "add", "--", "src/added.py")
+    (root / LINK).symlink_to("added.py")
+    git(root, "add", "--", LINK)
+    git(root, "mv", "src/old.py", "src/moved.py")
+    git(root, "rm", "-q", "--", "src/gone.py")
+    write(root, "src/intent.py", "I = 1\n")
+    git(root, "add", "-N", "--", "src/intent.py")
+    write(root, "src/partial.py", "P = 2\n")
+    git(root, "add", "--", "src/partial.py")
+    write(root, "src/partial.py", "P = 3\n")
+
+
+def sources(root: Path) -> dict[str, str]:
+    return {
+        path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
+        for path in (root / "src").rglob("*")
+        if path.is_file()
+    }
+
+
+@pytest.mark.parametrize("hook", DESTROYING)
+def test_a_commit_hook_that_destroys_the_owners_work_names_each_file_and_the_object_holding_it(
+    tmp_path: Path, capsys: Out, hook: str
+) -> None:
+    root = project(tmp_path, **WHOLE, **STAGED_WORK)
+    run(root, "open", ALPHA)
+    stage_everything(root)
+    before = sources(root)
+    hooked = hook_script(root / ".git/hooks", "pre-commit", DESTROYING[hook])
+    plan = str(plan_file(tmp_path, HALVES))
+    capsys.readouterr()
+    assert run(root, "split", ALPHA, "--plan", plan) == drain.NOT_LANDED
+    printed = capsys.readouterr().out.splitlines()
+    after = sources(root)
+    hurt = {path for path in {*before, *after} if before.get(path) != after.get(path)}
+    named = {match[2]: match for line in printed if (match := HARMED.match(line))}
+    assert hurt, "the hook reached the owner's work"
+    assert set(named) == hurt, printed
+    for path, match in named.items():
+        what, held = match[1], match[3]
+        happened = "deleted" if path not in after else "changed"
+        assert what == ("restored" if path not in before else happened), path
+        if path in before and path != LINK:
+            assert raw(root, "cat-file", "blob", held) == before[path], f"{path} is in {held}"
+    if LINK in hurt:
+        assert f"records: the commit hooks deleted `{LINK}`; it was a link to `added.py`" in printed
+    again = f"once the cause above is gone, run `drain.py split {ALPHA} --plan {plan}` again"
+    hooked.unlink()
+    if hook == "stash":
+        stash = raw(root, "rev-parse", "refs/stash").strip()
+        moved = f"records: the commit hooks moved the stash: `stash@{{0}}` is now {stash}"
+        assert any(
+            line.startswith(moved) and line.endswith(f": `git stash show -p {stash}` prints them")
+            for line in printed
+        ), printed
+        assert (
+            "not landed: the commit hooks took the parts out of the commit, so"
+            f" `{LANDING}` holds a commit that adds nothing, and it stays as it is: delete it;"
+            f" {again}"
+        ) in printed
+        held = git(root, "rev-parse", LANDING)
+        assert run(root, "split", ALPHA, "--plan", plan) == drain.NOT_LANDED
+        assert f"not landed: `{LANDING}` holds other than just the parts" in capsys.readouterr().out
+        assert git(root, "rev-parse", LANDING) == held, "the rerun keeps the empty commit"
+        return
+    assert (
+        "not landed: the commit hooks changed the checkout as the lines above say, so nothing is"
+        f" merged: `{LANDING}` holds the parts, and they stay uncommitted in the checkout; {again}"
+    ) in printed
+    assert run(root, "split", ALPHA, "--plan", plan) == 0, "the rerun commits the parts again"
+    children = note(root, BRANCH_A)["children"]
+    assert isinstance(children, list)
+    assert git(root, "ls-tree", "--name-only", "main", "--", *children).splitlines() == children
+    assert git(root, "branch", "--list", "records/*") == ""
+
+
+@pytest.mark.parametrize("hook", RESTORING)
+def test_a_commit_hook_that_sets_the_checkout_aside_and_back_lets_the_parts_land(
+    tmp_path: Path, capsys: Out, hook: str
+) -> None:
+    root = project(tmp_path, **WHOLE, **STAGED_WORK)
+    run(root, "open", ALPHA)
+    stage_everything(root)
+    before = owners_view(root)
+    hook_script(root / ".git/hooks", "pre-commit", RESTORING[hook])
+    assert run(root, "split", ALPHA, "--plan", str(plan_file(tmp_path, HALVES))) == 0
+    children = json.loads(capsys.readouterr().out.splitlines()[-1])["children"]
+    assert git(root, "ls-tree", "--name-only", "main", "--", *children).splitlines() == children
+    assert changed(before, owners_view(root)) == {}, "the owner's work is as it was"
+
+
+def subcommand(args: list[str]) -> str:
+    rest = args[3:] if args[1] == "-C" else args[1:]
+    return next(arg for arg in rest if not arg.startswith("-"))
+
+
+def test_a_split_over_a_clean_checkout_lists_what_the_hooks_could_reach_in_one_git_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    calls: list[str] = []
+    real_commit, real_run = drain.commit_parts, subprocess.run
+
+    def running(args: object, *rest: object, **kwargs: object) -> object:
+        if isinstance(args, list) and args[:1] == ["git"]:
+            calls.append(subcommand(args))
+        return real_run(args, *rest, **kwargs)  # type: ignore[call-overload]
+
+    def counted(*args: object, **kwargs: object) -> object:
+        with pytest.MonkeyPatch.context() as cut:
+            cut.setattr(subprocess, "run", running)
+            return real_commit(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(drain, "commit_parts", counted)
+    assert run(root, "split", ALPHA, "--plan", str(plan_file(tmp_path, HALVES))) == 0
+    assert calls == [
+        "worktree",
+        "rev-parse",
+        "read-tree",
+        "add",
+        "status",
+        "commit",
+        "worktree",
+        "worktree",
+        "for-each-ref",
+        "hash-object",
+        "rev-list",
+        "diff",
+        "diff",
+    ], "the split lists what the hooks could reach, and hashes nothing when that is nothing"
+
+
+def test_a_file_the_split_cannot_read_keeps_the_commit_hooks_from_running(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    write(root, "src/locked.py", "L = 1\n")
+    git(root, "add", "--", "src/locked.py")
+    (root / "src/locked.py").chmod(0)
+    ran = tmp_path / "ran"
+    hook_script(root / ".git/hooks", "pre-commit", f"touch {ran}")
+    capsys.readouterr()
+    assert run(root, "split", ALPHA, "--plan", str(plan_file(tmp_path, HALVES))) == drain.NOT_LANDED
+    printed = capsys.readouterr().out.splitlines()
+    assert any(
+        line.startswith("records: the parts were not committed: ") and "src/locked.py" in line
+        for line in printed
+    ), printed
+    assert not ran.exists(), "no hook runs over a file the split could not keep a copy of"
+    assert git(root, "branch", "--list", "records/*") == ""
+
+
+def test_a_split_on_a_detached_head_says_so_and_what_to_do(tmp_path: Path, capsys: Out) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    git(root, "switch", "-q", "--detach", "main")
+    capsys.readouterr()
+    assert run(root, "split", ALPHA, "--plan", str(plan_file(tmp_path, HALVES))) == drain.NOT_LANDED
+    assert (
+        "merge: the checkout's HEAD is detached, and the parts land from `main`: switch it to"
+        " `main`"
+    ) in capsys.readouterr().out.splitlines()
+
+
+def test_a_commit_hook_that_refuses_and_prints_nothing_is_named_with_the_exit(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    hook_script(root / ".git/hooks", "pre-commit", "exit 3")
+    capsys.readouterr()
+    assert run(root, "split", ALPHA, "--plan", str(plan_file(tmp_path, HALVES))) == drain.NOT_LANDED
+    assert (
+        "records: the parts were not committed: a commit hook refused them and printed nothing"
+        " (`git commit` exited 1)"
+    ) in capsys.readouterr().out.splitlines()
+
+
+def test_a_split_that_meets_a_held_index_lock_names_it_and_lands_once_it_is_gone(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    lock = root / ".git/index.lock"
+    lock.write_text("", encoding="utf-8")
+    plan = str(plan_file(tmp_path, HALVES))
+    capsys.readouterr()
+    assert run(root, "split", ALPHA, "--plan", plan) == drain.NOT_LANDED
+    assert (
+        f"not landed: the parts are on `{LANDING}`, and `{lock}` locks the checkout's index, so the"
+        " merge could not move it: once no git command runs in this repository, delete that file;"
+        f" once the cause above is gone, run `drain.py split {ALPHA} --plan {plan}` again"
+    ) in capsys.readouterr().out.splitlines()
+    lock.unlink()
+    assert run(root, "split", ALPHA, "--plan", plan) == 0
+
+
 def test_a_ticket_waiting_on_parts_no_branch_holds_any_more_is_refused_and_says_why(
     tmp_path: Path, capsys: Out
 ) -> None:
