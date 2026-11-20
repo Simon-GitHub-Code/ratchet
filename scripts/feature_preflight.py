@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import posixpath
 import re
 import subprocess
@@ -386,7 +387,8 @@ def conjecture_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
         return f"{ticket.ref} has no `{CONJECTURE}` section and names no parent"
     parent = read_parent(parent_ref, root, gh)
     if parent is None:
-        return f"{ticket.ref} has no `{CONJECTURE}` section; its parent {parent_ref} was not found"
+        why = unread(parent_ref, root, "was not found")
+        return f"{ticket.ref} has no `{CONJECTURE}` section; its parent {parent_ref} {why}"
     inherited = parent.conjecture
     if inherited is not None and states_a_conjecture(inherited):
         return None
@@ -468,11 +470,11 @@ def operability_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
         return None
     lines = operability_lines(ticket, None)
     parent_ref = parent_of(ticket, root)
-    lacking, unread, templated = [], [], []
+    lacking, unreadable, templated = [], [], []
     if parent_ref is not None and any(name not in lines for name, _says in asked):
         parent = read_parent(parent_ref, root, gh)
         if parent is None:
-            unread.append(f"its parent {parent_ref} could not be read")
+            unreadable.append(f"its parent {parent_ref} {unread(parent_ref, root, 'could not be read')}")
         lines = operability_lines(ticket, parent)
     for name, says in asked:
         cause = unfilled(lines.get(name, ""), says)
@@ -480,7 +482,7 @@ def operability_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
             lacking.append(f"`{name}:` ({says})")
         elif cause is not None:
             templated.append(f"has `{name}:` with {cause}")
-    parts = ([f"lacks {', '.join(lacking)}"] if lacking else []) + unread + templated
+    parts = ([f"lacks {', '.join(lacking)}"] if lacking else []) + unreadable + templated
     if not parts:
         return None
     return f"{ticket.ref}: `{OPERABILITY}` {'; '.join(parts)}; write each, or `none` and why"
@@ -514,7 +516,19 @@ def parent_of(ticket: Ticket, root: Path) -> str | None:
 
 
 def outside(ref: str, root: Path) -> bool:
-    return Path(ref).is_absolute() or not (root / ref).resolve().is_relative_to(root.resolve())
+    place = root / ref
+    try:
+        place.stat()
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError):
+        return True
+    real = Path(os.path.realpath(place))
+    return Path(ref).is_absolute() or not real.is_relative_to(root.resolve())
+
+
+def unread(ref: str, root: Path, why: str) -> str:
+    return "is outside the repository" if outside(ref, root) else why
 
 
 def read_parent(ref: str, root: Path, gh: Runner) -> Ticket | None:
@@ -605,6 +619,9 @@ def check_ticket(report: Report, ticket: Ticket, label: str, *, root: Path, gh: 
             f"{ticket.ref}: its parent {report.parent} is outside the repository, so the"
             " preflight does not read it",
         )
+    elif report.parent is not None and report.parent.startswith("../"):
+        real = Path(os.path.realpath(root / report.parent))
+        report.parent = real.relative_to(root.resolve()).as_posix()
     if not ticket.is_open:
         report.fail("open", f"{ticket.ref} is not open")
     if (parts := split_parts(ticket, root)) is not None:
