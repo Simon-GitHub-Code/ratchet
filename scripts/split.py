@@ -135,6 +135,20 @@ def matching(folder: Path, body: str) -> str | None:
     )
 
 
+def untouched(
+    folder: Path, parent: preflight.Ticket, parts: list[Part], *, filed: list[str], label: str
+) -> list[str]:
+    names: list[str] = []
+    for index in range(len(parts)):
+        body = body_of(parent, parts, names, index=index, label=label)
+        recorded = Path(filed[index]).name if len(filed) == len(parts) else None
+        name = recorded if filed else matching(folder, body)
+        if name is None or gatelib.read_text(folder / name) != body:
+            return []
+        names.append(name)
+    return names
+
+
 def file_locally(
     root: Path,
     parent: preflight.Ticket,
@@ -145,6 +159,18 @@ def file_locally(
 ) -> list[str]:
     folder = (root / parent.ref).parent
     filed = filed or []
+    mine = untouched(folder, parent, parts, filed=filed, label=label)
+    numbers = {number_of(name) for name in mine}
+    known = [f":(literal){(folder / name).relative_to(root).as_posix()}" for name in mine]
+    if (
+        any(
+            number_of(path.name) in numbers for path in folder.glob("*.md") if path.name not in mine
+        )
+        and gatelib.git(root, "ls-files", "--", *known) == ""
+    ):
+        for name in mine:
+            (folder / name).unlink()
+        filed = []
     names: list[str] = []
     for index, part in enumerate(parts):
         body = body_of(parent, parts, names, index=index, label=label)
