@@ -1,5 +1,6 @@
 import re
 import shlex
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 
 PLACEHOLDER = "_substitution_"
@@ -23,6 +24,10 @@ _PLAIN_DELIMITER = re.compile(r"\\?[\w.+-]+|'[\w.+-]*'|\"[\w.+-]*\"")
 _ARITHMETIC = "(("
 _FUNCTION_SUBSTITUTION = re.compile(r"\$\{[ \t\n|]")
 _BACKTICK_ESCAPE = re.compile(r"\\([$`\\])")
+_CONTINUED = re.compile(r"(?<!\\)(?:\\\\)*\\$")
+_CONTINUED_LINE = re.compile(r"(?<!\\)(?:\\\\)*\\$", re.MULTILINE)
+_EXPANDING = {"": re.compile(r"[\\`]|\$[({]"), '"': re.compile(r"[\\`\"]|\$[({]")}
+_SAME_EITHER_WAY = re.compile(r"'[^'\]\[{}\"\\`$]*'")
 _BRACKETS = {"[": 1, "]": -1}
 _EXPANSIONS = {"${": "}", "$[": "]"}
 _QUOTES = str.maketrans("", "", "'\"")
@@ -41,6 +46,7 @@ _BRACES = {"{": 1, "}": -1}
 class Token:
     text: str
     operator: bool = False
+    heredoc: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +59,7 @@ class SimpleCommand:
     then: str = ""
     opens: int = 0
     closes: int = 0
+    heredoc: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,31 +69,37 @@ class Script:
     heredocs: tuple[str, ...]
     modelled: bool = True
     closed: bool = True
+    expanded: Mapping[int, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class _Shared:
     nested: list[str] = field(default_factory=list)
+    expanded: dict[int, str] = field(default_factory=dict)
     heredocs: dict[int, str] = field(default_factory=dict)
     allocated: int = 0
     modelled: bool = True
     closed: bool = True
+    unsure: int = 0
 
 
 class _Lexer:
-    def __init__(self, text: str, start: int, shared: _Shared, *, closer: str = "") -> None:
+    def __init__(
+        self, text: str, start: int, shared: _Shared, *, closer: str = "", body: bool = False
+    ) -> None:
         self.text = text
         self.at = start
         self.shared = shared
         self.closer = closer
         self.tokens: list[Token] = []
         self.word: list[str] = []
-        self.pending: list[tuple[int, str, bool, bool]] = []
+        self.pending: list[tuple[int, str, bool, bool, int, bool]] = []
         self.depth = 0
         self.cases = 0
         self.braces = 0
         self.doubled = 0
         self.closed = False
+        self.body = body
 
     def run(self) -> None:
         while self.at < len(self.text):
@@ -189,9 +202,7 @@ class _Lexer:
         while self.at < len(self.text) and (self.text[self.at] != closer or depth):
             char = self.text[self.at]
             if self.doubled and char == "'":
-                self.shared.closed = False
-                self.word.append(char)
-                self.at += 1
+                self._single_in_double()
             elif self.text.startswith(("$$", "${", "$["), self.at) or (
                 not self.doubled and self.text.startswith("$'", self.at)
             ):
@@ -206,6 +217,13 @@ class _Lexer:
         self.word.append(closer)
         self.at += 1
 
+    def _single_in_double(self) -> None:
+        same = _SAME_EITHER_WAY.match(self.text, self.at) if self.body else None
+        self.shared.closed &= same is not None
+        end = self.at + 1 if same is None else same.end()
+        self.word.append(self.text[self.at : end])
+        self.at = end
+
     def _function_substitution(self) -> None:
         self.shared.modelled = False
         child = _Lexer(self.text, self.at + 3, self.shared, closer=_HOISTED)
@@ -218,8 +236,15 @@ class _Lexer:
     def _double(self) -> None:
         self.word.append('"')
         self.at += 1
+        self.expand('"')
+        self.shared.closed &= self.at < len(self.text)
+        self.word.append('"')
+        self.at += 1
+
+    def expand(self, until: str = "") -> None:
         self.doubled += 1
-        while self.at < len(self.text) and self.text[self.at] != '"':
+        stop = _EXPANDING[until]
+        while self.at < len(self.text) and self.text[self.at] != until:
             char = self.text[self.at]
             if char == "\\":
                 self.word.append(self.text[self.at : self.at + 2])
@@ -231,12 +256,11 @@ class _Lexer:
             elif char == "`" or self.text.startswith("$(", self.at):
                 self._substitute()
             else:
-                self.word.append(char)
-                self.at += 1
+                found = stop.search(self.text, self.at + 1)
+                end = len(self.text) if found is None else found.start()
+                self.word.append(self.text[self.at : end])
+                self.at = end
         self.doubled -= 1
-        self.shared.closed &= self.at < len(self.text)
-        self.word.append('"')
-        self.at += 1
 
     def _escape(self) -> None:
         pair = self.text[self.at : self.at + 2]
@@ -296,26 +320,88 @@ class _Lexer:
         delimiter = written.translate(_DELIMITER_QUOTING)
         index = self.shared.allocated
         self.shared.allocated += 1
-        self.pending.append((index, delimiter, strip_tabs, sure))
         self.tokens.append(Token("<<", operator=True))
         self.tokens.append(Token(f"{HEREDOC_MARK}{index}"))
+        self.pending.append(
+            (index, delimiter, strip_tabs, sure, len(self.tokens), delimiter == written)
+        )
 
     def _read_heredoc_bodies(self) -> None:
-        for index, delimiter, strip_tabs, sure in self.pending:
-            body: list[str] = []
-            while self.at < len(self.text):
-                end = self._find("\n", self.at)
-                line = self.text[self.at : end]
-                self.at = end + 1
-                if (line.lstrip("\t") if strip_tabs else line) == delimiter:
-                    break
-                body.append(line)
-            self.shared.heredocs[index] = "\n".join(body)
+        hoisted: list[tuple[int, list[Token]]] = []
+        for index, delimiter, strip_tabs, sure, after, expands in self.pending:
+            opened = self.at
+            released = self._body(delimiter, strip_tabs=strip_tabs)
+            self.shared.heredocs[index] = released
+            text, beyond = released, False
+            if expands:
+                if _CONTINUED_LINE.search(released):
+                    ended, self.at = self.at, opened
+                    text = self._joined(delimiter, strip_tabs=strip_tabs)
+                    beyond = self.at > ended
+                    self.at = min(self.at, ended)
+                if not beyond:
+                    self.shared.heredocs[index] = _BACKTICK_ESCAPE.sub(r"\1", text)
+                first = len(self.shared.nested)
+                reader = _Lexer(text, 0, self.shared, body=True)
+                reader.expand()
+                cure = delimiter if sure and not beyond and not self.shared.unsure else ""
+                if cure:
+                    found = range(first, len(self.shared.nested))
+                    self.shared.expanded.update(dict.fromkeys(found, cure))
+                tokens = [replace(token, heredoc=cure) for token in reader.tokens]
+                hoisted += [(after, tokens)] if tokens else []
             if not sure:
-                reader = _Lexer(self.shared.heredocs[index] + "\n", 0, self.shared)
+                reader = _Lexer(released + "\n", 0, self.shared)
+                self.shared.unsure += 1
                 reader.run()
+                self.shared.unsure -= 1
                 self.tokens += reader.tokens
+        if hoisted:
+            start = hoisted[0][0]
+            self.tokens[start:] = _spliced(self.tokens, hoisted, start)
         self.pending = []
+
+    def _body(self, delimiter: str, *, strip_tabs: bool) -> str:
+        if self.at >= len(self.text):
+            return ""
+        tabs = r"\t*" if strip_tabs else ""
+        line = re.compile(f"^{tabs}{re.escape(delimiter)}$", re.MULTILINE)
+        found = line.search(self.text, self.at)
+        if found is None or found.start() == len(self.text):
+            body = self.text[self.at :].removesuffix("\n")
+            self.at = len(self.text) + (not self.text.endswith("\n"))
+            return body
+        body = self.text[self.at : max(found.start() - 1, self.at)]
+        self.at = found.end() + 1
+        return body
+
+    def _joined(self, delimiter: str, *, strip_tabs: bool) -> str:
+        body: list[str] = []
+        while self.at < len(self.text):
+            lines = [self._line()]
+            while _CONTINUED.search(lines[-1]) and self.at < len(self.text):
+                lines[-1] = lines[-1][:-1]
+                lines.append(self._line())
+            line = "".join(lines)
+            if (line.lstrip("\t") if strip_tabs else line) == delimiter:
+                break
+            body.append(line)
+        return "\n".join(body)
+
+    def _line(self) -> str:
+        end = self._find("\n", self.at)
+        line = self.text[self.at : end]
+        self.at = end + 1
+        return line
+
+
+def _spliced(tokens: list[Token], hoisted: list[tuple[int, list[Token]]], at: int) -> list[Token]:
+    spliced: list[Token] = []
+    for after, inserted in hoisted:
+        spliced += tokens[at:after]
+        spliced += inserted
+        at = after
+    return spliced + tokens[at:]
 
 
 def lex(text: str) -> tuple[list[Token], tuple[str, ...], tuple[str, ...]]:
@@ -354,6 +440,7 @@ class _Splitter:
     nesting: list[str] = field(default_factory=list)
     opens: int = 0
     closed: bool = False
+    heredoc: str = ""
     held: list[tuple[list[str], list[str], list[int], list[str], str | None]] = field(
         default_factory=list
     )
@@ -428,6 +515,7 @@ class _Splitter:
                 operator,
                 self.opens,
                 closes,
+                self.heredoc,
             )
             self.commands.append(command)
             self.opens = 0
@@ -438,6 +526,7 @@ class _Splitter:
 def split(tokens: list[Token], *, subshells: bool = True) -> list[SimpleCommand]:
     splitter = _Splitter(subshells=subshells)
     for token in tokens:
+        splitter.heredoc = token.heredoc
         if token.operator:
             splitter.operator(token.text)
         else:
@@ -451,4 +540,5 @@ def parse(text: str, *, subshells: bool = True) -> Script:
     modelled = shared.modelled and shared.closed and not words & _UNSURE_WORDS
     commands = split(tokens, subshells=subshells and modelled)
     bodies = tuple(shared.heredocs.get(index, "") for index in range(shared.allocated))
-    return Script(tuple(commands), tuple(shared.nested), bodies, modelled, shared.closed)
+    nested = tuple(shared.nested)
+    return Script(tuple(commands), nested, bodies, modelled, shared.closed, shared.expanded)
