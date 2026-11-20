@@ -543,8 +543,36 @@ def test_a_conjecture_is_drafted_again_when_its_criteria_change_and_only_then(
     changed = CRITERIA_BODY.replace("is refused", "is kept twice")
     assert criteria_digest(command, changed, tmp_path) != written
     step_1 = conjecture_step(1)
-    assert "**The command prints another digest than the line names, or none:**" in step_1
+    assert "**The command prints another digest than the line names, or exits 3:**" in step_1
     assert "Redraft it: run steps 2 to 5" in step_1
+    assert "**It exits any other way:** stop" in step_1
+    assert "redraft nothing" in step_1
+
+
+@pytest.mark.parametrize("via", ["file", "stdin"])
+def test_a_digest_command_that_cannot_run_is_not_read_as_changed_criteria(
+    via: str, tmp_path: Path
+) -> None:
+    page = (SKILLS / "conjecture/SKILL.md").read_text(encoding="utf-8")
+    reference = page.split("\n## The criteria digest\n", 1)[1]
+    found = re.search(r"\*\*The body is a file\*\*.*`([^`]+)`$", reference, re.MULTILINE)
+    assert found, "the page gives the command for a body in a file"
+    path = tmp_path / "ticket.md"
+    path.write_text(CRITERIA_BODY, encoding="utf-8")
+    command = found.group(1).replace("<heading>", "## Acceptance criteria")
+    run = (
+        command.replace("<file>", str(path))
+        if via == "file"
+        else f"cat {path} | {command.removesuffix(' <file>')}"
+    )
+    bash = shutil.which("bash")
+    assert bash
+    unset = {name: value for name, value in os.environ.items() if name != "CLAUDE_PLUGIN_ROOT"}
+    done = subprocess.run(  # noqa: S603 # -- the page's own command with the plugin root unset
+        [bash, "-c", run], env=unset, capture_output=True, text=True, check=False
+    )
+    assert done.stdout == ""
+    assert done.returncode not in (0, 3), done.stderr
 
 
 def test_a_redraft_keeps_the_answers_and_shows_the_owner_what_changed() -> None:
