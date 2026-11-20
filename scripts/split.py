@@ -113,18 +113,21 @@ def file_locally(
     root: Path, parent: preflight.Ticket, parts: list[Part], *, label: str
 ) -> list[str]:
     folder = (root / parent.ref).parent
-    number = next_number(folder)
-    slugs = [
-        SLUG.sub("-", part.title.lower()).strip("-")[:40].strip("-") or "part" for part in parts
-    ]
-    names = [f"{number + i:02d}-{slug}.md" for i, slug in enumerate(slugs)]
+    names: list[str] = []
     for index, part in enumerate(parts):
         waits = [names[i] for i in part.after if 0 <= i < index]
         if index == 0:
             waits = [*parent.blockers, *waits]
-        (folder / names[index]).write_text(
-            child_body(parent, part, waits=waits, label=label), encoding="utf-8"
+        body = child_body(parent, part, waits=waits, label=label)
+        filed = next(
+            (p.name for p in sorted(folder.glob("*.md")) if p.read_text(encoding="utf-8") == body),
+            None,
         )
+        if filed is None:
+            slug = SLUG.sub("-", part.title.lower()).strip("-")[:40].strip("-") or "part"
+            filed = f"{next_number(folder):02d}-{slug}.md"
+            (folder / filed).write_text(body, encoding="utf-8")
+        names.append(filed)
     return [(folder / name).relative_to(root).as_posix() for name in names]
 
 

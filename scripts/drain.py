@@ -63,6 +63,12 @@ OWNER_FILE = 0o600
 LANDING_TRIES, LANDING_POLL = 20, 0.05
 LANDING_RUNNING = 3
 UNREAD = 3
+NOT_LANDED = 4
+FORGE_PARTS = (
+    "next: this repository has a forge (`origin`): commit {} on a branch of their own and open"
+    " the pull request; its merge job merges records alone, and the plan lists the parts once the"
+    " default branch holds them"
+)
 CUT_OFF = "is not checked: its update was cut off after it moved the branch; run `update` again"
 LANDING_MAY_RUN = "a landing may be in flight in another drain"
 LOCK, LEASE = "ratchet-drain.lock", "ratchet-drain.lease"
@@ -1528,8 +1534,28 @@ def split_ticket(drain: Drain, ticket: preflight.Ticket, options: argparse.Names
         result=result,
         children=made,
     )
+    landed = land_parts(drain.root, made) if ticket.ref.endswith(".md") else 0
     print(json.dumps({"children": made}))
-    return 0
+    return landed
+
+
+def land_parts(root: Path, made: list[str]) -> int:
+    default = merge.local_default(root) or ""
+    landed = all(gatelib.show(root, default, path) is not None for path in made)
+    if not landed and gatelib.git(root, "remote", "get-url", "origin") is not None:
+        print(FORGE_PARTS.format(", ".join(made)))
+        return 0
+    listed = gatelib.git(root, "for-each-ref", "--format=%(refname:short)", "refs/heads/records/")
+    for branch in (listed or "").splitlines():
+        changed = gatelib.git(root, "diff", "--name-only", f"{default}...{branch}") or ""
+        if all(
+            (root / path).is_file()
+            and gatelib.git(root, "rev-parse", f"{branch}:{path}")
+            == gatelib.git(root, "hash-object", "--", path)
+            for path in {*made, *changed.splitlines()}
+        ):
+            gatelib.git(root, "branch", "--quiet", "-D", branch)
+    return 0 if landed or merge.land_records(root) == 0 else NOT_LANDED
 
 
 def show_plan(drain: Drain, _options: argparse.Namespace) -> int:
