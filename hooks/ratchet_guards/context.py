@@ -3,6 +3,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
+from ratchet_guards.environment import TRACKED
 from ratchet_guards.paths import Hit, Locator
 from ratchet_guards.refs import MAIN_BRANCHES
 from ratchet_guards.verdict import ACTING_RULES, Verdict
@@ -52,7 +53,7 @@ class Context:
         return replace(self, maybe=self.maybe | frozenset(branches))
 
     def exporting(self, names: Iterable[str]) -> "Context":
-        return replace(self, exported=self.exported | frozenset(names))
+        return replace(self, exported=self.exported | (TRACKED & frozenset(names)))
 
     def unsettling(self) -> "Context":
         return replace(self, unsettled=True)
