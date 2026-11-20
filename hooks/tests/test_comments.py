@@ -552,7 +552,7 @@ def test_recording_again_after_the_pin_moves_leaves_an_entry_the_lister_does_not
     commit(root, "chore(method): upgrade the Ratchet plugin")
     git(root, "checkout", "-q", "change")
     git(root, "merge", "-q", "--no-edit", "main")
-    assert changed(root, old, monkeypatch, "--record") == 0
+    assert changed(root, old, monkeypatch, "--record", "--base", "main") == 0
     assert owed.read(root).entries == (
         unfound,
         owed.Entry("src/old.txt", RULE, "old reason", "1.3.0"),

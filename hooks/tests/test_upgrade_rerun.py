@@ -182,6 +182,12 @@ def with_one_commit(tmp_path: Path) -> tuple[Path, Path]:
     return writer, once_from(writer, tmp_path / "once")
 
 
+def with_no_default_branch(tmp_path: Path) -> tuple[Path, Path]:
+    writer = adopted.copy(merged_upgrade(), tmp_path / "writer")
+    git(writer, "branch", "-q", "-m", "trunk")
+    return writer, once_from(writer, tmp_path / "once")
+
+
 def detached(tmp_path: Path) -> tuple[Path, Path]:
     writer, reference = on_an_open_branch(tmp_path)
     git(writer, "checkout", "-q", "--detach")
@@ -200,6 +206,7 @@ FLOWS = {
     "on an open upgrade branch": on_an_open_branch,
     "on an open branch the moved default branch was merged into": after_the_default_branch_moved,
     "in a repository with one commit": with_one_commit,
+    "on a branch no default branch is known for": with_no_default_branch,
     "on a detached HEAD": detached,
 }
 
@@ -215,7 +222,7 @@ def test_whatever_order_the_upgrades_run_in_the_ledger_is_one_upgrade_from_what_
     assert (writer / LEDGER).read_text(encoding="utf-8") == (reference / LEDGER).read_text(
         encoding="utf-8"
     ), f"{flow}: the ledger is the one a single upgrade from what is merged writes"
-    if git(writer, "rev-parse", "--abbrev-ref", "HEAD") in {"main", "HEAD"}:
+    if git(writer, "rev-parse", "--abbrev-ref", "HEAD") in {"main", "trunk", "HEAD"}:
         branch(writer, "up")
     commit(writer, f"chore(method): upgrade the Ratchet plugin to {SECOND}")
     monkeypatch.setattr(plugin_pin, "PLUGIN", plugins()[SECOND])
@@ -349,9 +356,10 @@ def test_an_entry_the_base_does_not_owe_is_still_red_after_a_rerun_and_a_rerun_d
     assert upgrade.main(["upgrade.py", "--root", str(rerun)]) == 1
     out = capsys.readouterr().out
     base = git(rerun, "merge-base", "HEAD", "main")[:12]
+    named = f"'{written.problem}' for {written.path} ({written.rule})"
     assert (
-        f"    - drop 1 entry this change brought, which one upgrade from the merge base {base}"
-        f" would not write: '{written.problem}' for {written.path} ({written.rule})\n"
+        f"    - drop 2 entries this change brought, which one upgrade from the merge base {base}"
+        f" would not write: {named}; {named}\n"
     ) in out
     assert "write down 0" not in out
     upgraded(rerun, SECOND)
