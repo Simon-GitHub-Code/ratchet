@@ -148,7 +148,8 @@ def spec(body: str) -> str:
     [
         ("Parent: 02-b.md", ".scratch/f/issues/02-b.md"),
         ("Parent: ./02-b.md", ".scratch/f/issues/02-b.md"),
-        ("Parent: `../spec.md`", ".scratch/f/issues/../spec.md"),
+        ("Parent: `../spec.md`", ".scratch/f/spec.md"),
+        ("Parent: ../../g/./spec.md", ".scratch/g/spec.md"),
         ("Parent: 02", "02"),
         ("Parent: #2", "#2"),
     ],
@@ -667,6 +668,106 @@ def test_the_flag_line_is_asked_whatever_the_life_events_and_its_row(tmp_path: P
     held = adopted(tmp_path / "held", "cli", BODY, extra=(LIVE, waiting))
     assert "lacks `Flag:`" in held.failures[0].detail
     assert adopted(tmp_path / "said", "cli", BODY + FLAGGED, extra=events("none")).ok
+
+
+LACKS_FLAG = (
+    "4: `## Operability` lacks `Flag:` (the flag the behaviour ships behind); write each, or"
+    " `none` and why"
+)
+
+
+@pytest.mark.parametrize(
+    "bare", ["none", "`none`", "**none**", "- none", "_none_", "`none`.", "**none**:", "none -"]
+)
+def test_a_none_with_no_reason_is_refused_in_any_markup(tmp_path: Path, bare: str) -> None:
+    report = adopted(tmp_path, "cli", BODY + f"\n## Operability\n\n- Flag: {bare}\n")
+    assert [failure.detail for failure in report.failures] == [LACKS_FLAG]
+
+
+@pytest.mark.parametrize(
+    "given",
+    [
+        "none: the command only reads",
+        "`none`: the command only reads",
+        "**none**: the command only reads",
+        "- none: the command only reads",
+        "none, the command only reads",
+    ],
+)
+def test_a_none_with_a_reason_is_accepted_in_any_markup(tmp_path: Path, given: str) -> None:
+    assert adopted(tmp_path, "cli", BODY + f"\n## Operability\n\n- Flag: {given}\n").ok
+
+
+FLAG = "- Flag: `notes`, off until the owner switches it on\n"
+SIGNAL = "- **Signal:** a span per request, `notes.list`\n"
+LOAD = "- Load: the list route joins the load smoke\n"
+SECURITY = "* security: one read route and no new input\n"
+OPERATED = "## Operability\n\n"
+
+
+def operated(tmp_path: Path, own: str, inherited: str) -> preflight.Report:
+    binding = f"# Binding\n\n{LIVE}\n## Gates\n\n- Application types: service\n"
+    files = {
+        "docs/process/binding.md": binding,
+        ".scratch/f/spec.md": f"# F\n\n## Solution\n\nX.{CONJECTURE}\n{OPERATED}{inherited}",
+        TICKET: f"# 01: T\n\nStatus: ready-for-agent\n\nParent: ../spec.md\n\n{OPERATED}{own}",
+    }
+    root = repository(tmp_path, files)
+    install_hooks(root)
+    return run(root, TICKET)
+
+
+def test_a_line_the_ticket_lacks_is_read_from_its_parent(tmp_path: Path) -> None:
+    report = operated(tmp_path / "split", FLAG + SIGNAL, LOAD + SECURITY)
+    assert report.ok, report.failures
+    neither = operated(tmp_path / "neither", FLAG + SIGNAL, LOAD)
+    assert [failure.detail for failure in neither.failures] == [
+        (
+            f"{TICKET}: `## Operability` lacks `Security:` (the surface it adds: routes, inputs,"
+            " who may call); write each, or `none` and why"
+        )
+    ]
+
+
+def test_the_tickets_own_line_wins_over_its_parents(tmp_path: Path) -> None:
+    whole = FLAG + SIGNAL + LOAD + SECURITY
+    assert operated(tmp_path / "said", whole, "- Flag: <flag>\n").ok
+    bare = operated(tmp_path / "bare", "- Flag: `none`\n", whole)
+    assert [failure.detail for failure in bare.failures] == [
+        (
+            f"{TICKET}: `## Operability` lacks `Flag:` (the flag the behaviour ships behind);"
+            " write each, or `none` and why"
+        )
+    ]
+
+
+def test_the_report_names_the_parent_as_a_path_git_reads(tmp_path: Path) -> None:
+    report = operated(tmp_path / "local", FLAG + SIGNAL + LOAD + SECURITY, "")
+    assert report.parent == ".scratch/f/spec.md"
+    assert git(tmp_path / "local", "show", f"HEAD:{report.parent}").startswith("# F")
+    assert json.loads(json.dumps(asdict(report)))["parent"] == ".scratch/f/spec.md"
+    files = {
+        ".scratch/f/spec.md": "# F\n\n## Solution\n\nX." + CONJECTURE,
+        TICKET: "# 01: T\n\nStatus: ready-for-agent\n\nBody.\n",
+    }
+    assert run(repository(tmp_path / "beside", files), TICKET).parent == ".scratch/f/spec.md"
+    child = issue(body="**Parent:** #12\n\n## What to build\n\nA slice.\n")
+    forge = run(repository(tmp_path / "forge"), "4", ParentGh(child, spec("X." + CONJECTURE)))
+    assert forge.parent == "#12"
+    assert run(repository(tmp_path / "orphan"), "4", gh_returning(issue())).parent is None
+
+
+def test_the_report_says_whether_the_project_is_deployed(tmp_path: Path) -> None:
+    for name, extra, deployed in (
+        ("live", events("irreplaceable-data, deployed"), True),
+        ("young", events("none"), False),
+        ("other", events("depended-on"), False),
+        ("unlined", ("", ""), True),
+    ):
+        report = adopted(tmp_path / name, "library", BODY, extra=extra)
+        assert report.deployed is deployed, name
+        assert json.loads(json.dumps(asdict(report)))["deployed"] is deployed, name
+    assert run(repository(tmp_path / "bare"), "4", gh_returning(issue())).deployed is False
 
 
 def test_the_critic_runs_only_for_a_project_that_is_depended_on(tmp_path: Path) -> None:
