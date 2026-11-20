@@ -1,6 +1,5 @@
 import json
 import re
-import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -1797,26 +1796,83 @@ def _commands(prompt: str) -> list[str]:
     return [line for line in prompt.splitlines() if PLUGIN_PY in line]
 
 
-def test_the_preflight_hands_the_shell_its_script_path_as_one_word() -> None:
+HOSTILE = [
+    "a b",
+    "$HOME",
+    "$(touch {marker})",
+    "`touch {marker}`",
+    'x"y',
+    "it's",
+    "a;b",
+    "*",
+    "a\\b",
+]
+
+
+def _words(line: str, cwd: Path) -> list[str]:
+    shell = shutil.which("bash")
+    assert shell, "bash reads a command line as the agent's shell does"
+    assert line.lstrip().startswith(PLUGIN_PY), line
+    standin = line.replace(PLUGIN_PY, "printf '%s\\0'", 1)
+    standin = standin.replace("<that file>", "THAT").replace("<ticket file>", "TICKET")
+    (cwd / "a file the shell could glob").touch()
+    run = subprocess.run(  # noqa: S603 # -- the line under test is the shell's input
+        [shell, "-c", standin], cwd=cwd, capture_output=True, text=True, check=True
+    )
+    return run.stdout.split("\0")[:-1]
+
+
+@pytest.mark.parametrize("hostile", HOSTILE)
+def test_a_shell_hands_the_preflight_each_value_as_one_word_unchanged(
+    hostile: str, tmp_path: Path
+) -> None:
+    marker = tmp_path / "expanded"
+    value = hostile.format(marker=marker)
     args = {
-        "ref": "docs/my ticket.md",
-        "preflight": f"{AWKWARD}feature_preflight.py",
-        "base": "main",
-        "branch": "feature/4-$x",
+        "ref": f"docs/{value}.md",
+        "preflight": f"/opt/{value}/scripts/feature_preflight.py",
+        "base": f"base-{value}",
+        "branch": f"feature/{value}",
     }
     [line] = _commands(_run(args, preflight=STOPPED)["prompts"]["preflight"])
-    assert "`" not in line, f"the shell reads a backtick as command substitution: {line}"
-    assert shlex.split(line) == [
-        *PLUGIN_PY.split(),
-        f"{AWKWARD}feature_preflight.py",
-        "docs/my ticket.md",
+    assert _words(line, tmp_path) == [
+        args["preflight"],
+        args["ref"],
         "--root",
         ".",
         "--base",
-        "main",
+        args["base"],
         "--branch",
-        "feature/4-$x",
+        args["branch"],
+    ], line
+    assert not marker.exists(), f"the shell ran a command out of {line}"
+
+
+@pytest.mark.parametrize("hostile", HOSTILE)
+def test_a_shell_hands_the_quote_check_its_script_path_as_one_word_unchanged(
+    hostile: str, tmp_path: Path
+) -> None:
+    marker = tmp_path / "expanded"
+    value = hostile.format(marker=marker)
+    named = {"ref": "4", "preflight": f"/opt/{value}/scripts/feature_preflight.py"}
+    again = {"review-again": REVIEW}
+    runs = [
+        _run(named, preflight=PREFLIGHT, spec=SPECIFIED, **DEPTH, critique=CRITIQUED),
+        _run({**named, "branch": "feature/4-expiry", "rejudge": REJUDGE}, **again),
     ]
+    checked = [f"/opt/{value}/scripts/quotes.py", "THAT", "--root", "."]
+    lines = [
+        (label, line)
+        for ran in runs
+        for label, prompt in ran["prompts"].items()
+        if label != "preflight"
+        for line in _commands(prompt)
+    ]
+    assert [label for label, _ in lines] == ["critique", "review", "review-again"]
+    for label, line in lines:
+        record = [] if label == "critique" else ["--record", "ticket=TICKET"]
+        assert _words(line, tmp_path) == [*checked, *record], f"{label}: {line}"
+    assert not marker.exists(), "the shell ran a command out of a quote-check line"
 
 
 def test_every_command_a_role_is_told_to_run_is_a_line_of_its_own_with_no_backtick() -> None:
@@ -1835,8 +1891,6 @@ def test_every_command_a_role_is_told_to_run_is_a_line_of_its_own_with_no_backti
                 assert line.lstrip().startswith(PLUGIN_PY), f"{label}: prose around it: {line}"
                 assert "`" not in line, f"{label}: a backtick in a command line: {line}"
     assert seen == 7, "preflight, critique and review in two runs, and the second review"
-    quoted = _commands(runs[0]["prompts"]["critique"])[0]
-    assert shlex.split(quoted)[len(PLUGIN_PY.split())] == f"{AWKWARD}quotes.py"
 
 
 def test_no_skill_runs_a_plugin_script_with_a_bare_python3() -> None:
