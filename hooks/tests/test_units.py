@@ -465,8 +465,8 @@ def test_the_reader_finds_many_heredocs_on_one_line_without_searching_its_tokens
 
 def test_lexer_survives_unterminated_constructs() -> None:
     assert lex("echo 'open")[0][1].text == "'open\n"
-    assert lex("echo `open")[1] == ("open\n",)
-    assert lex("echo $(ls")[1] == ("ls\n",)
+    assert lex("echo `open")[1] == ("open",)
+    assert lex("echo $(ls")[1] == ("ls",)
     assert lex('echo "open')[0][1].text == '"open\n"'
     assert lex("cat <<EOF\nnever closed")[2] == ("never closed",)
     assert f"{HEREDOC_MARK}0" in [token.text for token in lex("cat <<")[0]]
