@@ -56,38 +56,39 @@ def shell_pipeline(heading: str, body: bytes) -> str:
     return done.stdout.decode().strip()
 
 
-def test_the_digest_is_the_blob_of_the_heading_and_each_non_blank_line_under_it() -> None:
-    done = digest(HEADING, BODY.encode())
+def printed(body: str, *path: Path) -> str:
+    done = digest(HEADING, body.encode(), *path)
     assert done.returncode == 0, done.stderr
+    assert done.stderr == b""
+    return done.stdout.decode()
+
+
+def test_the_digest_is_the_blob_of_the_heading_and_each_non_blank_line_under_it() -> None:
     kept = f"{HEADING}\n- [ ] newest first\n- [ ] a re-pasted link is refused\n### Notes\nkept\n"
-    assert done.stdout.decode() == f"{git_blob(kept.encode())}\n"
+    assert printed(BODY) == f"{git_blob(kept.encode())}\n"
 
 
 @pytest.mark.parametrize("body", BODIES)
 def test_the_digest_is_what_the_shell_pipeline_printed_with_its_record_intact(body: str) -> None:
-    done = digest(HEADING, body.encode())
-    assert done.returncode == 0, done.stderr
-    assert done.stdout.decode().strip() == shell_pipeline(HEADING, body.encode())
-    assert done.stdout.decode().strip() != EMPTY_BLOB
+    assert printed(body).strip() == shell_pipeline(HEADING, body.encode())
+    assert printed(body).strip() != EMPTY_BLOB
 
 
 def test_a_carriage_return_changes_nothing() -> None:
-    assert digest(HEADING, BODY.replace("\n", "\r\n").encode()).stdout == (
-        digest(HEADING, BODY.encode()).stdout
-    )
+    assert printed(BODY.replace("\n", "\r\n")) == printed(BODY)
 
 
 def test_a_body_in_a_file_has_the_digest_of_the_same_body_on_stdin(tmp_path: Path) -> None:
     path = tmp_path / "ticket.md"
     path.write_bytes(BODY.encode())
-    assert digest(HEADING, b"", path).stdout == digest(HEADING, BODY.encode()).stdout
+    assert printed("", path) == printed(BODY)
 
 
 def test_a_changed_criterion_changes_the_digest_and_a_section_after_it_does_not() -> None:
-    written = digest(HEADING, BODY.encode()).stdout
-    assert digest(HEADING, BODY.replace("is refused", "is kept twice").encode()).stdout != written
-    assert digest(HEADING, BODY.replace("None", "#4").encode()).stdout == written
-    assert digest(HEADING, (BODY + "\n## Conjecture\n- One list.\n").encode()).stdout == written
+    written = printed(BODY)
+    assert printed(BODY.replace("is refused", "is kept twice")) != written
+    assert printed(BODY.replace("None", "#4")) == written
+    assert printed(BODY + "\n## Conjecture\n- One list.\n") == written
 
 
 def test_a_body_without_the_heading_prints_no_digest_and_says_so() -> None:
