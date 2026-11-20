@@ -352,6 +352,16 @@ def test_the_guard_reads_identical_nested_scripts_once(
     assert len(_reads(monkeypatch, shape(1000))) == len(_reads(monkeypatch, shape(1)))
 
 
+@pytest.mark.parametrize(
+    "command",
+    [": " + "$(\n" * 20, "cat <<E\n" + "$(\n" * 20 + "\nE", "echo " + "$(a " * 20],
+)
+def test_an_unclosed_substitution_is_read_once_at_every_depth(
+    monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    assert len(_reads(monkeypatch, command)) <= 22
+
+
 FORCE = "git push -f"
 
 
