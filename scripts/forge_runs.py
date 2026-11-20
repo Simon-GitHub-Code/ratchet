@@ -24,7 +24,7 @@ this repository that an event of the template started on a commit of the default
 on a tag named like the branch, or an old run started again, does not change the answer.
 Unreadable input is ``red``. ``forge_runs.py tier1`` answers the same of the ``ci.yml`` runs a
 push started. Where more runs match than one page holds, the newest page decides, and is ``red``
-when no run in it counts.
+when no run in it counts. Standard input that is not UTF-8 is unreadable to every command.
 
 ``forge_runs.py deep --answer FILE`` reads the ``deep.yml`` runs of every status and writes what
 the merge judge reads with ``merge_ready.py --deep FILE`` (ADR 0077): each run of this repository
@@ -37,9 +37,9 @@ run covers the tip and no run goes on a commit nearer the tip than the nearest o
 covers.
 
 ``forge_runs.py speaks --commit SHA --state green|red`` prints which merges of the default branch
-the deep run that checked out SHA speaks for: its commit, or the merge that brought it onto the
-first-parent line, and each one below it down to, and not including, the nearest whose deciding
-run is green.
+the deep run that checked out SHA, a full commit name, speaks for: its commit, or the merge that
+brought it onto the first-parent line, and each one below it down to, and not including, the
+nearest whose deciding run is green.
 
 Usage: ``forge_runs.py ci --pulls FILE --events FILE --number N --sha SHA --branch NAME --base
 NAME --repository OWNER/NAME [--report FILE]``, ``forge_runs.py deep|tier1 --tip REF
@@ -52,9 +52,8 @@ import argparse
 import json
 import re
 import sys
-from collections import defaultdict
-from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, replace
+from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -243,30 +242,18 @@ def on_the_tip(runs: str, *, root: Path, tip: str, repository: str, events: froz
     nearest: dict[int, list[object]] = {}
     for run in ran:
         ours = at(run, "head_repository", "full_name") == repository
-        counts = at(run, "status") == "completed" and at(run, "conclusion") not in UNCOUNTED
-        if not ours or not counts or at(run, "event") not in events:
-            continue
+        try:
+            counts = at(run, "status") == "completed" and at(run, "conclusion") not in UNCOUNTED
+            if not ours or not counts or at(run, "event") not in events:
+                continue
+        except TypeError:
+            return RED
         distance = _distance(root, at(run, "head_sha"), tip)
         if distance is not None:
             nearest.setdefault(distance, []).append(run)
     if not nearest:
         return NONE if whole else RED
     return GREEN if at(newest(nearest[min(nearest)]), "conclusion") == "success" else RED
-
-
-def chain(root: Path, tip: str, commits: Iterable[str] = ()) -> tuple[unproven.Landed, ...]:
-    listed = gatelib.git(root, "log", "--first-parent", "--format=%H %s", tip, "--") or ""
-    line = [unproven.Landed(*row.partition(" ")[::2]) for row in listed.splitlines()]
-    where, merged = unproven.places(line), defaultdict[int, set[str]](set)
-    for sha in {sha for sha in commits if COMMIT.match(sha)} - where.keys():
-        later = gatelib.git(root, "rev-list", "--ancestry-path", f"{sha}..{tip}", "--") or ""
-        landing = max((where[one] for one in later.split() if one in where), default=None)
-        if landing is not None:
-            merged[landing].add(sha)
-    return tuple(
-        replace(landed, merged=frozenset(merged.get(index, ())))
-        for index, landed in enumerate(line)
-    )
 
 
 def state_of(run: object) -> unproven.State | None:
@@ -291,7 +278,7 @@ def deep_runs(items: list[object], repository: str) -> tuple[unproven.DeepRun, .
         if when is None:
             return None
         url, number = at(item, "html_url"), at(item, "id")
-        if not isinstance(url, str) or not url:
+        if not isinstance(url, str) or not url or not url.isprintable():
             url = f"run {number if isinstance(number, int | str) else '?'}"
         found.append(unproven.DeepRun(sha, state, when, url))
     return tuple(found)
@@ -323,7 +310,7 @@ def answer_or_speak(options: argparse.Namespace, runs: str) -> int:
     found = None if page is None else deep_runs(page[0], options.repository)
     asked = [options.commit] if options.command == "speaks" else []
     seen = [run.commit for run in found or ()]
-    line = chain(Path(options.root), options.tip, [*seen, *asked])
+    line = gatelib.chain(Path(options.root), options.tip, [*seen, *asked])
     covered = found is not None and unproven.reading(line, found).decider is not None
     whole = page is not None and page[1]
     deep = unproven.Deep(found if whole or covered else None, STARTS)
@@ -338,6 +325,13 @@ def answer_or_speak(options: argparse.Namespace, runs: str) -> int:
 
 def read(path: str) -> str | None:
     return gatelib.read_text(Path(path))
+
+
+def decoded(data: bytes) -> str:
+    try:
+        return data.decode()
+    except UnicodeDecodeError:
+        return ""
 
 
 def main(argv: list[str] | None = None, runs: str | None = None) -> int:
@@ -365,7 +359,9 @@ def main(argv: list[str] | None = None, runs: str | None = None) -> int:
     tiers["speaks"].add_argument("--state", choices=(GREEN, RED), required=True)
     parser.set_defaults(answer=None)
     options = parser.parse_args(argv)
-    text = sys.stdin.read() if runs is None else runs
+    if options.command == "speaks" and not COMMIT.fullmatch(options.commit):
+        parser.error(f"argument --commit: {options.commit!a} is not a full commit name")
+    text = decoded(sys.stdin.buffer.read()) if runs is None else runs
     if options.command == "speaks" or options.answer is not None:
         return answer_or_speak(options, text)
     if options.command in ON_THE_DEFAULT_BRANCH:

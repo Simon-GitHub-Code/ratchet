@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Final, Literal, NamedTuple, cast
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple, TypeGuard, cast
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -20,6 +21,9 @@ FIELDS = ("commit", "state", "at", "name")
 SHORT = 12
 SHOWN = 10
 MOST = 1 << 20
+INSTANT = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-9]{2})"
+)
 UNKNOWN = (
     "tier 2 on the default branch is not known: its deep runs could not be read, so the next"
     " judge reads them again"
@@ -133,11 +137,12 @@ def held(line: Sequence[Landed], deep: Deep, *, gated: bool, bound: int | None) 
 
 
 def instant(value: object) -> datetime | None:
+    if not isinstance(value, str) or not INSTANT.fullmatch(value):
+        return None
     try:
-        when = datetime.fromisoformat(value) if isinstance(value, str) else None
+        return datetime.fromisoformat(value)
     except ValueError:
         return None
-    return when if when is not None and when.tzinfo is not None else None
 
 
 def written(deep: Deep) -> str:
@@ -146,8 +151,12 @@ def written(deep: Deep) -> str:
     return shown + "\n"
 
 
+def printable(value: object) -> TypeGuard[str]:
+    return isinstance(value, str) and value.isprintable()
+
+
 def parsed(item: object) -> DeepRun | None:
-    if not isinstance(item, dict) or not all(isinstance(item.get(key), str) for key in FIELDS):
+    if not isinstance(item, dict) or not all(printable(item.get(key)) for key in FIELDS):
         return None
     when = instant(item["at"])
     if item["state"] not in STATES or when is None:
@@ -164,7 +173,7 @@ def answer(data: bytes | None) -> Deep:
     shape = found if isinstance(found, dict) else {}
     start, listed = shape.get("start"), shape.get("runs")
     runs = [parsed(item) for item in listed] if isinstance(listed, list) else [None]
-    said = start if isinstance(start, str) else ""
+    said = start if printable(start) else ""
     kept = tuple(run for run in runs if run is not None)
     return Deep(kept if len(kept) == len(runs) and said == start else None, said)
 

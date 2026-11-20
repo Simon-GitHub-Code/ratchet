@@ -21,7 +21,6 @@ import application_types
 import documents
 import feature_preflight as preflight
 import flags as registry
-import forge_runs
 import gatelib
 import lowered
 import markdown_text
@@ -1151,7 +1150,7 @@ def deep_reasons(change: Change, deep: unproven.Deep) -> list[Reason]:
         for row in project_bite.gate_rows(change.before(BINDING) or "")
     )
     bound, why = declared_bound(change.before(THRESHOLDS))
-    line = forge_runs.chain(change.root, change.base, [run.commit for run in deep.runs or ()])
+    line = gatelib.chain(change.root, change.base, [run.commit for run in deep.runs or ()])
     hold = unproven.held(line, deep, gated=gated, bound=bound)
     if hold is None:
         return []
