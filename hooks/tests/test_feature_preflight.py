@@ -866,8 +866,61 @@ def test_a_parent_outside_the_repository_is_refused_and_not_read(tmp_path: Path,
     assert report.failures[0].detail == (
         f"{TICKET}: its parent {named} is outside the repository, so the preflight does not read it"
     )
-    assert f"its parent {named} was not found" in report.failures[1].detail
-    assert f"its parent {named} could not be read" in report.failures[2].detail
+    assert f"its parent {named} is outside the repository" in report.failures[1].detail
+    assert f"its parent {named} is outside the repository" in report.failures[2].detail
+    assert "not found" not in report.failures[1].detail
+    assert "could not be read" not in report.failures[2].detail
+
+
+UNRESOLVABLE = {
+    "a NUL byte": "a\x00b.md",
+    "a path longer than the system allows": "a/" * 2100 + "x.md",
+    "a name longer than 255 bytes": "x" * 300 + ".md",
+    "a symlink loop": "loop.md",
+    "a path through a file": "docs/process/binding.md/x.md",
+    "a lone surrogate": "\ud800.md",
+}
+
+
+@pytest.mark.parametrize("parent", UNRESOLVABLE.values(), ids=UNRESOLVABLE.keys())
+def test_a_parent_the_check_cannot_resolve_is_refused_as_outside(
+    tmp_path: Path, parent: str
+) -> None:
+    binding = f"# Binding\n\n{LIVE}\n## Gates\n\n- Application types: service\n"
+    root = repository(tmp_path, {"docs/process/binding.md": binding})
+    install_hooks(root)
+    (root / "loop.md").symlink_to("loop.md")
+    body = f"Parent: {parent}\n\n## What to build\n\nA slice.\n"
+    gh = gh_returning(issue(body=body, labels=("ready-for-agent",)))
+    report = run(root, "4", gh)
+    assert report.failures[0].check == "parent"
+    assert report.failures[0].detail == (
+        f"4: its parent {parent} is outside the repository, so the preflight does not read it"
+    )
+    ticket = preflight.fetch("4", root, gh)
+    assert ticket is not None
+    assert ticket.parent == parent
+    assert preflight.operability_failure(ticket, root, gh) is not None
+    assert route.unstated(ticket, root, gh) == "states no conjecture"
+
+
+def test_a_parent_that_leaves_the_repository_and_comes_back_is_named_from_its_root(
+    tmp_path: Path,
+) -> None:
+    whole = FLAG + SIGNAL + LOAD + SECURITY
+    binding = f"# Binding\n\n{LIVE}\n## Gates\n\n- Application types: service\n"
+    ticket = "# 01: T\n\nStatus: ready-for-agent\n\nParent: ../../../../repo/spec.md\n\nBody.\n"
+    files = {
+        "docs/process/binding.md": binding,
+        "spec.md": f"# S{CONJECTURE}\n{OPERATED}{whole}",
+        TICKET: ticket,
+    }
+    root = repository(tmp_path / "repo", files)
+    install_hooks(root)
+    report = run(root, TICKET)
+    assert report.ok, report.failures
+    assert report.parent == "spec.md"
+    assert git(root, "show", f"HEAD:{report.parent}").startswith("# S")
 
 
 def test_the_tickets_own_line_wins_over_its_parents(tmp_path: Path) -> None:
