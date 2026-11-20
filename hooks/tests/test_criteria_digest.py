@@ -59,8 +59,8 @@ def shell_pipeline(heading: str, body: bytes) -> str:
 def test_the_digest_is_the_blob_of_the_heading_and_each_non_blank_line_under_it() -> None:
     done = digest(HEADING, BODY.encode())
     assert done.returncode == 0, done.stderr
-    expected = f"{HEADING}\n- [ ] newest first\n- [ ] a re-pasted link is refused\n### Notes\nkept\n"
-    assert done.stdout.decode() == f"{git_blob(expected.encode())}\n"
+    kept = f"{HEADING}\n- [ ] newest first\n- [ ] a re-pasted link is refused\n### Notes\nkept\n"
+    assert done.stdout.decode() == f"{git_blob(kept.encode())}\n"
 
 
 @pytest.mark.parametrize("body", BODIES)

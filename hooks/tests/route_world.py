@@ -194,6 +194,7 @@ def criteria_digest(body: str, heading: str) -> str:
         ran = subprocess.run(  # noqa: S603 # -- the conjecture skill's own command
             ["sh", "-c", command.replace("<heading>", heading)],  # noqa: S607 # -- as the skill runs it
             cwd=scratch,
+            env={**os.environ, "CLAUDE_PLUGIN_ROOT": str(plugin_pin.PLUGIN)},
             capture_output=True,
             text=True,
             check=True,

@@ -1,3 +1,4 @@
+import os
 import re
 import shutil
 import subprocess
@@ -506,7 +507,11 @@ def criteria_digest(command: str, body: str, tmp_path: Path) -> str:
     bash = shutil.which("bash")
     assert bash
     done = subprocess.run(  # noqa: S603 # -- the page's own command, run on a file the test wrote
-        [bash, "-c", run], capture_output=True, text=True, check=True
+        [bash, "-c", run],
+        env={**os.environ, "CLAUDE_PLUGIN_ROOT": str(SKILLS.parent)},
+        capture_output=True,
+        text=True,
+        check=True,
     )
     return done.stdout.strip()
 
@@ -519,8 +524,8 @@ def test_a_conjecture_is_drafted_again_when_its_criteria_change_and_only_then(
     found = re.search(r"\*\*The body is a file\*\*.*`([^`]+)`$", reference, re.MULTILINE)
     assert found, "the page gives the command for a body in a file"
     command = found.group(1)
-    rest = command.split("< <file> | ", 1)[1]
-    forge = f"`gh issue view <n> --json body --jq .body | tr -d '\\r' | {rest}`"
+    assert command.endswith(" '<heading>' <file>")
+    forge = f"`gh issue view <n> --json body --jq .body | {command.removesuffix(' <file>')}`"
     assert forge in reference
     written = criteria_digest(command, CRITERIA_BODY, tmp_path)
     assert re.fullmatch(r"[0-9a-f]{40}", written)
@@ -538,7 +543,7 @@ def test_a_conjecture_is_drafted_again_when_its_criteria_change_and_only_then(
     changed = CRITERIA_BODY.replace("is refused", "is kept twice")
     assert criteria_digest(command, changed, tmp_path) != written
     step_1 = conjecture_step(1)
-    assert "**The command prints another digest than the line names:**" in step_1
+    assert "**The command prints another digest than the line names, or none:**" in step_1
     assert "Redraft it: run steps 2 to 5" in step_1
 
 
