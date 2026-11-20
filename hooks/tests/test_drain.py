@@ -1328,6 +1328,88 @@ def test_split_files_the_parts_with_the_label_and_closes_the_parent_as_split(
     assert (root / ALPHA).read_text(encoding="utf-8") == WHOLE[ALPHA], "the parent is never edited"
 
 
+ISSUES = ".scratch/f/issues"
+FILED = ["01-a.md", "02-b.md", "03-c.md", "04-save.md", "05-list.md"]
+
+
+def landed_parts(root: Path, children: list[str]) -> None:
+    assert git(root, "status", "--porcelain") == "", "the split leaves the checkout clean"
+    assert sorted(path.name for path in (root / ISSUES).iterdir()) == FILED, "no part twice"
+    for child in children:
+        commits = git(root, "rev-list", "main", "--", child).splitlines()
+        assert len(commits) == 1, f"{child} is on the default branch, committed once"
+    assert git(root, "branch", "--list", "records/*") == "", "no records branch is left"
+    drafted = drain.plan(offline(root))
+    assert drafted.blocked == (), "the checkout is fit"
+    assert children[0] in drafted.start, "the plan starts the first part"
+
+
+def test_a_local_split_lands_its_parts_so_the_plan_starts_them(tmp_path: Path, capsys: Out) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    assert run(root, "split", ALPHA, "--plan", str(plan_file(tmp_path, HALVES))) == 0
+    children = json.loads(capsys.readouterr().out.splitlines()[-1])["children"]
+    landed_parts(root, children)
+
+
+class Killed(BaseException): ...
+
+
+def killed_after(real: object, when: object = None) -> object:
+    def run(*args: object, **kwargs: object) -> object:
+        done = real(*args, **kwargs)  # type: ignore[operator]
+        if when is None or args[1] == when:
+            raise Killed
+        return done
+
+    return run
+
+
+KILLS = {
+    "the parts written": (drain.split, "file_locally", None),
+    "the note written": (drain, "close", None),
+    "the parts committed on the records branch": (drain.merge, "porcelain", "commit"),
+}
+
+
+@pytest.mark.parametrize("kill", KILLS.values(), ids=KILLS.keys())
+def test_a_local_split_killed_half_way_and_run_again_files_and_lands_each_part_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kill: tuple[object, str, str]
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    plan = str(plan_file(tmp_path, HALVES))
+    module, name, when = kill
+    with monkeypatch.context() as cut:
+        cut.setattr(module, name, killed_after(getattr(module, name), when))
+        with pytest.raises(Killed):
+            run(root, "split", ALPHA, "--plan", plan)
+    assert run(root, "split", ALPHA, "--plan", plan) == 0
+    children = note(root, BRANCH_A)["children"]
+    assert isinstance(children, list)
+    landed_parts(root, children)
+
+
+def test_a_local_split_with_a_forge_names_the_pull_request_and_commits_nothing(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    git(root, "remote", "add", "origin", str(tmp_path / "forge.git"))
+    capsys.readouterr()
+    assert run(root, "split", ALPHA, "--plan", str(plan_file(tmp_path, HALVES))) == 0
+    printed = capsys.readouterr().out.splitlines()
+    children = json.loads(printed[-1])["children"]
+    assert printed[-2] == (
+        "next: this repository has a forge (`origin`): commit "
+        + ", ".join(children)
+        + " on a branch of their own and open the pull request; its merge job merges records"
+        " alone, and the plan lists the parts once the default branch holds them"
+    )
+    assert git(root, "rev-list", "main", "--", *children) == "", "nothing is committed"
+    assert git(root, "branch", "--list", "records/*") == "", "no records branch is made"
+
+
 @pytest.mark.parametrize(
     "parts",
     [
