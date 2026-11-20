@@ -7,12 +7,16 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import feature_preflight as preflight
 import gatelib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import splits
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 INHERITED = ("## Parent", "## Conjecture", "## Operability")
 SLUG = re.compile(r"[^a-z0-9]+")
@@ -149,13 +153,14 @@ def untouched(
     return names
 
 
-def file_locally(
+def file_locally(  # noqa: PLR0913 -- the parts, where they were filed, and who records them
     root: Path,
     parent: preflight.Ticket,
     parts: list[Part],
     *,
     label: str,
     filed: list[str] | None = None,
+    noting: Callable[[list[str]], None] = lambda _paths: None,
 ) -> list[str]:
     folder = (root / parent.ref).parent
     filed = filed or []
@@ -172,6 +177,7 @@ def file_locally(
             (folder / name).unlink()
         filed = []
     names: list[str] = []
+    texts: list[str] = []
     for index, part in enumerate(parts):
         body = body_of(parent, parts, names, index=index, label=label)
         recorded = Path(filed[index]).name if len(filed) == len(parts) else None
@@ -181,11 +187,16 @@ def file_locally(
             name = found
         else:
             slug = SLUG.sub("-", part.title.lower()).strip("-")[:40].strip("-") or "part"
-            name = f"{next_number(folder):02d}-{slug}.md"
+            number = max([next_number(folder), *(int(number_of(n) or 0) + 1 for n in names)])
+            name = f"{number:02d}-{slug}.md"
+        names.append(name)
+        texts.append(body)
+    paths = [(folder / name).relative_to(root).as_posix() for name in names]
+    noting(paths)
+    for name, body in zip(names, texts, strict=True):
         if not (folder / name).is_file():
             (folder / name).write_text(body, encoding="utf-8")
-        names.append(name)
-    return [(folder / name).relative_to(root).as_posix() for name in names]
+    return paths
 
 
 def file_on_tracker(
@@ -239,14 +250,20 @@ def bodies(
     }
 
 
-def apply(
-    root: Path, ref: str, plan: object, *, gh: preflight.Runner, filed: list[str] | None = None
+def apply(  # noqa: PLR0913 -- the plan, where it was filed, and who records it
+    root: Path,
+    ref: str,
+    plan: object,
+    *,
+    gh: preflight.Runner,
+    filed: list[str] | None = None,
+    noting: Callable[[list[str]], None] = lambda _paths: None,
 ) -> tuple[list[str], list[str]]:
     parent, parts, label, refused = judge(root, ref, plan, gh=gh)
     if refused or parent is None:
         return [], refused
     if ref.endswith(".md"):
-        return file_locally(root, parent, parts, label=label, filed=filed), []
+        return file_locally(root, parent, parts, label=label, filed=filed, noting=noting), []
     return file_on_tracker(parent, parts, label=label, root=root), []
 
 
