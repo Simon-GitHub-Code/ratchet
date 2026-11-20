@@ -1,10 +1,12 @@
 import shutil
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 import conformance
+import gatelib
 import owed
 import upgrade
 from tests import adopted, repos
@@ -167,3 +169,141 @@ def test_an_entry_an_earlier_upgrade_owed_that_the_project_does_not_find_is_drop
     again = upgrade.plan(root, PLUGIN_ROOT)
     assert isinstance(again, upgrade.Plan), again
     assert again.changes == {}
+
+
+FORMAT = "--format=%(refname) %(objectname) %(symref)"
+
+
+def git_run(root: Path, *args: str, feed: str | None = None) -> subprocess.CompletedProcess[str]:
+    git = shutil.which("git")
+    assert git
+    return subprocess.run(  # noqa: S603 # -- a fixed argv against a test repository
+        [git, "-C", str(root), *args], capture_output=True, text=True, input=feed, check=False
+    )
+
+
+def project(tmp_path: Path, backend: str) -> Path:
+    root = conforming(tmp_path)
+    bound(root)
+    repos.commit(root, "chore(method): the project as it stands")
+    repos.branch(root, "upgrade")
+    if backend == "reftable":
+        moved = git_run(root, "refs", "migrate", "--ref-format=reftable")
+        if moved.returncode != 0:
+            pytest.skip(f"this git cannot make a reftable repository: {moved.stderr!r}")
+    return root
+
+
+def hold(root: Path, backend: str, refs: dict[str, str]) -> None:
+    if backend == "files":
+        with (root / ".git/packed-refs").open("a", encoding="utf-8") as packed:
+            packed.writelines(f"{oid} {ref}\n" for ref, oid in refs.items())
+        return
+    feed = "".join(f"create {ref} {oid}\n" for ref, oid in refs.items())
+    assert git_run(root, "update-ref", "--stdin", feed=feed).returncode == 0
+
+
+def head_of(root: Path) -> str:
+    return repos.git(root, "rev-parse", "HEAD")
+
+
+def a_long_name(root: Path, backend: str) -> None:
+    hold(root, backend, {"refs/heads/" + "y" * 300: head_of(root)})
+
+
+def many_refs(root: Path, backend: str, count: int = 2000) -> None:
+    head = head_of(root)
+    hold(root, backend, {f"refs/remotes/origin/r{n:05d}": head for n in range(count)})
+
+
+def names_that_differ_in_case(root: Path, backend: str) -> None:
+    head = head_of(root)
+    hold(root, backend, {"refs/remotes/origin/Topic": head, "refs/remotes/origin/topic": head})
+
+
+def hostile(root: Path, backend: str) -> None:
+    head = head_of(root)
+    repos.git(root, "tag", "-a", "-m", "t", "annotated", head)
+    repos.git(root, "update-ref", "refs/tags/tree", repos.git(root, "rev-parse", "HEAD^{tree}"))
+    repos.git(root, "update-ref", "refs/tags/blob", repos.git(root, "rev-parse", f"HEAD:{BINDING}"))
+    repos.git(root, "update-ref", "refs/remotes/x/main", head)
+    repos.git(root, "symbolic-ref", "refs/remotes/x/HEAD", "refs/remotes/x/main")
+    repos.git(root, "symbolic-ref", "refs/remotes/y/HEAD", "refs/remotes/y/gone")
+    if backend == "files":
+        (root / ".git/refs/heads/broken").write_text("not a hash\n", encoding="utf-8")
+
+
+REF_SETS: dict[str, Callable[[Path, str], None]] = {
+    "a 300-byte name": a_long_name,
+    "2,000 refs": many_refs,
+    "names that differ only in case": names_that_differ_in_case,
+    "symbolic, dangling, tag, tree, blob and broken refs": hostile,
+}
+BACKENDS = ["files", "reftable"]
+
+
+def refs(root: Path) -> str:
+    return git_run(root, "for-each-ref", FORMAT).stdout
+
+
+def held(root: Path) -> dict[str, bytes]:
+    store = root / ".git"
+    return {str(path.relative_to(store)): path.read_bytes() for path in store.rglob("*") if path.is_file()}
+
+
+def base_copy(root: Path, target: Path) -> None:
+    gatelib.export(root, "HEAD", target)
+
+
+COPIES: dict[str, Callable[[Path, Path], object]] = {
+    "trial": conformance.copied,
+    "base": base_copy,
+}
+
+
+@pytest.mark.parametrize("make", REF_SETS.values(), ids=REF_SETS.keys())
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_the_plans_copy_holds_exactly_the_projects_refs_and_leaves_its_store_alone(
+    tmp_path: Path, backend: str, make: Callable[[Path, str], None]
+) -> None:
+    root = project(tmp_path, backend)
+    make(root, backend)
+    before = held(root)
+    for name, copy in COPIES.items():
+        target = tmp_path / name / "tree"
+        copy(root, target)
+        assert refs(target) == refs(root), name
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    assert held(root) == before
+
+
+def files_in_copies(tmp_path: Path, backend: str, count: int) -> dict[str, int]:
+    root = project(tmp_path / str(count), backend)
+    many_refs(root, backend, count)
+    counted = {}
+    for name, copy in COPIES.items():
+        target = tmp_path / str(count) / name / "tree"
+        copy(root, target)
+        counted[name] = sum(1 for path in (target / ".git").rglob("*") if path.is_file())
+    return counted
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_the_files_a_copy_writes_do_not_grow_with_the_projects_refs(
+    tmp_path: Path, backend: str
+) -> None:
+    few = files_in_copies(tmp_path, backend, 10)
+    many = files_in_copies(tmp_path, backend, 2000)
+    assert many == few
+
+
+@pytest.mark.parametrize("ref", ["HEAD~1", "HEAD^{tree}"])
+def test_export_takes_any_commit_or_tree_it_took_before(tmp_path: Path, ref: str) -> None:
+    root = project(tmp_path, "files")
+    repos.write(root, "src/a.txt", "changed\n")
+    repos.commit(root, "feat(core): a later commit")
+    target = tmp_path / "base" / "tree"
+    gatelib.export(root, ref, target)
+    assert (target / "src/a.txt").read_text(encoding="utf-8") == "a\n"
+    commit = ["rev-parse", "--verify", "-q", f"{ref}^{{commit}}"]
+    assert git_run(target, *commit[:-1], "HEAD^{commit}").stdout == git_run(root, *commit).stdout
