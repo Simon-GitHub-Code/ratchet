@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -71,6 +72,7 @@ class Verdict:
     problems: list[str]
     owed: int
     red: tuple[Record, ...] = ()
+    found: tuple[Record, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -351,20 +353,23 @@ def judge(root: Path, output: str, *, judged: frozenset[str], binding: str | Non
         for (_, path, text), count in sorted(left.items())
         if path in judged or not (root / path).is_file()
     ]
-    return Verdict(problems, sum(hits), red)
+    return Verdict(problems, sum(hits), red, tuple(found))
 
 
-def record(root: Path, red: Sequence[Record], *, since: str, base: str | None) -> int:
-    added = [owed.Entry(r.path, RULE, r.text.strip(), since) for r in red if r.text.strip()]
+def record(root: Path, verdict: Verdict, *, since: str, base: str | None) -> int:
+    added = [
+        owed.Entry(r.path, RULE, r.text.strip(), since) for r in verdict.red if r.text.strip()
+    ]
     path = root / owed.LEDGER
     text = gatelib.read_text(path)
     held = owed.parse(gatelib.show(root, base, str(owed.LEDGER)) if base else None).entries
     renamed = gatelib.renamed(root, base) if base else {}
-    mine = [
-        e
-        for e in owed.brought(held, owed.parse(text).entries, renamed).elements()
-        if e.rule == RULE
-    ]
+    found = Counter(key(r) for r in verdict.found)
+    mine = []
+    for entry in sorted(owed.brought(held, owed.parse(text).entries, renamed).elements()):
+        if entry.rule == RULE and found[entry.key] > 0:
+            found[entry.key] -= 1
+            mine.append(entry)
     redated = [owed.Entry(e.path, e.rule, e.problem, since) for e in mine]
     made = owed.recorded([*redated, *added], mine)(text)
     if made != (text or ""):
@@ -407,7 +412,7 @@ def main(argv: list[str]) -> int:
         pin = plugin_pin.pinned(gatelib.read_text(root / gatelib.BINDING))
         if pin is None:
             return gatelib.report(RULE, [RECORD_UNPINNED], base)
-        added = record(root, verdict.red, since=pin.version, base=base)
+        added = record(root, verdict, since=pin.version, base=owed.merged(root, options.base))
         print(f"{RULE}: recorded {added} owed since {pin.version} in {owed.LEDGER}")
         verdict = judge(root, output, judged=paths, binding=binding)
     if verdict.owed:

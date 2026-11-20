@@ -284,7 +284,7 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
 
 
 def owing(root: Path, sandbox: Path, left: list[Finding], *, plugin: Path) -> list[Finding]:
-    base = gatelib.base_commit(root)
+    base = owed.merged(root)
     before = gatelib.show(root, base, str(gatelib.BINDING)) if base else None
     after = gatelib.read_text(sandbox / gatelib.BINDING)
     pin = owed.moved(before, after, floor=plugin_pin.version_of(plugin))
@@ -302,11 +302,22 @@ def owing(root: Path, sandbox: Path, left: list[Finding], *, plugin: Path) -> li
         if allowed[key] > 0 and not owed.never(key):
             allowed[key] -= 1
             added.append(owed.Entry(key[1], key[0], key[2], pin.version))
-    if not added and not mine:
+    dropped = sorted((Counter(e.key for e in mine) - Counter(e.key for e in added)).elements())
+    does = []
+    if added:
+        count = len(added)
+        things = "thing" if count == 1 else "things"
+        does.append(f"write down {count} {things} owed since {pin.version}")
+    if dropped:
+        count = len(dropped)
+        does.append(
+            f"drop {count} {'entry' if count == 1 else 'entries'} this change brought, which one"
+            f" upgrade from the merge base {str(base)[:12]} would not write: "
+            + "; ".join(f"'{problem}' for {path} ({rule})" for rule, path, problem in dropped)
+        )
+    if not does:
         return []
-    count = len(added)
-    does = f"write down {count} {'thing' if count == 1 else 'things'} owed since {pin.version}"
-    return [Finding(str(owed.LEDGER), "", Auto(does, owed.recorded(added, mine)))]
+    return [Finding(str(owed.LEDGER), "", Auto("; ".join(does), owed.recorded(added, mine)))]
 
 
 def red_at_base(root: Path, base: str | None, plugin: Path) -> Counter[owed.Key]:

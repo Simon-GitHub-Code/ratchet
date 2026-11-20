@@ -172,11 +172,32 @@ def recorded(added: Sequence[Entry], gone: Sequence[Entry] = ()) -> gatelib.Want
     return record
 
 
+def merged(root: Path, branch: str | None = None) -> str | None:
+    for name in [branch] if branch else gatelib.default_branches(root):
+        if (found := gatelib.git(root, "merge-base", "HEAD", name)) is not None:
+            return found
+    return gatelib.git(root, "rev-parse", "--verify", "-q", "HEAD")
+
+
 def brought(
     before: Sequence[Entry], after: Sequence[Entry], renamed: Mapping[str, str]
 ) -> Counter[Entry]:
     new = Counter(after) - Counter(before)
-    return new - followed(new, Counter(before) - Counter(after), renamed)
+    left = Counter(before) - Counter(after)
+    for entry in sorted(new.elements()):
+        held = next(
+            (
+                old
+                for old in sorted(left.elements())
+                if (old.rule, old.problem) == (entry.rule, entry.problem)
+                and entry.path in (old.path, renamed.get(old.path))
+            ),
+            None,
+        )
+        if held is not None:
+            left[held] -= 1
+            new[entry] -= 1
+    return +new
 
 
 def moved(before: str | None, after: str | None, *, floor: str | None) -> plugin_pin.Pin | None:
