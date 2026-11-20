@@ -137,6 +137,9 @@ class ParentGh:
         return self.parent if args[2] == "12" else self.ticket
 
 
+SPEC_URL = "https://example.com/o/r/blob/main/docs/spec.md"
+
+
 def spec(body: str) -> str:
     return json.dumps(
         {"number": 12, "title": "The spec", "body": body, "labels": [], "state": "OPEN"}
@@ -152,10 +155,25 @@ def spec(body: str) -> str:
         ("Parent: ../../g/./spec.md", ".scratch/g/spec.md"),
         ("Parent: 02", "02"),
         ("Parent: #2", "#2"),
+        (f"Parent: {SPEC_URL}", SPEC_URL),
     ],
 )
 def test_a_parent_line_reads_a_path_before_a_number(line: str, parent: str) -> None:
     assert preflight.local_ticket(TICKET, f"# T\n\n{line}\n").parent == parent
+
+
+def test_a_forge_tickets_parent_is_kept_as_written_unless_it_is_a_path(tmp_path: Path) -> None:
+    for index, (line, parent) in enumerate(
+        (
+            (SPEC_URL, SPEC_URL),
+            ("#12", "#12"),
+            ("12", "12"),
+            ("docs/specs/./notes.md", "docs/specs/notes.md"),
+        )
+    ):
+        child = issue(body=f"**Parent:** {line}\n\n## What to build\n\nA slice.\n" + CONJECTURE)
+        report = run(repository(tmp_path / str(index)), "4", gh_returning(child))
+        assert report.parent == parent, line
 
 
 def test_a_ticket_inherits_the_conjecture_of_its_parent_spec(tmp_path: Path) -> None:
@@ -622,6 +640,8 @@ def test_a_ticket_inherits_the_operability_of_its_parent_spec(tmp_path: Path) ->
         report = adopted(tmp_path / name, "service", "", gh=ParentGh(child, parent))
         assert "operability" in checks(report), name
         assert "4: `## Operability` lacks `Flag:`" in report.failures[-1].detail
+    gone = adopted(tmp_path / "unread", "service", "", gh=ParentGh(child, None))
+    assert "; its parent #12 could not be read; write each" in gone.failures[-1].detail
 
 
 def test_a_repository_that_is_not_adopted_is_not_asked_for_hooks(tmp_path: Path) -> None:
@@ -677,7 +697,41 @@ LACKS_FLAG = (
 
 
 @pytest.mark.parametrize(
-    "bare", ["none", "`none`", "**none**", "- none", "_none_", "`none`.", "**none**:", "none -"]
+    "bare",
+    [
+        "none",
+        "NONE",
+        "`none`",
+        "**none**",
+        "- none",
+        "_none_",
+        "`none`.",
+        "**none**:",
+        "none -",
+        "none —",
+        "none –",
+        "none!",
+        "none?",
+        "none…",
+        "(none)",
+        "[none]",
+        '"none"',
+        "'none'",
+        "> none",
+        "1. none",
+        "~~none~~",
+        "none<br>",
+        "none <br />",
+        "none&nbsp;",
+        "​none",
+        "no​ne",
+        "none﻿",
+        "*",
+        "none: none",
+        "none: n/a",
+        "none: -",
+        "none — (none)",
+    ],
 )
 def test_a_none_with_no_reason_is_refused_in_any_markup(tmp_path: Path, bare: str) -> None:
     report = adopted(tmp_path, "cli", BODY + f"\n## Operability\n\n- Flag: {bare}\n")
@@ -692,10 +746,41 @@ def test_a_none_with_no_reason_is_refused_in_any_markup(tmp_path: Path, bare: st
         "**none**: the command only reads",
         "- none: the command only reads",
         "none, the command only reads",
+        "none — the command only reads",
+        "none - the command only reads",
+        "none; the command only reads",
+        "none (the command only reads)",
+        "none because the command only reads",
+        "`none` — the command only reads",
+        "none: tbd",
+        "nothing a user meets changes",
     ],
 )
 def test_a_none_with_a_reason_is_accepted_in_any_markup(tmp_path: Path, given: str) -> None:
     assert adopted(tmp_path, "cli", BODY + f"\n## Operability\n\n- Flag: {given}\n").ok
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "- Flag: `notes`, off until the owner switches it on",
+        "- **Flag:** `notes`, off until the owner switches it on",
+        "- **Flag**: `notes`, off until the owner switches it on",
+        "* flag: `notes`, off until the owner switches it on",
+        "Flag: `notes`, off until the owner switches it on",
+    ],
+)
+def test_a_line_written_as_the_pages_show_it_is_read(tmp_path: Path, line: str) -> None:
+    assert adopted(tmp_path, "cli", BODY + f"\n## Operability\n\n{line}\n").ok
+
+
+@pytest.mark.parametrize(
+    "prose",
+    ["Flagged rows are red.", "**Flag** rows are red.", "- Flags `notes` stay off", "- Flags: one"],
+)
+def test_a_sentence_that_begins_with_the_name_is_not_the_line(tmp_path: Path, prose: str) -> None:
+    report = adopted(tmp_path, "cli", BODY + f"\n## Operability\n\n{prose}\n")
+    assert [failure.detail for failure in report.failures] == [LACKS_FLAG]
 
 
 FLAG = "- Flag: `notes`, off until the owner switches it on\n"
@@ -727,6 +812,64 @@ def test_a_line_the_ticket_lacks_is_read_from_its_parent(tmp_path: Path) -> None
             " who may call); write each, or `none` and why"
         )
     ]
+
+
+def test_a_ticket_that_lacks_the_flag_line_takes_its_specs(tmp_path: Path) -> None:
+    rest = SIGNAL + LOAD + SECURITY
+    assert operated(tmp_path / "said", rest, FLAG).ok
+    for name, inherited in (("bare", "- Flag: none\n"), ("silent", "")):
+        report = operated(tmp_path / name, rest, inherited)
+        assert [failure.detail for failure in report.failures] == [
+            (
+                f"{TICKET}: `## Operability` lacks `Flag:` (the flag the behaviour ships behind);"
+                " write each, or `none` and why"
+            )
+        ], name
+
+
+def test_a_prose_line_is_not_the_line_its_spec_does_not_state(tmp_path: Path) -> None:
+    report = operated(tmp_path, "Flagged rows are red.\n", SIGNAL + LOAD + SECURITY)
+    assert [failure.detail for failure in report.failures] == [
+        (
+            f"{TICKET}: `## Operability` lacks `Flag:` (the flag the behaviour ships behind);"
+            " write each, or `none` and why"
+        )
+    ]
+
+
+def test_a_parent_that_cannot_be_read_is_named(tmp_path: Path) -> None:
+    binding = f"# Binding\n\n{LIVE}\n## Gates\n\n- Application types: service\n"
+    ticket = f"# 01: T\n\nStatus: ready-for-agent\n\nParent: ../nope.md\n{CONJECTURE}\n{OPERATED}"
+    files = {"docs/process/binding.md": binding, TICKET: ticket + FLAG + SIGNAL}
+    root = repository(tmp_path, files)
+    install_hooks(root)
+    assert [failure.detail for failure in run(root, TICKET).failures] == [
+        (
+            f"{TICKET}: `## Operability` lacks `Load:` (the route or input the load gates gain),"
+            " `Security:` (the surface it adds: routes, inputs, who may call); its parent"
+            " .scratch/f/nope.md could not be read; write each, or `none` and why"
+        )
+    ]
+
+
+@pytest.mark.parametrize("line", ["Parent: ../../../../outside.md", "Parent: {absolute}"])
+def test_a_parent_outside_the_repository_is_refused_and_not_read(
+    tmp_path: Path, line: str
+) -> None:
+    outside = tmp_path / "outside.md"
+    outside.write_text(f"# O{CONJECTURE}\n{OPERATED}{FLAG}{SIGNAL}{LOAD}{SECURITY}")
+    binding = f"# Binding\n\n{LIVE}\n## Gates\n\n- Application types: service\n"
+    ticket = f"# 01: T\n\nStatus: ready-for-agent\n\n{line.format(absolute=outside)}\n\nBody.\n"
+    root = repository(tmp_path / "repo", {"docs/process/binding.md": binding, TICKET: ticket})
+    install_hooks(root)
+    report = run(root, TICKET)
+    named = "../outside.md" if ".." in line else str(outside)
+    assert checks(report) == ["parent", "conjecture", "operability"]
+    assert report.failures[0].detail == (
+        f"{TICKET}: its parent {named} is outside the repository, so the preflight does not read it"
+    )
+    assert f"its parent {named} was not found" in report.failures[1].detail
+    assert f"its parent {named} could not be read" in report.failures[2].detail
 
 
 def test_the_tickets_own_line_wins_over_its_parents(tmp_path: Path) -> None:
