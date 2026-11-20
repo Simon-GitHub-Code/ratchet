@@ -474,7 +474,8 @@ def operability_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
     if parent_ref is not None and any(name not in lines for name, _says in asked):
         parent = read_parent(parent_ref, root, gh)
         if parent is None:
-            unreadable.append(f"its parent {parent_ref} {unread(parent_ref, root, 'could not be read')}")
+            why = unread(parent_ref, root, "could not be read")
+            unreadable.append(f"its parent {parent_ref} {why}")
         lines = operability_lines(ticket, parent)
     for name, says in asked:
         cause = unfilled(lines.get(name, ""), says)
