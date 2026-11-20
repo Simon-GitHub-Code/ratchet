@@ -278,8 +278,8 @@ def deep_runs(items: list[object], repository: str) -> tuple[unproven.DeepRun, .
         if when is None:
             return None
         url, number = at(item, "html_url"), at(item, "id")
-        if not isinstance(url, str) or not url or not url.isprintable():
-            url = f"run {number if isinstance(number, int | str) else '?'}"
+        if not url or not unproven.printable(url):
+            url = f"run {number if isinstance(number, int) or unproven.printable(number) else '?'}"
         found.append(unproven.DeepRun(sha, state, when, url))
     return tuple(found)
 

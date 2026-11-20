@@ -644,6 +644,8 @@ def test_runs_nested_past_the_interpreters_limit_are_an_answer_that_could_not_be
         ({"id": [1]}, ["green"], "run ?"),
         ({"html_url": "https://forge.example/runs/7\ud800"}, ["green"], "run 1"),
         ({"html_url": "https://forge.example/runs/7\nbehind: a line"}, ["green"], "run 1"),
+        ({"html_url": None, "id": "7\nbehind: a line"}, ["green"], "run ?"),
+        ({"html_url": None, "id": "7"}, ["green"], "run 7"),
     ],
 )
 def test_an_answer_reads_a_field_of_the_wrong_type_without_trusting_it(
@@ -760,7 +762,7 @@ def test_speaks_refuses_a_commit_that_is_not_a_commit_name(
 ) -> None:
     history(tmp_path)
     argv = ["speaks", "--tip", "main", "--repository", REPO, "--root", str(tmp_path)]
-    for odd in ("main", "\udcff" * 40, "A" * 40):
+    for odd in ("main", "\udcff" * 40, "A" * 40, "a" * 40 + "\n"):
         with pytest.raises(SystemExit) as stopped:
             forge_runs.main([*argv, "--commit", odd, "--state", "red"], page())
         assert stopped.value.code == 2
