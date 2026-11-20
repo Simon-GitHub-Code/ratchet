@@ -724,6 +724,7 @@ def passed(root: Path, branch: str) -> bool:
 def mark_passed(root: Path, branch: str) -> None:
     note = queue_notes.read_note(root, branch)
     queue_notes.write_note(queue_notes.note_path(root, branch), {**note, "passed": True})
+    queue_notes.pass_feature_start(root, branch, tree=tree_of(root, branch))
 
 
 def read_present(

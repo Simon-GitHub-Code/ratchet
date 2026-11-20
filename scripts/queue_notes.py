@@ -92,10 +92,13 @@ def record_feature_start(root: Path, branch: str, start: dict[str, object]) -> N
         write_note(path, {"branch": branch, "worktree": str(root), "start": start})
 
 
-def pass_feature_start(root: Path, branch: str) -> None:
+def pass_feature_start(root: Path, branch: str, *, tree: Path | None = None) -> None:
     path = feature_start_path(root, branch)
-    if path is not None and path.is_file():
-        write_note(path, {**loaded(gatelib.read_text(path)), "passed": True})
+    if path is None or not path.is_file():
+        return
+    note = loaded(gatelib.read_text(path))
+    if tree is None or Path(str(note.get("worktree"))).resolve() == tree.resolve():
+        write_note(path, {**note, "passed": True})
 
 
 def read_note(root: Path, branch: str) -> dict[str, object]:
