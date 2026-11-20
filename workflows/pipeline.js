@@ -204,10 +204,12 @@ function shellWord(value) {
 
 function quoteRule(spec, list, ticketFile) {
   const script = PREFLIGHT_SCRIPT ? shellWord(PREFLIGHT_SCRIPT.replace(/[^/]*$/, 'quotes.py')) : '<quotes.py>'
-  const found = PREFLIGHT_SCRIPT ? '' : `,
-  <quotes.py> the path of the ratchet plugin's \`scripts/quotes.py\` as one shell word (beside
-  \`feature_preflight.py\`; \`find\` it, do not write one)`
-  const ticket = ticketFile ? ' and <ticket file> a file holding the ticket text' : ''
+  const named = ['<that file> its path']
+  if (ticketFile) named.push('<ticket file> a file holding the ticket text')
+  if (!PREFLIGHT_SCRIPT) named.push(`<quotes.py> the path of the ratchet plugin's \`scripts/quotes.py\` as one
+  shell word (beside \`feature_preflight.py\`; \`find\` it, do not write one)`)
+  const last = named.pop()
+  const placeholders = named.length ? `${named.join(',\n  ')}\n  and ${last}` : last
   const record = ticketFile ? ' --record ticket=<ticket file>' : ''
   return `- Every blocker or major in \`${list}\` carries \`breaks\`: \`record\` names the record it breaks and
   \`quote\` is the promise, criterion, non-negotiable or rule it breaks. The records are the ticket,
@@ -217,7 +219,7 @@ function quoteRule(spec, list, ticketFile) {
   list item, heading, table cell or line. A blocker or major with no quote is not a finding: return it
   as an \`unstated\` entry.
 - Before you return, write \`${list}\` as the JSON list you return, in that order, to a file in a
-  \`mktemp -d\` directory outside the repository. Run this, with <that file> its path${ticket}${found}:
+  \`mktemp -d\` directory outside the repository. Run this, with ${placeholders}:
 
       ${PLUGIN_PY} ${script} <that file> --root .${record}
 
