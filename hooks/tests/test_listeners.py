@@ -432,12 +432,12 @@ def test_a_child_of_the_service_stays_the_services_once_its_parent_has_exited() 
         group = running.process.pid
         ours = listeners.Service(group, set())
         before, unseen = ours.scan(everyone=False)
-        assert unseen is None
+        assert unseen == []
         assert before
         os.kill(group, signal.SIGKILL)
         until(lambda: Path(f"/proc/{group}/stat").read_text(encoding="utf-8").split()[2] == "Z")
         after, unseen = ours.scan(everyone=False)
-    assert unseen is None
+    assert unseen == []
     assert after == before
 
 
@@ -468,22 +468,23 @@ ROW = "0: {} 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 123 1 0
         ("header\n0: 0100007F:1F90\n", "'0: 0100007F:1F90'"),
         (f"header\n{ROW.format('ZZ00007F:1F90')}\n", repr(ROW.format("ZZ00007F:1F90"))),
         (f"header\n{ROW.format('0100007F:ZZ')}\n", repr(ROW.format("0100007F:ZZ"))),
-        (f"header\n{ROW.format('0100:1F90')}\n", repr(ROW.format("0100:1F90"))),
-        ("", "none: it is empty"),
+        (f"header\n{ROW.format('010:1F90')}\n", repr(ROW.format("010:1F90"))),
+        (f"header\n{ROW.format('01000000AA:1F90')}\n", repr(ROW.format("01000000AA:1F90"))),
+        ("", None),
     ],
-    ids=["a short row", "an address that is not hex", "a port that is not hex", "a short address", "an empty table"],
+    ids=["a short row", "not hex", "a port not hex", "odd hex", "a length no address has", "empty"],
 )
 def test_a_table_the_gate_cannot_read_is_said_not_raised(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text: str, unread: str
+    text: str, unread: str | None, *, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     net = tmp_path / "7" / "net"
     net.mkdir(parents=True)
     (net / "tcp").write_text(text, encoding="utf-8")
     monkeypatch.setattr(listeners, "PROC", str(tmp_path))
     said = (
-        "the system's net/tcp table is empty"
-        if not text
-        else f"a row of the system's net/tcp table cannot be read: {unread}"
+        f"a row of the system's net/tcp table cannot be read: {unread}"
+        if unread
+        else "the system's net/tcp table is empty"
     )
     assert listeners.tcp_listeners(7) == ({}, [said])
 
@@ -494,7 +495,8 @@ def test_a_table_the_gate_may_not_open_is_said(
     net = tmp_path / "7" / "net"
     (net / "tcp").mkdir(parents=True)
     monkeypatch.setattr(listeners, "PROC", str(tmp_path))
-    assert listeners.tcp_listeners(7) == ({}, ["the system's net/tcp table cannot be read: Is a directory"])
+    said = "the system's net/tcp table cannot be read: Is a directory"
+    assert listeners.tcp_listeners(7) == ({}, [said])
 
 
 def test_where_nothing_listens_for_the_boot_command_or_on_its_port_it_says_why() -> None:
@@ -521,7 +523,8 @@ def test_a_listener_of_the_group_is_the_products_even_when_its_process_table_is_
 
 def fake_process(proc: Path, pid: int, table: str) -> None:
     (proc / str(pid) / "fd").mkdir(parents=True)
-    (proc / str(pid) / "stat").write_text(f"{pid} (product) S 1 {pid} 0 0 0 0 0 0\n", encoding="utf-8")
+    stat = f"{pid} (product) S 1 {pid} 0 0 0 0 0 0\n"
+    (proc / str(pid) / "stat").write_text(stat, encoding="utf-8")
     (proc / str(pid) / "fd" / "3").symlink_to("socket:[999]")
     (proc / str(pid) / "net").mkdir()
     (proc / str(pid) / "net" / "tcp").write_text(table, encoding="utf-8")

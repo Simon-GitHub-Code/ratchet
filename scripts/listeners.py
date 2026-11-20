@@ -5,7 +5,6 @@ import ctypes
 import errno
 import functools
 import ipaddress
-import itertools
 import os
 import select
 import socket
@@ -19,6 +18,7 @@ import gatelib
 
 if TYPE_CHECKING:
     import threading
+    from collections.abc import Iterator
 
 PROC = "/proc"
 PIDFD_GETFD = 438
@@ -47,9 +47,17 @@ NONE_FOUND = (
 UNREADABLE = "this system has no /proc/<pid>/net/tcp or tcp6 to read a listener's address from"
 NOT_FOUND = (
     "no process the boot command started, nor any child of one, listens on a TCP port this "
-    "system shows, and nothing here listens on the ready URL's port"
+    "system shows"
 )
 Address = ipaddress.IPv4Address | ipaddress.IPv6Address
+Table = dict[str, tuple[Address, int]]
+
+
+@dataclass(frozen=True)
+class Seen:
+    product: list[tuple[Address, int]]
+    others: list[tuple[Address, int]]
+    unchecked: list[str]
 
 
 def parse(stat: bytes) -> tuple[str, bytes, int, int, int]:
@@ -100,7 +108,7 @@ class Service:
     group: int
     known: set[int]
 
-    def scan(self, *, everyone: bool) -> tuple[dict[str, list[Path]], str | None]:
+    def scan(self, *, everyone: bool) -> tuple[dict[str, list[Path]], list[str]]:
         processes = table()
         ours = (self.known & processes.keys()) | {
             pid for pid, (_, group) in processes.items() if group == self.group
@@ -109,20 +117,21 @@ class Service:
             ours |= grown
         self.known |= ours
         found: dict[str, list[Path]] = {}
+        unseen: list[str] = []
         for pid in processes if everyone else ours:
             try:
                 descriptors = os.listdir(f"{PROC}/{pid}/fd")  # noqa: PTH208 # -- as in table
             except OSError as error:
                 name = hiding(pid) if pid in ours and isinstance(error, PermissionError) else None
                 if name is not None:
-                    return found, hidden(pid, name, error)
+                    unseen.append(hidden(pid, name, error))
                 continue
             for descriptor in descriptors:
                 with contextlib.suppress(OSError):
                     link = os.readlink(f"{PROC}/{pid}/fd/{descriptor}")  # noqa: PTH115 # -- as above
                     if link.startswith("socket:["):
                         found.setdefault(link, []).append(Path(f"{PROC}/{pid}/fd/{descriptor}"))
-        return found, None
+        return found, unseen
 
 
 @dataclass
@@ -138,7 +147,7 @@ class Listener:
             return False
         found, unseen = self.service.scan(everyone=True)
         if unseen:
-            return unseen
+            return unseen[0]
         self.holders = found.get(link, [])
         return not self.holders
 
@@ -150,11 +159,17 @@ def points(descriptor: Path, link: str) -> bool:
         return False
 
 
+def unmapped(found: Address) -> Address:
+    return getattr(found, "ipv4_mapped", None) or found
+
+
 def address(hexadecimal: str) -> Address:
     raw = bytes.fromhex(hexadecimal)
     words = (raw[at : at + 4] for at in range(0, len(raw), 4))
-    return ipaddress.ip_address(
-        b"".join(int.from_bytes(word, sys.byteorder).to_bytes(4) for word in words)
+    return unmapped(
+        ipaddress.ip_address(
+            b"".join(int.from_bytes(word, sys.byteorder).to_bytes(4) for word in words)
+        )
     )
 
 
@@ -163,31 +178,64 @@ def bound_at(field: str) -> tuple[Address, int]:
     return address(where), int(port, 16)
 
 
-def tcp_listeners(pid: int) -> dict[str, tuple[Address, int]] | None:
-    found: dict[str, tuple[Address, int]] | None = None
+def rows_of(kind: str, lines: Iterator[str], found: Table) -> list[str]:
+    if next(lines, None) is None:
+        return [f"the system's net/{kind} table is empty"]
+    unread = []
+    for line in lines:
+        fields = line.split()
+        try:
+            if fields[3] != LISTENING:
+                break
+            found[f"socket:[{fields[9]}]"] = bound_at(fields[1])
+        except (IndexError, ValueError):
+            row = line.strip()
+            unread.append(f"a row of the system's net/{kind} table cannot be read: {row!r}")
+    return unread
+
+
+def tcp_listeners(pid: int) -> tuple[Table, list[str]] | None:
+    found: Table = {}
+    unread: list[str] = []
+    tables = 0
     for kind in ("tcp", "tcp6"):
-        with contextlib.suppress(OSError), Path(f"{PROC}/{pid}/net/{kind}").open() as rows:
-            found = found or {}
-            next(rows)
-            listening = itertools.takewhile(
-                lambda fields: fields[3] == LISTENING, map(str.split, rows)
-            )
-            found.update((f"socket:[{f[9]}]", bound_at(f[1])) for f in listening)
-    return found
+        try:
+            with Path(f"{PROC}/{pid}/net/{kind}").open(errors="replace") as lines:
+                tables += 1
+                unread += rows_of(kind, lines, found)
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            tables += 1
+            unread.append(f"the system's net/{kind} table cannot be read: {error.strerror}")
+    return (found, unread) if tables else None
 
 
-def bound(group: int, port: int) -> list[tuple[Address, int]] | str:
+def bound(group: int, port: int) -> Seen:
     own = tcp_listeners(os.getpid())
     if own is None:
-        return UNREADABLE
-    found = {link: at for link, at in own.items() if at[1] == port}
-    sockets, _ = Service(group, {group}).scan(everyone=False)
+        return Seen([], [], [UNREADABLE])
+    table, unread = own
+    sockets, unseen = Service(group, {group}).scan(everyone=False)
+    unchecked = [*unread, *unseen]
     listening = functools.cache(tcp_listeners)
+    product: Table = {}
     for link, descriptors in sockets.items():
-        rows = listening(int(descriptors[0].parents[1].name)) or {}
-        if link in rows:
-            found[link] = rows[link]
-    return list(dict.fromkeys(found.values())) or NOT_FOUND
+        at = table.get(link)
+        theirs = None if at else listening(int(descriptors[0].parents[1].name))
+        if theirs:
+            unchecked += theirs[1]
+            at = theirs[0].get(link)
+        if at:
+            product[link] = at
+    others = [at for link, at in table.items() if at[1] == port and link not in sockets]
+    if not product and not unchecked:
+        unchecked.append(NOT_FOUND)
+    return Seen(
+        list(dict.fromkeys(product.values())),
+        list(dict.fromkeys(others)),
+        list(dict.fromkeys(unchecked)),
+    )
 
 
 def copy_of(descriptor: Path) -> socket.socket:
@@ -232,11 +280,11 @@ def grab(group: int) -> list[Listener] | str:
     service = Service(group, {group})
     sockets, unseen = service.scan(everyone=False)
     if unseen:
-        return unseen
+        return unseen[0]
     listening = functools.cache(tcp_listeners)
     found: list[Listener] = []
     for link, descriptors in sockets.items():
-        at = (listening(int(descriptors[0].parents[1].name)) or {}).get(link)
+        at = (listening(int(descriptors[0].parents[1].name)) or ({}, []))[0].get(link)
         if at is None:
             continue
         port = at[1]

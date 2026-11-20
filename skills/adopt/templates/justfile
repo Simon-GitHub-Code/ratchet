@@ -78,8 +78,9 @@ export RATCHET_RUN := env_var_or_default("RATCHET_RUN", uuid())
 boot := "bind: the command that builds and starts the deliverable in the foreground, such as ./server --host {host} --port {port}"
 ready := "bind: the URL that answers once it is up, such as http://127.0.0.1:{port}/health"
 boot_timeout := "30"
+listens := "none"
 service := "bind: the service.name every signal carries"
-booted := plugin_py + ' "' + ratchet_plugin + '/scripts/with_service.py" --boot ' + quote(boot) + ' --ready ' + quote(ready) + ' --timeout ' + boot_timeout
+booted := plugin_py + ' "' + ratchet_plugin + '/scripts/with_service.py" --boot ' + quote(boot) + ' --ready ' + quote(ready) + ' --timeout ' + boot_timeout + if listens == "none" { "" } else { ' --listens ' + quote(listens) }
 
 flags_on := "bind: NAME=VALUE, the flag seam's override with each key of flags.py --temporary on"
 probed := booted + ' --env "' + flags_on + '"'
@@ -98,7 +99,7 @@ default:
 
 start *args:
     @{{ if ready =~ '^https?://' { "echo 'open " + replace(ready, "{port}", port) + " once it is up; Ctrl-C stops it'" } else { "true" } }}
-    export HOST=127.0.0.1 PORT={{port}}; {{ replace(replace(boot, "{port}", port), "{host}", "127.0.0.1") }} {{args}}
+    export PORT={{port}}; {{ replace(replace(boot, "{port}", port), "{host}", if ready =~ '^https?://' { replace_regex(ready, '^[a-z]+://(?:\[([^]]*)\]|([^/:]*)).*$', '${1}${2}') } else { "{host}" }) }} {{args}}
 
 test-files *files:
     {{test_runner}} {{files}}

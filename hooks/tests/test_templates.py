@@ -428,7 +428,7 @@ def smoke(tmp_path: Path, sets: list[str], port: str | None = None) -> str:
     ("sets", "said"),
     [
         ([], "with_service: note: the product listened on 0.0.0.0:"),
-        (["--set", "listens", "0.0.0.0"], "when it first answered, as declared"),
+        (["--set", "listens", "0.0.0.0"], "when it first answered, as declared"),  # noqa: S104 # -- the declared address under test
     ],
     ids=["nothing declared", "declared"],
 )

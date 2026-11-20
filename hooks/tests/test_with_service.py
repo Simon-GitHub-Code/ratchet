@@ -335,11 +335,16 @@ def machine_address() -> str:
 
 @pytest.mark.parametrize(
     ("ready", "host"),
-    [(READY, "127.0.0.1"), ("http://[::1]:{port}/", "::1"), ("http://localhost:{port}/", "localhost")],
+    [
+        (READY, "127.0.0.1"),
+        ("http://[::1]:{port}/", "::1"),
+        ("http://localhost:{port}/", "localhost"),
+    ],
 )
 def test_host_stands_for_the_ready_urls_host_and_nothing_is_exported(
     ready: str,
     host: str,
+    *,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -364,7 +369,9 @@ def test_a_ready_url_cannot_hold_the_host_it_stands_for(capsys: pytest.CaptureFi
     with pytest.raises(SystemExit) as caught:
         with_service.main(["with_service.py", "--boot", "true", "--ready", "http://{host}:1/"])
     assert caught.value.code == 2
-    assert "{host} stands for the ready URL's host" in capsys.readouterr().err
+    assert "--ready cannot hold {host}, which stands for the ready URL's host" in (
+        capsys.readouterr().err
+    )
 
 
 @pytest.mark.parametrize(
@@ -374,7 +381,7 @@ def test_a_ready_url_cannot_hold_the_host_it_stands_for(capsys: pytest.CaptureFi
         (
             listening_on('"${HOST:-0.0.0.0}"'),
             "http://{machine}:{{port}}/",
-            noted("0.0.0.0", "every interface"),
+            noted("0.0.0.0", "every interface"),  # noqa: S104 # -- the wide listener under test
         ),
         (f"exec {python(NAMES_ITSELF)}", "http://localhost:{port}/", ""),
     ],
@@ -384,6 +391,7 @@ def test_a_boot_line_without_host_boots_as_it_did_before_host_existed(
     boot: str,
     ready: str,
     said: str,
+    *,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -447,16 +455,18 @@ def test_a_listener_on_an_ipv4_mapped_address_is_named_as_the_ipv4_address(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     code, out = run("--boot", listening_on("::ffff:0.0.0.0"), "--ready", READY, capsys=capsys)
-    assert re.fullmatch(noted("0.0.0.0", "every interface") + "with_service: green\n", out), out
+    said = noted("0.0.0.0", "every interface")  # noqa: S104 # -- the wide listener under test
+    assert re.fullmatch(said + "with_service: green\n", out), out
     assert code == 0
 
 
 def test_the_cure_of_a_boot_line_that_passes_host_is_the_ready_url(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    ready = "http://0.0.0.0:{port}/"  # noqa: S104 # -- the wide ready URL under test
+    ready = "http://0.0.0.0:{port}/"
     code, out = run("--boot", listening_on("{host}"), "--ready", ready, capsys=capsys)
-    said = noted("0.0.0.0", "every interface", HOSTED) + "with_service: green\n"
+    wide = "0.0.0.0"  # noqa: S104 # -- the wide listener under test
+    said = noted(wide, "every interface", HOSTED) + "with_service: green\n"
     assert re.fullmatch(said, out), out
     assert code == 0
 
@@ -487,14 +497,16 @@ def test_loopback_only_says_what_it_looked_at_and_when(capsys: pytest.CaptureFix
         *("--", "true"),
         capsys=capsys,
     )
-    assert (code, out) == (
-        0,
+    checked = (
         "with_service: when the product first answered, each of its listeners was on loopback or "
-        "declared; one opened later is not seen\nwith_service: green\n",
+        "declared; one opened later is not seen\n"
     )
+    assert (code, out) == (0, checked + "with_service: green\n")
 
 
-DECLARED = r"with_service: the product listened on {where}:\d+ when it first answered, as declared\n"
+DECLARED = (
+    r"with_service: the product listened on {where}:\d+ when it first answered, as declared\n"
+)
 
 
 @pytest.mark.parametrize(
@@ -546,8 +558,8 @@ def test_an_empty_listens_says_what_to_write(capsys: pytest.CaptureFixture[str])
         with_service.main(["with_service.py", "--boot", "true", "--ready", READY, "--listens", ""])
     assert caught.value.code == 2
     assert (
-        "--listens names no address: write each address the product listens on on purpose, "
-        "separated by spaces, such as --listens '0.0.0.0 ::'"
+        "argument --listens: names no address: write each address the product listens on on "
+        "purpose, separated by spaces, such as --listens '0.0.0.0 ::'"
     ) in capsys.readouterr().err
 
 
@@ -569,11 +581,11 @@ def test_a_listener_on_the_ready_port_held_by_another_process_is_said_and_never_
         )
     finally:
         other.close()
-    assert (code, out.splitlines()[0]) == (
-        0,
+    other_line = (
         f"with_service: [::]:{port}, on the ready URL's port, is held by a process the gate did "
-        "not find among the boot command's, so it is not judged as the product's",
-    ), out
+        "not find among the boot command's, so it is not judged as the product's"
+    )
+    assert (code, out.splitlines()[0]) == (0, other_line), out
     assert ran.exists(), "another process's listener refused the session"
 
 
@@ -599,8 +611,10 @@ def test_a_process_the_gate_cannot_read_hides_no_other_listener_and_is_said(
     code, out = run("--boot", boot, "--ready", READY, capsys=capsys)
     lines = out.splitlines(keepends=True)
     assert code == 0
-    assert re.fullmatch(noted("0.0.0.0", "every interface"), lines[0]), out
-    assert re.fullmatch(rf"with_service: where the product listens was not checked: {UNSEEN}\n", lines[1]), out
+    wide = "0.0.0.0"  # noqa: S104 # -- the wide listener under test
+    unseen = rf"with_service: where the product listens was not checked: {UNSEEN}\n"
+    assert re.fullmatch(noted(wide, "every interface"), lines[0]), out
+    assert re.fullmatch(unseen, lines[1]), out
     assert lines[2:] == ["with_service: green\n"], out
 
 
@@ -615,8 +629,8 @@ def test_loopback_only_refuses_what_it_could_not_check(
     )
     assert code == 1
     assert not ran.exists(), "a session started on a product it could not check"
-    said = rf"where the product listens was not checked, so the command after -- did not run: {UNSEEN}\n"
-    assert re.match(said, out), out
+    said = "where the product listens was not checked, so the command after -- did not run: "
+    assert re.match(rf"{said}{UNSEEN}\n", out), out
 
 
 def test_where_the_product_listens_is_not_checked_where_it_cannot_be_read(

@@ -525,7 +525,7 @@ def test_a_product_the_justfile_says_listens_wider_on_purpose_is_served_and_said
     ],
 )
 def test_a_listens_that_is_not_a_list_of_addresses_gives_no_way_to_start(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], listens: str, said: str
+    listens: str, said: str, *, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = products.make(tmp_path / "product", extra=f'listens := "{listens}"')
     code, out = up(root, capsys)
@@ -545,14 +545,15 @@ def test_a_product_the_harness_could_not_check_does_not_start_a_session(
     boot = f"{python(HIDES)} {hid} & while [ ! -e {hid} ]; do sleep 0.05; done; {app}"
     root = products.make(tmp_path / "product", boot=boot)
     code, out = up(root, capsys)
+    said = "\n".join(out)
     assert code == 1
-    assert re.fullmatch(
+    assert re.match(
         rf"It was started with `{re.escape(boot)}`, and where it listens could not be checked, so "
         r"a request might reach it around the session's proxy and leave no line in its log, and "
         r"no session starts on that: the gate is not allowed to look at the open files of process "
-        r"\d+ .*",
-        out[0],
-    ), out[0]
+        r"\d+ ",
+        said,
+    ), said
     assert products.processes_naming(str(tmp_path)) == []
 
 
@@ -565,7 +566,7 @@ def test_replay_of_a_product_reachable_around_the_proxy_says_why_it_did_not_run(
     code, out = run(root, "replay", "--checks", str(checks), capsys=capsys)
     assert code == 1
     assert out[0].startswith(
-        "K9 (C1) was not run on a fresh boot: the product did not start: it listens on 0.0.0.0:"
+        "K9 (C1) was not run on a fresh boot: the product did not start: it listened on 0.0.0.0:"
     ), out[0]
 
 

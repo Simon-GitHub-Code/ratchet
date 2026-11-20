@@ -49,9 +49,18 @@ BACKGROUND = '"$@" </dev/null >&2 & echo "$!"'
 EXITED = re.compile(r"^the service exited with code (-?\d+) before")
 SILENT = re.compile(r" did not answer within (\S+?);")
 WIDE = re.compile(
-    r"^the product listens on (\S+), (every interface|not a loopback address), so the network can "
-    r"reach it around",
+    r"^the product listened on (\S+), (every interface|not a loopback address), when it first "
+    r"answered, so the network could reach it around the command after --; (.+), or declare the "
+    r"address with --listens$",
     re.MULTILINE,
+)
+UNSEEN = re.compile(
+    r"^where the product listens was not checked, so the command after -- did not run: (.+)$",
+    re.MULTILINE,
+)
+LISTENS = (
+    "Name each address the product listens on on purpose, separated by spaces, such as "
+    '`listens := "0.0.0.0 ::"`, or write `none`.'
 )
 
 
@@ -173,16 +182,23 @@ def read_binding(root: Path) -> Binding:
         env = (shown.stdout,)
     seconds = float(timeout) if re.fullmatch(r"\d+(\.\d+)?", timeout.strip()) else 30.0
     listens = evaluate(root, "listens")
-    if listens is not None:
+    words = (NONE if listens is None else listens).split()
+    declared = None if words == [NONE] else " ".join(words)
+    if declared is not None and (said := unlisted(words)):
+        why = f"The project gives no way to start it: its justfile's `listens` {said}. {LISTENS}"
+        return Binding(tuple(types), None, why)
+    return Binding(tuple(types), Boot(boot, ready, seconds, env, declared))
+
+
+def unlisted(words: list[str]) -> str | None:
+    if not words:
+        return "is empty"
+    for word in words:
         try:
-            ipaddress.ip_address(listens)
+            ipaddress.ip_address(word)
         except ValueError:
-            why = (
-                "The project gives no way to start it: its justfile's `listens` is "
-                f"`{listens}`, which is not an IP address."
-            )
-            return Binding(tuple(types), None, why)
-    return Binding(tuple(types), Boot(boot, ready, seconds, env, listens))
+            return f"names `{word}`, which is not an IP address"
+    return None
 
 
 def store(root: Path) -> Path:
@@ -271,16 +287,21 @@ def prune(place: Path, now: dt.datetime) -> None:
 
 
 def reachable(text: str) -> str | None:
+    if unseen := UNSEEN.search(text):
+        return (
+            "where it listens could not be checked, so a request might reach it around the "
+            "session's proxy and leave no line in its log, and no session starts on that: "
+            f"{unseen[1]}"
+        )
     wide = WIDE.search(text)
     if wide is None:
         return None
-    where, what = wide[1], wide[2]
+    where, what, cure = wide[1], wide[2], wide[3]
     address = where.rpartition(":")[0].strip("[]")
     return (
-        f"it listens on {where}, {what}, so a request could reach it around the session's proxy "
-        "and leave no line in its log. Bind it to 127.0.0.1, which `boot` gets as {host} and "
-        "$HOST; if it listens there on purpose, name that address in the justfile as "
-        f'`listens := "{address}"`.'
+        f"it listened on {where}, {what}, so a request could reach it around the session's proxy "
+        f"and leave no line in its log. To keep it on loopback, {cure}; if it listens there on "
+        f'purpose, add the address to the justfile\'s `listens`, as `listens := "{address}"`.'
     )
 
 
