@@ -161,14 +161,22 @@ def kept(found: Counter[Key]) -> gatelib.Want:
     return keep
 
 
-def recorded(added: Sequence[Entry]) -> gatelib.Want:
+def recorded(added: Sequence[Entry], gone: Sequence[Entry] = ()) -> gatelib.Want:
     def record(text: str | None) -> str:
         ledger = parse(text)
-        if not added or ledger.problems:
+        entries = [*(Counter(ledger.entries) - Counter(gone)).elements(), *added]
+        if ledger.problems or Counter(entries) == Counter(ledger.entries):
             return text or ""
-        return render([*ledger.entries, *added])
+        return render(entries)
 
     return record
+
+
+def brought(
+    before: Sequence[Entry], after: Sequence[Entry], renamed: Mapping[str, str]
+) -> Counter[Entry]:
+    new = Counter(after) - Counter(before)
+    return new - followed(new, Counter(before) - Counter(after), renamed)
 
 
 def moved(before: str | None, after: str | None, *, floor: str | None) -> plugin_pin.Pin | None:

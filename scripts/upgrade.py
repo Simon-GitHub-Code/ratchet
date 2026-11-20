@@ -290,19 +290,23 @@ def owing(root: Path, sandbox: Path, left: list[Finding], *, plugin: Path) -> li
     pin = owed.moved(before, after, floor=plugin_pin.version_of(plugin))
     if pin is None:
         return []
+    held = owed.parse(gatelib.show(root, base, str(owed.LEDGER)) if base else None).entries
+    brought = owed.brought(
+        held, owed.read(sandbox).entries, gatelib.renamed(root, base) if base else {}
+    )
+    mine = sorted(entry for entry in brought.elements() if entry.rule not in owed.GATE_RULES)
     red, _ = conformance.owed_split(sandbox, left)
     allowed = red_at_base(root, base, plugin)
     added = []
-    for finding in red:
-        key = finding.key()
+    for key in [*(finding.key() for finding in red), *(entry.key for entry in mine)]:
         if allowed[key] > 0 and not owed.never(key):
             allowed[key] -= 1
             added.append(owed.Entry(key[1], key[0], key[2], pin.version))
-    if not added:
+    if not added and not mine:
         return []
     count = len(added)
     does = f"write down {count} {'thing' if count == 1 else 'things'} owed since {pin.version}"
-    return [Finding(str(owed.LEDGER), "", Auto(does, owed.recorded(added)))]
+    return [Finding(str(owed.LEDGER), "", Auto(does, owed.recorded(added, mine)))]
 
 
 def red_at_base(root: Path, base: str | None, plugin: Path) -> Counter[owed.Key]:
