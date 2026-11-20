@@ -3,6 +3,7 @@ import json
 import os
 import re
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -2192,7 +2193,8 @@ def landed(root: Path, *, gates: str = FUZZ, bound: str = "") -> list[str]:
     return tips[::-1]
 
 
-def run(sha: str, state: str, number: int, *, at: str = "2026-11-20T09:00:00Z") -> unproven.DeepRun:
+def run(sha: str, state: str, number: int) -> unproven.DeepRun:
+    at = datetime(2026, 11, 20, 9, tzinfo=UTC)
     return unproven.DeepRun(sha, state, at, RUN.format(number))  # type: ignore[arg-type]
 
 
@@ -2211,7 +2213,7 @@ def verdict(
 
 
 def deep_judged(repo: Path, deep: Path) -> list[str]:
-    asked = merge_ready.Asked(deep=unproven.answer(deep.read_text(encoding="utf-8")))
+    asked = merge_ready.Asked(deep=unproven.read(deep))
     return [str(reason) for reason in merge_ready.judge(repo, "main", "HEAD", asked=asked)]
 
 
@@ -2424,7 +2426,9 @@ def test_a_tier_2_gate_is_bound_or_the_plugins_own(
     assert bool(reasons) == waits
 
 
-def listed(sha: str, state: str, number: int, at: str = "2026-11-20T09:00:00Z") -> dict[str, str]:
+def listed(
+    sha: str, state: str, number: int, *, at: str = "2026-11-20T09:00:00Z"
+) -> dict[str, str]:
     return {"commit": sha, "state": state, "at": at, "name": RUN.format(number)}
 
 
@@ -2525,17 +2529,14 @@ def pulled(root: Path) -> dict[str, str]:
     landed(root, gates="")
     git(root, "checkout", "-q", "main")
     shas = {"base": git(root, "rev-parse", "HEAD")}
-    git(root, "checkout", "-q", "-b", "local")
-    write(root, "src/local.py", "l = 1\n")
-    shas["local"] = commit(root, "feat(core): committed on a main that moved")
-    git(root, "checkout", "-q", "main")
+    git(root, "checkout", "-q", "-b", "earlier")
     write(root, "src/remote.py", "r = 1\n")
     shas["remote"] = commit(root, "feat(core): the default branch's tip then")
-    git(root, "checkout", "-q", "local")
-    git(root, "merge", "-q", "--no-edit", "-m", "Merge the default branch", "main")
-    shas["pulled"] = git(root, "rev-parse", "HEAD")
     git(root, "checkout", "-q", "main")
-    git(root, "merge", "-q", "--ff-only", "local")
+    write(root, "src/local.py", "l = 1\n")
+    shas["local"] = commit(root, "feat(core): committed on a main that moved")
+    git(root, "merge", "-q", "--no-ff", "-m", "Merge the default branch", "earlier")
+    shas["pulled"] = git(root, "rev-parse", "HEAD")
     git(root, "checkout", "-q", "feature/4-thing")
     return shas
 
@@ -2547,9 +2548,7 @@ def pulled(root: Path) -> dict[str, str]:
         pytest.param(
             [("remote", "red", 2), ("pulled", "green", 1)], False, id="its merge's own green"
         ),
-        pytest.param(
-            [("remote", "green", 2), ("base", "red", 1)], True, id="a green off the line"
-        ),
+        pytest.param([("remote", "green", 2), ("base", "red", 1)], True, id="a green off the line"),
     ],
 )
 def test_a_red_on_a_commit_a_merge_brought_onto_the_line_holds_and_a_green_there_covers_nothing(

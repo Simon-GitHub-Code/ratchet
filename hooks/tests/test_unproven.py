@@ -1,24 +1,27 @@
 import json
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
 import unproven
-from tests.repos import branch, commit, git, repository
 from unproven import Deep, DeepRun, Landed
 
-CHAIN = tuple(Landed(f"{index:02d}" * 20, f"merge {index}") for index in range(6))
+SIDE = "ee" * 20
+CHAIN = tuple(
+    Landed(f"{index:02d}" * 20, f"merge {index}", frozenset({SIDE} if index == 2 else ()))
+    for index in range(6)
+)
 OFF = "ff" * 20
 START = "start a deep run on the tip"
 EARLY, LATE = "2026-11-20T09:00:00Z", "2026-11-20T10:00:00Z"
 
 
-def on(index: int | None, state: str, *, at: str = EARLY) -> DeepRun:
-    sha = OFF if index is None else CHAIN[index].commit
-    return DeepRun(sha, state, at, f"run-{index}-{state}-{at[11:13]}")  # type: ignore[arg-type]
+def on(index: int | str | None, state: str, *, at: str = EARLY) -> DeepRun:
+    sha = OFF if index is None else SIDE if isinstance(index, str) else CHAIN[index].commit
+    when = datetime.fromisoformat(at)
+    return DeepRun(sha, state, when, f"run-{index}-{state}-{at[11:13]}")  # type: ignore[arg-type]
 
 
 def sha(index: int) -> str:
@@ -163,6 +166,51 @@ ROWS = [
         [],
         [],
     ),
+    (
+        "19 a red off the line, brought onto it by T2",
+        [on("side", "red"), on(4, "green")],
+        True,
+        None,
+        "tier2",
+        [SIDE[:12], sha(2), sha(3), "run-side-red"],
+        [sha(1), sha(4)],
+    ),
+    (
+        "20 a red off the line, after a green on the merge that brought it",
+        [on(2, "green"), on("side", "red", at=LATE)],
+        True,
+        None,
+        None,
+        [],
+        [],
+    ),
+    (
+        "21 a red off the line, a green nearer the tip",
+        [on(1, "green"), on("side", "red", at=LATE)],
+        True,
+        None,
+        None,
+        [],
+        [],
+    ),
+    (
+        "22 a green off the line covers nothing, a bound",
+        [on("side", "green"), on(0, "running")],
+        True,
+        1,
+        "unproven",
+        ["newest 6", "run-0-running"],
+        [],
+    ),
+    (
+        "22 a green off the line covers nothing, a red below",
+        [on("side", "green", at=LATE), on(3, "red")],
+        True,
+        None,
+        "tier2",
+        [sha(3), sha(5)],
+        [sha(2)],
+    ),
 ]
 
 
@@ -207,6 +255,8 @@ def test_15_a_forge_that_cannot_be_read_is_not_known(gated: bool, bound: int | N
         pytest.param([on(2, "green")], on(0, "green"), CHAIN[0:2], id="a run not yet listed"),
         pytest.param([on(0, "running")], on(0, "running"), (), id="a running run"),
         pytest.param([on(None, "red")], on(None, "red"), (), id="off the chain"),
+        pytest.param([on(4, "green")], on("side", "red"), CHAIN[2:4], id="row 19"),
+        pytest.param([], on("side", "green"), (), id="a green off the line"),
     ],
 )
 def test_a_run_speaks_for_its_commit_down_to_the_last_green(
@@ -233,7 +283,7 @@ def test_a_run_speaks_for_nothing_when_the_forge_cannot_be_read() -> None:
 
 
 SPECS = st.lists(
-    st.tuples(st.integers(0, len(CHAIN)), st.sampled_from(unproven.STATES), st.integers(0, 5)),
+    st.tuples(st.integers(0, len(CHAIN) + 1), st.sampled_from(unproven.STATES), st.integers(0, 5)),
     max_size=8,
 )
 
@@ -241,9 +291,9 @@ SPECS = st.lists(
 def built(specs: list[tuple[int, str, int]]) -> tuple[DeepRun, ...]:
     return tuple(
         DeepRun(
-            CHAIN[index].commit if index < len(CHAIN) else OFF,
+            CHAIN[index].commit if index < len(CHAIN) else (OFF, SIDE)[index - len(CHAIN)],
             state,  # type: ignore[arg-type]
-            f"2026-11-20T0{hour}:00:00Z",
+            datetime(2026, 11, 20, hour, tzinfo=UTC),
             f"run {number}",
         )
         for number, (index, state, hour) in enumerate(specs)
@@ -252,7 +302,10 @@ def built(specs: list[tuple[int, str, int]]) -> tuple[DeepRun, ...]:
 
 def decider(runs: tuple[DeepRun, ...], landed: Landed) -> DeepRun | None:
     finished = [run for run in runs if run.commit == landed.commit and run.state != "running"]
-    return max(finished, key=lambda run: (run.at, run.name), default=None)
+    finished = finished or [
+        run for run in runs if run.commit in landed.merged and run.state == "red"
+    ]
+    return max(finished, key=lambda run: (run.at, run.state == "red", run.name), default=None)
 
 
 BOUNDS = st.none() | st.integers(0, len(CHAIN) + 1)
@@ -278,7 +331,7 @@ def test_a_red_speaks_down_to_the_nearest_older_green_and_never_past_it(
     specs: list[tuple[int, str, int]], index: int
 ) -> None:
     runs = built(specs)
-    red = DeepRun(CHAIN[index].commit, "red", "2026-11-20T09:30:00Z", "the red")
+    red = DeepRun(CHAIN[index].commit, "red", datetime(2026, 11, 20, 9, 30, tzinfo=UTC), "the red")
     spoken = unproven.speaks_for(CHAIN, Deep(runs, START), red)
     end = index + len(spoken)
     assert spoken == CHAIN[index:end]
@@ -315,29 +368,10 @@ def test_with_no_bound_only_a_red_or_an_unread_forge_holds(
     )
 
 
-def test_the_chain_is_the_first_parent_line_tip_first(tmp_path: Path) -> None:
-    repository(tmp_path)
-    first = git(tmp_path, "rev-parse", "HEAD")
-    branch(tmp_path, "side")
-    aside = commit(tmp_path, "feat(core): on the side")
-    git(tmp_path, "switch", "-q", "main")
-    second = commit(tmp_path, "feat(core): second")
-    git(tmp_path, "merge", "-q", "--no-ff", "-m", "Merge side", "side")
-    merged = git(tmp_path, "rev-parse", "HEAD")
-    chain = unproven.chain(tmp_path, "main")
-    assert chain == (
-        Landed(merged, "Merge side"),
-        Landed(second, "feat(core): second"),
-        Landed(first, "feat(core): the clean state"),
-    )
-    assert aside not in [landed.commit for landed in chain]
-    assert unproven.chain(tmp_path, "nowhere") == ()
-
-
 def test_an_answer_reads_back_as_it_was_written() -> None:
     deep = Deep((on(0, "red"), on(1, "running"), on(2, "green")), START)
-    assert unproven.answer(unproven.written(deep)) == deep
-    assert unproven.answer(unproven.written(Deep(None, START))) == Deep(None, START)
+    assert unproven.answer(unproven.written(deep).encode()) == deep
+    assert unproven.answer(unproven.written(Deep(None, START)).encode()) == Deep(None, START)
 
 
 @pytest.mark.parametrize(
@@ -357,4 +391,4 @@ def test_an_answer_reads_back_as_it_was_written() -> None:
     ],
 )
 def test_an_answer_that_does_not_read_is_not_known(text: str | None) -> None:
-    assert unproven.answer(text).runs is None
+    assert unproven.answer(None if text is None else text.encode()).runs is None

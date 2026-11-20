@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Final, Literal, NamedTuple, cast
-
-import gatelib
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -19,6 +18,8 @@ TIER2: Final = "tier2"
 UNPROVEN: Final = "unproven"
 FIELDS = ("commit", "state", "at", "name")
 SHORT = 12
+SHOWN = 10
+MOST = 1 << 20
 UNKNOWN = (
     "tier 2 on the default branch is not known: its deep runs could not be read, so the next"
     " judge reads them again"
@@ -29,7 +30,7 @@ UNKNOWN = (
 class DeepRun:
     commit: str
     state: State
-    at: str
+    at: datetime
     name: str
 
 
@@ -43,6 +44,7 @@ class Deep:
 class Landed:
     commit: str
     subject: str
+    merged: frozenset[str] = frozenset()
 
 
 class Hold(NamedTuple):
@@ -56,22 +58,28 @@ class Reading(NamedTuple):
     ender: DeepRun | None
 
 
-def chain(root: Path, tip: str) -> tuple[Landed, ...]:
-    listed = gatelib.git(root, "log", "--first-parent", "--format=%H %s", tip, "--") or ""
-    return tuple(Landed(*line.partition(" ")[::2]) for line in listed.splitlines())
-
-
 def places(line: Sequence[Landed]) -> dict[str, int]:
     return {landed.commit: index for index, landed in enumerate(line)}
 
 
+def brought(line: Sequence[Landed]) -> dict[str, int]:
+    return {commit: index for index, landed in enumerate(line) for commit in landed.merged}
+
+
+def place(line: Sequence[Landed], run: DeepRun) -> int | None:
+    where = places(line).get(run.commit)
+    return brought(line).get(run.commit) if where is None and run.state == RED else where
+
+
+def newest(run: DeepRun) -> tuple[datetime, bool, str]:
+    return run.at, run.state == RED, run.name
+
+
 def deciders(line: Sequence[Landed], runs: Sequence[DeepRun]) -> dict[int, DeepRun]:
-    where = places(line)
-    finished = sorted(
-        (run for run in runs if run.state != RUNNING and run.commit in where),
-        key=lambda run: (run.at, run.name),
-    )
-    return {where[run.commit]: run for run in finished}
+    where, off = places(line), brought(line)
+    finished = sorted((run for run in runs if run.state != RUNNING), key=newest)
+    reds = {off[run.commit]: run for run in finished if run.state == RED and run.commit in off}
+    return reds | {where[run.commit]: run for run in finished if run.commit in where}
 
 
 def reading(line: Sequence[Landed], runs: Sequence[DeepRun]) -> Reading:
@@ -85,10 +93,10 @@ def reading(line: Sequence[Landed], runs: Sequence[DeepRun]) -> Reading:
 
 
 def speaks_for(line: Sequence[Landed], deep: Deep, run: DeepRun) -> tuple[Landed, ...]:
-    where = places(line)
-    if deep.runs is None or run.state == RUNNING or run.commit not in where:
+    start = place(line, run)
+    if deep.runs is None or run.state == RUNNING or start is None:
         return ()
-    start, decided = where[run.commit], deciders(line, deep.runs)
+    decided = deciders(line, deep.runs)
     end = min((i for i, d in decided.items() if i > start and d.state == GREEN), default=len(line))
     return tuple(line[start:end])
 
@@ -98,7 +106,8 @@ def named(run: DeepRun) -> str:
 
 
 def merges(landed: Sequence[Landed]) -> str:
-    return "; ".join(f"`{merge.commit[:SHORT]}` {merge.subject}" for merge in landed)
+    shown = "; ".join(f"`{merge.commit[:SHORT]}` {merge.subject}" for merge in landed[:SHOWN])
+    return shown + (f"; and {len(landed) - SHOWN} more" if len(landed) > SHOWN else "")
 
 
 def held(line: Sequence[Landed], deep: Deep, *, gated: bool, bound: int | None) -> Hold | None:
@@ -123,28 +132,49 @@ def held(line: Sequence[Landed], deep: Deep, *, gated: bool, bound: int | None) 
     return Hold(UNPROVEN, text)
 
 
+def instant(value: object) -> datetime | None:
+    try:
+        when = datetime.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+    return when if when is not None and when.tzinfo is not None else None
+
+
 def written(deep: Deep) -> str:
     runs = None if deep.runs is None else [asdict(run) for run in deep.runs]
-    return json.dumps({"runs": runs, "start": deep.start}, indent=2) + "\n"
+    shown = json.dumps({"runs": runs, "start": deep.start}, indent=2, default=datetime.isoformat)
+    return shown + "\n"
 
 
 def parsed(item: object) -> DeepRun | None:
     if not isinstance(item, dict) or not all(isinstance(item.get(key), str) for key in FIELDS):
         return None
-    if item["state"] not in STATES:
+    when = instant(item["at"])
+    if item["state"] not in STATES or when is None:
         return None
     state = cast("State", item["state"])
-    return DeepRun(item["commit"], state, item["at"], item["name"])
+    return DeepRun(item["commit"], state, when, item["name"])
 
 
-def answer(text: str | None) -> Deep:
+def answer(data: bytes | None) -> Deep:
     try:
-        data: object = json.loads(text or "")
-    except ValueError:
-        data = None
-    found = data if isinstance(data, dict) else {}
-    start, listed = found.get("start"), found.get("runs")
+        found: object = json.loads(data.decode()) if data and len(data) <= MOST else None
+    except (ValueError, RecursionError):
+        found = None
+    shape = found if isinstance(found, dict) else {}
+    start, listed = shape.get("start"), shape.get("runs")
     runs = [parsed(item) for item in listed] if isinstance(listed, list) else [None]
     said = start if isinstance(start, str) else ""
     kept = tuple(run for run in runs if run is not None)
     return Deep(kept if len(kept) == len(runs) and said == start else None, said)
+
+
+def read(path: Path) -> Deep:
+    data = None
+    try:
+        if path.is_file():
+            with path.open("rb") as handle:
+                data = handle.read(MOST + 1)
+    except OSError:
+        data = None
+    return answer(data)

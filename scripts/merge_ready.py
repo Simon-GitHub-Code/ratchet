@@ -21,6 +21,7 @@ import application_types
 import documents
 import feature_preflight as preflight
 import flags as registry
+import forge_runs
 import gatelib
 import lowered
 import markdown_text
@@ -1104,7 +1105,7 @@ def record_reasons(change: Change, manifest: Manifest) -> list[Reason]:
     path = found[0]
     try:
         data: object = json.loads(change.after(path) or "")
-    except ValueError:
+    except (ValueError, RecursionError):
         data = None
     if not isinstance(data, dict):
         return [Reason("record", f"{path} is gone or is not a JSON object")]
@@ -1150,7 +1151,7 @@ def deep_reasons(change: Change, deep: unproven.Deep) -> list[Reason]:
         for row in project_bite.gate_rows(change.before(BINDING) or "")
     )
     bound, why = declared_bound(change.before(THRESHOLDS))
-    line = unproven.chain(change.root, change.base)
+    line = forge_runs.chain(change.root, change.base, [run.commit for run in deep.runs or ()])
     hold = unproven.held(line, deep, gated=gated, bound=bound)
     if hold is None:
         return []
@@ -1425,7 +1426,7 @@ def main(argv: list[str]) -> int:
     if recording:
         return write_record(root, sys.stdin.read())
     base = options.base or default_ref(root)
-    deep = None if options.deep is None else unproven.answer(gatelib.read_text(options.deep))
+    deep = None if options.deep is None else unproven.read(options.deep)
     tier2 = options.tier2 or "none"
     asked = Asked(options.target, options.current, tier1=options.tier1, tier2=tier2, deep=deep)
     notes: list[str] = []

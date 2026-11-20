@@ -1,9 +1,12 @@
 import io
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 import forge_runs
 import merge_ready
@@ -459,7 +462,7 @@ def answered(
     target = root / "answer.json"
     argv = ["deep", "--tip", "main", "--repository", REPO, "--root", str(root), "--answer"]
     assert forge_runs.main([*argv, str(target)], runs) == 0
-    return unproven.answer(target.read_text(encoding="utf-8")), capsys.readouterr().out
+    return unproven.read(target), capsys.readouterr().out
 
 
 @pytest.mark.parametrize(
@@ -630,6 +633,7 @@ def test_runs_nested_past_the_interpreters_limit_are_an_answer_that_could_not_be
         ({"html_url": ["https://forge.example/runs/7"]}, ["green"], "run 1"),
         ({"event": ["push"]}, [], None),
         ({"conclusion": ["success"]}, ["red"], "run 1"),
+        ({"id": [1]}, ["green"], "run ?"),
     ],
 )
 def test_an_answer_reads_a_field_of_the_wrong_type_without_trusting_it(
@@ -655,3 +659,127 @@ def test_an_answer_with_a_time_that_is_not_an_instant_is_not_known(
     at = history(tmp_path)
     read, _ = answered(tmp_path, capsys, page(tier2(at["tip"], created_at=created)))
     assert read.runs is None
+
+
+def test_the_chain_is_the_first_parent_line_and_each_merge_holds_the_runs_it_brought(
+    tmp_path: Path,
+) -> None:
+    repository(tmp_path)
+    first = git(tmp_path, "rev-parse", "HEAD")
+    git(tmp_path, "switch", "-q", "-c", "side")
+    aside = commit(tmp_path, "feat(core): on the side")
+    git(tmp_path, "switch", "-q", "-c", "never")
+    never = commit(tmp_path, "feat(core): never merged")
+    git(tmp_path, "switch", "-q", "main")
+    second = commit(tmp_path, "feat(core): second")
+    git(tmp_path, "merge", "-q", "--no-ff", "-m", "Merge side", "side")
+    merged = git(tmp_path, "rev-parse", "HEAD")
+    asked = [aside, first, never, "--all", aside.upper()]
+    assert forge_runs.chain(tmp_path, "main", asked) == (
+        unproven.Landed(merged, "Merge side", frozenset({aside})),
+        unproven.Landed(second, "feat(core): second"),
+        unproven.Landed(first, "feat(core): the clean state"),
+    )
+    assert forge_runs.chain(tmp_path, "nowhere", asked) == ()
+
+
+def pull_merged(root: Path) -> dict[str, str]:
+    repository(root)
+    shas = {"base": git(root, "rev-parse", "HEAD")}
+    git(root, "switch", "-q", "-c", "earlier")
+    shas["remote"] = commit(root, "feat(core): the default branch's tip then")
+    git(root, "switch", "-q", "main")
+    shas["local"] = commit(root, "feat(core): committed on a main that moved")
+    git(root, "merge", "-q", "--no-ff", "-m", "Merge the default branch", "earlier")
+    shas["pulled"] = git(root, "rev-parse", "HEAD")
+    return shas
+
+
+def test_a_red_a_pull_merge_left_off_the_line_holds_and_speaks_from_that_merge(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    shas = pull_merged(tmp_path)
+    red = page(tier2(shas["remote"], "failure", id=2), tier2(shas["base"]))
+    assert deep(tmp_path, capsys, red) == "red"
+    read, _ = answered(tmp_path, capsys, red)
+    line = forge_runs.chain(tmp_path, "main", [run.commit for run in read.runs or ()])
+    hold = unproven.held(line, read, gated=False, bound=None)
+    assert hold is not None
+    assert hold.code == "tier2"
+    pulled, local = shas["pulled"][:12], shas["local"][:12]
+    assert spoken(tmp_path, capsys, red, sha=shas["remote"], state="red") == [
+        f"deep: red at `{shas['remote'][:12]}`. The merges of the default branch it speaks for:",
+        f"- `{pulled}` Merge the default branch",
+        f"- `{local}` feat(core): committed on a main that moved",
+    ]
+
+
+STEPS = st.lists(
+    st.tuples(st.sampled_from(["commit", "merge", "pull"]), st.integers(0, 3), st.integers(1, 2)),
+    min_size=1,
+    max_size=6,
+)
+RUNS = st.lists(
+    st.tuples(
+        st.integers(0, 30),
+        st.sampled_from(["completed", "completed", "in_progress"]),
+        st.sampled_from(["success", "failure", "cancelled", None]),
+        st.integers(0, 3),
+    ),
+    max_size=6,
+)
+
+
+def grown(root: Path, steps: list[tuple[str, int, int]]) -> list[str]:
+    tree = git(root, "rev-parse", "HEAD^{tree}")
+    shas = [git(root, "rev-parse", "HEAD")]
+    line = [0]
+
+    def made(*parents: int) -> int:
+        on = [argument for one in parents for argument in ("-p", shas[one])]
+        shas.append(git(root, "commit-tree", tree, *on, "-m", f"commit {len(shas)}"))
+        return len(shas) - 1
+
+    for kind, back, length in steps:
+        fork = line[max(0, len(line) - 1 - back)]
+        if kind == "commit":
+            line.append(made(line[-1]))
+            continue
+        side = fork
+        for _ in range(length):
+            side = made(side)
+        line.append(made(line[-1], side) if kind == "merge" else made(side, line[-1]))
+    return shas
+
+
+@settings(max_examples=60)
+@given(STEPS, RUNS, st.booleans())
+def test_a_red_that_todays_deep_reader_sees_on_any_history_holds(
+    steps: list[tuple[str, int, int]],
+    runs: list[tuple[int, str, str | None, int]],
+    cut: bool,  # noqa: FBT001
+) -> None:
+    with tempfile.TemporaryDirectory() as scratch:
+        root = Path(scratch) / "repo"
+        repository(root)
+        shas = grown(root, steps)
+        listed = [
+            tier2(
+                shas[index % len(shas)] if index < 2 * len(shas) else "f" * 40,
+                conclusion,
+                status=status,
+                created_at=f"2026-11-20T09:{minute * 20:02d}:00Z",
+                id=number,
+            )
+            for number, (index, status, conclusion, minute) in enumerate(runs)
+        ]
+        text = json.dumps({"total_count": len(listed) + cut, "workflow_runs": listed})
+        tip, events = shas[-1], forge_runs.DEEP_EVENTS
+        today = forge_runs.on_the_tip(text, root=root, tip=tip, repository=REPO, events=events)
+        target = Path(scratch) / "answer.json"
+        argv = ["deep", "--tip", tip, "--repository", REPO, "--root", str(root)]
+        assert forge_runs.main([*argv, "--answer", str(target)], text) == 0
+        read = unproven.read(target)
+        line = forge_runs.chain(root, tip, [run.commit for run in read.runs or ()])
+        if today == "red":
+            assert unproven.held(line, read, gated=False, bound=None) is not None, text
