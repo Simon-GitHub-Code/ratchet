@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import conformance
+import gatelib
 import owed
 import plugin_pin
 import upgrade
@@ -137,28 +138,37 @@ def noted(root: Path, note: str) -> None:
     commit(root, "docs: a note")
 
 
-def on_the_default_branch(how: str, tmp_path: Path) -> tuple[Path, Path]:
-    writer = adopted.copy(merged_by(how), tmp_path / "writer")
-    return writer, once_from(merged_by(how), tmp_path / "once")
+def remote(root: Path, place: Path, name: str = "origin") -> Path:
+    git(place, "init", "-q", "--bare", f"{name}.git")
+    git(root, "remote", "add", name, str(place / f"{name}.git"))
+    git(root, "push", "-q", name, "main")
+    git(root, "remote", "set-head", name, "main")
+    return root
 
 
-def ahead_of_the_remote(tmp_path: Path) -> tuple[Path, Path]:
-    writer = adopted.copy(held_base(), tmp_path / "writer")
-    git(tmp_path, "init", "-q", "--bare", "origin.git")
-    git(writer, "remote", "add", "origin", str(tmp_path / "origin.git"))
-    git(writer, "push", "-q", "origin", "main")
-    noted(writer, "a local commit")
-    upgraded(writer, FIRST)
-    noted(writer, "another local commit")
-    reference = once_from(held_base(), tmp_path / "once", "a local commit", "another local commit")
-    return writer, reference
+def on_the_default_branch(how: str, tmp_path: Path) -> Path:
+    return remote(adopted.copy(merged_by(how), tmp_path / "writer"), tmp_path)
 
 
-def on_an_open_branch(tmp_path: Path) -> tuple[Path, Path]:
-    return adopted.copy(upgrades("held", FIRST), tmp_path / "writer"), upgrades("held", SECOND)
+def without_a_remote(tmp_path: Path) -> Path:
+    return adopted.copy(merged_by("fast-forward"), tmp_path / "writer")
 
 
-def after_the_default_branch_moved(tmp_path: Path) -> tuple[Path, Path]:
+def ahead_of_the_remote(tmp_path: Path, *, local: tuple[str, ...]) -> Path:
+    writer = remote(adopted.copy(held_base(), tmp_path / "writer"), tmp_path)
+    for step in local:
+        if step == FIRST:
+            upgraded(writer, FIRST)
+        else:
+            noted(writer, step)
+    return writer
+
+
+def on_an_open_branch(tmp_path: Path) -> Path:
+    return adopted.copy(upgrades("held", FIRST), tmp_path / "writer")
+
+
+def after_the_default_branch_moved(tmp_path: Path) -> Path:
     writer = adopted.copy(held_base(), tmp_path / "writer")
     branch(writer, "rerun")
     upgraded(writer, FIRST)
@@ -167,31 +177,69 @@ def after_the_default_branch_moved(tmp_path: Path) -> tuple[Path, Path]:
     upgraded(writer, FIRST)
     git(writer, "checkout", "-q", "main")
     git(writer, "merge", "-q", "--no-ff", "--no-edit", "other")
-    reference = adopted.copy(writer, tmp_path / "moved")
     git(writer, "checkout", "-q", "rerun")
     git(writer, "merge", "-q", "--no-edit", "main")
-    return writer, once_from(reference, tmp_path / "once")
+    return writer
 
 
-def with_one_commit(tmp_path: Path) -> tuple[Path, Path]:
+def rebased(tmp_path: Path) -> Path:
+    writer = remote(adopted.copy(held_base(), tmp_path / "writer"), tmp_path)
+    branch(writer, "rerun")
+    upgraded(writer, FIRST)
+    git(writer, "checkout", "-q", "main")
+    noted(writer, "the default branch moved")
+    git(writer, "push", "-q", "origin", "main")
+    git(writer, "checkout", "-q", "rerun")
+    git(writer, "rebase", "-q", "main")
+    return writer
+
+
+def stacked(tmp_path: Path) -> Path:
+    writer = remote(adopted.copy(held_base(), tmp_path / "writer"), tmp_path)
+    branch(writer, "first")
+    upgraded(writer, FIRST)
+    branch(writer, "second")
+    noted(writer, "stacked on the first")
+    return writer
+
+
+def behind_the_remote(tmp_path: Path) -> Path:
+    writer = remote(adopted.copy(held_base(), tmp_path / "writer"), tmp_path)
+    branch(writer, "elsewhere")
+    noted(writer, "pushed from another clone")
+    git(writer, "push", "-q", "origin", "elsewhere:main")
+    git(writer, "checkout", "-q", "main")
+    branch(writer, "rerun")
+    upgraded(writer, FIRST)
+    return writer
+
+
+def with_another_remote(tmp_path: Path) -> Path:
+    writer = remote(adopted.copy(held_base(), tmp_path / "writer"), tmp_path, "upstream")
+    branch(writer, "rerun")
+    upgraded(writer, FIRST)
+    return writer
+
+
+def with_one_commit(tmp_path: Path) -> Path:
     writer = adopted.copy(merged_upgrade(), tmp_path / "writer")
     git(writer, "checkout", "-q", "--orphan", "solo")
     commit(writer, "feat(core): the one commit")
     git(writer, "branch", "-q", "-D", "main")
     git(writer, "branch", "-q", "-m", "main")
-    return writer, once_from(writer, tmp_path / "once")
+    return writer
 
 
-def with_no_default_branch(tmp_path: Path) -> tuple[Path, Path]:
+def with_no_default_branch(tmp_path: Path) -> Path:
     writer = adopted.copy(merged_upgrade(), tmp_path / "writer")
     git(writer, "branch", "-q", "-m", "trunk")
-    return writer, once_from(writer, tmp_path / "once")
+    return writer
 
 
-def detached(tmp_path: Path) -> tuple[Path, Path]:
-    writer, reference = on_an_open_branch(tmp_path)
+def detached(tmp_path: Path) -> Path:
+    writer = on_an_open_branch(tmp_path)
     git(writer, "checkout", "-q", "--detach")
-    return writer, reference
+    return writer
 
 
 FLOWS = {
@@ -202,35 +250,118 @@ FLOWS = {
     "on the default branch, merged by a merge commit": functools.partial(
         on_the_default_branch, "merge"
     ),
-    "on the default branch, ahead of the remote": ahead_of_the_remote,
+    "on the default branch, ahead of the remote": functools.partial(
+        ahead_of_the_remote, local=("a local commit", "another local commit")
+    ),
+    "on the default branch, ahead of the remote by an upgrade": functools.partial(
+        ahead_of_the_remote, local=(FIRST,)
+    ),
+    "on the default branch, ahead of the remote by an upgrade and a commit": functools.partial(
+        ahead_of_the_remote, local=("a local commit", FIRST, "another local commit")
+    ),
+    "on the default branch, with no remote": without_a_remote,
     "on an open upgrade branch": on_an_open_branch,
     "on an open branch the moved default branch was merged into": after_the_default_branch_moved,
+    "on a rebased branch": rebased,
+    "on a branch stacked on an open upgrade branch": stacked,
+    "on a branch from a default branch behind its remote": behind_the_remote,
+    "on a branch of a remote not named origin": with_another_remote,
     "in a repository with one commit": with_one_commit,
     "on a branch no default branch is known for": with_no_default_branch,
     "on a detached HEAD": detached,
 }
 
 
+def runs_again_unchanged(root: Path) -> None:
+    written = (root / LEDGER).read_bytes()
+    for _ in range(2):
+        again = upgrade.plan(root, plugins()[SECOND])
+        assert isinstance(again, upgrade.Plan)
+        assert again.changes == {}, "a further run plans nothing"
+        assert (root / LEDGER).read_bytes() == written
+
+
 @pytest.mark.parametrize("flow", list(FLOWS))
-def test_whatever_order_the_upgrades_run_in_the_ledger_is_one_upgrade_from_what_is_merged(
+def test_an_upgrade_is_judged_against_the_base_it_was_written_from_on_the_commit_that_carries_it(
     flow: str, *, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
 ) -> None:
-    writer, reference = FLOWS[flow](tmp_path)
+    writer = FLOWS[flow](tmp_path)
+    written_from = owed.next_base(writer)
+    held = owed.parse(gatelib.show(writer, str(written_from), str(LEDGER))).entries
     result = upgrade.plan(writer, plugins()[SECOND])
     assert isinstance(result, upgrade.Plan), result
     upgrade.apply(writer, result.changes)
-    assert (writer / LEDGER).read_text(encoding="utf-8") == (reference / LEDGER).read_text(
-        encoding="utf-8"
-    ), f"{flow}: the ledger is the one a single upgrade from what is merged writes"
-    if git(writer, "rev-parse", "--abbrev-ref", "HEAD") in {"main", "trunk", "HEAD"}:
-        branch(writer, "up")
     commit(writer, f"chore(method): upgrade the Ratchet plugin to {SECOND}")
+    assert gatelib.base_commit(writer) == written_from, f"{flow}: judged from the base written from"
+    assert [e for e in owed.read(writer).entries if e not in held and e.since != SECOND] == [], (
+        f"{flow}: an entry the base does not hold is owed since the pin the change moves to"
+    )
     monkeypatch.setattr(plugin_pin, "PLUGIN", plugins()[SECOND])
     code, out = gate(writer, capsys)
     assert code == 0, f"{flow}: {out}"
-    again = upgrade.plan(writer, plugins()[SECOND])
-    assert isinstance(again, upgrade.Plan)
-    assert again.changes == {}, f"{flow}: a further run plans nothing"
+    runs_again_unchanged(writer)
+
+
+def test_a_result_committed_on_a_new_branch_is_settled_by_one_rerun_there(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+) -> None:
+    writer = ahead_of_the_remote(tmp_path, local=(FIRST,))
+    upgrade.apply(writer, plan_of(writer).changes)
+    branch(writer, "up")
+    commit(writer, f"chore(method): upgrade the Ratchet plugin to {SECOND}")
+    monkeypatch.setattr(plugin_pin, "PLUGIN", plugins()[SECOND])
+    assert gate(writer, capsys)[0] == 1, "the branch's gate judges from the remote's branch"
+    written_from = owed.next_base(writer)
+    capsys.readouterr()
+    assert upgrade.main(["upgrade.py", "--root", str(writer), "--apply"]) == 0
+    out = capsys.readouterr().out
+    assert f"  {LEDGER}\n    - write down " in out, "the rerun names the ledger it changes"
+    commit(writer, "chore(method): owe the branch's entries since the pin it moves to")
+    assert gatelib.base_commit(writer) == written_from
+    code, out = gate(writer, capsys)
+    assert code == 0, out
+    runs_again_unchanged(writer)
+
+
+def test_a_result_carried_to_the_default_branch_is_settled_by_one_rerun_there(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+) -> None:
+    writer = ahead_of_the_remote(tmp_path, local=(FIRST,))
+    branch(writer, "up")
+    upgrade.apply(writer, plan_of(writer).changes)
+    git(writer, "checkout", "-q", "main")
+    written_from = owed.next_base(writer)
+    upgrade.apply(writer, plan_of(writer).changes)
+    commit(writer, f"chore(method): upgrade the Ratchet plugin to {SECOND}")
+    assert gatelib.base_commit(writer) == written_from
+    monkeypatch.setattr(plugin_pin, "PLUGIN", plugins()[SECOND])
+    code, out = gate(writer, capsys)
+    assert code == 0, out
+    runs_again_unchanged(writer)
+
+
+def plan_of(root: Path) -> upgrade.Plan:
+    result = upgrade.plan(root, plugins()[SECOND])
+    assert isinstance(result, upgrade.Plan), result
+    return result
+
+
+def test_a_shallow_clone_without_the_merge_base_says_it_measured_the_ledger_against_head(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+) -> None:
+    writer = remote(adopted.copy(held_base(), tmp_path / "writer"), tmp_path)
+    branch(writer, "rerun")
+    upgraded(writer, FIRST)
+    git(writer, "push", "-q", "origin", "rerun")
+    shallow = tmp_path / "shallow"
+    source = f"file://{tmp_path / 'origin.git'}"
+    git(tmp_path, "clone", "-q", "--depth", "1", "--branch", "rerun", source, str(shallow))
+    monkeypatch.setattr(plugin_pin, "PLUGIN", plugins()[SECOND])
+    said = "The history is shallow, and the owed ledger was measured against HEAD.\n"
+    for root, shown in ((shallow, True), (writer, False)):
+        capsys.readouterr()
+        upgrade.main(["upgrade.py", "--root", str(root)])
+        assert (said in capsys.readouterr().out) is shown, root
 
 
 def test_an_entry_the_merge_base_holds_is_left_as_the_change_has_it_and_the_gate_judges_it(
@@ -356,7 +487,7 @@ def test_an_entry_the_base_does_not_owe_is_still_red_after_a_rerun_and_a_rerun_d
     out = capsys.readouterr().out
     base = git(rerun, "merge-base", "HEAD", "main")[:12]
     assert (
-        f"drop 1 entry this change brought, which one upgrade from the merge base {base}"
+        f"drop 1 entry this change brought, which one upgrade from the gate's base {base}"
         f" would not write: '{written.problem}' for {written.path} ({written.rule})\n"
     ) in out
     assert "write down 0" not in out
