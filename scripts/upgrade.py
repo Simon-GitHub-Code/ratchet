@@ -75,6 +75,7 @@ class Plan:
     shallow: bool = False
     branch: str | None = None
     head: str = ""
+    owes: bool = False
 
     @property
     def edits(self) -> int:
@@ -265,6 +266,7 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
         approved = sum(
             editor(sandbox, f.path) != NOT_GUARDED for f in converged.left if id(f) not in reds
         )
+        owes = bool(owed.read(sandbox).entries)
     return Plan(
         old=standing(root, plugin),
         new=plugin_pin.in_use(plugin),
@@ -288,6 +290,7 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
         and base == gatelib.git(root, "rev-parse", "--verify", "-q", "HEAD"),
         branch=gatelib.git(root, "symbolic-ref", "--short", "-q", "HEAD"),
         head=str(gatelib.git(root, "rev-parse", "--verify", "-q", "HEAD"))[:12],
+        owes=owes,
     )
 
 
@@ -564,7 +567,7 @@ def plain(result: Plan, *, applied: bool) -> str:
     assumed = list(dict.fromkeys(finding.fix.assumed for finding in result.owner))
     if assumed:
         lines += ["Assumed until you say otherwise:", *(f"- {line}" for line in assumed)]
-    if str(owed.LEDGER) in result.changes:
+    if str(owed.LEDGER) in result.changes or (result.changes and result.owes):
         lines.append(
             f"Commit this on {result.branch}; to commit it on another branch, run the upgrade"
             " again there first."
