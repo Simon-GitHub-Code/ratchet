@@ -51,8 +51,13 @@ READY_ROLE = "ready-for-agent"
 LABELS_RECORD = Path("docs/agents/triage-labels.md")
 ROLE_COLUMN = "label in mattpocock/skills"
 TRACKER_COLUMN = "label in our tracker"
-EMPTY_BODIES = frozenset({"", "tbd", "todo", "n/a", "none", "-", "..."})
-MARKUP = re.compile(r"^(?:[-*+]\s+|[`*_\s])+|[`*_\s.:;,\-]+$")
+EMPTY_BODIES = frozenset({"", "tbd", "todo", "n/a"})
+NO_REASON = frozenset({"", "none", "n/a"})
+INVISIBLE = re.compile(r"[\u00ad\u200b-\u200f\u2060-\u2064\ufeff]")
+EDGES = re.compile(
+    r"^(?:<br\s*/?>|&#?\w+;|\d+[.)]\s|[\W_])+|(?:<br\s*/?>|&#?\w+;|[\W_])+$", re.IGNORECASE
+)
+NONE_AND = re.compile(r"none\b(.*)", re.IGNORECASE | re.DOTALL)
 PLACEHOLDER = re.compile(r"<[^<>\n]{2,}>")
 MIN_BODY = 40
 SLUG_WIDTH = 40
@@ -90,6 +95,10 @@ PRODUCES = {
     "operability": (
         "`/ratchet:conjecture <ticket>` writes `## Operability` on the ticket, or on its parent"
         " spec for all its tickets, from the binding and the record"
+    ),
+    "parent": (
+        "the owner points the ticket's `Parent:` line at its spec inside the repository, or at"
+        " a ticket on the tracker"
     ),
     "size": (
         "the orchestrator splits the ticket itself: the parts as tickets that block each other in"
@@ -135,7 +144,7 @@ class Ticket:
             if found is None:
                 return None
             parent = f"#{found.group(1)}" if found.group(1) else found.group(2)
-        if parent.endswith(".md") and not parent.startswith("#"):
+        if parent.endswith(".md") and not parent.startswith("#") and "://" not in parent:
             folder = posixpath.dirname(self.ref) if "/" in self.ref else ""
             return posixpath.normpath(posixpath.join(folder, parent))
         return parent
@@ -304,12 +313,16 @@ def section(text: str, heading: str) -> str:
     return match.group(1) if match else ""
 
 
+def bare(text: str) -> str:
+    return EDGES.sub("", INVISIBLE.sub("", text)).lower()
+
+
 def unfilled(text: str, template: str = "") -> str | None:
-    text = text.strip()
-    bare = MARKUP.sub("", text).lower()
-    if bare in EMPTY_BODIES:
+    value = bare(text)
+    reason = NONE_AND.fullmatch(value)
+    if value in EMPTY_BODIES or (reason is not None and bare(reason.group(1)) in NO_REASON):
         return "nothing"
-    if template and bare == template.lower():
+    if template and value == bare(template):
         return "the template's own words"
     first = PLACEHOLDER.search(text)
     if first and not re.search(r"\w", PLACEHOLDER.sub("", text)):
@@ -371,7 +384,7 @@ def conjecture_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
     parent_ref = parent_of(ticket, root)
     if parent_ref is None:
         return f"{ticket.ref} has no `{CONJECTURE}` section and names no parent"
-    parent = fetch(parent_ref, root, gh)
+    parent = read_parent(parent_ref, root, gh)
     if parent is None:
         return f"{ticket.ref} has no `{CONJECTURE}` section; its parent {parent_ref} was not found"
     inherited = parent.conjecture
@@ -455,16 +468,19 @@ def operability_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
         return None
     lines = operability_lines(ticket, None)
     parent_ref = parent_of(ticket, root)
+    lacking, unread, templated = [], [], []
     if parent_ref is not None and any(name not in lines for name, _says in asked):
-        lines = operability_lines(ticket, fetch(parent_ref, root, gh))
-    lacking, templated = [], []
+        parent = read_parent(parent_ref, root, gh)
+        if parent is None:
+            unread.append(f"its parent {parent_ref} could not be read")
+        lines = operability_lines(ticket, parent)
     for name, says in asked:
         cause = unfilled(lines.get(name, ""), says)
         if cause == "nothing":
             lacking.append(f"`{name}:` ({says})")
         elif cause is not None:
             templated.append(f"has `{name}:` with {cause}")
-    parts = ([f"lacks {', '.join(lacking)}"] if lacking else []) + templated
+    parts = ([f"lacks {', '.join(lacking)}"] if lacking else []) + unread + templated
     if not parts:
         return None
     return f"{ticket.ref}: `{OPERABILITY}` {'; '.join(parts)}; write each, or `none` and why"
@@ -488,12 +504,21 @@ def size_failure(ticket: Ticket, root: Path) -> str | None:
 
 def operability_line(name: str) -> re.Pattern[str]:
     return re.compile(
-        rf"^[-* \t]*\*{{0,2}}{name}:?\*{{0,2}}:?[ \t]*(.*)$", re.IGNORECASE | re.MULTILINE
+        rf"^[-* \t]*\*{{0,2}}{name}(?::\*{{0,2}}|\*{{1,2}}:)[ \t]*(.*)$",
+        re.IGNORECASE | re.MULTILINE,
     )
 
 
 def parent_of(ticket: Ticket, root: Path) -> str | None:
     return ticket.parent or beside_spec(ticket.ref, root)
+
+
+def outside(ref: str, root: Path) -> bool:
+    return Path(ref).is_absolute() or not (root / ref).resolve().is_relative_to(root.resolve())
+
+
+def read_parent(ref: str, root: Path, gh: Runner) -> Ticket | None:
+    return None if outside(ref, root) else fetch(ref, root, gh)
 
 
 def reads(ticket: Ticket, root: Path) -> tuple[frozenset[str], frozenset[str]]:
@@ -574,6 +599,12 @@ def check_ticket(report: Report, ticket: Ticket, label: str, *, root: Path, gh: 
     report.slug = slug_of(ticket.title, ticket.number)
     report.branch = branch_of(ticket, report.slug)
     report.parent = parent_of(ticket, root)
+    if report.parent is not None and outside(report.parent, root):
+        report.fail(
+            "parent",
+            f"{ticket.ref}: its parent {report.parent} is outside the repository, so the"
+            " preflight does not read it",
+        )
     if not ticket.is_open:
         report.fail("open", f"{ticket.ref} is not open")
     if (parts := split_parts(ticket, root)) is not None:

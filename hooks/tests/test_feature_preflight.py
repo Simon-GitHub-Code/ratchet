@@ -708,11 +708,11 @@ LACKS_FLAG = (
         "`none`.",
         "**none**:",
         "none -",
-        "none —",
-        "none –",
+        "none \u2014",
+        "none \u2013",
         "none!",
         "none?",
-        "none…",
+        "none\u2026",
         "(none)",
         "[none]",
         '"none"',
@@ -723,14 +723,14 @@ LACKS_FLAG = (
         "none<br>",
         "none <br />",
         "none&nbsp;",
-        "​none",
-        "no​ne",
-        "none﻿",
+        "\u200bnone",
+        "no\u200bne",
+        "none\ufeff",
         "*",
         "none: none",
         "none: n/a",
         "none: -",
-        "none — (none)",
+        "none \u2014 (none)",
     ],
 )
 def test_a_none_with_no_reason_is_refused_in_any_markup(tmp_path: Path, bare: str) -> None:
@@ -746,12 +746,12 @@ def test_a_none_with_no_reason_is_refused_in_any_markup(tmp_path: Path, bare: st
         "**none**: the command only reads",
         "- none: the command only reads",
         "none, the command only reads",
-        "none — the command only reads",
+        "none \u2014 the command only reads",
         "none - the command only reads",
         "none; the command only reads",
         "none (the command only reads)",
         "none because the command only reads",
-        "`none` — the command only reads",
+        "`none` \u2014 the command only reads",
         "none: tbd",
         "nothing a user meets changes",
     ],
@@ -853,9 +853,7 @@ def test_a_parent_that_cannot_be_read_is_named(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("line", ["Parent: ../../../../outside.md", "Parent: {absolute}"])
-def test_a_parent_outside_the_repository_is_refused_and_not_read(
-    tmp_path: Path, line: str
-) -> None:
+def test_a_parent_outside_the_repository_is_refused_and_not_read(tmp_path: Path, line: str) -> None:
     outside = tmp_path / "outside.md"
     outside.write_text(f"# O{CONJECTURE}\n{OPERATED}{FLAG}{SIGNAL}{LOAD}{SECURITY}")
     binding = f"# Binding\n\n{LIVE}\n## Gates\n\n- Application types: service\n"
