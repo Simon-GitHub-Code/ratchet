@@ -323,21 +323,48 @@ def test_a_result_committed_on_a_new_branch_is_settled_by_one_rerun_there(
     runs_again_unchanged(writer)
 
 
-def test_a_result_carried_to_the_default_branch_is_settled_by_one_rerun_there(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
-) -> None:
+def carried_to_the_default_branch(tmp_path: Path) -> Path:
     writer = ahead_of_the_remote(tmp_path, local=(FIRST,))
     branch(writer, "up")
     upgrade.apply(writer, plan_of(writer).changes)
     git(writer, "checkout", "-q", "main")
+    return writer
+
+
+def test_a_result_carried_to_the_default_branch_is_settled_by_one_rerun_there_before_the_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+) -> None:
+    writer = carried_to_the_default_branch(tmp_path)
     written_from = owed.next_base(writer)
-    upgrade.apply(writer, plan_of(writer).changes)
+    held = owed.parse(gatelib.show(writer, str(written_from), str(LEDGER))).entries
+    monkeypatch.setattr(plugin_pin, "PLUGIN", plugins()[SECOND])
+    capsys.readouterr()
+    assert upgrade.main(["upgrade.py", "--root", str(writer), "--apply"]) == 0
+    out = capsys.readouterr().out
+    [line] = lines(out, "set back the since of")
+    assert f"the gate's base {written_from[:12]} holds, to the since it holds there: '" in line
+    assert line.endswith(f") from '{SECOND}' to '{FIRST}'")
+    assert [e for e in owed.read(writer).entries if e not in held and e.since != SECOND] == []
     commit(writer, f"chore(method): upgrade the Ratchet plugin to {SECOND}")
     assert gatelib.base_commit(writer) == written_from
-    monkeypatch.setattr(plugin_pin, "PLUGIN", plugins()[SECOND])
     code, out = gate(writer, capsys)
     assert code == 0, out
     runs_again_unchanged(writer)
+
+
+def test_a_result_committed_on_the_default_branch_before_the_rerun_stays_red_and_is_the_next_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+) -> None:
+    writer = carried_to_the_default_branch(tmp_path)
+    commit(writer, f"chore(method): upgrade the Ratchet plugin to {SECOND}")
+    monkeypatch.setattr(plugin_pin, "PLUGIN", plugins()[SECOND])
+    code, out = gate(writer, capsys)
+    assert code == 1
+    assert "which the upgrade's own plan does not leave red on the merge base" in out
+    assert plan_of(writer).changes == {}, "the gate judges the red commit against its parent"
+    noted(writer, "the next commit")
+    code, out = gate(writer, capsys)
+    assert code == 0, out
 
 
 def plan_of(root: Path) -> upgrade.Plan:
@@ -364,7 +391,7 @@ def test_a_shallow_clone_without_the_merge_base_says_it_measured_the_ledger_agai
         assert (said in capsys.readouterr().out) is shown, root
 
 
-def test_an_entry_the_merge_base_holds_is_left_as_the_change_has_it_and_the_gate_judges_it(
+def test_a_since_edited_on_an_entry_the_base_holds_is_set_back_by_a_rerun_and_named(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
 ) -> None:
     root = adopted.copy(held_base(), tmp_path / "repo")
@@ -373,15 +400,23 @@ def test_an_entry_the_merge_base_holds_is_left_as_the_change_has_it_and_the_gate
     edited = replace(victim, since=FIRST)
     (root / LEDGER).write_text(owed.render([*rest, edited]), encoding="utf-8")
     commit(root, "chore(method): date an owed entry by hand")
-    upgraded(root, SECOND)
-    assert edited in owed.read(root).entries, "the upgrade leaves the base's own entry as it is"
     monkeypatch.setattr(plugin_pin, "PLUGIN", plugins()[SECOND])
     code, out = gate(root, capsys)
     assert code == 1
+    assert f"adds or changes '{victim.problem}' for {victim.path} ({victim.rule})" in out
+    capsys.readouterr()
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    base = git(root, "merge-base", "HEAD", "main")[:12]
     assert (
-        f"adds '{victim.problem}' for {victim.path} ({victim.rule}) since '{FIRST}'; the change"
-        f" moves the plugin pin to {SECOND}"
-    ) in out
+        f"set back the since of 1 entry the gate's base {base} holds, to the since it holds"
+        f" there: '{victim.problem}' for {victim.path} ({victim.rule}) from '{FIRST}' to"
+        f" '{victim.since}'"
+    ) in capsys.readouterr().out
+    assert victim in owed.read(root).entries
+    assert edited not in owed.read(root).entries
+    commit(root, f"chore(method): upgrade the Ratchet plugin to {SECOND}")
+    code, out = gate(root, capsys)
+    assert code == 0, out
 
 
 def test_an_entry_the_merge_base_holds_keeps_its_since_through_a_rerun() -> None:
@@ -520,8 +555,11 @@ def test_the_entries_a_change_brings_are_those_the_gate_judges_but_its_edits_of_
     before = [kept, moved, entry(path="b.toml")]
     after = [kept, replace(moved, path="new.toml"), redated, new]
     renamed = {"old.toml": "new.toml"}
-    brought = owed.brought(before, after, renamed)
+    brought, edits = owed.brought(before, after, renamed)
     assert brought == Counter([new])
+    assert sorted(edits) == sorted(
+        [(replace(moved, path="new.toml"), moved), (redated, entry(path="b.toml"))]
+    )
     judged = owed.grown(
         owed.Ledger(tuple(before), ()),
         owed.Ledger(tuple(after), ()),
@@ -532,3 +570,27 @@ def test_the_entries_a_change_brings_are_those_the_gate_judges_but_its_edits_of_
     assert sorted(line.split(" (")[0] for line in judged) == sorted(
         f"{LEDGER}: adds or changes '{e.problem}' for {e.path}" for e in (redated, new)
     )
+
+
+@pytest.mark.parametrize("ahead", [False, True])
+@pytest.mark.parametrize("named", [None, "trunk"])
+@pytest.mark.parametrize("on", ["main", "origin/main", "trunk", "feature", "HEAD"])
+@pytest.mark.parametrize("remote_name", [None, "origin", "upstream", "team/origin"])
+def test_the_writer_s_base_is_the_base_the_gate_takes_for_the_commit_made_next(
+    remote_name: str | None, on: str, named: str | None, ahead: bool, tmp_path: Path
+) -> None:
+    binding = f"- Default branch: `{named}`\n" if named else "# Binding\n"
+    root = repository(tmp_path / "repo", {str(gatelib.BINDING): binding})
+    noted(root, "a second commit")
+    if remote_name:
+        remote(root, tmp_path, remote_name)
+    if ahead:
+        noted(root, "a commit the remote does not hold")
+    if on == "HEAD":
+        git(root, "checkout", "-q", "--detach")
+    elif on != "main":
+        branch(root, on)
+    noted(root, f"a commit on {on}")
+    written_from = owed.next_base(root)
+    noted(root, "the commit the gate judges")
+    assert gatelib.base_commit(root) == written_from
