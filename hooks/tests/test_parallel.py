@@ -1,5 +1,6 @@
 import argparse
 import json
+import math
 import os
 import re
 import shlex
@@ -12,6 +13,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 import budget
 import gatelib
@@ -617,6 +620,280 @@ def test_a_group_the_runner_may_not_signal_is_left_and_not_reported(
 def test_a_serial_group_launches_where_its_first_gate_stands() -> None:
     units = parallel.plan(["a", "b", "c", "d"], [["c", "a"]])
     assert units == [("c", "a"), ("b",), ("d",)]
+
+
+TICKET_TIER = {
+    "lint": 36.4,
+    "fmt-check": 13.4,
+    "types": 12.4,
+    "imports": 2.4,
+    "deadcode": 4.6,
+    "lint-workflows": 3.4,
+    "secrets": 1.2,
+    "spelling": 2.1,
+    "links": 1.8,
+    "licenses": 1.5,
+    "markers": 1.2,
+    "sizes": 1.1,
+    "decisions": 0.9,
+    "headers": 0.7,
+    "env": 0.6,
+    "limits": 21.3,
+}
+
+
+def ends(units: list[tuple[str, ...]], seconds: dict[str, float], lanes: int) -> float:
+    free = [0.0] * lanes
+    for unit in units:
+        lane = free.index(min(free))
+        free[lane] += sum(seconds[name] for name in unit)
+    return max(free)
+
+
+def test_a_tier_whose_longest_gate_is_declared_last_ends_near_the_bound_on_two_lanes() -> None:
+    declared = list(TICKET_TIER)
+    assert declared[-1] == "limits"
+    bound = max(sum(TICKET_TIER.values()) / 2, *TICKET_TIER.values())
+    today = ends(parallel.plan(declared, [], seconds={}), TICKET_TIER, 2)
+    planned = ends(parallel.plan(declared, [], seconds=TICKET_TIER), TICKET_TIER, 2)
+    assert today > bound + 10, f"declared order ends at {today:.1f}s"
+    assert planned <= bound + min(TICKET_TIER.values()), (
+        f"longest first ends at {planned:.1f}s, the bound is {bound:.1f}s"
+    )
+
+
+def test_with_no_record_the_gates_start_in_the_order_given() -> None:
+    declared = list(TICKET_TIER)
+    assert parallel.plan(declared, [], seconds={}) == [(name,) for name in declared]
+
+
+def test_gates_with_the_same_recorded_time_start_in_the_order_given() -> None:
+    seconds = {"a": 5.0, "b": 5.0, "c": 5.0, "d": 9.0}
+    assert parallel.plan(["a", "b", "c", "d"], [], seconds=seconds) == [
+        ("d",),
+        ("a",),
+        ("b",),
+        ("c",),
+    ]
+
+
+def test_a_gate_with_no_record_starts_before_the_recorded_ones_in_the_order_given() -> None:
+    seconds = {"b": 1.0, "d": 30.0}
+    units = parallel.plan(["a", "b", "c", "d", "e"], [], seconds=seconds)
+    assert units == [("a",), ("c",), ("e",), ("d",), ("b",)]
+
+
+def test_a_serial_group_counts_as_the_sum_of_its_gates_and_keeps_its_order() -> None:
+    seconds = {"a": 6.0, "b": 2.0, "c": 4.0, "d": 5.0}
+    units = parallel.plan(["a", "b", "c", "d"], [["d", "b"]], seconds=seconds)
+    assert units == [("d", "b"), ("a",), ("c",)]
+
+
+def recorded(path: Path, *runs: tuple[str, float]) -> None:
+    for name, seconds in runs:
+        outcome = budget.Outcome(name, seconds, None, 0)
+        budget.report(path, outcome, runrecord.stamp(path.parent, "tree"))
+
+
+def test_a_tier_starts_the_gates_its_record_says_take_longest_first(tmp_path: Path) -> None:
+    log, report = tmp_path / "log", tmp_path / "timing.jsonl"
+    short, middle, long = (gate(LOG, log, name) for name in ("short", "middle", "long"))
+    recorded(report, (short, 1.0), (middle, 2.0), (long, 3.0))
+    assert run("--jobs", "1", "--report", str(report), "--", short, middle, long) == 0
+    starts = [line for line in log.read_text().splitlines() if line.startswith("+")]
+    assert starts == ["+long", "+middle", "+short"]
+
+
+def test_a_gate_s_expected_time_is_the_median_of_its_last_runs(tmp_path: Path) -> None:
+    log, report = tmp_path / "log", tmp_path / "timing.jsonl"
+    once, steady = gate(LOG, log, "once"), gate(LOG, log, "steady")
+    recorded(report, *((once, 90.0),) * 5, (steady, 3.0))
+    recorded(report, (once, 1.0), (once, 60.0), (once, 1.0), (once, 1.0), (once, 1.0))
+    assert run("--jobs", "1", "--report", str(report), "--", once, steady) == 0
+    starts = [line for line in log.read_text().splitlines() if line.startswith("+")]
+    assert starts == ["+steady", "+once"]
+
+
+DEEP = b"[" * 100_000 + b"]" * 100_000
+
+
+def seconds_of_a(value: bytes) -> bytes:
+    return b'{"key": FIRST, "seconds": ' + value + b"}\n"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        None,
+        b"",
+        b"\0\xff\xfe not a record\n",
+        (
+            b'{not json\n[1, 2]\n{"seconds": 9}\n'
+            b'{"key": 3, "seconds": 9}\n{"key": "x", "seconds": "slow"}\n'
+        ),
+        DEEP + b"\n",
+        seconds_of_a(DEEP),
+        seconds_of_a(b"9" * 309),
+        seconds_of_a(b"9" * 5000),
+        seconds_of_a(b"true"),
+        seconds_of_a(b"NaN") + seconds_of_a(b"Infinity") + seconds_of_a(b"-Infinity"),
+        seconds_of_a(b"-5"),
+        seconds_of_a(b"0"),
+    ],
+    ids=[
+        "missing",
+        "empty",
+        "binary",
+        "garbled",
+        "nested-deeply",
+        "seconds-nested-deeply",
+        "seconds-past-a-float",
+        "seconds-past-the-digit-limit",
+        "seconds-a-boolean",
+        "seconds-not-finite",
+        "seconds-negative",
+        "seconds-zero",
+    ],
+)
+def test_a_record_that_cannot_be_read_leaves_the_order_given(
+    tmp_path: Path, content: bytes | None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    log, report = tmp_path / "log", tmp_path / "timing.jsonl"
+    names = ["a", "b", "c"]
+    gates = [gate(LOG, log, name) for name in names]
+    if content is not None:
+        report.write_bytes(content.replace(b"FIRST", json.dumps(gates[0]).encode()))
+    assert run("--jobs", "1", "--report", str(report), "--", *gates) == 0
+    starts = [line for line in log.read_text().splitlines() if line.startswith("+")]
+    assert starts == ["+a", "+b", "+c"]
+    assert capsys.readouterr().out.endswith("parallel: green (3 ran)\n")
+
+
+def test_gates_measured_alone_run_last_in_the_order_given_whatever_the_record(
+    tmp_path: Path,
+) -> None:
+    log, report = tmp_path / "log", tmp_path / "timing.jsonl"
+    timed, also = gate(LOG, log, "timed"), gate(LOG, log, "also")
+    short, long = gate(LOG, log, "short"), gate(LOG, log, "long")
+    recorded(report, (timed, 50.0), (also, 90.0), (short, 1.0), (long, 2.0))
+    arguments = ["--jobs", "1", "--report", str(report), "--alone", timed, also]
+    assert run(*arguments, "--", timed, short, also, long) == 0
+    starts = [line for line in log.read_text().splitlines() if line.startswith("+")]
+    assert starts == ["+long", "+short", "+timed", "+also"]
+
+
+JSON = st.recursive(
+    st.none() | st.booleans() | st.integers() | st.floats() | st.text(),
+    lambda inner: st.lists(inner) | st.dictionaries(st.text(), inner),
+    max_leaves=8,
+)
+NOT_A_TIME = JSON.filter(
+    lambda value: (
+        isinstance(value, bool) or not isinstance(value, int | float) or not 0 < value < math.inf
+    )
+)
+LINES = st.lists(
+    st.binary()
+    | JSON.map(json.dumps).map(str.encode)
+    | NOT_A_TIME.map(lambda value: json.dumps({"key": "a", "seconds": value}).encode()),
+    max_size=8,
+)
+
+
+@given(lines=LINES)
+def test_no_record_stops_a_tier_and_no_line_that_is_not_a_time_gives_one(
+    tmp_path_factory: pytest.TempPathFactory, lines: list[bytes]
+) -> None:
+    report = tmp_path_factory.mktemp("record") / "timing.jsonl"
+    report.write_bytes(b"\n".join(lines))
+    seconds = parallel.expected_seconds(report)
+    assert "a" not in seconds, f"a line that is not a time gave a {seconds['a']}s"
+    assert all(math.isfinite(value) and value > 0 for value in seconds.values()), seconds
+    units = parallel.plan(["a", "b", "c"], [], seconds=seconds)
+    assert sorted(name for unit in units for name in unit) == ["a", "b", "c"]
+
+
+RED_LOG = LOG + "sys.exit(1)\n"
+
+
+def test_fail_fast_starts_the_gates_in_the_order_given_whatever_the_record(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    log, report = tmp_path / "log", tmp_path / "timing.jsonl"
+    red = gate(RED_LOG, log, "red")
+    middle, long = gate(LOG, log, "middle"), gate(LOG, log, "long")
+    recorded(report, (red, 0.1), (middle, 2.0), (long, 3.0))
+    assert run("--jobs", "1", "--fail-fast", "--report", str(report), "--", red, middle, long) == 1
+    starts = [line for line in log.read_text().splitlines() if line.startswith("+")]
+    assert starts == ["+red"]
+    assert f"not started, --fail-fast: {middle}, {long}\n" in capsys.readouterr().out
+
+
+def test_a_record_far_larger_than_its_last_runs_is_read_only_at_its_end(tmp_path: Path) -> None:
+    log, report = tmp_path / "log", tmp_path / "timing.jsonl"
+    early, a, b = (gate(LOG, log, name) for name in ("early", "a", "b"))
+    recorded(report, *((early, 0.5),) * 50)
+    with report.open("r+b") as handle:
+        handle.truncate(handle.seek(0, os.SEEK_END) + 64 * 2**20)
+    with report.open("ab") as handle:
+        handle.write(b"\n")
+    recorded(report, (a, 3.0), (b, 2.0))
+    assert run("--jobs", "1", "--report", str(report), "--", a, b, early) == 0
+    starts = [line for line in log.read_text().splitlines() if line.startswith("+")]
+    assert starts == ["+early", "+a", "+b"], "a time 64 MiB before the end was read"
+
+
+def test_a_record_whose_window_starts_on_a_line_keeps_that_line(tmp_path: Path) -> None:
+    log, report = tmp_path / "log", tmp_path / "timing.jsonl"
+    first, other = gate(LOG, log, "first"), gate(LOG, log, "other")
+    lines = b"".join(
+        json.dumps({"key": name, "seconds": seconds}).encode() + b"\n"
+        for name, seconds in ((first, 1.0), (other, 3.0))
+    )
+    report.write_bytes(b"{}\n" + lines + b"\n" * (parallel.WINDOW - len(lines)))
+    assert run("--jobs", "1", "--report", str(report), "--", first, other) == 0
+    starts = [line for line in log.read_text().splitlines() if line.startswith("+")]
+    assert starts == ["+other", "+first"], "the whole first line of the window was dropped"
+
+
+def test_a_record_that_may_not_be_read_leaves_the_order_given(tmp_path: Path) -> None:
+    log, report = tmp_path / "log", tmp_path / "timing.jsonl"
+    short, long = gate(LOG, log, "short"), gate(LOG, log, "long")
+    recorded(report, (short, 1.0), (long, 3.0))
+    report.chmod(0o200)
+    try:
+        assert run("--jobs", "1", "--report", str(report), "--", short, long) == 0
+    finally:
+        report.chmod(0o600)
+    starts = [line for line in log.read_text().splitlines() if line.startswith("+")]
+    assert starts == ["+short", "+long"]
+
+
+def test_a_record_that_is_a_pipe_leaves_the_order_given(tmp_path: Path) -> None:
+    log, report = tmp_path / "log", tmp_path / "timing.jsonl"
+    gates = [gate(LOG, log, name) for name in ("a", "b", "c")]
+    os.mkfifo(report)
+    seen: list[list[str]] = []
+    held: list[int] = []
+
+    def lines() -> list[str]:
+        return log.read_text().splitlines() if log.exists() else []
+
+    def release() -> None:
+        until(lambda: any(line.startswith("+") for line in lines()))
+        seen.append([line for line in lines() if line.startswith("+")])
+        held.append(os.open(report, os.O_RDWR | os.O_NONBLOCK))
+
+    thread = threading.Thread(target=release)
+    thread.start()
+    try:
+        assert run("--jobs", "1", "--report", str(report), "--", *gates) == 0
+    finally:
+        thread.join()
+        for handle in held:
+            os.close(handle)
+    assert seen[0] == ["+a"], f"gates started before the pipe was opened: {seen[0]}"
+    assert [line for line in lines() if line.startswith("+")] == ["+a", "+b", "+c"]
 
 
 def test_a_signal_stops_every_gate_and_what_they_forked(

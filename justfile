@@ -8,7 +8,7 @@ default:
 tier0_gates := "lint types validate parse-workflow parse-adapters"
 tier1_gates := "test test-floor conformance-self-test lowered-smoke bite"
 
-test_shards := "16"
+test_shards := "20"
 shard := env_var_or_default("SHARD", "1")
 shards := env_var_or_default("SHARDS", "1")
 parallel := "python3 scripts/parallel.py --runner '" + just_executable() + "' --report .ratchet/timing.jsonl --wide test test-floor"
