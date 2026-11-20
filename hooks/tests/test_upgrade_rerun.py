@@ -632,3 +632,22 @@ def test_the_plain_words_name_where_the_ledger_was_measured_for_and_how_to_commi
     upgrade.main(["upgrade.py", "--root", str(writer)])
     out = capsys.readouterr().out
     assert "Commit this" not in out, f"{flow}: a plan that writes no ledger names no branch"
+
+
+@pytest.mark.parametrize(
+    "local", [(FIRST,), ("a local commit", FIRST, "another local commit")], ids=["last", "inside"]
+)
+def test_a_plan_that_leaves_an_owing_ledger_as_it_is_still_names_the_branch_it_holds_for(
+    local: tuple[str, ...], *, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+) -> None:
+    writer = ahead_of_the_remote(tmp_path, local=local)
+    monkeypatch.setattr(plugin_pin, "PLUGIN", plugins()[SECOND])
+    for apply in ([], ["--apply"]):
+        capsys.readouterr()
+        upgrade.main(["upgrade.py", "--root", str(writer), *apply])
+        out = capsys.readouterr().out
+        assert f"  {LEDGER}\n" not in out, "the plan leaves the ledger as it is"
+        assert lines(out.split("In plain words:")[1], "Commit this") == [
+            f"Commit this on main; {ELSEWHERE}"
+        ], apply
+    assert owed.read(writer).entries, "the ledger the plan leaves owes something"
