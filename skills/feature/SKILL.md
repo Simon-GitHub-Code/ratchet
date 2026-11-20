@@ -250,10 +250,12 @@ A ticket that passes the product ceilings (the preflight's `size` failure, the s
 
    Done when the check has passed the plan, or the ticket is parked as too large: after a second refusal, or at once for a part.
 
-3. **File it.** In the repository's own checkout, run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py" split <ticket> --plan <file> --root .`, only with a plan the check passed.
+3. **File it.** In the repository's own checkout, on the default branch, run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py" split <ticket> --plan <file> --root .`, only with a plan the check passed. With local tickets and no forge it also lands the parts on the default branch, as records alone.
+   - **Exit 0 with a `next:` line:** local tickets and a forge. Do what it says: commit the parts it names on a branch of their own, push it, open the pull request, and switch back to the default branch.
    - **Exit 1:** it refused the plan and has already parked the ticket as too large: it prints `closed: <ref>: parked`, and the report gives the reason. The ticket is the owner's. Do not run it again.
+   - **Exit 4:** the parts are filed and the ticket is closed as split, and the merge did not land them: it prints why. Relay that to the owner in the hand-over. Once the cause is gone, running it again lands them and files nothing twice.
 
-   Done when the parts are printed, or `split` has parked the ticket as too large.
+   Done when the parts are printed and on the default branch or in a pull request, or `split` has parked the ticket as too large, or exit 4's lines are in the hand-over.
 
 4. **Go on.** The hand-over says the ticket was split, into what, and why.
 
