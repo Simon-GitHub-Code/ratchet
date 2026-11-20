@@ -578,7 +578,7 @@ class _Checker:
         names = _assigned(words)
         verdicts = _variables(names) + self._scripts(environment.commands(names), context)
         context = context.exporting(names)
-        places = [context, *(self._entered(word, context) for word in _directories(words))]
+        places = _distinct([context, *(self._entered(w, context) for w in _directories(words))])
         for index in range(len(words)):
             if _name(words[index]) not in WRAPPERS and not environment.is_assignment(words[index]):
                 verdicts += [v for place in places for v in self.words(words[index:], place)]
