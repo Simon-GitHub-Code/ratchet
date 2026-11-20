@@ -7,8 +7,8 @@ import signal
 import tempfile
 import threading
 import time
-from collections.abc import Callable
-from contextlib import AbstractContextManager
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -956,6 +956,41 @@ def test_with_setup_every_part_of_a_fault_that_git_sees_is_still_checked(
     replaced(root, "src/code.txt", "first\n", "renamed\n")
     commit(root, "feat(core): an edit the fault leans on")
     assert project_bite.failures(root) == [f"{REGISTRY}: {says}"]
+
+
+@pytest.mark.parametrize(
+    ("fault", "builds"),
+    [
+        ('patch = "quality/bites/p.patch"', 1),
+        ('replace = { path = "src/code.txt", old = "second", new = "planted" }', 0),
+    ],
+    ids=["a patch fault", "no patch fault"],
+)
+def test_one_run_reads_the_tree_as_git_sees_it_at_most_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    fault: str,
+    builds: int,
+) -> None:
+    built: list[Path] = []
+    sees = project_bite.as_git_sees
+
+    @contextmanager
+    def counted(root: Path) -> Iterator[dict[str, str]]:
+        built.append(root)
+        with sees(root) as store:
+            yield store
+
+    monkeypatch.setattr(project_bite, "as_git_sees", counted)
+    root = deep(tmp_path, fault)
+    conformance.run(root)
+    assert len(built) == builds, f"one conformance run built {len(built)} scratch indexes"
+    built.clear()
+    replaced(root, "src/code.txt", "sixth\n", "sixth\nseventh\n")
+    assert prove(root, "--changed") == 0
+    assert len(built) == builds, f"one bite gate run built {len(built)} scratch indexes"
+    capsys.readouterr()
 
 
 MOVED = "if the file moved, {}, or else remove the bite and add one that plants"
