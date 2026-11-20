@@ -594,3 +594,41 @@ def test_the_writer_s_base_is_the_base_the_gate_takes_for_the_commit_made_next(
     written_from = owed.next_base(root)
     noted(root, "the commit the gate judges")
     assert gatelib.base_commit(root) == written_from
+
+
+ELSEWHERE = "to commit it on another branch, run the upgrade again there first."
+PLACES = {
+    "carried to the default branch": (
+        carried_to_the_default_branch,
+        lambda _root: f"Commit this on main; {ELSEWHERE}",
+    ),
+    "on an open upgrade branch": (
+        on_an_open_branch,
+        lambda _root: f"Commit this on rerun; {ELSEWHERE}",
+    ),
+    "on a detached HEAD": (
+        detached,
+        lambda root: (
+            f"Commit this on the detached HEAD at {git(root, 'rev-parse', 'HEAD')[:12]}; to commit"
+            " it on a branch, run the upgrade again there first."
+        ),
+    ),
+}
+
+
+@pytest.mark.parametrize("flow", list(PLACES))
+def test_the_plain_words_name_where_the_ledger_was_measured_for_and_how_to_commit_it_elsewhere(
+    flow: str, *, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+) -> None:
+    build, said = PLACES[flow]
+    writer = build(tmp_path)
+    monkeypatch.setattr(plugin_pin, "PLUGIN", plugins()[SECOND])
+    capsys.readouterr()
+    upgrade.main(["upgrade.py", "--root", str(writer), "--apply"])
+    out = capsys.readouterr().out
+    assert f"  {LEDGER}\n" in out, f"{flow}: the plan writes the ledger"
+    assert lines(out.split("In plain words:")[1], "Commit this") == [said(writer)], flow
+    capsys.readouterr()
+    upgrade.main(["upgrade.py", "--root", str(writer)])
+    out = capsys.readouterr().out
+    assert "Commit this" not in out, f"{flow}: a plan that writes no ledger names no branch"
