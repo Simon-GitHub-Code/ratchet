@@ -23,6 +23,7 @@ _PLAIN_DELIMITER = re.compile(r"\\?[\w.+-]+|'[\w.+-]*'|\"[\w.+-]*\"")
 _ARITHMETIC = "(("
 _FUNCTION_SUBSTITUTION = re.compile(r"\$\{[ \t\n|]")
 _BACKTICK_ESCAPE = re.compile(r"\\([$`\\])")
+_CONTINUED = re.compile(r"(?<!\\)(?:\\\\)*\\$")
 _BRACKETS = {"[": 1, "]": -1}
 _EXPANSIONS = {"${": "}", "$[": "]"}
 _QUOTES = str.maketrans("", "", "'\"")
@@ -81,7 +82,7 @@ class _Lexer:
         self.closer = closer
         self.tokens: list[Token] = []
         self.word: list[str] = []
-        self.pending: list[tuple[int, str, bool, bool]] = []
+        self.pending: list[tuple[int, str, bool, bool, bool]] = []
         self.depth = 0
         self.cases = 0
         self.braces = 0
@@ -218,8 +219,14 @@ class _Lexer:
     def _double(self) -> None:
         self.word.append('"')
         self.at += 1
+        self.expand('"')
+        self.shared.closed &= self.at < len(self.text)
+        self.word.append('"')
+        self.at += 1
+
+    def expand(self, until: str = "") -> None:
         self.doubled += 1
-        while self.at < len(self.text) and self.text[self.at] != '"':
+        while self.at < len(self.text) and self.text[self.at] != until:
             char = self.text[self.at]
             if char == "\\":
                 self.word.append(self.text[self.at : self.at + 2])
@@ -234,9 +241,6 @@ class _Lexer:
                 self.word.append(char)
                 self.at += 1
         self.doubled -= 1
-        self.shared.closed &= self.at < len(self.text)
-        self.word.append('"')
-        self.at += 1
 
     def _escape(self) -> None:
         pair = self.text[self.at : self.at + 2]
@@ -296,26 +300,38 @@ class _Lexer:
         delimiter = written.translate(_DELIMITER_QUOTING)
         index = self.shared.allocated
         self.shared.allocated += 1
-        self.pending.append((index, delimiter, strip_tabs, sure))
+        self.pending.append((index, delimiter, strip_tabs, sure, delimiter == written))
         self.tokens.append(Token("<<", operator=True))
         self.tokens.append(Token(f"{HEREDOC_MARK}{index}"))
 
     def _read_heredoc_bodies(self) -> None:
-        for index, delimiter, strip_tabs, sure in self.pending:
+        for index, delimiter, strip_tabs, sure, expands in self.pending:
             body: list[str] = []
             while self.at < len(self.text):
-                end = self._find("\n", self.at)
-                line = self.text[self.at : end]
-                self.at = end + 1
+                line = self._line()
+                while expands and _CONTINUED.search(line) and self.at < len(self.text):
+                    line = line[:-1] + self._line()
                 if (line.lstrip("\t") if strip_tabs else line) == delimiter:
                     break
                 body.append(line)
-            self.shared.heredocs[index] = "\n".join(body)
+            text = "\n".join(body)
+            self.shared.heredocs[index] = _BACKTICK_ESCAPE.sub(r"\1", text) if expands else text
+            if expands:
+                reader = _Lexer(text, 0, self.shared)
+                reader.expand()
+                at = self.tokens.index(Token(f"{HEREDOC_MARK}{index}")) + 1
+                self.tokens[at:at] = reader.tokens
             if not sure:
-                reader = _Lexer(self.shared.heredocs[index] + "\n", 0, self.shared)
+                reader = _Lexer(text + "\n", 0, self.shared)
                 reader.run()
                 self.tokens += reader.tokens
         self.pending = []
+
+    def _line(self) -> str:
+        end = self._find("\n", self.at)
+        line = self.text[self.at : end]
+        self.at = end + 1
+        return line
 
 
 def lex(text: str) -> tuple[list[Token], tuple[str, ...], tuple[str, ...]]:
