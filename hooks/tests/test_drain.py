@@ -1,11 +1,13 @@
 import atexit
 import contextlib
 import functools
+import hashlib
 import json
 import os
 import re
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 from collections.abc import Sequence
@@ -1374,8 +1376,8 @@ def killed_after(real: object, when: object = None) -> object:
 KILLS = {
     "the parts written": (drain.split, "file_locally", None),
     "the note written": (drain, "close", None),
-    "the parts committed on the records branch": (drain.merge, "porcelain", "commit"),
-    "back on the default branch before the merge": (drain.merge, "commit_records", None),
+    "the parts committed aside": (drain, "commit_aside", None),
+    "the scratch removed before the merge": (drain, "commit_parts", None),
     "the merge landed and its branch kept": (drain.merge, "merge", None),
 }
 
@@ -1662,31 +1664,56 @@ def test_a_local_split_commits_its_parts_alone_and_leaves_what_the_owner_staged(
     assert owners_work(root) == before, "what the owner staged stays staged, as it was"
 
 
-@pytest.mark.parametrize("added", ["git add -- docs/hooked.md", ":"], ids=["stages", "writes"])
-def test_a_commit_hook_that_makes_another_file_gets_it_into_no_commit_and_says_so(
-    tmp_path: Path, capsys: Out, added: str
+def test_a_commit_hook_that_stages_another_file_keeps_the_branch_holding_it_and_says_so(
+    tmp_path: Path, capsys: Out
 ) -> None:
     root = project(tmp_path, **WHOLE)
     run(root, "open", ALPHA)
-    hook_script(root / ".git/hooks", "pre-commit", f"echo hooked > docs/hooked.md\n{added}")
+    hooked = hook_script(
+        root / ".git/hooks", "pre-commit", "echo hooked > docs/hooked.md\ngit add docs/hooked.md"
+    )
     plan = str(plan_file(tmp_path, HALVES))
     capsys.readouterr()
     assert run(root, "split", ALPHA, "--plan", plan) == drain.NOT_LANDED
     printed = capsys.readouterr().out.splitlines()
     assert (
-        "records: gates: the records stay uncommitted on the default branch, since the commit"
-        " hooks changed docs/hooked.md as they ran"
+        f"not landed: `{LANDING}` holds what the commit hooks made besides the parts, so it stays"
+        " as it is: take what is yours from it, delete it; the parts stay uncommitted in the"
+        f" checkout; once the cause above is gone, run `drain.py split {ALPHA} --plan {plan}` again"
     ) in printed
-    assert (
-        "not landed: the parts stay uncommitted in the checkout; once the cause above is gone,"
-        f" run `drain.py split {ALPHA} --plan {plan}` again"
-    ) in printed
-    assert git(root, "rev-list", "--branches", "--", "docs/hooked.md") == "", "in no commit"
-    assert git(root, "branch", "--list", "records/*") == ""
     children = json.loads(printed[-1])["children"]
+    held = git(root, "ls-tree", "-r", "--name-only", LANDING, "--", "docs/hooked.md", *children)
+    assert held.splitlines() == ["docs/hooked.md", *children], "the hook's commit is kept"
     assert git(root, "status", "--porcelain", "--", *children).splitlines() == [
         f"?? {child}" for child in children
     ]
+    hooked.unlink()
+    assert run(root, "split", ALPHA, "--plan", plan) == drain.NOT_LANDED
+    assert f"not landed: `{LANDING}` holds other than just the parts" in capsys.readouterr().out
+
+
+def test_a_commit_hook_that_writes_a_file_and_reads_an_ignored_folder_lets_the_parts_land(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, **WHOLE, **{".gitignore": "tools/\n"})
+    write(root, "tools/lint", "#!/bin/sh\necho hooked > docs/hooked.md\n")
+    (root / "tools/lint").chmod(0o755)
+    ran = tmp_path / "ran"
+    hooks = ("pre-commit", "prepare-commit-msg", "commit-msg", "post-commit")
+    for name in hooks:
+        hook_script(root / ".git/hooks", name, f'echo {name} "$(pwd)" >> {ran}')
+    hook_script(
+        root / ".git/hooks", "pre-commit", f'echo pre-commit "$(pwd)" >> {ran}\n./tools/lint'
+    )
+    run(root, "open", ALPHA)
+    assert run(root, "split", ALPHA, "--plan", str(plan_file(tmp_path, HALVES))) == 0
+    children = json.loads(capsys.readouterr().out.splitlines()[-1])["children"]
+    assert ran.read_text(encoding="utf-8").splitlines()[:4] == [
+        f"{name} {root}" for name in hooks
+    ], "every commit hook runs, in the checkout, with its ignored folders"
+    assert git(root, "ls-tree", "--name-only", "main", "--", *children).splitlines() == children
+    assert git(root, "rev-list", "--branches", "--", "docs/hooked.md") == "", "in no commit"
+    assert git(root, "status", "--porcelain") == "?? docs/hooked.md"
 
 
 def test_a_ticket_waiting_on_parts_no_branch_holds_any_more_is_refused_and_says_why(
@@ -1793,6 +1820,148 @@ def test_a_split_leaves_a_branch_named_as_its_landing_that_it_did_not_make(
             f" `drain.py split {ALPHA} --plan {plan}` again"
         ) in capsys.readouterr().out.splitlines()
         assert git(root, "rev-parse", LANDING) == theirs
+
+
+def test_a_note_naming_another_landing_branch_is_refused_and_that_branch_is_kept(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root, plan, _ = red_split(tmp_path, capsys)
+    git(root, "branch", "release-1", "main")
+    tip = git(root, "rev-parse", "release-1")
+    path = queue_notes.note_path(root, BRANCH_A)
+    queue_notes.write_note(path, {**note(root, BRANCH_A), "landing": "release-1"})
+    green_check(root)
+    assert run(root, "split", ALPHA, "--plan", plan) == drain.NOT_LANDED
+    assert (
+        f"not landed: the split's note {path} names `release-1` as its landing branch, and this"
+        f" split lands on `{LANDING}`, so no branch is touched: correct the note, then run"
+        f" `drain.py split {ALPHA} --plan {plan}` again"
+    ) in capsys.readouterr().out.splitlines()
+    assert git(root, "rev-parse", "release-1") == tip
+    assert git(root, "branch", "--list", LANDING) != ""
+
+
+def test_a_split_killed_between_its_parts_and_a_part_edited_lands_each_part_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    plan = str(plan_file(tmp_path, HALVES))
+    real = Path.write_text
+
+    def once(path: Path, *args: object, **kwargs: object) -> int:
+        done = real(path, *args, **kwargs)  # type: ignore[arg-type]
+        if path.name == "04-save.md":
+            raise Killed
+        return done
+
+    with monkeypatch.context() as cut:
+        cut.setattr(Path, "write_text", once)
+        with pytest.raises(Killed):
+            run(root, "split", ALPHA, "--plan", plan)
+    first = root / ISSUES / "04-save.md"
+    first.write_text(first.read_text(encoding="utf-8") + "\nThe owner's note.\n", encoding="utf-8")
+    assert run(root, "split", ALPHA, "--plan", plan) == 0
+    landed_parts(root, [f"{ISSUES}/04-save.md", f"{ISSUES}/05-list.md"])
+    assert "The owner's note." in git(root, "show", f"main:{ISSUES}/04-save.md")
+
+
+def test_a_part_the_owner_staged_is_left_staged_and_the_split_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    plan = str(plan_file(tmp_path, HALVES))
+    with monkeypatch.context() as cut:
+        cut.setattr(drain, "close", killed_after(drain.close))
+        with pytest.raises(Killed):
+            run(root, "split", ALPHA, "--plan", plan)
+    git(root, "add", "--", f"{ISSUES}/04-save.md")
+    staged = git(root, "ls-files", "--stage", "--", f"{ISSUES}/04-save.md")
+    capsys.readouterr()
+    assert run(root, "split", ALPHA, "--plan", plan) == drain.NOT_LANDED
+    assert (
+        f"not landed: the checkout's index holds {ISSUES}/04-save.md, so the parts stay"
+        " uncommitted in the checkout: unstage them"
+    ) in capsys.readouterr().out
+    assert git(root, "ls-files", "--stage", "--", f"{ISSUES}/04-save.md") == staged
+    assert git(root, "branch", "--list", "records/*") == ""
+    git(root, "restore", "--staged", "--", f"{ISSUES}/04-save.md")
+    assert run(root, "split", ALPHA, "--plan", plan) == 0
+
+
+@pytest.mark.parametrize("what", ["conflict", "merge", "rebase"])
+def test_a_split_mid_merge_or_rebase_writes_nothing_and_says_so(
+    tmp_path: Path, capsys: Out, what: str
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    git(root, "switch", "-q", "-c", "theirs")
+    write(root, "src/a.py", "A = 2\n")
+    commit(root, "theirs")
+    git(root, "switch", "-q", "main")
+    if what != "merge":
+        write(root, "src/a.py", "A = 3\n")
+        commit(root, "ours")
+    with contextlib.suppress(subprocess.CalledProcessError):
+        if what == "rebase":
+            git(root, "switch", "-q", "theirs")
+            git(root, "rebase", "-q", "main")
+        else:
+            git(root, "merge", "-q", "--no-commit", "--no-ff", "theirs")
+    if what == "conflict":
+        (root / ".git/MERGE_HEAD").unlink()
+    before, refs = owners_view(root), git(root, "for-each-ref")
+    noted = note(root, BRANCH_A)
+    plan = str(plan_file(tmp_path, HALVES))
+    capsys.readouterr()
+    assert run(root, "split", ALPHA, "--plan", plan) == 2
+    assert capsys.readouterr().out.splitlines() == [
+        (
+            "split: the checkout is in the middle of a merge or a rebase, or its index holds a"
+            f" conflict, so nothing is filed: finish it, then run `drain.py split {ALPHA} --plan"
+            f" {plan}` again"
+        )
+    ]
+    assert (owners_view(root), git(root, "for-each-ref"), note(root, BRANCH_A)) == (
+        before,
+        refs,
+        noted,
+    )
+    assert not list((root / ISSUES).glob("0[4-9]*"))
+
+
+def test_a_landing_branch_git_cannot_make_leaves_the_parts_in_the_checkout_and_says_why(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    git(root, "branch", f"{LANDING}/mine")
+    plan = str(plan_file(tmp_path, HALVES))
+    capsys.readouterr()
+    assert run(root, "split", ALPHA, "--plan", plan) == drain.NOT_LANDED
+    printed = capsys.readouterr().out.splitlines()
+    assert any(line.startswith("records: the parts were not committed: ") for line in printed)
+    children = json.loads(printed[-1])["children"]
+    assert git(root, "status", "--porcelain").splitlines() == [f"?? {c}" for c in children]
+    assert git(root, "branch", "--list", "records/*").split() == [f"{LANDING}/mine"]
+
+
+def test_parts_outside_the_sparse_checkout_stay_in_the_checkout_and_the_split_says_why(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    git(root, "sparse-checkout", "set", "--no-cone", "/*", f"!/{ISSUES}/*-save.md")
+    plan = str(plan_file(tmp_path, HALVES))
+    capsys.readouterr()
+    assert run(root, "split", ALPHA, "--plan", plan) == drain.NOT_LANDED
+    printed = capsys.readouterr().out.splitlines()
+    said = next(line for line in printed if line.startswith("records: the parts were not"))
+    assert f"{ISSUES}/04-save.md" in said
+    assert git(root, "branch", "--list", "records/*") == ""
+    children = json.loads(printed[-1])["children"]
+    assert all((root / child).is_file() for child in children), "the parts stay in the checkout"
 
 
 def test_a_rerun_after_the_parts_landed_keeps_them_though_the_owner_took_a_parts_number(
@@ -1919,6 +2088,412 @@ def test_no_split_run_loses_a_commit_or_moves_the_owners_work(
     after = set(git(root, "rev-list", "--branches").splitlines())
     assert before <= after, f"{len(before - after)} commit(s) no branch holds any more"
     assert all(names == list(texts) for names in split_commits(root)), "each holds the parts"
+
+
+OWNED = {
+    "src/staged.py": "S = 1\n",
+    "src/unstaged.py": "U = 1\n",
+    "src/old.py": "O = 1\n",
+    "src/deleted.py": "D = 1\n",
+    "src/mode.sh": "echo m\n",
+    "src/partial.py": "P = 1\n",
+    "src/assumed.py": "A = 1\n",
+    "src/skipped.py": "K = 1\n",
+    "extra/out.txt": "outside the cone\n",
+}
+MIXED = (
+    "staged",
+    "unstaged",
+    "untracked",
+    "renamed",
+    "deleted",
+    "mode",
+    "intent",
+    "partial",
+    "assumed",
+    "gitlink",
+)
+OWNER_STATES = {
+    "sparse and mixed": ("sparse", *MIXED),
+    "skip-worktree and mixed": ("skipped", *MIXED),
+    "none": (),
+}
+GRID_STATES = (
+    list(OWNER_STATES) if os.environ.get("RATCHET_SPLIT_GRID") == "full" else ["sparse and mixed"]
+)
+KILL_POINTS = 29
+PART_PATH = re.compile(rf"{re.escape(ISSUES)}/\d+-(save|list)\.md")
+HOOKED = "docs/hooked.md"
+KEPT_FLAGS = 0xF000 | 1 << 29 | 1 << 30
+UNSEEN = {".git/objects", ".git/logs"}
+
+
+def owners_state(root: Path, kinds: Sequence[str]) -> None:
+    steps: dict[str, list[tuple[str, ...]]] = {
+        "sparse": [("sparse-checkout", "set", "--cone", ".scratch", "docs", "guards", "src")],
+        "staged": [("add", "--", "src/staged.py")],
+        "renamed": [("mv", "src/old.py", "src/new.py")],
+        "deleted": [("rm", "-q", "--", "src/deleted.py")],
+        "mode": [("update-index", "--chmod=+x", "--", "src/mode.sh")],
+        "intent": [("add", "-N", "--", "src/intent.py")],
+        "partial": [("add", "--", "src/partial.py")],
+        "assumed": [("update-index", "--assume-unchanged", "--", "src/assumed.py")],
+        "skipped": [("update-index", "--skip-worktree", "--", "src/skipped.py")],
+        "gitlink": [("update-index", "--add", "--cacheinfo", f"160000,{'1' * 40},vendor/sub")],
+    }
+    before = {"staged": "S = 2\n", "intent": "I = 1\n", "partial": "P = 2\n"}
+    after = {
+        "unstaged": "U = 2\n",
+        "untracked": "N = 1\n",
+        "partial": "P = 3\n",
+        "assumed": "A = 2\n",
+        "skipped": "K = 2\n",
+    }
+    for kind in kinds:
+        if kind in before:
+            write(root, f"src/{kind}.py", before[kind])
+        for step in steps.get(kind, []):
+            git(root, *step)
+        if kind in after:
+            write(root, f"src/{kind}.py", after[kind])
+
+
+def theirs(line: str) -> bool:
+    return not PART_PATH.search(line) and HOOKED not in line
+
+
+def raw(root: Path, *args: str) -> str:
+    return subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
+        ["git", "-C", str(root), *args],  # noqa: S607 # -- git is resolved from PATH on purpose
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+
+
+def index_view(root: Path) -> list[str]:
+    flags = [
+        int(line.rsplit(" ", 1)[1], 16) & KEPT_FLAGS
+        for line in git(root, "ls-files", "--debug").splitlines()
+        if "flags:" in line
+    ]
+    rows = git(root, "ls-files", "--stage").splitlines()
+    return [f"{row} {flag:x}" for row, flag in zip(rows, flags, strict=True) if theirs(row)]
+
+
+def files_view(root: Path) -> dict[str, tuple[str, int]]:
+    seen = {}
+    for top, dirs, names in os.walk(root):
+        here = Path(top).relative_to(root).as_posix()
+        dirs[:] = [d for d in dirs if here != "." or d not in {".git", str(drain.gatelib.STATE)}]
+        for name in names:
+            path = Path(top) / name
+            rel = path.relative_to(root).as_posix()
+            if theirs(rel):
+                shown = path.lstat()
+                body = str(path.readlink()).encode() if path.is_symlink() else path.read_bytes()
+                seen[rel] = (hashlib.sha256(body).hexdigest(), shown.st_mode)
+    return seen
+
+
+def owners_view(root: Path) -> dict[str, object]:
+    status = raw(root, "status", "--porcelain=v2", "--untracked-files=all").splitlines()
+    refs = raw(root, "for-each-ref", "--format=%(refname) %(objectname)").splitlines()
+    split_own = ("refs/heads/main ", f"refs/heads/{LANDING}")
+    return {
+        "index": index_view(root),
+        "cached": [r for r in raw(root, "diff", "--cached", "--raw").splitlines() if theirs(r)],
+        "status": [line for line in status if theirs(line)],
+        "files": files_view(root),
+        "refs": [r for r in refs if not r.startswith(split_own)],
+        "head": raw(root, "symbolic-ref", "-q", "HEAD"),
+        "sparse": raw(root, "sparse-checkout", "list")
+        + raw(root, "config", "--get-regexp", "^core\\.sparse"),
+    }
+
+
+def changed(before: dict[str, object], after: dict[str, object]) -> dict[str, object]:
+    out: dict[str, object] = {}
+    for name, was in before.items():
+        now = after[name]
+        if was == now:
+            continue
+        if isinstance(was, dict) and isinstance(now, dict):
+            keys = {k for k in {*was, *now} if was.get(k) != now.get(k)}
+            out[name] = {k: (was.get(k), now.get(k)) for k in keys}
+        elif isinstance(was, list) and isinstance(now, list):
+            out[name] = {"gone": sorted(set(was) - set(now)), "new": sorted(set(now) - set(was))}
+        else:
+            out[name] = (was, now)
+    return out
+
+
+def fingerprint(root: Path) -> frozenset[tuple[str, int, int, int]]:
+    seen = set()
+    for top, dirs, names in os.walk(root):
+        here = Path(top).relative_to(root).as_posix()
+        dirs[:] = [d for d in dirs if f"{here}/{d}" not in {f"./{u}" for u in UNSEEN}]
+        for name in names:
+            shown = (Path(top) / name).lstat()
+            seen.add((f"{here}/{name}", shown.st_size, shown.st_mtime_ns, shown.st_mode))
+    return frozenset(seen)
+
+
+class Cut:
+    def __init__(self, root: Path, at: int | None = None) -> None:
+        self.root, self.at, self.count, self.points, self.dead = root, at, 0, [], False
+        self.last = fingerprint(root) if at is None else frozenset()
+
+    def event(self) -> None:
+        if self.dead:
+            raise Killed
+        if self.at is None:
+            now = fingerprint(self.root)
+            if now != self.last:
+                self.points.append(self.count)
+            self.last = now
+        elif self.count == self.at:
+            self.dead = True
+            raise Killed
+        self.count += 1
+
+    def install(self, cut: pytest.MonkeyPatch) -> None:
+        real_run = subprocess.run
+
+        def running(args: object, *rest: object, **kwargs: object) -> object:
+            if not (isinstance(args, list) and args and args[0] == "git"):
+                return real_run(args, *rest, **kwargs)  # type: ignore[call-overload]
+            self.event()
+            done = real_run(args, *rest, **kwargs)  # type: ignore[call-overload]
+            self.event()
+            return done
+
+        cut.setattr(subprocess, "run", running)
+        for name in ("write_text", "unlink", "replace"):
+            real = getattr(Path, name)
+
+            def writing(
+                path: Path, *rest: object, _real: object = real, **kwargs: object
+            ) -> object:
+                done = _real(path, *rest, **kwargs)  # type: ignore[operator]
+                self.event()
+                return done
+
+            cut.setattr(Path, name, writing)
+
+
+@functools.cache
+def owners_project() -> Path:
+    built = Path(tempfile.mkdtemp(prefix="ratchet-owner-"))
+    atexit.register(shutil.rmtree, built, ignore_errors=True)
+    return project(built, **WHOLE, **OWNED)
+
+
+def owners_copy(tmp_path: Path, state: str) -> Path:
+    root = Path(tempfile.mkdtemp(dir=tmp_path)) / "repo"
+    shutil.copytree(owners_project(), root, symlinks=True)
+    run(root, "open", ALPHA)
+    owners_state(root, OWNER_STATES[state])
+    return root
+
+
+HOOKS = ("pre-commit", "prepare-commit-msg", "commit-msg", "post-commit")
+HOOK_ACTIONS = {
+    "refuses": "exit 1",
+    "stages": f"printf x > {HOOKED} && git add -- {HOOKED}",
+    "writes": f"printf x > {HOOKED}",
+    "edits a part": f"for f in {ISSUES}/*-save.md; do printf 'edited\\n' >> \"$f\"; done",
+}
+COMMITS = (
+    '[ -n "$HOOKED" ] && exit 0\n'
+    f"printf y > {HOOKED} && git add -- {HOOKED} && HOOKED=1 git commit -q -m hook-made"
+    ' && git rev-parse HEAD >> "$HOOK_COMMITS"'
+)
+EXITS = [
+    "landed",
+    "judge",
+    "red",
+    *(f"{name} {action}" for name in HOOKS for action in HOOK_ACTIONS),
+    "post-commit commits",
+]
+
+
+def drive(root: Path, exit_: str, cut: pytest.MonkeyPatch) -> list[Path]:
+    verdict = [merge_ready.Reason("record", "refused")] if exit_ == "judge" else []
+    cut.setattr(drain.merge.merge_ready, "judge", lambda *_a, **_k: verdict)
+    if exit_ == "red":
+        cut.setattr(drain.merge, "run_check", lambda *_a, **_k: merge_ready.Reason("gates", "red"))
+    elif exit_ not in {"landed", "judge"}:
+        name, _, action = exit_.partition(" ")
+        body = COMMITS if action == "commits" else HOOK_ACTIONS[action]
+        return [hook_script(root / ".git/hooks", name, body)]
+    return []
+
+
+def where_the_parts_are(root: Path, code: int | str, printed: str) -> list[str]:
+    children = note(root, BRANCH_A).get("children")
+    if not isinstance(children, list):
+        return []
+    lines = printed.splitlines()
+    said = next((line for line in lines if line.startswith("not landed:")), "")
+    named = re.search(r"the parts are on `([^`]+)`", said)
+    if code == 0:
+        held = git(root, "ls-tree", "--name-only", "main", "--", *children).splitlines()
+        return [] if held == children else [f"exit 0, and main holds {held}"]
+    if named:
+        held = raw(root, "ls-tree", "--name-only", named[1], "--", *children).splitlines()
+        return [] if held == children else [f"{said!r}, and `{named[1]}` holds {held}"]
+    if "uncommitted in the checkout" in said:
+        gone = [child for child in children if not (root / child).is_file()]
+        return [f"{said!r}, and the checkout lacks {gone}"] if gone else []
+    return []
+
+
+def landed_state(root: Path) -> list[str]:
+    children = note(root, BRANCH_A).get("children")
+    assert isinstance(children, list)
+    problems = [
+        f"{child} is not on main, committed once"
+        for child in children
+        if len(raw(root, "rev-list", "main", "--", child).split()) != 1
+    ]
+    filed = sorted(p.relative_to(root).as_posix() for p in (root / ISSUES).glob("*.md"))
+    if filed != sorted([ALPHA, BETA, GAMMA, *children]):
+        problems.append(f"the tracker holds {filed}, not each part once")
+    if raw(root, "status", "--porcelain", "--", *children):
+        problems.append("the checkout does not hold the parts as committed")
+    if raw(root, "branch", "--list", "records/*"):
+        problems.append(f"a records branch is left: {raw(root, 'branch', '--list', 'records/*')}")
+    return problems
+
+
+def owners_kept(root: Path, before: dict[str, object], *, tip: str, made: set[str]) -> list[str]:
+    problems = []
+    moved = changed(before, owners_view(root))
+    if moved:
+        problems.append(f"the owner's state changed: {moved}")
+    now = git(root, "rev-parse", "main")
+    names = git(root, "diff", "--name-only", tip, now).splitlines()
+    first = raw(root, "rev-parse", "main^1").strip()
+    if now != tip and (first != tip or not all(map(PART_PATH.fullmatch, names))):
+        problems.append(f"main gained more than the parts: {names}")
+    reachable = set(raw(root, "rev-list", "--all").split())
+    lost = made - reachable
+    if lost:
+        problems.append(f"{len(lost)} commit(s) no ref reaches any more")
+    return problems
+
+
+def one_exit(
+    tmp_path: Path, capsys: Out, *, state: str, exit_: str, at: int | None = None
+) -> list[str]:
+    root = owners_copy(tmp_path, state)
+    plan = str(plan_file(root.parent, HALVES))
+    made = tmp_path / "hook-commits"
+    before, tip = owners_view(root), git(root, "rev-parse", "main")
+    commits = set(git(root, "rev-list", "--all").split())
+    capsys.readouterr()
+    with pytest.MonkeyPatch.context() as cut:
+        cut.setenv("HOOK_COMMITS", str(made))
+        hooks = drive(root, exit_, cut)
+        if at is not None:
+            Cut(root, at).install(cut)
+        try:
+            code: int | str = run(root, "split", ALPHA, "--plan", plan)
+        except Killed:
+            code = "killed"
+    for hook in hooks:
+        hook.unlink()
+    printed = capsys.readouterr().out
+    hooked = set(made.read_text(encoding="utf-8").split()) if made.is_file() else set()
+    problems = [
+        f"first run: {p}"
+        for p in [
+            *owners_kept(root, before, tip=tip, made=commits | hooked),
+            *where_the_parts_are(root, code, printed),
+        ]
+    ]
+    if at is not None:
+        for part in (root / ISSUES).glob("*.md"):
+            name = part.relative_to(root).as_posix()
+            if PART_PATH.fullmatch(name) and not raw(root, "ls-files", "--", name):
+                part.write_text(part.read_text(encoding="utf-8") + "The owner's edit.\n")
+    kept = hooks_made(root)
+    again = run(root, "split", ALPHA, "--plan", plan)
+    printed = capsys.readouterr().out
+    problems += [
+        f"rerun: {p}"
+        for p in [
+            *owners_kept(root, before, tip=tip, made=commits | hooked),
+            *where_the_parts_are(root, again, printed),
+        ]
+    ]
+    said = [line for line in printed.splitlines() if line.startswith(("not landed", "records:"))]
+    if kept:
+        if again == 0 or raw(root, "rev-parse", LANDING).strip() != kept:
+            problems.append(f"the rerun let go of what the hooks made on `{LANDING}`: {said}")
+    elif again != 0:
+        problems.append(f"the rerun exits {again}: {said}")
+    else:
+        problems += [f"rerun: {p}" for p in landed_state(root)]
+    return problems
+
+
+def hooks_made(root: Path) -> str:
+    held = raw(root, "rev-parse", "--verify", "--quiet", LANDING).strip()
+    if not held:
+        return ""
+    names = raw(root, "diff", "--name-only", f"main...{held}").split()
+    alone = raw(root, "rev-list", "--count", f"main..{held}").strip() in {"0", "1"}
+    return "" if alone and all(map(PART_PATH.fullmatch, names)) else held
+
+
+@functools.cache
+def kill_points(state: str) -> tuple[int, ...]:
+    root = owners_copy(Path(tempfile.mkdtemp()), state)
+    recorder = Cut(root)
+    with pytest.MonkeyPatch.context() as cut:
+        drive(root, "landed", cut)
+        recorder.install(cut)
+        run(root, "split", ALPHA, "--plan", str(plan_file(root.parent, HALVES)))
+    return tuple(recorder.points)
+
+
+@pytest.mark.parametrize(
+    ("state", "exit_"),
+    [
+        pytest.param(state, exit_, marks=pytest.mark.shard_slot(n))
+        for n, (state, exit_) in enumerate((s, e) for s in GRID_STATES for e in EXITS)
+    ],
+)
+def test_every_exit_of_a_split_keeps_the_owners_work_and_a_rerun_lands_the_parts(
+    tmp_path: Path, capsys: Out, *, state: str, exit_: str
+) -> None:
+    problems = one_exit(tmp_path, capsys, state=state, exit_=exit_)
+    assert not problems, "\n".join(problems)
+
+
+@pytest.mark.parametrize("state", GRID_STATES)
+def test_the_harness_kills_the_split_between_every_two_of_its_writes(
+    state: str, capsys: Out
+) -> None:
+    assert len(kill_points(state)) == KILL_POINTS, "a write was added or removed: count them again"
+    capsys.readouterr()
+
+
+@pytest.mark.parametrize(
+    ("state", "kill"),
+    [
+        pytest.param(state, kill, marks=pytest.mark.shard_slot(n))
+        for n, (state, kill) in enumerate((s, k) for s in GRID_STATES for k in range(KILL_POINTS))
+    ],
+)
+def test_a_split_killed_between_any_two_writes_keeps_the_owners_work_and_a_rerun_lands_it(
+    tmp_path: Path, capsys: Out, *, state: str, kill: int
+) -> None:
+    at = kill_points(state)[kill]
+    problems = one_exit(tmp_path, capsys, state=state, exit_="landed", at=at)
+    assert not problems, f"killed at write event {at}:\n" + "\n".join(problems)
 
 
 @pytest.mark.parametrize(
