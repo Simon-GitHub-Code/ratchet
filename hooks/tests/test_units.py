@@ -231,6 +231,19 @@ def test_lexer_reads_every_heredoc_body() -> None:
     assert lex("x $(cat <<EOF) y")[2] == ("",)
 
 
+def test_an_unquoted_heredoc_body_is_read_as_bash_reads_it() -> None:
+    body = "$(a) `b` \\$(c) \\`c\\` \\\\$(d) '$(e)' \"$(f)\" ${x:-$(g)} $(h $(i))"
+    assert lex(f"cat <<E\n{body}\nE")[1] == ("a", "b", "d", "e", "f", "g", "i", "h $(i)")
+    assert lex("cat <<E\na\\\nb\\\\\n\\$x\nE")[2] == ("ab\\\n$x",)
+    assert lex("cat <<E\nE\\\n\nx\nE")[2] == ("",)
+    assert lex("cat <<-E\n\tE\\\n\nx\nE")[2] == ("",)
+
+
+@pytest.mark.parametrize("opener", ["<<'E'", '<<"E"', "<<\\E"])
+def test_a_quoted_heredoc_delimiter_keeps_the_body_as_text(opener: str) -> None:
+    assert lex(f"cat {opener}\n$(a) `b` \\$c\\\nE\nE")[1:] == ((), ("$(a) `b` \\$c\\",))
+
+
 def test_lexer_survives_unterminated_constructs() -> None:
     assert lex("echo 'open")[0][1].text == "'open\n"
     assert lex("echo `open")[1] == ("open\n",)
