@@ -2011,7 +2011,7 @@ def test_args_that_name_nothing_narrow_nothing(
     ],
 )
 def test_only_what_a_bite_runs_proves_its_gate_again(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], before: str, after: str, *, again: bool
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], *, before: str, after: str, again: bool
 ) -> None:
     rest = bite("tests", WORD) + bite("slow", WORD)
     root = targeted(tmp_path, registry=bite("lint", WORD) + before + rest)
@@ -2059,7 +2059,9 @@ def state_is_linked_out(record: Path) -> None:
 
 def apart(script: str, *argv: str) -> subprocess.CompletedProcess[str]:
     command = [sys.executable, str(Path(project_bite.__file__).with_name(script)), *argv]
-    return subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
+    return subprocess.run(  # noqa: S603 # -- this interpreter and the plugin's own script
+        command, capture_output=True, text=True, timeout=60, check=False
+    )
 
 
 def settled(out: str) -> list[str]:
@@ -2119,7 +2121,7 @@ def test_conformance_on_a_record_that_is_a_fifo_finishes_as_with_no_record(tmp_p
     [
         '{"kind": "fault", "gate": ["lint"], "bite": "whole", "seconds": 9.0, "narrowed": false}',
         '{"kind": "fault", "gate": "lint", "bite": {"a": 1}, "seconds": 9.0, "narrowed": false}',
-        '{"kind": "fault", "gate": "lint", "bite": "whole", "seconds": Infinity, "narrowed": false}',
+        '{"kind":"fault","gate":"lint","bite":"whole","seconds":Infinity,"narrowed":false}',
         "[" * 100_000,
     ],
     ids=["a gate that is a list", "a bite that is a table", "seconds without end", "deep"],

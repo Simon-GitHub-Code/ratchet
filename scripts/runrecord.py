@@ -23,10 +23,9 @@ SPEED = "## Speed"
 LOCAL_CACHES = "Local caches"
 WINDOW = 2**20
 FOLDER = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
-WRITE = (
-    os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC
-)
 READ = os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC
+WRITE = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY
+WRITE |= os.O_CLOEXEC
 UNRECORDED: set[Path] = set()
 
 

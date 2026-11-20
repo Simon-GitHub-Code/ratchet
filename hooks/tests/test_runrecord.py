@@ -290,7 +290,13 @@ def test_a_malformed_local_caches_bullet_is_a_finding(tmp_path: Path) -> None:
     assert list(conformance.check_local_caches(tmp_path / "ok" / "docs")) == []
 
 
-FAULT = {"kind": runrecord.FAULT, "gate": "lint", "bite": "whole", "seconds": 9.0, "narrowed": False}
+FAULT = {
+    "kind": runrecord.FAULT,
+    "gate": "lint",
+    "bite": "whole",
+    "seconds": 9.0,
+    "narrowed": False,
+}
 UNWRITABLE_BY_ROOT = pytest.mark.skipif(os.geteuid() == 0, reason="root writes through modes")
 
 
@@ -383,6 +389,7 @@ def folder_record(path: Path, _: Path) -> None:
 def test_the_writer_appends_only_to_a_regular_file_in_a_real_folder_and_says_so_once(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    *,
     unwritable: Callable[[Path, Path], None],
     why: str,
 ) -> None:
@@ -462,7 +469,9 @@ def test_the_runner_given_a_fifo_for_its_report_finishes_and_says_so(work: Path)
     os.mkfifo(fifo)
     command = [sys.executable, parallel.__file__, "--root", str(work), "--report", str(fifo)]
     command += ["--", PASS]
-    run = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
+    run = subprocess.run(  # noqa: S603 # -- this interpreter and the plugin's own runner
+        command, capture_output=True, text=True, timeout=60, check=False
+    )
     assert run.returncode == 0, run.stdout + run.stderr
     said = [line for line in run.stdout.splitlines() if "not recorded" in line]
     assert said == [f"ratchet: not recorded: {fifo}: {os.strerror(errno.ENXIO)}"]
