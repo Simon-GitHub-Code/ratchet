@@ -2118,10 +2118,10 @@ OWNER_STATES = {
     "skip-worktree and mixed": ("skipped", *MIXED),
     "none": (),
 }
-GRID_STATES = (
-    list(OWNER_STATES) if os.environ.get("RATCHET_SPLIT_GRID") == "full" else ["sparse and mixed"]
-)
+FULL_GRID = os.environ.get("RATCHET_SPLIT_GRID") == "full"
+GRID_STATES = list(OWNER_STATES) if FULL_GRID else ["sparse and mixed"]
 KILL_POINTS = 29
+GRID_KILLS = range(KILL_POINTS) if FULL_GRID else range(0, KILL_POINTS, 4)
 PART_PATH = re.compile(rf"{re.escape(ISSUES)}/\d+-(save|list)\.md")
 HOOKED = "docs/hooked.md"
 KEPT_FLAGS = 0xF000 | 1 << 29 | 1 << 30
@@ -2139,7 +2139,7 @@ def owners_state(root: Path, kinds: Sequence[str]) -> None:
         "partial": [("add", "--", "src/partial.py")],
         "assumed": [("update-index", "--assume-unchanged", "--", "src/assumed.py")],
         "skipped": [("update-index", "--skip-worktree", "--", "src/skipped.py")],
-        "gitlink": [("update-index", "--add", "--cacheinfo", f"160000,{'1' * 40},vendor/sub")],
+        "gitlink": [("update-index", "--add", "--cacheinfo", f"160000,{'1' * 40},src/vendor/sub")],
     }
     before = {"staged": "S = 2\n", "intent": "I = 1\n", "partial": "P = 2\n"}
     after = {
@@ -2316,6 +2316,20 @@ EXITS = [
     *(f"{name} {action}" for name in HOOKS for action in HOOK_ACTIONS),
     "post-commit commits",
 ]
+GRID_EXITS = (
+    EXITS
+    if FULL_GRID
+    else [
+        "landed",
+        "judge",
+        "red",
+        "pre-commit refuses",
+        "commit-msg stages",
+        "prepare-commit-msg writes",
+        "post-commit edits a part",
+        "post-commit commits",
+    ]
+)
 
 
 def drive(root: Path, exit_: str, cut: pytest.MonkeyPatch) -> list[Path]:
@@ -2450,12 +2464,13 @@ def hooks_made(root: Path) -> str:
 
 @functools.cache
 def kill_points(state: str) -> tuple[int, ...]:
-    root = owners_copy(Path(tempfile.mkdtemp()), state)
-    recorder = Cut(root)
-    with pytest.MonkeyPatch.context() as cut:
-        drive(root, "landed", cut)
-        recorder.install(cut)
-        run(root, "split", ALPHA, "--plan", str(plan_file(root.parent, HALVES)))
+    with tempfile.TemporaryDirectory() as made:
+        root = owners_copy(Path(made), state)
+        recorder = Cut(root)
+        with pytest.MonkeyPatch.context() as cut:
+            drive(root, "landed", cut)
+            recorder.install(cut)
+            run(root, "split", ALPHA, "--plan", str(plan_file(root.parent, HALVES)))
     return tuple(recorder.points)
 
 
@@ -2463,7 +2478,7 @@ def kill_points(state: str) -> tuple[int, ...]:
     ("state", "exit_"),
     [
         pytest.param(state, exit_, marks=pytest.mark.shard_slot(n))
-        for n, (state, exit_) in enumerate((s, e) for s in GRID_STATES for e in EXITS)
+        for n, (state, exit_) in enumerate((s, e) for s in GRID_STATES for e in GRID_EXITS)
     ],
 )
 def test_every_exit_of_a_split_keeps_the_owners_work_and_a_rerun_lands_the_parts(
@@ -2473,7 +2488,9 @@ def test_every_exit_of_a_split_keeps_the_owners_work_and_a_rerun_lands_the_parts
     assert not problems, "\n".join(problems)
 
 
-@pytest.mark.parametrize("state", GRID_STATES)
+@pytest.mark.parametrize(
+    "state", [pytest.param(state, marks=pytest.mark.shard_slot(10)) for state in GRID_STATES]
+)
 def test_the_harness_kills_the_split_between_every_two_of_its_writes(
     state: str, capsys: Out
 ) -> None:
@@ -2484,8 +2501,8 @@ def test_the_harness_kills_the_split_between_every_two_of_its_writes(
 @pytest.mark.parametrize(
     ("state", "kill"),
     [
-        pytest.param(state, kill, marks=pytest.mark.shard_slot(n))
-        for n, (state, kill) in enumerate((s, k) for s in GRID_STATES for k in range(KILL_POINTS))
+        pytest.param(state, kill, marks=pytest.mark.shard_slot(10 + n // 4))
+        for n, (state, kill) in enumerate((s, k) for s in GRID_STATES for k in GRID_KILLS)
     ],
 )
 def test_a_split_killed_between_any_two_writes_keeps_the_owners_work_and_a_rerun_lands_it(
