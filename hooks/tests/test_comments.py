@@ -510,6 +510,59 @@ def test_a_listed_file_the_change_deletes_is_not_judged(
     assert judged(root, monkeypatch, capsys) == ["src/kept.txt"]
 
 
+def test_recording_again_after_the_default_branch_moves_the_pin_owes_the_comments_since_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unlisted = f"# Binding\n\n{PIN}\n{SUPPRESSIONS}"
+    root = project(tmp_path, unlisted, {"src/old.txt": "x // old reason\n"})
+    write(root, BINDING_PATH, f"{unlisted}\n{COMMENTS}")
+    old = "src/old.txt\t1\tcomment\told reason\n"
+    assert changed(root, old, monkeypatch, "--record") == 0
+    commit(root, "chore(method): fill the lister")
+    git(root, "checkout", "-q", "main")
+    write(root, BINDING_PATH, unlisted.replace("1.2.3", "1.3.0"))
+    commit(root, "chore(method): upgrade the Ratchet plugin")
+    git(root, "checkout", "-q", "change")
+    git(root, "merge", "-q", "--no-edit", "main")
+    base = git(root, "rev-parse", "main")
+    assert "the change first fills the lister under the pin 1.3.0" in "".join(
+        lowered.owed_grown(root, base)
+    )
+    assert changed(root, old, monkeypatch, "--record") == 0
+    assert owed.read(root).entries == (owed.Entry("src/old.txt", RULE, "old reason", "1.3.0"),)
+    assert lowered.owed_grown(root, base) == []
+    ledger = (root / owed.LEDGER).read_bytes()
+    assert changed(root, old, monkeypatch, "--record") == 0
+    assert (root / owed.LEDGER).read_bytes() == ledger, "recording once more changes nothing"
+
+
+def test_recording_again_after_the_pin_moves_leaves_an_entry_the_lister_does_not_find(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unlisted = f"# Binding\n\n{PIN}\n{SUPPRESSIONS}"
+    root = project(tmp_path, unlisted, {"src/old.txt": "x // old reason\n", "notes.txt": "n\n"})
+    write(root, BINDING_PATH, f"{unlisted}\n{COMMENTS}")
+    old = "src/old.txt\t1\tcomment\told reason\n"
+    assert changed(root, old, monkeypatch, "--record") == 0
+    unfound = owed.Entry("notes.txt", RULE, "a comment no lister finds", "1.2.3")
+    write(root, str(owed.LEDGER), owed.render([*owed.read(root).entries, unfound]))
+    commit(root, "chore(method): fill the lister")
+    git(root, "checkout", "-q", "main")
+    write(root, BINDING_PATH, unlisted.replace("1.2.3", "1.3.0"))
+    commit(root, "chore(method): upgrade the Ratchet plugin")
+    git(root, "checkout", "-q", "change")
+    git(root, "merge", "-q", "--no-edit", "main")
+    assert changed(root, old, monkeypatch, "--record", "--base", "main") == 0
+    assert owed.read(root).entries == (
+        unfound,
+        owed.Entry("src/old.txt", RULE, "old reason", "1.3.0"),
+    ), "only what the lister finds is dated with the new pin"
+    assert (
+        f"adds 'a comment no lister finds' for notes.txt ({RULE}) since '1.2.3'; the change"
+        " first fills the lister under the pin 1.3.0"
+    ) in "".join(lowered.owed_grown(root, git(root, "rev-parse", "main")))
+
+
 LISTER = """\
 for f in "$@"; do
   awk -v OFS='\\t' -v f="$f" '{ i = index($0, "//"); if (i) { t = substr($0, i + 2); k = "comment";
