@@ -230,13 +230,13 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
         return Refused(reason)
     done: dict[str, list[str]] = {}
     changes: dict[str, Change] = {}
-    base = owed.next_base(root)
     with tempfile.TemporaryDirectory(prefix="ratchet-upgrade-") as scratch:
         sandbox = Path(scratch) / "tree"
         try:
             foreign = conformance.copied(root, sandbox)
             touched = pass_over(sandbox, [pinned_to(plugin)], done)
             first = converge(sandbox, done)
+            base = owed.next_base(root)
             touched |= first.touched | pass_over(
                 sandbox, owing(root, sandbox, first.left, plugin=plugin, base=base), done
             )
