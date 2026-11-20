@@ -3344,11 +3344,13 @@ def check_gate_reads(root: Path) -> Iterable[Finding]:
 
 
 def check_bites(root: Path) -> Iterable[Finding]:
-    for line in project_bite.failures(root):
-        if line == f"{project_bite.REGISTRY}: {project_bite.MISSING}":
-            yield whole_file(str(project_bite.REGISTRY), project_bite.MISSING)
+    path = str(project_bite.REGISTRY)
+    for problem in project_bite.registry_failures(root):
+        if problem == project_bite.MISSING:
+            yield whole_file(path, project_bite.MISSING)
         else:
-            yield agent(line)
+            identity = project_bite.owed_key(problem)[2]
+            yield Finding(path, str(problem), Agent(), identity=identity)
 
 
 def check_incidents(root: Path) -> Iterable[Finding]:
@@ -3557,6 +3559,8 @@ def run(root: Path) -> int:
             print(f"  then: {line}")
     for finding in owing:
         print(f"owed: {finding}")
+    for unchecked in project_bite.unchecked(root):
+        print(f"not checked: {project_bite.REGISTRY}: {unchecked}")
     autos = sum(isinstance(finding.fix, Auto) for finding in [*red, *owing])
     fixer = f"; `upgrade.py --apply` makes {autos} of them" if autos else ""
     since = f"; {len(owing)} owed since an upgrade, listed in {owed.LEDGER}" if owing else ""

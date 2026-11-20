@@ -1691,9 +1691,10 @@ def test_a_fault_an_upgrade_owes_stays_owed_while_later_changes_move_why_it_fail
     repos.commit(root, "refactor(core): move the file the owed fault patches")
     assert still_red(root) == ([], [])
     broken = 'replace = { path = "src/moved.txt", old = "line2\\n", new = "P\\n" }'
-    write(str(project_bite.REGISTRY), OWN_BITES.replace(
-        'write = { path = "src/x_lint.txt", content = "x" }', broken
-    ))(root)
+    write(
+        str(project_bite.REGISTRY),
+        OWN_BITES.replace('write = { path = "src/x_lint.txt", content = "x" }', broken),
+    )(root)
     replace("src/moved.txt", "line2\n", "renamed2\n")(root)
     repos.commit(root, "feat(core): a fault, then an edit that breaks it")
     says = (

@@ -889,7 +889,8 @@ def test_the_check_reads_the_work_tree_as_git_sees_it(tmp_path: Path) -> None:
     assert project_bite.failures(root) == [
         (
             f"{REGISTRY}: bite 'new' of gate 'slow' cannot be planted: src/new.txt is not a file"
-            " git sees, and a fault plants only into what git sees"
+            " git sees, and a fault plants only into what git sees; if the file moved, point"
+            " 'path' at its new name, or else remove the bite and add one that plants"
         )
     ]
 
@@ -910,7 +911,8 @@ def test_a_fault_on_a_file_setup_makes_is_not_checked_and_says_so(
     assert project_bite.failures(root) == [
         (
             f"{REGISTRY}: bite 'deep fault' of gate 'slow' cannot be planted: src/made.txt is not"
-            " a file git sees, and a fault plants only into what git sees"
+            " a file git sees, and a fault plants only into what git sees; if the file moved,"
+            " point 'path' at its new name, or else remove the bite and add one that plants"
         )
     ]
 
@@ -928,9 +930,11 @@ NOT_CHECKED = (
     [
         ('patch = "quality/bites/p.patch"', BROKEN),
         (
-            'replace = [{ path = "src/made.txt", old = "made", new = "planted" },'
-            ' { path = "src/code.txt", old = "first", new = "planted" },'
-            ' { path = "src/made.txt", old = "planted", new = "made" }]',
+            (
+                'replace = [{ path = "src/made.txt", old = "made", new = "planted" },'
+                ' { path = "src/code.txt", old = "first", new = "planted" },'
+                ' { path = "src/made.txt", old = "planted", new = "made" }]'
+            ),
             (
                 "bite 'deep fault' of gate 'slow' cannot be planted: src/code.txt no longer holds"
                 " the text the fault replaces; write 'old' as the file has it now: 'first'"
@@ -963,7 +967,7 @@ MOVED = "if the file moved, {}, or else remove the bite and add one that plants"
     [
         (
             'patch = "quality/bites/p.patch"',
-            "quality/bites/p.patch changes src/code.txt, which is not a file git sees; "
+            "quality/bites/p.patch changes src/code.txt, which git does not see; "
             + MOVED.format("make the patch again against its new name"),
         ),
         (
@@ -973,7 +977,10 @@ MOVED = "if the file moved, {}, or else remove the bite and add one that plants"
         ),
         (
             'remove = ["bench/**"]',
-            "no file git sees matches bench/**; write the globs to match the collection as it is now",
+            (
+                "no file git sees matches bench/**; write the globs to match the collection as it"
+                " is now"
+            ),
         ),
     ],
     ids=["a patch", "a replace", "a remove"],
@@ -1001,7 +1008,7 @@ def test_a_patch_on_a_file_git_ignores_is_red_as_its_plant_is(
     assert (root / "src/made.secret").is_file()
     assert project_bite.failures(root) == [
         f"{REGISTRY}: bite 'on an ignored file' of gate 'lint' cannot be planted: "
-        "quality/bites/p.patch changes src/made.secret, which is not a file git sees; "
+        "quality/bites/p.patch changes src/made.secret, which git does not see; "
         + MOVED.format("make the patch again against its new name")
     ]
     assert prove(root, "--gate", "lint") == 1
