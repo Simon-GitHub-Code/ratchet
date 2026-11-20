@@ -172,11 +172,13 @@ def recorded(added: Sequence[Entry], gone: Sequence[Entry] = ()) -> gatelib.Want
     return record
 
 
-def merged(root: Path, branch: str | None = None) -> str | None:
+def next_base(root: Path, branch: str | None = None) -> str | None:
+    head = gatelib.git(root, "rev-parse", "--verify", "-q", "HEAD")
+    on = gatelib.git(root, "rev-parse", "--abbrev-ref", "HEAD")
     for name in [branch] if branch else gatelib.default_branches(root):
         if (found := gatelib.git(root, "merge-base", "HEAD", name)) is not None:
-            return found
-    return gatelib.git(root, "rev-parse", "--verify", "-q", "HEAD")
+            return head if on in (name, name.removeprefix("origin/")) else found
+    return head
 
 
 def brought(

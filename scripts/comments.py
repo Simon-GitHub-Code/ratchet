@@ -410,7 +410,7 @@ def main(argv: list[str]) -> int:
         pin = plugin_pin.pinned(gatelib.read_text(root / gatelib.BINDING))
         if pin is None:
             return gatelib.report(RULE, [RECORD_UNPINNED], base)
-        added = record(root, verdict, since=pin.version, base=owed.merged(root, options.base))
+        added = record(root, verdict, since=pin.version, base=owed.next_base(root, options.base))
         print(f"{RULE}: recorded {added} owed since {pin.version} in {owed.LEDGER}")
         verdict = judge(root, output, judged=paths, binding=binding)
     if verdict.owed:

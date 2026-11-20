@@ -72,6 +72,7 @@ class Plan:
     now: str
     waiting: tuple[str, ...] = ()
     approved: int = 0
+    shallow: bool = False
 
     @property
     def edits(self) -> int:
@@ -229,6 +230,7 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
         return Refused(reason)
     done: dict[str, list[str]] = {}
     changes: dict[str, Change] = {}
+    base = owed.next_base(root)
     with tempfile.TemporaryDirectory(prefix="ratchet-upgrade-") as scratch:
         sandbox = Path(scratch) / "tree"
         try:
@@ -236,7 +238,7 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
             touched = pass_over(sandbox, [pinned_to(plugin)], done)
             first = converge(sandbox, done)
             touched |= first.touched | pass_over(
-                sandbox, owing(root, sandbox, first.left, plugin=plugin), done
+                sandbox, owing(root, sandbox, first.left, plugin=plugin, base=base), done
             )
             converged = converge(sandbox, done)
         except StuckError as error:
@@ -280,11 +282,14 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
         now=plugin_pin.version_of(plugin) or "an unknown version",
         waiting=waiting,
         approved=approved,
+        shallow=gatelib.git(root, "rev-parse", "--is-shallow-repository") == "true"
+        and base == gatelib.git(root, "rev-parse", "--verify", "-q", "HEAD"),
     )
 
 
-def owing(root: Path, sandbox: Path, left: list[Finding], *, plugin: Path) -> list[Finding]:
-    base = owed.merged(root)
+def owing(
+    root: Path, sandbox: Path, left: list[Finding], *, plugin: Path, base: str | None
+) -> list[Finding]:
     before = gatelib.show(root, base, str(gatelib.BINDING)) if base else None
     after = gatelib.read_text(sandbox / gatelib.BINDING)
     pin = owed.moved(before, after, floor=plugin_pin.version_of(plugin))
@@ -312,7 +317,7 @@ def owing(root: Path, sandbox: Path, left: list[Finding], *, plugin: Path) -> li
         count = len(dropped)
         does.append(
             f"drop {count} {'entry' if count == 1 else 'entries'} this change brought, which one"
-            f" upgrade from the merge base {str(base)[:12]} would not write: "
+            f" upgrade from the gate's base {str(base)[:12]} would not write: "
             + "; ".join(f"'{problem}' for {path} ({rule})" for rule, path, problem in dropped)
         )
     if not does:
@@ -532,6 +537,8 @@ def plain(result: Plan, *, applied: bool) -> str:
     lines = ["In plain words:", text]
     if result.waiting:
         lines.append(f"Checks that do not run until then: {', '.join(result.waiting)}.")
+    if result.shallow:
+        lines.append("The history is shallow, and the owed ledger was measured against HEAD.")
     assumed = list(dict.fromkeys(finding.fix.assumed for finding in result.owner))
     if assumed:
         lines += ["Assumed until you say otherwise:", *(f"- {line}" for line in assumed)]
