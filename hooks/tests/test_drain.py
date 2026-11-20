@@ -1683,7 +1683,7 @@ def test_a_commit_hook_that_stages_another_file_keeps_the_branch_holding_it_and_
     ) in printed
     children = json.loads(printed[-1])["children"]
     held = git(root, "ls-tree", "-r", "--name-only", LANDING, "--", "docs/hooked.md", *children)
-    assert held.splitlines() == ["docs/hooked.md", *children], "the hook's commit is kept"
+    assert sorted(held.splitlines()) == sorted(["docs/hooked.md", *children]), "the hook's commit"
     assert git(root, "status", "--porcelain", "--", *children).splitlines() == [
         f"?? {child}" for child in children
     ]
