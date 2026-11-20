@@ -190,6 +190,17 @@ def _redefines(command: SimpleCommand) -> bool:
     return defines or _FUNCTION in lead or any({w, _name(w)} & _REDEFINERS for w in named)
 
 
+_Read = tuple[Script, bool, list[tuple[str, str]]]
+
+
+def _read(text: str) -> _Read:
+    parsed = _followed(text)
+    switching = any(map(_HIDDEN_SWITCH.search, parsed.nested))
+    found = enumerate(parsed.nested)
+    nested = list(dict.fromkeys((script, parsed.expanded.get(i, "")) for i, script in found))
+    return parsed, switching, nested
+
+
 def _followed(text: str) -> Script:
     parsed = parse(text)
     if parsed.modelled and any(map(_redefines, parsed.commands)):
@@ -374,21 +385,46 @@ def _inner_scripts(head: str, words: Sequence[str]) -> list[str]:
 
 
 class _Checker:
-    def __init__(self, guard: Guard, depth: int, line: str) -> None:
+    def __init__(
+        self,
+        guard: Guard,
+        depth: int,
+        line: str,
+        *,
+        judged: dict[tuple[str, Context, int, str], list[Verdict]],
+        parsed: dict[str, _Read],
+    ) -> None:
         self.guard = guard
         self.depth = depth
         self.line = line
+        self.judged = judged
+        self.parsed = parsed
         self.modelled = True
 
     def _deeper(self) -> "_Checker":
-        return _Checker(self.guard, self.depth + 1, self.line)
+        return _Checker(
+            self.guard, self.depth + 1, self.line, judged=self.judged, parsed=self.parsed
+        )
 
-    def script(self, text: str, context: Context) -> list[Verdict]:
-        if self.depth > MAX_DEPTH:
-            return [Verdict("unreadable", "the command nests scripts too deeply")]
-        parsed = _followed(text)
+    def script(self, text: str, context: Context, heredoc: str = "") -> list[Verdict]:
+        key = (text, context, self.depth, heredoc)
+        if key in self.judged:
+            return self.judged[key]
+        if heredoc:
+            verdicts = [replace(v, heredoc=heredoc) for v in self.script(text, context)]
+        elif self.depth > MAX_DEPTH:
+            verdicts = [Verdict("unreadable", "the command nests scripts too deeply")]
+        else:
+            if text not in self.parsed:
+                self.parsed[text] = _read(text)
+            verdicts = self._judged(self.parsed[text], context)
+        self.judged[key] = verdicts
+        return verdicts
+
+    def _judged(self, read: _Read, context: Context) -> list[Verdict]:
+        parsed, switching, nested = read
         self.modelled = parsed.modelled
-        if any(map(_HIDDEN_SWITCH.search, parsed.nested)):
+        if switching:
             context = context.switching_unseen()
         trusted = not any(map(_redefines, parsed.commands))
         now = chain = seen = [context]
@@ -431,12 +467,19 @@ class _Checker:
             previous = command.then
         verdicts += [_CROWDED] if crowded else []
         verdicts += [] if parsed.closed else [_UNCLOSED]
-        inside = self._nested(parsed.nested, seen[:MAX_STATES])
+        inside = self._nested(nested, seen[:MAX_STATES])
         return list(dict.fromkeys([*inside, *verdicts]))
 
-    def _nested(self, scripts: Sequence[str], places: Sequence[Context]) -> list[Verdict]:
+    def _nested(
+        self, nested: Sequence[tuple[str, str]], places: Sequence[Context]
+    ) -> list[Verdict]:
         inner = self._deeper()
-        return [v for script in scripts for place in places for v in inner.script(script, place)]
+        return [
+            v
+            for script, heredoc in nested
+            for place in places
+            for v in inner.script(script, place, heredoc)
+        ]
 
     def _command(
         self, pipeline: Sequence[SimpleCommand], heredocs: Sequence[str], context: Context
@@ -446,7 +489,10 @@ class _Checker:
         verdicts += self.words(command.words, context)
         if _reads_script_from_stdin(command.words):
             verdicts += self._fed(pipeline, heredocs, context)
-        return verdicts + self._fed_interpreter(pipeline, heredocs, context)
+        verdicts += self._fed_interpreter(pipeline, heredocs, context)
+        return (
+            [replace(v, heredoc=command.heredoc) for v in verdicts] if command.heredoc else verdicts
+        )
 
     def _fed(
         self, pipeline: Sequence[SimpleCommand], heredocs: Sequence[str], context: Context
@@ -628,6 +674,9 @@ class _Checker:
 
 
 def check(command: str, context: Context, guard: Guard) -> list[Verdict]:
-    verdicts = tickets.together(_Checker(guard, 0, command).script(command, context))
+    verdicts = _Checker(guard, 0, command, judged={}, parsed={}).script(command, context)
+    elsewhere = {verdict for verdict in verdicts if not verdict.heredoc}
+    verdicts = [v for v in verdicts if not v.heredoc or replace(v, heredoc="") not in elsewhere]
+    verdicts = tickets.together(verdicts)
     refused = any(verdict.rule in _PATH_REFUSALS for verdict in verdicts)
     return [v for v in verdicts if not (refused and v.rule == "unresolved-directory")]
