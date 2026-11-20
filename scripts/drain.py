@@ -99,6 +99,19 @@ HOOKS_CHANGED = (
     "not landed: the commit hooks changed {} as they ran, so the parts stay uncommitted in the"
     " checkout, and `{}` holds them as they were filed"
 )
+HOOKS_HURT = (
+    "not landed: the commit hooks changed the checkout as the lines above say, so nothing is"
+    " merged: `{}` holds the parts, and they stay uncommitted in the checkout"
+)
+HOOKS_EMPTIED = (
+    "not landed: the commit hooks took the parts out of the commit, so `{}` holds a commit that"
+    " adds nothing, and it stays as it is: delete it"
+)
+HOOKS_SILENT = "a commit hook refused them and printed nothing (`git commit` exited {})"
+INDEX_LOCKED = (
+    "not landed: the parts are on `{}`, and `{}` locks the checkout's index, so the merge could"
+    " not move it: once no git command runs in this repository, delete that file"
+)
 UNFINISHED = (
     "split: the checkout is in the middle of a merge or a rebase, or its index holds a conflict,"
     " so nothing is filed: finish it"
@@ -165,6 +178,12 @@ class Seen:
     merged: frozenset[str]
     trees: frozenset[Path]
     queued: frozenset[str]
+
+
+@dataclass(frozen=True)
+class Exposed:
+    files: dict[str, tuple[int, str] | None]
+    stash: str | None
 
 
 @dataclass(frozen=True)
@@ -1700,13 +1719,20 @@ def land_parts(root: Path, branch: str, *, landing: str, made: list[str]) -> str
         (root / part).unlink()
     if merge.merge_records(root, landing) == 0:
         return None
-    return ON_LANDING.format(landing)
+    lock = root / (gatelib.git(root, "rev-parse", "--git-path", "index.lock") or "index.lock")
+    return INDEX_LOCKED.format(landing, lock) if lock.is_file() else ON_LANDING.format(landing)
 
 
 def unlandable(root: Path, default: str, *, landing: str, made: list[str]) -> str | None:
     if merge.tip(root, landing) is not None:
         return TAKEN.format(landing)
     current = merge.on_branch(root)
+    if current is None:
+        print(
+            f"merge: the checkout's HEAD is detached, and the parts land from `{default}`: switch"
+            f" it to `{default}`"
+        )
+        return IN_CHECKOUT
     if current != default:
         print(f"merge: the checkout is on `{current}`, and the parts land from `{default}`")
         return IN_CHECKOUT
@@ -1719,15 +1745,19 @@ def commit_parts(root: Path, base: str, *, landing: str, made: list[str]) -> tup
     tree = scratch / "tree"
     with merge.locked(scratch / merge.HELD):
         try:
-            done = commit_aside(root, tree, base=base, landing=landing, made=made)
+            done, exposed = commit_aside(root, tree, base=base, landing=landing, made=made)
         finally:
             gatelib.git(root, "worktree", "remove", "--force", str(tree))
             shutil.rmtree(scratch, ignore_errors=True)
             gatelib.git(root, "worktree", "prune")
-    held = merge.tip(root, landing)
+    held, stash = tips(root, landing)
+    hurt = [] if exposed is None else harmed(root, exposed, stash)
+    for line in hurt:
+        print(f"records: {line}")
     if held in {None, base}:
         gatelib.git(root, "update-ref", "-d", f"{merge.HEADS}{landing}", base)
         said = " / ".join((done.stdout + done.stderr).strip().splitlines()[-merge.HOOK_LINES :])
+        said = said or HOOKS_SILENT.format(done.returncode)
         print(f"records: the parts were not committed: {said}")
         return None, IN_CHECKOUT
     kept = merge.hashed(root, made)
@@ -1735,22 +1765,33 @@ def commit_parts(root: Path, base: str, *, landing: str, made: list[str]) -> tup
         root, "rev-list", "--parents", "-n", "1", held
     ) == f"{held} {base}" and added(root, base, held).keys() == set(made)
     if not alone:
-        return None, HOOKS_ADDED.format(landing)
+        return None, (HOOKS_ADDED if added(root, base, held) else HOOKS_EMPTIED).format(landing)
     if added(root, base, held) != {part: kept.get(part, "") for part in made}:
         return None, HOOKS_CHANGED.format(", ".join(made), landing)
+    if hurt:
+        return None, HOOKS_HURT.format(landing)
     return held, ""
+
+
+def tips(root: Path, landing: str) -> tuple[str | None, str | None]:
+    names = (f"{merge.HEADS}{landing}", "refs/stash")
+    shown = gatelib.git(root, "for-each-ref", "--format=%(refname) %(objectname)", *names) or ""
+    found = {name: tip for name, _, tip in (line.partition(" ") for line in shown.splitlines())}
+    return found.get(names[0]), found.get(names[1])
 
 
 def commit_aside(
     root: Path, tree: Path, *, base: str, landing: str, made: list[str]
-) -> subprocess.CompletedProcess[str]:
+) -> tuple[subprocess.CompletedProcess[str], Exposed | None]:
     branched = merge.porcelain(
         root, "worktree", "add", "--quiet", "--no-checkout", "-b", landing, str(tree), base
     )
-    admin = gatelib.git(tree, "rev-parse", "--absolute-git-dir")
-    if branched.returncode or admin is None:
-        return branched
-    aside = (f"--git-dir={admin}", f"--work-tree={root}")
+    shown = merge.porcelain(
+        tree, "rev-parse", "--absolute-git-dir", "--verify", "--quiet", "refs/stash"
+    ).stdout.splitlines()
+    if branched.returncode or not shown:
+        return branched, None
+    aside = (f"--git-dir={shown[0]}", f"--work-tree={root}")
     merge.porcelain(root, *aside, "read-tree", base)
     listed = "".join(f"{part}\0" for part in made)
     staged = merge.porcelain(
@@ -1763,11 +1804,88 @@ def commit_aside(
         given=listed,
     )
     if staged.returncode:
-        return staged
+        return staged, None
+    files, hashed = snapshot(root, reachable(root, aside, made), keep=True)
+    if hashed.returncode:
+        return hashed, None
     message = f"{merge.SUBJECT}\n\nThe parts of a split, landed by `drain.py split`:\n\n" + "".join(
         f"- {part}\n" for part in made
     )
-    return merge.porcelain(root, *aside, "commit", "-q", "--file=-", given=message)
+    done = merge.porcelain(root, *aside, "commit", "-q", "--file=-", given=message)
+    return done, Exposed(files, shown[1] if len(shown) > 1 else None)
+
+
+def reachable(root: Path, aside: tuple[str, str], made: list[str]) -> list[str]:
+    listed = merge.porcelain(
+        root, *aside, "status", "--porcelain=v2", "-z", "--untracked-files=all", "--no-renames"
+    ).stdout
+    rows = [row for row in listed.split("\0") if row[:2] in {"1 ", "? "}]
+    paths = [row[2:] if row[0] == "?" else row.split(" ", 8)[8] for row in rows]
+    return [path for path in paths if path not in made]
+
+
+def mode_of(path: Path) -> int | None:
+    try:
+        return path.lstat().st_mode
+    except OSError:
+        return None
+
+
+def snapshot(
+    root: Path, paths: list[str], *, keep: bool
+) -> tuple[dict[str, tuple[int, str] | None], subprocess.CompletedProcess[str]]:
+    modes = {path: mode_of(root / path) for path in paths}
+    plain = [path for path, mode in modes.items() if mode is not None and stat.S_ISREG(mode)]
+    hashed = (
+        merge.porcelain(
+            root,
+            "hash-object",
+            *(["-w"] if keep else []),
+            "--no-filters",
+            "--stdin-paths",
+            given="".join(f"{path}\n" for path in plain),
+        )
+        if plain
+        else subprocess.CompletedProcess([], 0, "", "")
+    )
+    blobs = dict(zip(plain, hashed.stdout.split(), strict=False))
+    files = {
+        path: None if mode is None else (mode, kept_as(root / path, mode, blobs.get(path, "")))
+        for path, mode in modes.items()
+    }
+    return files, hashed
+
+
+def kept_as(path: Path, mode: int, blob: str) -> str:
+    return str(path.readlink()) if stat.S_ISLNK(mode) else blob
+
+
+def harmed(root: Path, exposed: Exposed, stash: str | None) -> list[str]:
+    now, _ = snapshot(root, list(exposed.files), keep=False)
+    lines = [harm(path, was, now[path]) for path, was in exposed.files.items() if now[path] != was]
+    if stash != exposed.stash:
+        top = stash or exposed.stash
+        holds = gatelib.git(root, "diff", "--name-only", f"{top}^1", f"{top}") or ""
+        lines.append(
+            f"the commit hooks moved the stash: `stash@{{0}}` is now {stash or 'gone'}, and {top}"
+            f" holds {', '.join(holds.splitlines()) or 'no tracked file'} from the checkout:"
+            f" `git stash show -p {top}` prints them"
+        )
+    return lines
+
+
+def harm(path: str, was: tuple[int, str] | None, now: tuple[int, str] | None) -> str:
+    if was is None:
+        return f"the commit hooks restored `{path}`, which the checkout did not have"
+    mode, held = was
+    what = "deleted" if now is None else "changed"
+    if stat.S_ISREG(mode):
+        return (
+            f"the commit hooks {what} `{path}`; the bytes it had are object {held}:"
+            f" `git cat-file blob {held}` prints them"
+        )
+    shape = f"a link to `{held}`" if held else "a folder"
+    return f"the commit hooks {what} `{path}`; it was {shape}"
 
 
 def show_plan(drain: Drain, _options: argparse.Namespace) -> int:

@@ -254,7 +254,7 @@ A ticket that passes the product ceilings (the preflight's `size` failure, the s
    - **Exit 0 with a `next:` line:** local tickets and a forge. Do what it says: commit the parts it names on a branch of their own, push it, open the pull request, and switch back to the default branch.
    - **Exit 1:** it refused the plan and has already parked the ticket as too large: it prints `closed: <ref>: parked`, and the report gives the reason. The ticket is the owner's. Do not run it again.
    - **Exit 2:** the checkout is in the middle of a merge or a rebase, or its index holds a conflict, and nothing was filed. Relay its `split:` line to the owner in the hand-over.
-   - **Exit 4:** the parts are filed and the ticket is closed as split, and they did not land: its `not landed:` line says why, where the parts are, and the command that tries again. Relay that line to the owner in the hand-over. Once the cause is gone, that command lands each part once.
+   - **Exit 4:** the parts are filed and the ticket is closed as split, and they did not land: its `not landed:` line says why, where the parts are, and the command that tries again. Relay that line to the owner in the hand-over, with each `records:` line before it: a commit hook that deleted, changed or put back a file of the owner's, or moved the stash, is named there, with the object that holds the bytes the file had. Do not put those files back yourself. Once the cause is gone, that command lands each part once.
 
    Done when the parts are printed and on the default branch or in a pull request, or `split` has parked the ticket as too large, or exit 4's lines are in the hand-over.
 
