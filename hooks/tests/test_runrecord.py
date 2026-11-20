@@ -1,7 +1,11 @@
+import errno
 import json
+import os
 import re
 import shlex
+import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -284,3 +288,181 @@ def test_a_malformed_local_caches_bullet_is_a_finding(tmp_path: Path) -> None:
     root = repos.repository(tmp_path / "ok", {str(gatelib.BINDING): ok})
     assert list(conformance.check_local_caches(root)) == []
     assert list(conformance.check_local_caches(tmp_path / "ok" / "docs")) == []
+
+
+FAULT = {"kind": runrecord.FAULT, "gate": "lint", "bite": "whole", "seconds": 9.0, "narrowed": False}
+UNWRITABLE_BY_ROOT = pytest.mark.skipif(os.geteuid() == 0, reason="root writes through modes")
+
+
+def test_the_reader_returns_only_records_of_the_shape_their_callers_read(tmp_path: Path) -> None:
+    kept = [FAULT, {**FAULT, "seconds": 0}, {"key": "lint", "seconds": "9"}, {"kind": "tier"}]
+    dropped = [
+        {**FAULT, "gate": ["lint"]},
+        {**FAULT, "bite": {"a": 1}},
+        {**FAULT, "seconds": "9"},
+        {**FAULT, "seconds": True},
+        {**FAULT, "seconds": -1.0},
+        {**FAULT, "narrowed": "false"},
+        {key: value for key, value in FAULT.items() if key != "narrowed"},
+        [FAULT],
+        "a string",
+    ]
+    odd = [
+        json.dumps(FAULT).replace("9.0", "NaN"),
+        json.dumps(FAULT).replace("9.0", "Infinity"),
+        "not json",
+        "[" * 100_000,
+        "1" * 5_000,
+    ]
+    rows = [*map(json.dumps, dropped), *odd, *map(json.dumps, kept)]
+    path = tmp_path / "timing.jsonl"
+    path.write_bytes(b"\xff\xfe\x80\n" + "\n".join(rows).encode() + b'\n{"kind": "fau')
+    assert runrecord.read(path) == kept
+
+
+def sized(count: int) -> list[bytes]:
+    rows = []
+    for number in range(count):
+        row = {"key": f"k{number:05d}", "seconds": 1.0, "pad": ""}
+        row["pad"] = "x" * (63 - len(json.dumps(row)))
+        rows.append(json.dumps(row).encode() + b"\n")
+    return rows
+
+
+def test_the_reader_reads_the_last_window_of_the_record_and_no_line_it_cuts(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "timing.jsonl"
+    rows = sized(runrecord.WINDOW // 64 + 2)
+    full = runrecord.WINDOW // 64
+    for held, tail, expected in (
+        (rows[:full], b"", rows[:full]),
+        (rows[: full + 1], b"", rows[1 : full + 1]),
+        (rows, b'{"key": "k", "seconds": 1.0}\n'.rjust(32, b" "), rows[3:]),
+    ):
+        path.write_bytes(b"".join(held) + tail)
+        got = runrecord.read(path)
+        assert [json.dumps(each).encode() + b"\n" for each in got[: len(expected)]] == expected
+        assert len(got) == len(expected) + bool(tail)
+
+
+def test_the_reader_reads_only_a_regular_file(tmp_path: Path) -> None:
+    assert runrecord.read(tmp_path) == []
+    assert runrecord.read(tmp_path / "absent.jsonl") == []
+
+
+def linked_record(path: Path, outside: Path) -> None:
+    path.parent.mkdir()
+    path.symlink_to(outside / "timing.jsonl")
+
+
+def linked_folder(path: Path, outside: Path) -> None:
+    path.parent.symlink_to(outside)
+
+
+def read_only_record(path: Path, _: Path) -> None:
+    path.parent.mkdir()
+    path.write_text("", encoding="utf-8")
+    path.chmod(0o444)
+
+
+def folder_record(path: Path, _: Path) -> None:
+    path.mkdir(parents=True)
+
+
+@UNWRITABLE_BY_ROOT
+@pytest.mark.parametrize(
+    ("unwritable", "why"),
+    [
+        (linked_record, "a symbolic link"),
+        (linked_folder, "a symbolic link"),
+        (read_only_record, os.strerror(errno.EACCES)),
+        (folder_record, os.strerror(errno.EISDIR)),
+    ],
+)
+def test_the_writer_appends_only_to_a_regular_file_in_a_real_folder_and_says_so_once(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    unwritable: Callable[[Path, Path], None],
+    why: str,
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "timing.jsonl").write_text("", encoding="utf-8")
+    path = tmp_path / "repo" / runrecord.TIMING
+    path.parents[1].mkdir()
+    unwritable(path, outside)
+    runrecord.append(path, FAULT, who="bite")
+    runrecord.append(path, FAULT, who="bite")
+    assert capsys.readouterr().out == f"bite: not recorded: {path}: {why}\n"
+    assert (outside / "timing.jsonl").read_text() == ""
+    assert [each.name for each in outside.iterdir()] == ["timing.jsonl"]
+
+
+def test_the_writer_refuses_a_fifo_another_process_reads(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / runrecord.TIMING
+    path.parent.mkdir()
+    os.mkfifo(path)
+    reader = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        runrecord.append(path, FAULT)
+        assert os.read(reader, 4096) == b""
+    finally:
+        os.close(reader)
+    assert capsys.readouterr().out == f"ratchet: not recorded: {path}: not a regular file\n"
+
+
+def test_the_writer_makes_the_state_folder_and_the_record(tmp_path: Path) -> None:
+    path = tmp_path / runrecord.TIMING
+    runrecord.append(path, FAULT)
+    runrecord.append(path, {"kind": "tier"})
+    assert lines(path) == [FAULT, {"kind": "tier"}]
+
+
+def outputs(capsys: pytest.CaptureFixture[str]) -> list[str]:
+    return [re.sub(r"\d+\.\d+s", "Ns", line) for line in capsys.readouterr().out.splitlines()]
+
+
+def stuck(path: Path) -> str:
+    path.write_text("", encoding="utf-8")
+    path.chmod(0o444)
+    return f"ratchet: not recorded: {path}: {os.strerror(errno.EACCES)}"
+
+
+@UNWRITABLE_BY_ROOT
+@pytest.mark.parametrize("first", [PASS, shlex.join([sys.executable, "-c", "raise SystemExit(3)"])])
+def test_the_runner_that_cannot_record_says_so_once_and_ends_as_it_would(
+    work: Path, capsys: pytest.CaptureFixture[str], first: str
+) -> None:
+    gates = ["--root", str(work), "--", first, shlex.join([sys.executable, "-c", "print()"])]
+    expected = parallel.main(["parallel", "--report", str(work / "kept.jsonl"), *gates])
+    said = outputs(capsys)
+    line = stuck(work / "stuck.jsonl")
+    assert parallel.main(["parallel", "--report", str(work / "stuck.jsonl"), *gates]) == expected
+    got = outputs(capsys)
+    assert got.count(line) == 1, got
+    assert [each for each in got if each != line] == said
+    assert (work / "stuck.jsonl").read_text() == ""
+
+
+@UNWRITABLE_BY_ROOT
+def test_budget_that_cannot_record_says_so_and_ends_as_it_would(
+    work: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    line = stuck(work / "stuck.jsonl")
+    timed = ["budget", "lint", "--root", str(work), "--report", "stuck.jsonl", "--", "true"]
+    assert budget.main(timed) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == line
+
+
+def test_the_runner_given_a_fifo_for_its_report_finishes_and_says_so(work: Path) -> None:
+    fifo = work / "timing.jsonl"
+    os.mkfifo(fifo)
+    command = [sys.executable, parallel.__file__, "--root", str(work), "--report", str(fifo)]
+    command += ["--", PASS]
+    run = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
+    assert run.returncode == 0, run.stdout + run.stderr
+    said = [line for line in run.stdout.splitlines() if "not recorded" in line]
+    assert said == [f"ratchet: not recorded: {fifo}: {os.strerror(errno.ENXIO)}"]

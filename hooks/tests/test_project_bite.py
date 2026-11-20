@@ -4,6 +4,8 @@ import re
 import shlex
 import shutil
 import signal
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -18,6 +20,7 @@ import conformance
 import gatelib
 import owed
 import project_bite
+import runrecord
 from tests import repos
 from tests.repos import branch, commit, git, repository, write
 from tests.servers import gone
@@ -70,13 +73,18 @@ def prove(root: Path, *flags: str) -> int:
     return project_bite.main(["project_bite.py", "--root", str(root), "--jobs", "1", *flags])
 
 
+def the_record(root: Path, path: Path) -> bool:
+    return path in {root / gatelib.STATE, root / runrecord.TIMING}
+
+
 def state(root: Path) -> tuple[list[str], str, list[str]]:
-    kept = (".git", gatelib.STATE.name)
     paths = sorted(
-        str(path) for path in root.rglob("*") if not any(name in path.parts for name in kept)
+        str(path)
+        for path in root.rglob("*")
+        if ".git" not in path.parts and not the_record(root, path)
     )
-    status = git(root, "status", "--porcelain").splitlines()
-    tree = [line for line in status if not line.endswith(f" {gatelib.STATE}/")]
+    status = git(root, "status", "--porcelain", "--untracked-files=all").splitlines()
+    tree = [line for line in status if line != f"?? {runrecord.TIMING}"]
     return tree, git(root, "rev-parse", "HEAD"), paths
 
 
@@ -1865,6 +1873,8 @@ def test_a_fault_over_the_tier0_ceiling_whose_bite_passes_no_args_is_named_with_
         pytest.param(None, id="no thresholds"),
         pytest.param(ceilings(tier1=0.1), id="no tier0 ceiling"),
         pytest.param(ceilings(tier0=60), id="under the ceiling"),
+        pytest.param(ceilings(tier0=0), id="a ceiling of zero"),
+        pytest.param(ceilings(tier0=-3), id="a ceiling below zero"),
         pytest.param("[ceilings.seconds\n", id="thresholds that do not parse"),
     ],
 )
@@ -1944,6 +1954,189 @@ def test_conformance_reads_only_the_last_whole_run_of_a_bite_that_still_passes_n
         timing.write_text(json.dumps(last) + "\n", encoding="utf-8")
         conformance.run(root)
         assert "slow:" not in capsys.readouterr().out, last
+
+
+@pytest.mark.parametrize(("each", "named"), [(0.25, False), (0.3, True)], ids=["at", "over"])
+def test_a_fault_is_slow_only_when_it_took_more_than_the_tier0_ceiling(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    each: float,
+    named: bool,
+) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "whole"))
+    write(root, "quality/thresholds.toml", ceilings(tier0=0.5))
+    commit(root, "thresholds")
+    run = project_bite.Shell.run
+
+    def timed(*args: object) -> project_bite.Run:
+        return run(*args)._replace(seconds=each)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(project_bite.Shell, "run", timed)
+    assert prove(root) == 0
+    assert [record["seconds"] for record in recorded(root)] == [each * 2]
+    assert ("bite: slow: lint: whole:" in capsys.readouterr().out) is named
+    conformance.run(root)
+    assert ("slow: quality/bites.toml: lint: whole:" in capsys.readouterr().out) is named
+
+
+@pytest.mark.parametrize("args", ["args = []\n", 'args = [" "]\n'])
+def test_args_that_name_nothing_narrow_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], args: str
+) -> None:
+    root = project(tmp_path / "repo", {"lint": SLEEPY}, bite("lint", "whole") + args)
+    write(root, "quality/thresholds.toml", ceilings(tier0=0.5))
+    commit(root, "thresholds")
+    assert prove(root) == 0
+    assert [record["narrowed"] for record in recorded(root)] == [False]
+    out = capsys.readouterr().out
+    assert re.search(r"bite: slow: lint: whole: .*; " + re.escape(CURE), out), out
+    conformance.run(root)
+    assert "slow: quality/bites.toml: lint: whole:" in capsys.readouterr().out
+    reason = "the runner filters after its own selection"
+    write(root, REGISTRY, bite("lint", "whole") + args + f'whole = "{reason}"\n')
+    assert project_bite.read_registry((root / REGISTRY).read_text())[1] == []
+    conformance.run(root)
+    assert "slow:" not in capsys.readouterr().out, "a reason beside args that narrow nothing"
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "again"),
+    [
+        pytest.param("", 'whole = "a reason"\n', False, id="a reason added"),
+        pytest.param('whole = "a reason"\n', 'whole = "another"\n', False, id="a reason edited"),
+        pytest.param('args = ["src"]\n', 'whole = "a reason"\n', True, id="args to a reason"),
+        pytest.param('whole = "a reason"\n', 'args = ["src"]\n', True, id="a reason to args"),
+    ],
+)
+def test_only_what_a_bite_runs_proves_its_gate_again(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], before: str, after: str, *, again: bool
+) -> None:
+    rest = bite("tests", WORD) + bite("slow", WORD)
+    root = targeted(tmp_path, registry=bite("lint", WORD) + before + rest)
+    write(root, REGISTRY, bite("lint", WORD) + after + rest)
+    assert prove(root, "--changed") == 0
+    assert (proved(shown(capsys).splitlines()) == ["lint"]) is again
+
+
+def read_only_record(record: Path) -> None:
+    record.parent.mkdir()
+    record.write_text("", encoding="utf-8")
+    record.chmod(0o444)
+
+
+def read_only_folder(record: Path) -> None:
+    record.parent.mkdir()
+    record.parent.chmod(0o555)
+
+
+def record_is_a_folder(record: Path) -> None:
+    record.mkdir(parents=True)
+
+
+def state_is_a_file(record: Path) -> None:
+    record.parent.write_text("not a folder\n", encoding="utf-8")
+
+
+def record_is_a_fifo(record: Path) -> None:
+    record.parent.mkdir()
+    os.mkfifo(record)
+
+
+def record_is_linked_out(record: Path) -> None:
+    outside = record.parents[2] / "outside.jsonl"
+    outside.write_text("", encoding="utf-8")
+    record.parent.mkdir()
+    record.symlink_to(outside)
+
+
+def state_is_linked_out(record: Path) -> None:
+    outside = record.parents[2] / "outside"
+    outside.mkdir()
+    record.parent.symlink_to(outside)
+
+
+def apart(script: str, *argv: str) -> subprocess.CompletedProcess[str]:
+    command = [sys.executable, str(Path(project_bite.__file__).with_name(script)), *argv]
+    return subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
+
+
+def settled(out: str) -> list[str]:
+    lines = AID.sub("", TIMING.sub("", out)).splitlines()
+    return [re.sub(r" in \d+s$", "", line) for line in lines]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes through a read-only file or folder")
+@pytest.mark.parametrize(
+    "unwritable",
+    [
+        read_only_record,
+        read_only_folder,
+        record_is_a_folder,
+        state_is_a_file,
+        record_is_a_fifo,
+        record_is_linked_out,
+        state_is_linked_out,
+    ],
+)
+def test_a_proof_that_cannot_record_says_so_once_and_is_otherwise_the_same_run(
+    tmp_path: Path, unwritable: Callable[[Path], None]
+) -> None:
+    registry = bite("lint", "one") + bite("lint", "two") + bite("format", "three")
+
+    def made(name: str) -> Path:
+        root = project(tmp_path / name, {"lint": LINT, "format": LINT}, registry)
+        write(root, ".gitignore", "ignored/\n*.secret\n.ratchet\n")
+        commit(root, "the state folder is ignored")
+        return root
+
+    recorded_run = apart("project_bite.py", "--root", str(made("records")), "--jobs", "1")
+    root = made("repo")
+    unwritable(root / runrecord.TIMING)
+    run = apart("project_bite.py", "--root", str(root), "--jobs", "1")
+    said = [line for line in run.stdout.splitlines() if line.startswith("bite: not recorded: ")]
+    assert len(said) == 1, run.stdout
+    assert said[0].startswith(f"bite: not recorded: {root / runrecord.TIMING}: "), said
+    assert (run.returncode, recorded_run.returncode) == (0, 0), run.stdout + run.stderr
+    assert settled(run.stdout.replace(said[0] + "\n", "")) == settled(recorded_run.stdout)
+    outside = [*tmp_path.glob("outside.jsonl"), *tmp_path.glob("outside/*")]
+    assert [path.read_text() for path in outside] in ([], [""]), "nothing written outside"
+
+
+def test_conformance_on_a_record_that_is_a_fifo_finishes_as_with_no_record(tmp_path: Path) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "whole"))
+    write(root, "quality/thresholds.toml", ceilings(tier0=0.5))
+    commit(root, "thresholds")
+    without = apart("conformance.py", str(root))
+    record_is_a_fifo(root / runrecord.TIMING)
+    run = apart("conformance.py", str(root))
+    assert (run.returncode, run.stdout) == (without.returncode, without.stdout), run.stderr
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        '{"kind": "fault", "gate": ["lint"], "bite": "whole", "seconds": 9.0, "narrowed": false}',
+        '{"kind": "fault", "gate": "lint", "bite": {"a": 1}, "seconds": 9.0, "narrowed": false}',
+        '{"kind": "fault", "gate": "lint", "bite": "whole", "seconds": Infinity, "narrowed": false}',
+        "[" * 100_000,
+    ],
+    ids=["a gate that is a list", "a bite that is a table", "seconds without end", "deep"],
+)
+def test_conformance_reads_past_a_record_it_cannot_use(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], line: str
+) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "whole"))
+    write(root, "quality/thresholds.toml", ceilings(tier0=0.5))
+    commit(root, "thresholds")
+    code = conformance.run(root)
+    without = capsys.readouterr().out
+    timing = root / runrecord.TIMING
+    timing.parent.mkdir()
+    timing.write_text(line + "\n", encoding="utf-8")
+    assert conformance.run(root) == code
+    assert capsys.readouterr().out == without
 
 
 def test_a_gate_that_times_out_only_with_the_fault_planted_is_timed_out(
@@ -2660,7 +2853,7 @@ def test_a_fault_inside_a_repository_setup_made_is_not_planted(
 def fingerprint(root: Path) -> list[tuple[str, int, bytes]]:
     entries = []
     for path in sorted(root.rglob("*")):
-        if {".git", gatelib.STATE.name} & set(path.relative_to(root).parts):
+        if ".git" in path.relative_to(root).parts or the_record(root, path):
             continue
         mode = path.lstat().st_mode
         held = (
