@@ -1,12 +1,13 @@
 import re
 import shlex
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
 
-from ratchet_guards import bash, gh, git, gitcall
+from ratchet_guards import bash, gh, git, gitcall, hook
 from ratchet_guards.context import Context
 from ratchet_guards.manifest import (
     DoorRule,
@@ -242,6 +243,65 @@ def test_an_unquoted_heredoc_body_is_read_as_bash_reads_it() -> None:
 @pytest.mark.parametrize("opener", ["<<'E'", '<<"E"', "<<\\E"])
 def test_a_quoted_heredoc_delimiter_keeps_the_body_as_text(opener: str) -> None:
     assert lex(f"cat {opener}\n$(a) `b` \\$c\\\nE\nE")[1:] == ((), ("$(a) `b` \\$c\\",))
+
+
+@pytest.mark.parametrize(
+    ("command", "outside"),
+    [
+        ("cat <<EOF > notes.md\nRun `git push -f` to publish.\nEOF", "git push -f"),
+        ("cat <<EOF > notes.md\nRun `git push -f` to publish.\nEOF", 'echo "$(git push -f)"'),
+        ("x=$(cat <<EOF\n# Notes\nRun `gh pr merge 1` here.\nEOF\n)", "x=$(gh pr merge 1)"),
+        ("cat <<E\n$(echo hi > AGENTS.md)\nE", "echo hi > AGENTS.md"),
+    ],
+)
+def test_a_finding_in_an_unquoted_heredoc_body_says_quoting_the_delimiter_keeps_it_text(
+    command: str, outside: str
+) -> None:
+    def message(text: str) -> str:
+        verdict = strictest(verdicts(text))
+        assert verdict is not None, text
+        return hook.reason(verdict)
+
+    cure = "quote the delimiter (`<<'EOF'`)"
+    inside = message(command)
+    assert "heredoc body" in inside, inside
+    assert cure in inside, inside
+    assert cure not in message(outside)
+
+
+def _cpu_seconds(command: str) -> float:
+    guard = make_guard()
+    start = time.thread_time()
+    bash.check(command, Context(ROOT), guard)
+    return time.thread_time() - start
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["x\\\n", "price $5 and $HOME and ${name} and $$ end\n", "$" * 63 + "\n", "\\" * 64 + "x\n"],
+)
+def test_the_guard_reads_an_unquoted_heredoc_body_in_time_linear_in_its_size(line: str) -> None:
+    lines, floor = 2048, 0.005
+    small: list[float] = []
+    large: list[float] = []
+    for _ in range(5):
+        small.append(_cpu_seconds(f"cat <<E\n{line * lines}E"))
+        large.append(_cpu_seconds(f"cat <<E\n{line * 4 * lines}E"))
+    assert min(large) < 8 * max(min(small), floor), (min(small), min(large))
+
+
+def test_the_guard_reads_many_heredocs_on_one_line_in_time_linear_in_their_number() -> None:
+    def command(count: int) -> str:
+        opened = " ".join(f"<<E{index}" for index in range(count))
+        return f"cat {opened}\n" + "".join(f"b\nE{index}\n" for index in range(count))
+
+    count, floor = 2000, 0.005
+    small: list[float] = []
+    large: list[float] = []
+    for _ in range(5):
+        small.append(_cpu_seconds(command(count)))
+        large.append(_cpu_seconds(command(4 * count)))
+    assert min(large) < 8 * max(min(small), floor), (min(small), min(large))
 
 
 def test_lexer_survives_unterminated_constructs() -> None:

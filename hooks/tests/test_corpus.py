@@ -941,6 +941,10 @@ ASKED: list[tuple[str, list[str]]] = [
     ("gh pr edit 3 --add-label agent:ready", ["agent-ready-label"]),
     ("gh pr create --title t --body b --label agent:ready", ["agent-ready-label"]),
     ("bash -c 'gh issue edit 4 --add-label agent:ready'", ["agent-ready-label"]),
+    ("cat <<E\n${x:-'}'}\nE", ["unreadable"]),
+    ('echo "${x:-\'a"b\'}"', ["unreadable"]),
+    ("cat <<E\n${x:-'$(git push -f)'}\nE", ["force-push", "unreadable"]),
+    ("echo \"${x:-'`git push -f`'}\"", ["force-push", "unreadable"]),
 ]
 
 UNRESOLVED = U
@@ -1307,6 +1311,9 @@ ALLOWED: list[str] = [
     "cat <<\\E\n$(git push -f) `git push -f`\nE",
     "cat <<E\n$((1 + 2)) $(( 1 << 2 ))\nE",
     "cat <<E\nx\\\\\nE\necho ok",
+    "cat <<E\n${x:-'none'}\nE",
+    "echo \"${x:-'none'}\"",
+    "echo \"${x:+'a b' 'c'}\"",
     "find . -name '*.py' -exec grep -l x {} +",
     "find . -name x",
     "echo x > .claude/worktrees/agent-1/app/src/a.py",
@@ -1502,6 +1509,19 @@ def test_a_write_the_merge_judges_is_refused_on_main(command: str) -> None:
 @pytest.mark.parametrize("command", ALLOWED)
 def test_harmless_commands_fire_nothing(command: str) -> None:
     assert rules(command) == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "for ((i=0;i<1;i++)); do cat <<'EOF'\nsee: cat <<X\n`git push -f`\nX\nEOF\ndone",
+        "cat <<E''\n$(cat <<F\n$(git push -f)\nF\n)\nE",
+    ],
+)
+def test_the_guard_is_deliberately_strict_where_it_cannot_be_sure_where_a_heredoc_ends(
+    command: str,
+) -> None:
+    assert rules(command) == ["force-push"]
 
 
 ON_MAIN: list[tuple[str, list[str]]] = [
