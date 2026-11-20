@@ -79,6 +79,7 @@ RUN_CEILING = "bite-run"
 SLOW = 2.0
 SLOW_FLOOR = 1.0
 WAKE = 0.1
+GLOB_SPECIAL = re.compile(r"[\\*?\[]")
 SHIPPED = re.compile(r"`ratchet` plugin `[^`]+`(?: and `[^`]+`)*")
 
 
@@ -134,14 +135,18 @@ def split_gates(binding: str) -> tuple[tuple[Row, ...], str]:
 
 
 def run_git(
-    root: Path, *args: str, index: Path | None = None, stdin: str | bytes | None = None
+    root: Path,
+    *args: str,
+    index: Path | None = None,
+    stdin: str | bytes | None = None,
+    store: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(
         ["git", "-C", str(root), *args],
         capture_output=True,
         check=False,
         input=stdin.encode() if isinstance(stdin, str) else stdin,
-        env=environment() | ({"GIT_INDEX_FILE": str(index)} if index else {}),
+        env=environment() | ({"GIT_INDEX_FILE": str(index)} if index else {}) | (store or {}),
     )
 
 
@@ -240,24 +245,29 @@ class Replace:
     def plant(self, copy: Tree) -> None:
         for swap in self.swaps:
             owned(copy.path, swap.path)
-            content, old = copy.read(swap.path), swap.old.encode()
+            content = copy.read(swap.path)
             if content is None:
                 message = f"{swap.path} is not a file in the copy, and 'replace' changes a file"
                 raise Unprovable(message)
-            first = content.find(old)
-            if first == -1:
-                message = (
-                    f"{swap.path} no longer holds the text the fault replaces; write 'old' as the"
-                    f" file has it now: {swap.old!r}"
-                )
-                raise Unprovable(message)
-            if content.find(old, first + 1) != -1:
-                message = (
-                    f"{swap.path} holds the text the fault replaces in more than one place;"
-                    f" lengthen 'old' until it names one: {swap.old!r}"
-                )
-                raise Unprovable(message)
-            copy.write(swap.path, content[:first] + swap.new.encode() + content[first + len(old) :])
+            copy.write(swap.path, swapped(content, swap))
+
+
+def swapped(content: bytes, swap: Swap) -> bytes:
+    old = swap.old.encode()
+    first = content.find(old)
+    if first == -1:
+        message = (
+            f"{swap.path} no longer holds the text the fault replaces; write 'old' as the"
+            f" file has it now: {swap.old!r}"
+        )
+        raise Unprovable(message)
+    if content.find(old, first + 1) != -1:
+        message = (
+            f"{swap.path} holds the text the fault replaces in more than one place;"
+            f" lengthen 'old' until it names one: {swap.old!r}"
+        )
+        raise Unprovable(message)
+    return content[:first] + swap.new.encode() + content[first + len(old) :]
 
 
 Fault = Write | Patch | Remove | Replace
@@ -597,6 +607,145 @@ def misplaced(root: Path, rows: Sequence[Row], bites: Sequence[Bite]) -> Iterato
             yield f"bite '{bite.name}' applies {bite.fault.path}, which is missing"
 
 
+class Unplantable(NamedTuple):
+    bite: Bite
+    why: str
+
+    @property
+    def identity(self) -> str:
+        return f"bite '{self.bite.name}' of gate '{self.bite.gate}' cannot be planted"
+
+    def __str__(self) -> str:
+        return f"{self.identity}: {self.why}"
+
+
+class Unchecked(NamedTuple):
+    bite: Bite
+    where: str
+
+    def __str__(self) -> str:
+        return (
+            f"bite '{self.bite.name}' of gate '{self.bite.gate}': nothing git sees is at"
+            f" {self.where}, and the registry's `setup` may make it in the scratch copy; the full"
+            " proof plants it"
+        )
+
+
+class Unplanted(NamedTuple):
+    why: str
+    unseen: tuple[str, ...] = ()
+    rest_plants: bool = False
+
+
+MOVED = "if the file moved, {}, or else remove the bite and add one that plants"
+
+
+def unplanted(
+    root: Path, seen: set[str], fault: Fault, *, store: dict[str, str]
+) -> Unplanted | None:
+    if isinstance(fault, Patch) and (root / fault.path).is_file():
+        return unapplied(root, seen, fault.path, store=store)
+    if isinstance(fault, Replace):
+        return unreplaced(root, seen, fault)
+    if isinstance(fault, Remove) and not any(gatelib.matches(p, [*fault.patterns]) for p in seen):
+        globs = ", ".join(fault.patterns)
+        why = (
+            f"no file git sees matches {globs}; write the globs to match the collection as it is"
+            " now"
+        )
+        return Unplanted(why, fault.patterns, rest_plants=True)
+    return None
+
+
+def unapplied(root: Path, seen: set[str], patch: str, *, store: dict[str, str]) -> Unplanted | None:
+    result = run_git(root, "apply", "--check", "--cached", patch, store=store)
+    if result.returncode == 0:
+        return None
+    unseen = tuple(sorted(patch_paths(root, (root / patch).read_bytes()) - seen - {"**"}))
+    excluded = ["--exclude=" + GLOB_SPECIAL.sub(r"\\\g<0>", path) for path in unseen]
+    rest = run_git(root, "apply", "--check", "--cached", *excluded, patch, store=store)
+    if unseen and rest.returncode == 0:
+        why = f"{patch} changes {' and '.join(unseen)}, which git does not see; " + MOVED.format(
+            "make the patch again against its new name"
+        )
+        return Unplanted(why, unseen, rest_plants=True)
+    errors = "; ".join(line for line in rest.stderr.decode().splitlines() if line)
+    why = f"{patch} no longer applies: {errors}; make the patch again against the file as it is now"
+    return Unplanted(why)
+
+
+def unreplaced(root: Path, seen: set[str], fault: Replace) -> Unplanted | None:
+    paths = dict.fromkeys(swap.path for swap in fault.swaps)
+    contents = {path: (root / path).read_bytes() for path in paths if path in seen}
+    for swap in fault.swaps:
+        if swap.path in contents:
+            try:
+                contents[swap.path] = swapped(contents[swap.path], swap)
+            except Unprovable as error:
+                return Unplanted(str(error))
+    unseen = tuple(path for path in paths if path not in contents)
+    if not unseen:
+        return None
+    why = (
+        f"{unseen[0]} is not a file git sees, and a fault plants only into what git sees; "
+        + MOVED.format("point 'path' at its new name")
+    )
+    return Unplanted(why, unseen, rest_plants=True)
+
+
+@contextmanager
+def as_git_sees(root: Path) -> Iterator[dict[str, str]]:
+    with tempfile.TemporaryDirectory(prefix="ratchet-bite-check-") as scratch:
+        index, objects = Path(scratch) / "index", Path(scratch) / "objects"
+        objects.mkdir()
+        store = {
+            "GIT_INDEX_FILE": str(index),
+            "GIT_OBJECT_DIRECTORY": str(objects),
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(git_path(root, "objects")),
+        }
+        with contextlib.suppress(FileNotFoundError):
+            shutil.copyfile(git_path(root, "index"), index)
+        run_git(root, "add", "--all", store=store)
+        yield store
+
+
+def committed(root: Path) -> set[str]:
+    refs = ("HEAD", gatelib.base_commit(root))
+    return {path for ref in refs if ref for path in gatelib.tracked_paths(root, ref)}
+
+
+def plants(root: Path, registry: Registry) -> tuple[list[Unplantable], list[Unchecked]]:
+    if gatelib.git(root, "rev-parse", "--show-toplevel") is None:
+        return [], []
+    seen = set(gatelib.tracked_paths(root))
+    patches = any(isinstance(bite.fault, Patch) for bite in registry.bites)
+    sight: contextlib.AbstractContextManager[dict[str, str]] = (
+        as_git_sees(root) if patches else contextlib.nullcontext({})
+    )
+    with sight as store:
+        found = [(bite, unplanted(root, seen, bite.fault, store=store)) for bite in registry.bites]
+    judged = [(bite, verdict) for bite, verdict in found if verdict is not None]
+    made = bool(registry.setup) and any(verdict.rest_plants for _, verdict in judged)
+    known = committed(root) if made else set()
+    unplantable: list[Unplantable] = []
+    unchecked: list[Unchecked] = []
+    for bite, verdict in judged:
+        gone = any(gatelib.matches(path, [*verdict.unseen]) for path in known)
+        if made and verdict.rest_plants and not gone:
+            unchecked.append(Unchecked(bite, ", ".join(verdict.unseen)))
+        else:
+            unplantable.append(Unplantable(bite, verdict.why))
+    return unplantable, unchecked
+
+
+def checked(root: Path, registry: Registry) -> tuple[list[Unplantable], dict[str, bool]]:
+    unplantable, unchecked = plants(root, registry)
+    for found in unchecked:
+        print(f"bite: not checked: {found}")
+    skipped = {found.bite.gate for found in unchecked}
+    return unplantable, {bite.gate: bite.gate not in skipped for bite in registry.bites}
+
+
 def unproven(
     rows: Sequence[Row], bites: Sequence[Bite], catalogue: application_types.Catalogue
 ) -> Iterator[str]:
@@ -634,16 +783,26 @@ def inspect(root: Path) -> tuple[list[Row], Registry, list[str], list[str]]:
     return rows, registry, problems, gaps
 
 
+class RegistryCheck(NamedTuple):
+    failures: list[str | Unplantable]
+    unchecked: list[Unchecked]
+
+
+def registry_check(root: Path) -> RegistryCheck:
+    _, registry, problems, gaps = inspect(root)
+    unplantable, unchecked = plants(root, registry)
+    return RegistryCheck([*problems, *gaps, *unplantable], unchecked)
+
+
 def failures(root: Path) -> list[str]:
-    _, _, problems, gaps = inspect(root)
-    return [f"{REGISTRY}: {problem}" for problem in problems + gaps]
+    return [f"{REGISTRY}: {problem}" for problem in registry_check(root).failures]
 
 
-def owed_key(problem: str) -> owed.Key:
-    return (RULE, str(REGISTRY), problem)
+def owed_key(problem: str | Unplantable) -> owed.Key:
+    return (RULE, str(REGISTRY), problem if isinstance(problem, str) else problem.identity)
 
 
-def owing(root: Path, problems: Sequence[str]) -> tuple[list[str], list[str]]:
+def owing(root: Path, problems: Sequence[str | Unplantable]) -> tuple[list[str], list[str]]:
     if not problems:
         return [], []
     ledger = owed.read(root)
@@ -920,13 +1079,15 @@ class Copy:
         return result
 
 
-def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell, lane: int = 0) -> Copy:
-    def git_path(name: str) -> Path:
-        return Path(git_in(root, "rev-parse", "--path-format=absolute", "--git-path", name))
+def git_path(root: Path, name: str) -> Path:
+    return Path(git_in(root, "rev-parse", "--path-format=absolute", "--git-path", name))
 
+
+def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell, lane: int = 0) -> Copy:
     git_in(root, "init", "-q", str(copy))
     tree = Tree.pin(copy)
-    (copy / ".git/objects/info/alternates").write_text(f"{git_path('objects')}\n", encoding="utf-8")
+    alternates = f"{git_path(root, 'objects')}\n"
+    (copy / ".git/objects/info/alternates").write_text(alternates, encoding="utf-8")
     git_in(copy, "fetch", "-q", "--update-head-ok", str(root), "+refs/*:refs/*")
     head = git_in(root, "rev-parse", "HEAD")
     git_in(copy, "update-ref", "--no-deref", "HEAD", head)
@@ -934,7 +1095,7 @@ def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell, lane:
     if remote_head:
         git_in(copy, "symbolic-ref", "refs/remotes/origin/HEAD", remote_head)
     for name in ("index", "info/exclude"):
-        carry(git_path(name), copy / ".git" / name)
+        carry(git_path(root, name), copy / ".git" / name)
     for path in visible(root):
         carry(root / path, copy / path)
     for path in registry.include:
@@ -1408,7 +1569,25 @@ def explain(rows: Sequence[Row], causes: Sequence[Cause]) -> list[str]:
     ]
 
 
-def changed_gates(root: Path, rows: Sequence[Row]) -> list[Row] | int:
+def deferred(rows: Sequence[Row], causes: Sequence[Cause], planted: dict[str, bool]) -> list[str]:
+    lines = []
+    for row in rows:
+        whys = dict.fromkeys(cause.why for cause in causes if cause.gate == row.gate)
+        if row.tier in PULL_REQUEST_TIERS or not whys or row.gate not in planted:
+            continue
+        plant = (
+            "each of its patch, replace and remove faults was checked to still plant"
+            if planted[row.gate]
+            else "a fault of it was not checked to plant, as said above"
+        )
+        lines.append(
+            f"bite: {row.gate}: {'; '.join(whys)}; a gate of tier {row.tier}, which a pull request"
+            f" does not prove, and {plant}"
+        )
+    return lines
+
+
+def changed_gates(root: Path, rows: Sequence[Row], planted: dict[str, bool]) -> list[Row] | int:
     base = gatelib.base_commit(root)
     if gatelib.adoption(root, base):
         print(
@@ -1426,10 +1605,12 @@ def changed_gates(root: Path, rows: Sequence[Row]) -> list[Row] | int:
     )
     causes = could_affect(root, base, touched)
     chosen = targeted(rows, causes)
+    later = deferred(rows, causes, planted)
     if not chosen:
-        print("bite: green: the change affects no gate of tiers 0 and 1; nothing to prove")
+        nothing = "bite: green: the change affects no gate of tiers 0 and 1; nothing to prove"
+        print("\n".join([*later, nothing]))
         return 0
-    print("\n".join(explain(rows, causes)))
+    print("\n".join([*explain(rows, causes), *later]))
     return chosen
 
 
@@ -1453,14 +1634,16 @@ def main(argv: list[str]) -> int:
     root = options.root.resolve()
     rows, registry, problems, gaps = inspect(root)
     problems += [] if options.gate and not options.changed else gaps
-    red, notes = owing(root, problems)
+    partial = options.changed or options.pull_request_gates
+    unplantable, planted = checked(root, registry) if partial else ([], {})
+    red, notes = owing(root, [*problems, *unplantable])
     for line in notes:
         print(line)
     if red:
         return gatelib.report("bite", red)
     chosen = pull_request_gates(rows) if options.pull_request_gates else rows
     if options.changed:
-        found = changed_gates(root, rows)
+        found = changed_gates(root, rows, planted)
         if isinstance(found, int):
             return found
         chosen = found

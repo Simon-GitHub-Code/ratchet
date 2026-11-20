@@ -15,7 +15,9 @@ import conformance
 import justfile_text
 import markdown_text
 import owed
-from tests import adopted
+import project_bite
+import upgrade
+from tests import adopted, repos
 from tests.repos import git, repository
 from tests.support import PLUGIN_ROOT
 
@@ -205,7 +207,7 @@ def test_a_red_finding_is_followed_by_what_it_asks_next(
     )
     findings = [finding, edited, owner, made]
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(conformance, "findings", lambda _root: findings)
+        patch.setattr(conformance, "findings", lambda _root, **_: findings)
         assert conformance.run(repo) == 1
     assert capsys.readouterr().out.splitlines()[:7] == [
         "justfile: no install",
@@ -1638,3 +1640,66 @@ def test_the_depended_on_event_may_carry_the_forges_signs(repo: Path) -> None:
 def test_a_repository_without_a_binding_raises_no_documents_finding(repo: Path) -> None:
     remove(BINDING)(repo)
     assert not any(found.rule == "documents" for found in conformance.findings(repo))
+
+
+APP = "".join(f"line{number}\n" for number in range(1, 41))
+TWO_HUNKS = (
+    "--- a/src/app.txt\n+++ b/src/app.txt\n"
+    "@@ -4,3 +4,3 @@\n line4\n-line5\n+P\n line6\n"
+    "@@ -29,3 +29,3 @@\n line29\n-line30\n+Q\n line31\n"
+)
+OWN_BITES = "".join(
+    f'[[bite]]\ngate = "{gate}"\nname = "{gate} word"\n'
+    f'write = {{ path = "src/x_{gate}.txt", content = "x" }}\nexpect = "x"\n'
+    for gate in ("fmt-check", "lint", "types", "imports", "deadcode", "lint-workflows", "secrets")
+) + (
+    '[[bite]]\ngate = "limits"\nname = "limits word"\n'
+    'write = { path = "src/x_limits.txt", content = "x" }\nexpect = "x"\n'
+    '[[bite]]\ngate = "test"\nname = "no tests"\nremove = ["tests/**"]\nexpect = "no test"\n'
+    '[[bite]]\ngate = "perf"\nname = "slow turn"\npatch = "quality/bites/slow.patch"\n'
+    'expect = "slow"\n'
+)
+
+
+def still_red(root: Path) -> tuple[list[str], list[str]]:
+    red, _ = conformance.owed_split(root, conformance.findings(root))
+    source = (root / project_bite.REGISTRY).read_text(encoding="utf-8")
+    registry, _ = project_bite.read_registry(source)
+    bite, _ = project_bite.owing(root, project_bite.plants(root, registry)[0])
+    return [str(finding) for finding in red], bite
+
+
+def test_a_fault_an_upgrade_owes_stays_owed_while_later_changes_move_why_it_fails(
+    tmp_path: Path,
+) -> None:
+    root = adopted.copy(adopted.adopted("0.9.2"), tmp_path / "repo")
+    write("src/app.txt", APP.replace("line31", "renamed31"))(root)
+    write("quality/bites/slow.patch", TWO_HUNKS)(root)
+    write(str(project_bite.REGISTRY), OWN_BITES)(root)
+    repos.commit(root, "feat(core): the project's own bites")
+    repos.branch(root, "upgrade")
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    repos.commit(root, "chore: upgrade")
+    owing = [entry for entry in owed.read(root).entries if "cannot be planted" in entry.problem]
+    assert len(owing) == 2
+    assert still_red(root) == ([], [])
+    repos.branch(root, "feature")
+    replace("src/app.txt", "line6\n", "renamed6\n")(root)
+    repos.commit(root, "feat(core): an edit above the owed fault")
+    assert still_red(root) == ([], [])
+    (root / "src/app.txt").rename(root / "src/moved.txt")
+    repos.commit(root, "refactor(core): move the file the owed fault patches")
+    assert still_red(root) == ([], [])
+    broken = 'replace = { path = "src/moved.txt", old = "line2\\n", new = "P\\n" }'
+    write(
+        str(project_bite.REGISTRY),
+        OWN_BITES.replace('write = { path = "src/x_lint.txt", content = "x" }', broken),
+    )(root)
+    replace("src/moved.txt", "line2\n", "renamed2\n")(root)
+    repos.commit(root, "feat(core): a fault, then an edit that breaks it")
+    says = (
+        f"{project_bite.REGISTRY}: bite 'lint word' of gate 'lint' cannot be planted:"
+        " src/moved.txt no longer holds the text the fault replaces; write 'old' as the file has"
+        " it now: 'line2\\n'"
+    )
+    assert still_red(root) == ([says], [says])
