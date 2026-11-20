@@ -607,3 +607,51 @@ def test_a_deep_run_says_which_merges_it_speaks_for(
             " default branch it speaks for is not known."
         ),
     ]
+
+
+NESTED = "[" * 200_000 + "]" * 200_000
+
+
+def test_runs_nested_past_the_interpreters_limit_are_an_answer_that_could_not_be_read(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    history(tmp_path)
+    assert deep(tmp_path, capsys, NESTED) == "red"
+    assert tier1(tmp_path, capsys, NESTED) == "red"
+    assert ci(tmp_path, capsys, NESTED) == (1, forge_runs.UNREADABLE)
+    assert ci(tmp_path, capsys, page(run()), pulls=NESTED) == (1, forge_runs.UNREADABLE)
+    read, out = answered(tmp_path, capsys, NESTED)
+    assert (read.runs, out) == (None, "")
+
+
+@pytest.mark.parametrize(
+    ("over", "states", "named"),
+    [
+        ({"html_url": ["https://forge.example/runs/7"]}, ["green"], "run 1"),
+        ({"event": ["push"]}, [], None),
+        ({"conclusion": ["success"]}, ["red"], "run 1"),
+    ],
+)
+def test_an_answer_reads_a_field_of_the_wrong_type_without_trusting_it(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    over: dict[str, object],
+    states: list[str],
+    named: str | None,
+) -> None:
+    at = history(tmp_path)
+    read, _ = answered(tmp_path, capsys, page(tier2(at["tip"], **over)))
+    assert [run.state for run in read.runs or ()] == states
+    assert [run.name for run in read.runs or ()] == ([named] if named else [])
+
+
+@pytest.mark.parametrize(
+    "created", [["2026-11-12T10:00:00Z"], None, "yesterday", "2026-11-12T10:00:00"]
+)
+def test_an_answer_with_a_time_that_is_not_an_instant_is_not_known(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], created: object
+) -> None:
+    at = history(tmp_path)
+    read, _ = answered(tmp_path, capsys, page(tier2(at["tip"], created_at=created)))
+    assert read.runs is None

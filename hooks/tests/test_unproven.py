@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -212,6 +213,19 @@ def test_a_run_speaks_for_its_commit_down_to_the_last_green(
     runs: list[DeepRun], run: DeepRun, spoken: tuple[Landed, ...]
 ) -> None:
     assert unproven.speaks_for(CHAIN, Deep(tuple(runs), START), run) == spoken
+
+
+def test_a_red_lists_the_nearest_merges_it_speaks_for_and_counts_the_rest() -> None:
+    line = tuple(Landed(f"{index:040x}", f"merge {index}") for index in range(40))
+    red = DeepRun(line[0].commit, "red", datetime(2026, 11, 20, 9, tzinfo=UTC), "the red")
+    deep = Deep((red,), START)
+    hold = unproven.held(line, deep, gated=True, bound=None)
+    assert hold is not None
+    assert [landed.subject for landed in line if f"{landed.subject};" in hold.text] == [
+        f"merge {index}" for index in range(10)
+    ]
+    assert hold.text.endswith("merge 9; and 30 more, and the owner merges what fixes it")
+    assert unproven.speaks_for(line, deep, red) == line
 
 
 def test_a_run_speaks_for_nothing_when_the_forge_cannot_be_read() -> None:
