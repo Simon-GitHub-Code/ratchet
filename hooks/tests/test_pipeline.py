@@ -1004,7 +1004,10 @@ def test_every_role_that_reads_a_local_ticket_reads_it_as_the_base_holds_it() ->
     answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
     based = {**PREFLIGHT, "base": "main"}
     ran = _run({"ref": TICKET_FILE}, preflight=based, spec=SPECIFIED, **answers)
-    shown = f"(`git show main:{TICKET_FILE}`, run from the repository root"
+    shown = (
+        "Read it, from the repository root (the directory holding AGENTS.md), with\n\n"
+        f"      git show 'main:{TICKET_FILE}'\n"
+    )
     for role in ("spec", "ticket-check", "review"):
         assert shown in ran["prompts"][role], role
         assert "not the copy in the working tree" in ran["prompts"][role], role
@@ -1012,7 +1015,7 @@ def test_every_role_that_reads_a_local_ticket_reads_it_as_the_base_holds_it() ->
     assert shown in _run(rejudge, **{"review-again": REVIEW})["prompts"]["review-again"]
     unbased = _built(REVIEW, TICKET_FILE)["prompts"]["review"]
     inputs = unbased.split("Inputs you may read")[1].split("Load the")[0]
-    assert f"The ticket: the file `{TICKET_FILE}` under the repository root" in inputs
+    assert f"It is the file `{TICKET_FILE}` under the repository root" in inputs
     assert "`## Answers`" in inputs
     assert "the ticket are outside your inputs" not in unbased
     tracker = "`gh issue view 4 --json number,title,body,labels,comments`"
@@ -1980,7 +1983,7 @@ def test_a_shell_hands_every_command_line_each_value_as_one_word_unchanged(
             for name, sentinel in SENTINELS.items():
                 expected = [word.replace(sentinel, values[name]) for word in expected]
             assert _shell_words(line, tmp_path) == (expected, 0), f"{label}: {line}"
-    assert seen >= 4, "the preflight, the quote checks and the git commands"
+    assert seen == 29, "the preflight, five quote checks and the git commands of ten prompts"
     assert not marker.exists(), "the shell ran a command out of a command line"
 
 

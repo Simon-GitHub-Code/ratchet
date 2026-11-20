@@ -254,7 +254,7 @@ function commonRules(role, rebasing) {
   const uncommitted = rebasing
     ? `- The branch holds the change as commits. Every edit you make stays uncommitted on the
   working tree; the orchestrator commits it. The git commands you run are read-only, plus the
-  \`git switch\` above and the three that finish the rebase: \`git rebase ${BASE}\`,
+  \`git switch\` above and the three that carry out the rebase below: \`git rebase\`,
   \`git add <a file you resolved>\` and \`git rebase --continue\`.`
     : `- Every change you make stays uncommitted on the working tree; the orchestrator commits and
   publishes. The git commands you run are read-only, plus the \`git switch\` above.`
@@ -262,8 +262,11 @@ function commonRules(role, rebasing) {
 Ground rules for every agent in this pipeline:
 - Work in ${ROOT_HINT} on branch \`${BRANCH}\`.
   First run \`git rev-parse --abbrev-ref HEAD\`; if it does not print \`${BRANCH}\`, run
-  \`git switch ${BRANCH}\`. The orchestrator creates the branch, never you: if it does not
-  exist, stop and return an error saying so.
+
+      git switch ${shellWord(BRANCH)}
+
+  The orchestrator creates the branch, never you: if it does not exist, stop and return an
+  error saying so.
 ${uncommitted}
 - Vocabulary comes from the glossary: use its terms in code, tests and docs; its Avoid lists
   are banned identifiers.
@@ -813,10 +816,14 @@ const PREFLIGHT_SCHEMA = {
 function ticketHint() {
   if (/^#?\d+$/.test(REF)) {
     const number = REF.replace('#', '')
-    return `issue ${number} on the tracker (\`gh issue view ${number} --json number,title,body,labels,comments\`)`
+    return `issue ${number} on the tracker (\`gh issue view ${number} --json number,title,body,labels,comments\`).`
   }
-  if (!BASE) return `the file \`${REF}\` under ${ROOT_HINT}`
-  return `the file \`${REF}\` as \`${BASE}\` holds it (\`git show ${BASE}:${REF}\`, run from ${ROOT_HINT}), not the copy in the working tree, which an agent of this run may have changed`
+  if (!BASE) return `the file \`${REF}\` under ${ROOT_HINT}.`
+  return `the file \`${REF}\` as \`${BASE}\` holds it, not the copy in the working tree, which an
+  agent of this run may have changed. Read it, from ${ROOT_HINT}, with
+
+      git show ${shellWord(`${BASE}:${REF}`)}
+`
 }
 
 const PROMISE_READINGS = `List in \`ticketPromises\` every promise the ticket makes about what the product does or
@@ -863,8 +870,8 @@ a promise still left out after that is built as the ticket says it, and a case s
 with the safe answer.
 
 Read these two and nothing else (no code, no tests, no other record), and edit nothing:
-- The ticket: ${ticketHint()}, with its comments and its \`## Answers\` section: what the owner asked
-  for and agreed.
+- The ticket, with its comments and its \`## Answers\` section: what the owner asked for and
+  agreed. It is ${ticketHint()}
 - The spec: \`${spec.specPath}\` under ${ROOT_HINT}.
 
 1. ${PROMISE_READINGS}
@@ -928,9 +935,10 @@ interface, depth, seam, adapter) for the Design section: where the feature lives
 it adds or changes, and deep modules over shallow wrappers.
 ${lastRunNote()}${amendNote(gaps)}
 Inputs you may read:
-- The ticket: ${ticketHint()}. Its sections are mattpocock-skills' (Parent, What to build,
-  Acceptance criteria, Blocked by, or the spec's Problem Statement, Solution, User Stories,
-  Implementation Decisions, Testing Decisions, Out of Scope) plus the method's
+- The ticket: ${ticketHint()}
+  Its sections are mattpocock-skills' (Parent, What to build, Acceptance criteria, Blocked by,
+  or the spec's Problem Statement, Solution, User Stories, Implementation Decisions, Testing
+  Decisions, Out of Scope) plus the method's
   \`## Conjecture\`: the approach the owner agreed, the observation that would refute it,
   the alternatives and the criticism that killed each. Build that approach, not another.
   Read \`## Answers\` and the comments too: the owner's answers to an earlier run's
@@ -1196,14 +1204,22 @@ that change before it can merge. You bring the two together and change nothing e
 ${commonRules('reconcile', true)}
 Inputs you may read:
 - The spec: \`${spec.specPath}\`
-- The branch's own change: \`git diff ${BASE}...${BRANCH}\`
-- What merged meanwhile: \`git log --oneline ${BRANCH}..${BASE}\` and its diff
+- The branch's own change, the first line below, and what merged meanwhile, the second, and
+  its diff:
+
+      git diff ${shellWord(`${BASE}...${BRANCH}`)}
+      git log --oneline ${shellWord(`${BRANCH}..${BASE}`)}
+
 - AGENTS.md, GLOSSARY.md, docs/process/binding.md, docs/adr/
 Paths the rebase stopped on when it was tried: ${JSON.stringify(conflicts)}
 
 Do this, in order:
-1. If \`git merge-base --is-ancestor ${BASE} HEAD\` fails, run \`git rebase ${BASE}\`. At each
-   stop, resolve every conflicted file so that both changes hold: both flags stay in the
+1. Run the first line below. If it fails, run the second.
+
+       git merge-base --is-ancestor ${shellWord(BASE)} HEAD
+       git rebase ${shellWord(BASE)}
+
+   At each stop, resolve every conflicted file so that both changes hold: both flags stay in the
    registry, both terms in the glossary, both routes in the application. Where the two cannot
    both hold, \`${BASE}\` stands as it is and this feature's code adapts to it. Then
    \`git add\` each file you resolved and \`git rebase --continue\`. Never \`--skip\` a commit
@@ -1351,20 +1367,28 @@ This is a second review. The feature was built and approved; then another change
 records as they are now: a term, a decision record, a flag or a route the other change added is
 part of \`${BASE}\` and a standard here, which this change must neither contradict nor repeat.
 The change is committed on the branch, with whatever the reconcile step edited uncommitted on
-top; \`git diff ${BASE}\` shows both, and nothing of the other change.
+top; \`git diff\` against \`${BASE}\`, as the inputs below run it, shows both, and nothing of the
+other change.
 `
     : ''
   return `${PREAMBLE}
 You are the independent REVIEWER for feature \`${spec.slug}\` of this repository.
 ${commonRules('review')}${second}
 Inputs you may read, and nothing else:
-- The ticket: ${ticketHint()}, with its comments and its \`## Answers\` section: what the owner
-  asked for and agreed. Read it; never edit it or comment on it.
+- The ticket, with its comments and its \`## Answers\` section: what the owner asked for and
+  agreed. Read it; never edit it or comment on it. It is ${ticketHint()}
 - The spec: \`${spec.specPath}\`
 - The diff: the change is on branch \`${BRANCH}\`, uncommitted unless this is a second review.
-  Enumerate it with
-  \`git diff ${BASE} --stat\`, \`git diff ${BASE}\` and \`git status --porcelain\` (untracked files are
-  new files: read them). If the branch has commits, \`git diff ${BASE}...${BRANCH}\` is equivalent.
+  Enumerate it with these three (untracked files are new files: read them):
+
+      git diff ${shellWord(BASE)} --stat
+      git diff ${shellWord(BASE)}
+      git status --porcelain
+
+  If the branch has commits, this one is equivalent:
+
+      git diff ${shellWord(`${BASE}...${BRANCH}`)}
+
 - AGENTS.md, GLOSSARY.md, docs/adr/, docs/process/binding.md, docs/disputes/, DESIGN.md
 - Any generated contract artefacts that binding.md names
 ${outsideInputs(CRITIC)} are outside your inputs:
