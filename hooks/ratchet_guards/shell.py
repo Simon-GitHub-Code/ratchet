@@ -5,6 +5,7 @@ from dataclasses import dataclass, field, replace
 
 PLACEHOLDER = "_substitution_"
 HEREDOC_MARK = "_heredoc_"
+MAX_NESTING = 64
 _OPERATOR_CHARS = frozenset(";&|<>\n")
 _OPERATORS = (
     *(";;&", "&>>", "<<<"),
@@ -39,6 +40,10 @@ _OPENERS = frozenset({"{", "!", "if", "then", "else", "elif", "do", "while", "un
 _HOIST = "${"
 _HOISTED = "}"
 _BRACES = {"{": 1, "}": -1}
+
+
+class TooDeepError(Exception):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,10 +86,19 @@ class _Shared:
 
 class _Lexer:
     def __init__(
-        self, text: str, start: int, shared: _Shared, *, closer: str = "", inner: bool = False
+        self,
+        text: str,
+        start: int,
+        shared: _Shared,
+        *,
+        closer: str = "",
+        parent: "_Lexer | None" = None,
     ) -> None:
+        self.level: int = 0 if parent is None else parent.level + 1
+        if self.level > MAX_NESTING:
+            raise TooDeepError
+        self.inner: bool = parent is not None and (parent.inner or closer == ")")
         self.text = text
-        self.inner = inner
         self.at = start
         self.shared = shared
         self.closer = closer
@@ -222,7 +236,7 @@ class _Lexer:
 
     def _function_substitution(self) -> None:
         self.shared.modelled = False
-        child = _Lexer(self.text, self.at + 3, self.shared, closer=_HOISTED, inner=self.inner)
+        child = _Lexer(self.text, self.at + 3, self.shared, closer=_HOISTED, parent=self)
         child.run()
         self.shared.closed &= child.closed
         self.tokens += [Token(_HOIST, operator=True), *child.tokens, Token(_HOISTED, operator=True)]
@@ -274,7 +288,7 @@ class _Lexer:
             self._nests(_BACKTICK_ESCAPE.sub(r"\1", self.text[self.at + 1 : end]))
             self.at = end + 1
         else:
-            child = _Lexer(self.text, self.at + 2, self.shared, closer=")", inner=True)
+            child = _Lexer(self.text, self.at + 2, self.shared, closer=")", parent=self)
             child.run()
             self.shared.closed &= child.closed
             self._nests(self.text[self.at + 2 : child.at - child.closed])
@@ -343,14 +357,14 @@ class _Lexer:
             self.shared.heredocs[index] = _BACKTICK_ESCAPE.sub(r"\1", text) if expands else text
             if expands:
                 first = len(self.shared.nested)
-                reader = _Lexer(text, 0, self.shared, inner=self.inner)
+                reader = _Lexer(text, 0, self.shared, parent=self)
                 reader.expand()
                 if sure:
                     found = range(first, len(self.shared.nested))
                     self.shared.expanded.update(dict.fromkeys(found, delimiter))
                 hoisted += [(after, reader.tokens)] if reader.tokens else []
             if not sure:
-                reader = _Lexer(text + "\n", 0, self.shared, inner=self.inner)
+                reader = _Lexer(text + "\n", 0, self.shared, parent=self)
                 reader.run()
                 self.tokens += reader.tokens
         if hoisted:

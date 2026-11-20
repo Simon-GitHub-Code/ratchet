@@ -7,7 +7,7 @@ from pathlib import Path, PurePosixPath
 from ratchet_guards import environment, gh, git, interpreters, tickets, writes
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.options import Options, Spec, scan
-from ratchet_guards.shell import PLACEHOLDER, Script, SimpleCommand, parse
+from ratchet_guards.shell import PLACEHOLDER, Script, SimpleCommand, TooDeepError, parse
 from ratchet_guards.verdict import Verdict
 
 MAX_DEPTH = 8
@@ -671,7 +671,7 @@ class _Checker:
 def check(command: str, context: Context, guard: Guard) -> list[Verdict]:
     try:
         verdicts = _Checker(guard, 0, command, work=_Work()).script(command, context)
-    except _TooMuchError:
+    except (_TooMuchError, TooDeepError):
         return [_TOO_MUCH]
     elsewhere = {verdict for verdict in verdicts if not verdict.heredoc}
     verdicts = [v for v in verdicts if not v.heredoc or replace(v, heredoc="") not in elsewhere]
