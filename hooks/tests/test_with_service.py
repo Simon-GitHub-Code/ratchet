@@ -590,9 +590,10 @@ def test_a_listener_on_the_ready_port_held_by_another_process_is_said_and_never_
 
 
 def hidden_beside(tmp_path: Path, *addresses: str) -> str:
-    hid = tmp_path / "hid"
+    one, two = tmp_path / "one", tmp_path / "two"
     return (
-        f"{python(HIDES)} {hid} & while [ ! -e {hid} ]; do sleep 0.05; done; "
+        f"{python(HIDES)} {one} & {python(HIDES)} {two} & "
+        f"while [ ! -e {one} ] || [ ! -e {two} ]; do sleep 0.05; done; "
         f"{listening_on(*addresses)}"
     )
 
@@ -615,7 +616,9 @@ def test_a_process_the_gate_cannot_read_hides_no_other_listener_and_is_said(
     unseen = rf"with_service: where the product listens was not checked: {UNSEEN}\n"
     assert re.fullmatch(noted(wide, "every interface"), lines[0]), out
     assert re.fullmatch(unseen, lines[1]), out
-    assert lines[2:] == ["with_service: green\n"], out
+    assert re.fullmatch(unseen, lines[2]), "each process the gate could not read is said"
+    assert lines[1] != lines[2], out
+    assert lines[3:] == ["with_service: green\n"], out
 
 
 def test_loopback_only_refuses_what_it_could_not_check(
