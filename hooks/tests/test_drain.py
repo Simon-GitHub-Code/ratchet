@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import re
@@ -9,6 +10,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 import drain
 import hooks_installed
@@ -1428,6 +1431,249 @@ def test_a_local_split_with_a_forge_names_the_pull_request_and_commits_nothing(
     )
     assert git(root, "rev-list", "main", "--", *children) == "", "nothing is committed"
     assert git(root, "branch", "--list", "records/*") == "", "no records branch is made"
+
+
+LANDING = "records/split-1-alpha"
+OTHER = f"{ISSUES}/04-other.md"
+
+
+def red_split(tmp_path: Path, capsys: Out) -> tuple[Path, str, str]:
+    root = project(tmp_path, **WHOLE, **{"docs/process/binding.md": binding(MERGE, "false")})
+    run(root, "open", ALPHA)
+    plan = str(plan_file(tmp_path, HALVES))
+    capsys.readouterr()
+    assert run(root, "split", ALPHA, "--plan", plan) == drain.NOT_LANDED
+    return root, plan, capsys.readouterr().out
+
+
+def green_check(root: Path, *, green: bool = True) -> None:
+    write(root, "docs/process/binding.md", binding(MERGE, "true" if green else "false"))
+    git(root, "add", "--", "docs/process/binding.md")
+    git(root, "commit", "-q", "--allow-empty", "-m", "the check")
+
+
+def test_a_split_that_did_not_land_names_the_branch_holding_its_parts_and_the_command_again(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root, plan, printed = red_split(tmp_path, capsys)
+    assert (
+        f"not landed: the parts are on `{LANDING}`, and the checkout does not hold them; once the"
+        f" cause above is gone, run `drain.py split {ALPHA} --plan {plan}` again"
+    ) in printed.splitlines()
+    assert note(root, BRANCH_A)["landing"] == LANDING, "the split records the branch it made"
+    children = json.loads(printed.splitlines()[-1])["children"]
+    assert git(root, "ls-tree", "--name-only", LANDING, "--", *children).splitlines() == children
+    assert not any((root / child).exists() for child in children)
+
+
+def test_a_rerun_after_the_owner_filed_a_ticket_lands_each_part_once_under_a_free_number(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root, plan, _ = red_split(tmp_path, capsys)
+    write(root, "docs/process/binding.md", binding(MERGE))
+    write(root, OTHER, ticket(4, "Other"))
+    commit(root, "the check is green again, and the owner files a ticket")
+    assert run(root, "split", ALPHA, "--plan", plan) == 0
+    children = json.loads(capsys.readouterr().out.splitlines()[-1])["children"]
+    assert children == [f"{ISSUES}/05-save.md", f"{ISSUES}/06-list.md"], "past the owner's 04"
+    assert note(root, BRANCH_A)["children"] == children
+    assert git(root, "branch", "--list", "records/*") == "", "no branch of the split is left"
+    assert git(root, "status", "--porcelain") == "", "the checkout is fit"
+    on_main = git(root, "ls-tree", "--name-only", "main", "--", f"{ISSUES}/").splitlines()
+    assert on_main == [ALPHA, BETA, GAMMA, OTHER, *children], "each part once"
+    assert "Blocked by: 05-save.md" in (root / children[1]).read_text(encoding="utf-8")
+    assert drain.plan(offline(root)).blocked == ()
+
+
+def test_a_part_the_owner_edited_after_a_kill_is_still_that_part(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    plan = str(plan_file(tmp_path, HALVES))
+    with monkeypatch.context() as cut:
+        cut.setattr(drain, "close", killed_after(drain.close))
+        with pytest.raises(Killed):
+            run(root, "split", ALPHA, "--plan", plan)
+    first = root / ISSUES / "04-save.md"
+    edited = first.read_text(encoding="utf-8").replace("Saving.", "Saving, with a date.")
+    first.write_text(edited, encoding="utf-8")
+    assert run(root, "split", ALPHA, "--plan", plan) == 0
+    landed_parts(root, [f"{ISSUES}/04-save.md", f"{ISSUES}/05-list.md"])
+    assert git(root, "show", f"main:{ISSUES}/04-save.md") == edited.strip()
+
+
+def test_a_rerun_leaves_its_own_branch_that_holds_more_than_the_parts(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root, plan, _ = red_split(tmp_path, capsys)
+    git(root, "switch", "-q", LANDING)
+    write(root, "docs/notes.md", "mine\n")
+    git(root, "add", "--", "docs/notes.md")
+    git(root, "commit", "-q", "-m", "my notes")
+    held = git(root, "rev-parse", "HEAD")
+    git(root, "switch", "-q", "main")
+    green_check(root)
+    assert run(root, "split", ALPHA, "--plan", plan) == drain.NOT_LANDED
+    printed = capsys.readouterr().out.splitlines()
+    assert (
+        f"not landed: `{LANDING}` holds more than the parts this split made, so it stays as it"
+        f" is: take what is yours from it, delete it, then run `drain.py split {ALPHA} --plan"
+        f" {plan}` again"
+    ) in printed
+    assert git(root, "rev-parse", LANDING) == held
+    assert git(root, "status", "--porcelain") == "", "no part is filed a second time"
+
+
+def test_a_rerun_with_another_plan_leaves_the_branch_holding_the_parts(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root, _, _ = red_split(tmp_path, capsys)
+    held = git(root, "rev-parse", LANDING)
+    green_check(root)
+    plan = str(plan_file(tmp_path, HALVES[:1]))
+    assert run(root, "split", ALPHA, "--plan", plan) == drain.NOT_LANDED
+    assert f"not landed: `{LANDING}` holds more" in capsys.readouterr().out
+    assert git(root, "rev-parse", LANDING) == held
+    assert note(root, BRANCH_A)["outcome"] == "split", "the split is not parked"
+
+
+def test_a_rerun_leaves_its_branch_while_a_work_tree_has_it_checked_out(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root, plan, _ = red_split(tmp_path, capsys)
+    git(root, "worktree", "add", "-q", str(tmp_path / "theirs"), LANDING)
+    green_check(root)
+    assert run(root, "split", ALPHA, "--plan", plan) == drain.NOT_LANDED
+    assert (
+        f"not landed: `{LANDING}` is checked out in a work tree, so it stays as it is: switch that"
+        f" work tree to another branch, then run `drain.py split {ALPHA} --plan {plan}` again"
+    ) in capsys.readouterr().out.splitlines()
+    assert git(root, "branch", "--list", LANDING) != ""
+
+
+def test_a_split_off_the_default_branch_leaves_its_parts_in_the_checkout_and_says_so(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    git(root, "switch", "-q", "-c", "elsewhere")
+    plan = str(plan_file(tmp_path, HALVES))
+    capsys.readouterr()
+    assert run(root, "split", ALPHA, "--plan", plan) == drain.NOT_LANDED
+    printed = capsys.readouterr().out.splitlines()
+    assert "merge: the checkout is on `elsewhere`, and the parts land from `main`" in printed
+    assert (
+        "not landed: the parts stay uncommitted in the checkout; once the cause above is gone,"
+        f" run `drain.py split {ALPHA} --plan {plan}` again"
+    ) in printed
+    children = json.loads(printed[-1])["children"]
+    assert git(root, "status", "--porcelain").splitlines() == [f"?? {c}" for c in children]
+
+
+def test_a_ticket_waiting_on_a_split_whose_parts_did_not_land_waits_on_them(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root, _, printed = red_split(tmp_path, capsys)
+    children = json.loads(printed.splitlines()[-1])["children"]
+    beta = next(e for e in drain.plan(offline(root)).tickets if e.ref == BETA)
+    assert (beta.state, beta.waits_on) == ("waiting", tuple(children)), beta.why
+
+
+def test_with_a_forge_a_ticket_waits_on_the_parts_until_their_pull_request_merges(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    git(root, "remote", "add", "origin", str(tmp_path / "forge.git"))
+    assert run(root, "split", ALPHA, "--plan", str(plan_file(tmp_path, HALVES))) == 0
+    children = json.loads(capsys.readouterr().out.splitlines()[-1])["children"]
+    git(root, "switch", "-q", "-c", "split-parts")
+    git(root, "add", "--", *children)
+    git(root, "commit", "-q", "-m", "docs(tracker): the parts")
+    git(root, "switch", "-q", "main")
+    beta = next(e for e in drain.plan(offline(root)).tickets if e.ref == BETA)
+    assert (beta.state, beta.waits_on) == ("waiting", tuple(children)), beta.why
+
+
+def test_a_local_split_lands_its_parts_and_no_other_uncommitted_record(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    draft = f"{ISSUES}/09-draft.md"
+    write(root, draft, "# 09: half a thought\n")
+    capsys.readouterr()
+    assert run(root, "split", ALPHA, "--plan", str(plan_file(tmp_path, HALVES))) == 0
+    children = json.loads(capsys.readouterr().out.splitlines()[-1])["children"]
+    assert git(root, "ls-tree", "--name-only", "main", "--", *children).splitlines() == children
+    assert git(root, "ls-tree", "--name-only", "main", "--", draft) == "", "the draft stays"
+    assert git(root, "status", "--porcelain") == f"?? {draft}"
+
+
+EDITS = st.lists(st.sampled_from(["parts", "mode", "rename", "delete", "extra"]), min_size=1)
+
+
+def someone_else(root: Path, n: int, edits: list[str], *, texts: dict[str, str]) -> None:
+    for edit in edits:
+        if edit == "parts":
+            for child, text in texts.items():
+                write(root, child, text)
+            git(root, "add", "--", *texts)
+        elif edit == "mode" and (root / GAMMA).exists():
+            (root / GAMMA).chmod((root / GAMMA).stat().st_mode ^ 0o111)
+            git(root, "add", "--", GAMMA)
+        elif edit == "rename" and (root / GAMMA).exists():
+            git(root, "mv", GAMMA, f"{ISSUES}/03-gamma-{n}.md")
+        elif edit == "delete" and (root / BETA).exists():
+            git(root, "rm", "-q", BETA)
+        else:
+            write(root, f"docs/notes-{n}.md", f"{edit} {n}\n")
+            git(root, "add", "--", f"docs/notes-{n}.md")
+    git(root, "commit", "-q", "--allow-empty", "-m", f"someone else's {n}")
+    git(root, "switch", "-q", "main")
+
+
+@settings(max_examples=25, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(
+    killed=st.booleans(),
+    strangers=st.lists(st.tuples(st.booleans(), EDITS), min_size=1, max_size=3),
+    greens=st.lists(st.booleans(), min_size=1, max_size=3),
+)
+def test_no_split_run_loses_a_commit_another_records_branch_held(
+    tmp_path: Path, *, killed: bool, strangers: list[tuple[bool, list[str]]], greens: list[bool]
+) -> None:
+    root = project(Path(tempfile.mkdtemp(dir=tmp_path)), **WHOLE)
+    run(root, "open", ALPHA)
+    plan = str(plan_file(root.parent, HALVES))
+    with pytest.MonkeyPatch.context() as cut:
+        if killed:
+            cut.setattr(drain.split, "file_locally", killed_after(drain.split.file_locally))
+        else:
+            green_check(root, green=False)
+        with contextlib.suppress(Killed):
+            run(root, "split", ALPHA, "--plan", plan)
+    own = git(root, "branch", "--list", "--format=%(refname:short)", "records/*")
+    children = [f"{ISSUES}/04-save.md", f"{ISSUES}/05-list.md"]
+    texts = {
+        child: (root / child).read_text(encoding="utf-8")
+        if killed
+        else git(root, "show", f"{own}:{child}") + "\n"
+        for child in children
+    }
+    touched = False
+    for n, (on_own, edits) in enumerate(strangers):
+        mine = bool(on_own and own)
+        touched |= mine
+        git(root, "switch", "-q", *((own,) if mine else ("-c", f"records/s{n}", "main")))
+        someone_else(root, n, edits, texts=texts)
+    kept = f"--exclude=refs/heads/{own}" if own and not touched else "--exclude=none"
+    before = set(git(root, "rev-list", kept, "--branches").splitlines())
+    for green in greens:
+        green_check(root, green=green)
+        run(root, "split", ALPHA, "--plan", plan)
+    after = set(git(root, "rev-list", "--branches").splitlines())
+    assert before <= after, f"{len(before - after)} commit(s) no branch holds any more"
 
 
 @pytest.mark.parametrize(
