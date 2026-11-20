@@ -171,6 +171,24 @@ FORGE = (
     "os._exit(0)\n"
 )
 
+LISTENS = (
+    "import os, socket, sys\n"
+    "def listen(address, port):\n"
+    "    v6 = ':' in address\n"
+    "    s = socket.socket(socket.AF_INET6 if v6 else socket.AF_INET)\n"
+    "    if v6: s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)\n"
+    "    s.bind((address, port))\n"
+    "    s.listen()\n"
+    "    return s\n"
+    "served = listen(sys.argv[1], int(os.environ['PORT']))\n"
+    "others = [listen(address, 0) for address in sys.argv[2:]]\n"
+    "while True:\n"
+    "    connection, _ = served.accept()\n"
+    "    connection.recv(65536)\n"
+    "    connection.sendall(b'HTTP/1.0 200 OK\\r\\nContent-Length: 0\\r\\n\\r\\n')\n"
+    "    connection.close()\n"
+)
+
 NEEDS = (
     "import os, sys, time\n"
     "MODE = os.environ['MODE']\n"

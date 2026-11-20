@@ -6,6 +6,7 @@ import http.client
 import inspect
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -466,6 +467,74 @@ def test_a_boot_that_does_not_answer_is_a_blocker_that_says_what_it_did(
     record = json.loads((session(root) / acceptance.RECORD).read_text(encoding="utf-8"))
     assert record["findings"][0]["actual"] == out[0]
     assert products.processes_naming(str(tmp_path)) == []
+
+
+REACHABLE = (
+    r"It was started with `{boot}`, and it listens on 0\.0\.0\.0:\d+, every interface, so a "
+    r"request could reach it around the session's proxy and leave no line in its log\. Bind it "
+    r"to 127\.0\.0\.1, which `boot` gets as \{{host\}} and \$HOST; if it listens there on purpose, "
+    r'name that address in the justfile as `listens := "0\.0\.0\.0"`\.'
+)
+
+
+def test_a_product_reachable_around_the_proxy_does_not_start_a_session(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = products.make(tmp_path / "product", env="HOST=0.0.0.0")
+    boot = acceptance.read_binding(root).boot
+    assert boot is not None
+    code, out = up(root, capsys)
+    assert code == 1
+    assert re.fullmatch(REACHABLE.format(boot=re.escape(boot.command)), out[0]), out[0]
+    record = json.loads((session(root) / acceptance.RECORD).read_text(encoding="utf-8"))
+    assert record["findings"][0]["actual"] == out[0]
+    assert products.processes_naming(str(tmp_path)) == []
+
+
+def test_a_product_the_justfile_says_listens_wider_on_purpose_is_served_and_said_to(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = products.make(tmp_path / "product", env="HOST=0.0.0.0", extra='listens := "0.0.0.0"')
+    try:
+        code = acceptance.main(
+            ["acceptance.py", "up", "--slug", SLUG, "--ticket", str(root / "ticket.md")]
+            + ["--root", str(root)]
+        )
+        seen = capsys.readouterr()
+        assert code == 0, seen
+        assert products.request(seen.out.splitlines()[0])[0] == 200
+    finally:
+        down(root, capsys)
+    assert re.fullmatch(
+        r"with_service: the product listens on 0\.0\.0\.0:\d+, as --listens declares, so the "
+        r"network can reach it while it runs\n",
+        seen.err,
+    ), seen.err
+
+
+def test_a_listens_that_is_not_an_address_gives_no_way_to_start(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = products.make(tmp_path / "product", extra='listens := "everywhere"')
+    code, out = up(root, capsys)
+    assert code == 1
+    assert out[0] == (
+        "The project gives no way to start it: its justfile's `listens` is `everywhere`, "
+        "which is not an IP address."
+    )
+
+
+def test_replay_of_a_product_reachable_around_the_proxy_says_why_it_did_not_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    checks = tmp_path / "checks.json"
+    checks.write_text(json.dumps({"schema": 1, "checks": [KEPT_ONLY_STATUS]}), encoding="utf-8")
+    root = products.make(tmp_path / "product", env="HOST=0.0.0.0")
+    code, out = run(root, "replay", "--checks", str(checks), capsys=capsys)
+    assert code == 1
+    assert out[0].startswith(
+        "K9 (C1) was not run on a fresh boot: the product did not start: it listens on 0.0.0.0:"
+    ), out[0]
 
 
 @pytest.mark.parametrize(

@@ -1,5 +1,6 @@
 import errno
 import fcntl
+import ipaddress
 import os
 import select
 import signal
@@ -453,4 +454,13 @@ def test_the_listening_rows_are_read_no_further_than_the_first_row_that_is_not(
     )
     (net / "tcp").write_text(f"header\n{listening}\n{connected}\nnot a row\n", encoding="utf-8")
     monkeypatch.setattr(listeners, "PROC", str(tmp_path))
-    assert listeners.tcp_listeners(7) == {"socket:[123]": 8080}
+    assert listeners.tcp_listeners(7) == {"socket:[123]": (ipaddress.ip_address("127.0.0.1"), 8080)}
+    assert listeners.tcp_listeners(8) is None, "a process with no table to read has no answer"
+
+
+def test_where_nothing_listens_for_the_boot_command_or_on_its_port_it_says_why() -> None:
+    with service() as running:
+        assert listeners.bound(running.process.pid, gatelib.free_port()) == [
+            (ipaddress.ip_address("127.0.0.1"), running.port)
+        ]
+    assert listeners.bound(os.getpid(), gatelib.free_port()) == listeners.NOT_FOUND

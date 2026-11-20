@@ -356,6 +356,18 @@ def test_start_gives_the_port_to_the_whole_boot_line_as_the_gates_do(tmp_path: P
     assert "port is 3000" in run_template(tmp_path, boot, "start")
 
 
+def test_start_gives_the_loopback_address_as_the_gates_do(tmp_path: Path) -> None:
+    needs_just()
+    boot = {"boot": "echo on {host} and $HOST:{port}", "ready": "none", "port": "3000"}
+    assert "on 127.0.0.1 and 127.0.0.1:3000" in run_template(tmp_path, boot, "start")
+
+
+def test_the_example_boot_line_hands_the_deliverable_its_address_and_port() -> None:
+    boot = next(line for line in JUSTFILE.splitlines() if line.startswith("boot := "))
+    assert "{host}" in boot
+    assert "{port}" in boot
+
+
 SERVE = f"{sys.executable} -m http.server --bind 127.0.0.1"
 
 
@@ -366,8 +378,9 @@ SERVE = f"{sys.executable} -m http.server --bind 127.0.0.1"
         (f"exec {SERVE} $PORT", None),
         (f"exec {SERVE} $PORT", "1"),
         (f'exec "{sys.executable}" -m http.server --bind 127.0.0.1 "$PORT"', None),
+        (f'exec "{sys.executable}" -m http.server --bind {{host}} {{port}}', None),
     ],
-    ids=["the placeholder", "PORT", "PORT set to another port", "a double quote"],
+    ids=["the placeholder", "PORT", "PORT set to another port", "a double quote", "the host"],
 )
 def test_smoke_boots_a_deliverable_on_the_port_the_gate_picked(
     tmp_path: Path, boot: str, port: str | None

@@ -115,7 +115,7 @@ class App(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
     do_PUT = do_PATCH = do_DELETE = do_POST
-Server(("127.0.0.1", int(os.environ["PORT"])), App).serve_forever()
+Server((os.environ.get("HOST", "127.0.0.1"), int(os.environ["PORT"])), App).serve_forever()
 """
 
 TICKET = """# 01: Save a link and see it on the list
