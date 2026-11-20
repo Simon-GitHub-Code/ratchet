@@ -213,7 +213,7 @@ FLOWS = {
 
 @pytest.mark.parametrize("flow", list(FLOWS))
 def test_whatever_order_the_upgrades_run_in_the_ledger_is_one_upgrade_from_what_is_merged(
-    flow: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+    flow: str, *, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
 ) -> None:
     writer, reference = FLOWS[flow](tmp_path)
     result = upgrade.plan(writer, plugins()[SECOND])
@@ -351,17 +351,16 @@ def test_an_entry_the_base_does_not_owe_is_still_red_after_a_rerun_and_a_rerun_d
     assert code == 1
     [line] = lines(out, "which the upgrade's own plan does not leave red on the merge base")
     assert f"adds '{written.problem}' for {written.path}" in line
-    add(rerun, replace(written, since=FIRST))
     capsys.readouterr()
     assert upgrade.main(["upgrade.py", "--root", str(rerun)]) == 1
     out = capsys.readouterr().out
     base = git(rerun, "merge-base", "HEAD", "main")[:12]
-    named = f"'{written.problem}' for {written.path} ({written.rule})"
     assert (
-        f"    - drop 2 entries this change brought, which one upgrade from the merge base {base}"
-        f" would not write: {named}; {named}\n"
+        f"    - drop 1 entry this change brought, which one upgrade from the merge base {base}"
+        f" would not write: '{written.problem}' for {written.path} ({written.rule})\n"
     ) in out
     assert "write down 0" not in out
+    add(rerun, replace(written, since=FIRST))
     upgraded(rerun, SECOND)
     assert written.key not in {e.key for e in owed.read(rerun).entries}
 
