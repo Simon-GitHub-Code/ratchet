@@ -60,11 +60,14 @@ Usage::
   When the run ends, one more line (``kind`` ``tier``) holds the wall time of the whole run and the
   gate names in the order given.
 * The gates start longest first, so a long gate given last does not wait behind short ones: a
-  gate is expected to take the median of its last five times in the ``--report`` file, and a
-  ``--serial`` group the sum of its gates. Those times include the ones ``budget.py`` measured
-  alone, since the record does not tell them apart. A gate with no time there starts before the
-  rest, and equal times keep the order given, so with no record the gates start in the order
-  given. ``--alone`` gates still run last, in the order given.
+  gate is expected to take the median of its last five times in the last MiB of the
+  ``--report`` file, and a ``--serial`` group the sum of its gates. Those times include the ones
+  ``budget.py`` measured alone, since the record does not tell them apart. A line that does not
+  give a gate a finite, positive number of seconds says nothing, so no record can stop a run or
+  change its verdict. A gate with no time there starts before the rest, and equal times keep the
+  order given, so with no record the gates start in the order given. With ``--fail-fast`` the
+  gates start in the order given whatever the record says, so the first red comes as soon as it
+  did without a record. ``--alone`` gates still run last, in the order given.
 * After the closing lines, each path the binding's ``Local caches`` bullet of ``## Speed`` names
   (its code spans) that does not exist is said in one line, and with ``--report`` has a line of
   its own (``kind`` ``cache-missing``, ``path``) after the tier's.
@@ -122,6 +125,7 @@ if TYPE_CHECKING:
 POLL = 0.05
 ALONE = -1
 RECENT = 5
+WINDOW = 2**20
 NO_RECORD: Mapping[str, float] = MappingProxyType({})
 WAITING = re.compile(r"(?P<standing>later|none): \S.*")
 
@@ -226,19 +230,34 @@ def plan(
     return sorted([*groups, *single], key=longest_first)
 
 
-def expected_seconds(report: Path | None) -> dict[str, float]:
+def recent_lines(report: Path) -> list[bytes]:
+    try:
+        with report.open("rb") as handle:
+            start = max(0, handle.seek(0, os.SEEK_END) - WINDOW)
+            handle.seek(start)
+            lines = handle.read(WINDOW).split(b"\n")
+    except OSError:
+        return []
+    return lines[1:] if start else lines
+
+
+def measured(line: bytes) -> tuple[str, float] | None:
+    try:
+        record = json.loads(line)
+        key, value = record["key"], record["seconds"]
+        number = isinstance(value, int | float) and not isinstance(value, bool)
+        seconds = float(value) if number else math.nan
+    except Exception:  # noqa: BLE001 # -- a line that cannot be read says nothing
+        return None
+    if isinstance(key, str) and 0 < seconds < math.inf:
+        return key, seconds
+    return None
+
+
+def expected_seconds(report: Path) -> dict[str, float]:
     runs: dict[str, list[float]] = {}
-    text = gatelib.read_text(report) if report is not None else None
-    for line in (text or "").splitlines():
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(record, dict):
-            continue
-        key, seconds = record.get("key"), record.get("seconds")
-        if isinstance(key, str) and isinstance(seconds, int | float) and math.isfinite(seconds):
-            runs.setdefault(key, []).append(float(seconds))
+    for found in filter(None, map(measured, recent_lines(report))):
+        runs.setdefault(found[0], []).append(found[1])
     return {key: statistics.median(times[-RECENT:]) for key, times in runs.items()}
 
 
@@ -493,7 +512,8 @@ def main(argv: list[str]) -> int:
         parser.error("--jobs is at least 1")
     options.alone = [name for name in gates if name in options.alone]
     options.wide = [name for name in gates if name in options.wide]
-    seconds = expected_seconds(options.report)
+    timings: Path | None = None if options.fail_fast else options.report
+    seconds = NO_RECORD if timings is None else expected_seconds(timings)
     try:
         runner = shlex.split(options.runner)
         units = plan(gates, options.serial, frozenset(options.alone), seconds=seconds)
