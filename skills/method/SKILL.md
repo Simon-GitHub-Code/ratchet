@@ -22,7 +22,7 @@ Use these words in code, tests, records and prose.
 
 ### Gates
 
-- **gate**: one deterministic check answering one question the method asks. It is *red* or *green*, nothing in between.
+- **gate**: one deterministic check answering one question the method asks. It is *red* or *green*, nothing in between. A check whose verdict on the same tree can change with the machine's load is not deterministic: a test bounded by seconds and not by a count of cases makes its whole suite such a check, so it is bounded by a count, and a time-boxed run goes to tier 2.
 - **red**, **green**: a test or gate's observable state. A test that was never red proves nothing.
 - **bite**: a gate shown to go red on a planted fault, and on an empty collection when it judges one. `quality/bites.toml` holds the faults. A gate nobody has seen fail is a gate nobody can trust.
 - **tier**: when a gate runs. Tier 0 on every commit, tier 1 on every pull request, tier 2 on the default branch and nightly.
