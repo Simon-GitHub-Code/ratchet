@@ -577,7 +577,7 @@ def test_the_entries_a_change_brings_are_those_the_gate_judges_but_its_edits_of_
 @pytest.mark.parametrize("on", ["main", "origin/main", "trunk", "feature", "HEAD"])
 @pytest.mark.parametrize("remote_name", [None, "origin", "upstream", "team/origin"])
 def test_the_writer_s_base_is_the_base_the_gate_takes_for_the_commit_made_next(
-    remote_name: str | None, on: str, named: str | None, ahead: bool, tmp_path: Path
+    *, remote_name: str | None, on: str, named: str | None, ahead: bool, tmp_path: Path
 ) -> None:
     binding = f"- Default branch: `{named}`\n" if named else "# Binding\n"
     root = repository(tmp_path / "repo", {str(gatelib.BINDING): binding})

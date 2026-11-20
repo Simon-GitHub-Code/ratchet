@@ -339,9 +339,8 @@ def owing(
         return []
     restored = [replace(entry, since=since) for entry, since in undated]
     gone = [*mine, *(entry for entry, _ in undated)]
-    return [
-        Finding(str(owed.LEDGER), "", Auto("; ".join(does), owed.recorded([*added, *restored], gone)))
-    ]
+    want = owed.recorded([*added, *restored], gone)
+    return [Finding(str(owed.LEDGER), "", Auto("; ".join(does), want))]
 
 
 def red_at_base(root: Path, base: str | None, plugin: Path) -> Counter[owed.Key]:
