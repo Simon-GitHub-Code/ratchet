@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import errno
 import json
+import math
 import os
+import stat
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,6 +21,13 @@ FAULT = "fault"
 TIMING = gatelib.STATE / "timing.jsonl"
 SPEED = "## Speed"
 LOCAL_CACHES = "Local caches"
+WINDOW = 2**20
+FOLDER = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+WRITE = (
+    os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC
+)
+READ = os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC
+UNRECORDED: set[Path] = set()
 
 
 def tree_id(root: Path) -> str:
@@ -35,22 +45,74 @@ def stamp(root: Path, tree: str | None = None) -> dict[str, str]:
     }
 
 
-def append(path: Path, record: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record) + "\n")
+def written(path: Path, line: bytes) -> str | None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        folder = os.open(path.parent, FOLDER)
+        try:
+            handle = os.open(path.name, WRITE, 0o666, dir_fd=folder)
+        finally:
+            os.close(folder)
+        try:
+            if not stat.S_ISREG(os.fstat(handle).st_mode):
+                return "not a regular file"
+            os.write(handle, line)
+        finally:
+            os.close(handle)
+    except OSError as error:
+        return "a symbolic link" if error.errno == errno.ELOOP else error.strerror or str(error)
+    return None
+
+
+def append(path: Path, record: dict[str, object], *, who: str = "ratchet") -> None:
+    why = written(path, (json.dumps(record) + "\n").encode())
+    if why is not None and path not in UNRECORDED:
+        UNRECORDED.add(path)
+        print(f"{who}: not recorded: {path}: {why}", flush=True)
+
+
+def tail(path: Path) -> list[bytes]:
+    try:
+        handle = os.open(path, READ)
+    except OSError:
+        return []
+    try:
+        held = os.fstat(handle)
+        if not stat.S_ISREG(held.st_mode):
+            return []
+        start = max(0, held.st_size - WINDOW - 1)
+        lines = os.pread(handle, WINDOW + 1, start).split(b"\n")
+    except OSError:
+        return []
+    finally:
+        os.close(handle)
+    return lines[1:] if start else lines
+
+
+def well_formed(record: dict[str, object]) -> bool:
+    if record.get("kind") != FAULT:
+        return True
+    seconds = record.get("seconds")
+    return (
+        isinstance(record.get("gate"), str)
+        and isinstance(record.get("bite"), str)
+        and isinstance(seconds, int | float)
+        and not isinstance(seconds, bool)
+        and 0 <= seconds < math.inf
+        and isinstance(record.get("narrowed"), bool)
+    )
 
 
 def read(path: Path) -> list[dict[str, object]]:
     records = []
-    for line in (gatelib.read_text(path) or "").splitlines():
+    for line in tail(path):
         try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
+            record = json.loads(line.decode("utf-8", errors="replace"))
+        except (ValueError, RecursionError):
             continue
         if isinstance(record, dict):
             records.append(record)
-    return records
+    return list(filter(well_formed, records))
 
 
 def cache_paths(binding: str) -> list[str]:

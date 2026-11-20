@@ -469,6 +469,10 @@ class Bite:
     proof: str = ""
     whole: str = field(default="", compare=False)
 
+    @property
+    def narrowed(self) -> bool:
+        return any(arg.strip() for arg in self.args)
+
     def plant(self, copy: Tree) -> None:
         self.fault.plant(copy)
         if self.commit:
@@ -567,21 +571,20 @@ def read_bite(table: dict[str, object]) -> Bite:
     if not isinstance(commit, bool):
         message = "'commit' is true or false"
         raise ValueError(message)  # noqa: TRY004 # -- one kind for all that is wrong in a bite
-    args = strings(table, "args")
-    whole = text(table, "whole") if "whole" in table else ""
-    if args and whole:
-        message = "a bite narrows its gate with 'args' or says in 'whole' why it cannot, not both"
-        raise ValueError(message)
-    return Bite(
+    bite = Bite(
         gate=text(table, "gate"),
         name=text(table, "name"),
         expect=text(table, "expect"),
         fault=read_fault(table),
-        args=args,
+        args=strings(table, "args"),
         commit=commit,
         proof=text(table, "proof") if "proof" in table else "",
-        whole=whole,
+        whole=text(table, "whole") if "whole" in table else "",
     )
+    if bite.narrowed and bite.whole:
+        message = "a bite narrows its gate with 'args' or says in 'whole' why it cannot, not both"
+        raise ValueError(message)
+    return bite
 
 
 def read_registry(source: str) -> tuple[Registry, list[str]]:
@@ -947,7 +950,7 @@ class Outcome:
             "gate": self.bite.gate,
             "bite": self.bite.name,
             "seconds": round(self.seconds, 3),
-            "narrowed": bool(self.bite.args),
+            "narrowed": self.bite.narrowed,
             "verdict": self.verdict.value,
             "lane": self.lane,
         }
@@ -1246,9 +1249,11 @@ def run_limit(root: Path, override: float | None) -> tuple[float, str]:
 
 def slow_ceiling(root: Path) -> float | None:
     try:
-        return budget.ceiling_of(gatelib.read_text(root / gatelib.THRESHOLDS) or "", SLOW_CEILING)
+        text = gatelib.read_text(root / gatelib.THRESHOLDS) or ""
+        ceiling = budget.ceiling_of(text, SLOW_CEILING)
     except tomllib.TOMLDecodeError:
         return None
+    return ceiling if ceiling and ceiling > 0 else None
 
 
 def slow_line(bite: Bite, seconds: float, ceiling: float) -> str:
@@ -1273,8 +1278,8 @@ def recorded_slow(root: Path) -> list[str]:
     for bite in registry.bites:
         record = last.get((bite.gate, bite.name), {})
         seconds = record.get("seconds")
-        whole = record.get("narrowed") is False and not (bite.args or bite.whole)
-        if whole and isinstance(seconds, float) and seconds > ceiling:
+        whole = record.get("narrowed") is False and not (bite.narrowed or bite.whole)
+        if whole and isinstance(seconds, int | float) and seconds > ceiling:
             lines.append(f"{REGISTRY}: {slow_line(bite, seconds, ceiling)}")
     return lines
 
@@ -1300,7 +1305,8 @@ def run_lanes(
             for outcome in copy.prove(row, bites):
                 with printing:
                     print(outcome.lines(), flush=True)
-                    runrecord.append(root / runrecord.TIMING, {**outcome.record(), **stamp})
+                    record = {**outcome.record(), **stamp}
+                    runrecord.append(root / runrecord.TIMING, record, who="bite")
                 outcomes.append(outcome)
         return outcomes
 
@@ -1348,7 +1354,7 @@ def proof(
     ceiling = slow_ceiling(root)
     if ceiling is not None:
         for outcome in outcomes:
-            if not outcome.bite.args and outcome.seconds > ceiling:
+            if not outcome.bite.narrowed and outcome.seconds > ceiling:
                 print(f"bite: slow: {slow_line(outcome.bite, outcome.seconds, ceiling)}")
     unseen = [outcome for outcome in outcomes if outcome.verdict is not Verdict.BITES]
     print(
