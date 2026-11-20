@@ -3344,8 +3344,12 @@ def check_gate_reads(root: Path) -> Iterable[Finding]:
 
 
 def check_bites(root: Path) -> Iterable[Finding]:
+    return bite_findings(project_bite.registry_check(root))
+
+
+def bite_findings(bites: project_bite.RegistryCheck) -> Iterator[Finding]:
     path = str(project_bite.REGISTRY)
-    for problem in project_bite.registry_failures(root):
+    for problem in bites.failures:
         if problem == project_bite.MISSING:
             yield whole_file(path, project_bite.MISSING)
         else:
@@ -3460,11 +3464,14 @@ def rule_of(check: Check) -> str:
     return check.__name__.removeprefix("check_")
 
 
-def raised(root: Path) -> list[tuple[Check, Finding]]:
+def raised(
+    root: Path, bites: project_bite.RegistryCheck | None = None
+) -> list[tuple[Check, Finding]]:
+    told = project_bite.registry_check(root) if bites is None else bites
     found = [
         (check, replace(failure, rule=rule_of(check)))
         for check in CHECKS
-        for failure in check(root)
+        for failure in (bite_findings(told) if check is check_bites else check(root))
     ]
     if any(isinstance(failure.fix, Auto) for _, failure in found):
         message = "a check offers an Edit: only the trial makes a finding auto"
@@ -3504,8 +3511,10 @@ def ledger_raised(root: Path, keys: list[owed.Key]) -> list[tuple[Check, Finding
     return [(check_owed, failure) for failure in check_owed(root)]
 
 
-def findings(root: Path, *, owned: bool = False) -> list[Finding]:
-    found = raised(root)
+def findings(
+    root: Path, *, owned: bool = False, bites: project_bite.RegistryCheck | None = None
+) -> list[Finding]:
+    found = raised(root, bites)
     if not any(isinstance(failure.fix, Edit) for _, failure in found):
         return [failure for _, failure in found]
     with contextlib.ExitStack() as stack:
@@ -3551,7 +3560,8 @@ def then_lines(fix: Fix) -> tuple[str, ...]:
 
 
 def run(root: Path) -> int:
-    found = findings(root)
+    bites = project_bite.registry_check(root)
+    found = findings(root, bites=bites)
     red, owing = owed_split(root, found)
     for finding in red:
         print(finding)
@@ -3559,7 +3569,7 @@ def run(root: Path) -> int:
             print(f"  then: {line}")
     for finding in owing:
         print(f"owed: {finding}")
-    for unchecked in project_bite.unchecked(root):
+    for unchecked in bites.unchecked:
         print(f"not checked: {project_bite.REGISTRY}: {unchecked}")
     autos = sum(isinstance(finding.fix, Auto) for finding in [*red, *owing])
     fixer = f"; `upgrade.py --apply` makes {autos} of them" if autos else ""

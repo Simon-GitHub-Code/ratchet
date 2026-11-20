@@ -207,7 +207,7 @@ def test_a_red_finding_is_followed_by_what_it_asks_next(
     )
     findings = [finding, edited, owner, made]
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(conformance, "findings", lambda _root: findings)
+        patch.setattr(conformance, "findings", lambda _root, **_: findings)
         assert conformance.run(repo) == 1
     assert capsys.readouterr().out.splitlines()[:7] == [
         "justfile: no install",

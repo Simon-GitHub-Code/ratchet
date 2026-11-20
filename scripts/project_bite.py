@@ -746,11 +746,6 @@ def checked(root: Path, registry: Registry) -> tuple[list[Unplantable], dict[str
     return unplantable, {bite.gate: bite.gate not in skipped for bite in registry.bites}
 
 
-def unchecked(root: Path) -> list[Unchecked]:
-    registry, _ = read_registry(gatelib.read_text(root / REGISTRY) or "")
-    return plants(root, registry)[1]
-
-
 def unproven(
     rows: Sequence[Row], bites: Sequence[Bite], catalogue: application_types.Catalogue
 ) -> Iterator[str]:
@@ -788,13 +783,19 @@ def inspect(root: Path) -> tuple[list[Row], Registry, list[str], list[str]]:
     return rows, registry, problems, gaps
 
 
-def registry_failures(root: Path) -> list[str | Unplantable]:
+class RegistryCheck(NamedTuple):
+    failures: list[str | Unplantable]
+    unchecked: list[Unchecked]
+
+
+def registry_check(root: Path) -> RegistryCheck:
     _, registry, problems, gaps = inspect(root)
-    return [*problems, *gaps, *plants(root, registry)[0]]
+    unplantable, unchecked = plants(root, registry)
+    return RegistryCheck([*problems, *gaps, *unplantable], unchecked)
 
 
 def failures(root: Path) -> list[str]:
-    return [f"{REGISTRY}: {problem}" for problem in registry_failures(root)]
+    return [f"{REGISTRY}: {problem}" for problem in registry_check(root).failures]
 
 
 def owed_key(problem: str | Unplantable) -> owed.Key:

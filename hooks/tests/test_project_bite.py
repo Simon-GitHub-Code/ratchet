@@ -969,6 +969,7 @@ def test_with_setup_every_part_of_a_fault_that_git_sees_is_still_checked(
 def test_one_run_reads_the_tree_as_git_sees_it_at_most_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    *,
     capsys: pytest.CaptureFixture[str],
     fault: str,
     builds: int,
