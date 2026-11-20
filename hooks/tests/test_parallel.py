@@ -856,6 +856,19 @@ def test_a_record_whose_window_starts_on_a_line_keeps_that_line(tmp_path: Path) 
     assert starts == ["+other", "+first"], "the whole first line of the window was dropped"
 
 
+def test_a_record_that_may_not_be_read_leaves_the_order_given(tmp_path: Path) -> None:
+    log, report = tmp_path / "log", tmp_path / "timing.jsonl"
+    short, long = gate(LOG, log, "short"), gate(LOG, log, "long")
+    recorded(report, (short, 1.0), (long, 3.0))
+    report.chmod(0o200)
+    try:
+        assert run("--jobs", "1", "--report", str(report), "--", short, long) == 0
+    finally:
+        report.chmod(0o600)
+    starts = [line for line in log.read_text().splitlines() if line.startswith("+")]
+    assert starts == ["+short", "+long"]
+
+
 def test_a_record_that_is_a_pipe_leaves_the_order_given(tmp_path: Path) -> None:
     log, report = tmp_path / "log", tmp_path / "timing.jsonl"
     gates = [gate(LOG, log, name) for name in ("a", "b", "c")]
