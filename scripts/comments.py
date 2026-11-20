@@ -357,9 +357,7 @@ def judge(root: Path, output: str, *, judged: frozenset[str], binding: str | Non
 
 
 def record(root: Path, verdict: Verdict, *, since: str, base: str | None) -> int:
-    added = [
-        owed.Entry(r.path, RULE, r.text.strip(), since) for r in verdict.red if r.text.strip()
-    ]
+    added = [owed.Entry(r.path, RULE, r.text.strip(), since) for r in verdict.red if r.text.strip()]
     path = root / owed.LEDGER
     text = gatelib.read_text(path)
     held = owed.parse(gatelib.show(root, base, str(owed.LEDGER)) if base else None).entries

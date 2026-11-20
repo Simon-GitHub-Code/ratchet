@@ -356,7 +356,7 @@ def test_an_entry_the_base_does_not_owe_is_still_red_after_a_rerun_and_a_rerun_d
     out = capsys.readouterr().out
     base = git(rerun, "merge-base", "HEAD", "main")[:12]
     assert (
-        f"    - drop 1 entry this change brought, which one upgrade from the merge base {base}"
+        f"drop 1 entry this change brought, which one upgrade from the merge base {base}"
         f" would not write: '{written.problem}' for {written.path} ({written.rule})\n"
     ) in out
     assert "write down 0" not in out
