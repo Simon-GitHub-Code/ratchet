@@ -39,6 +39,7 @@ OPERABILITY_LINES = (
 )
 FLAG_LINE = "Flag"
 CRITIC_EVENT = "depended-on"
+DEPLOYED_EVENT = "deployed"
 CRITERIA = "## Acceptance criteria"
 CRITERION_ITEM = re.compile(
     r"^(?P<indent>[ \t]*)(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]*)?(?P<text>.*)$"
@@ -51,6 +52,7 @@ LABELS_RECORD = Path("docs/agents/triage-labels.md")
 ROLE_COLUMN = "label in mattpocock/skills"
 TRACKER_COLUMN = "label in our tracker"
 EMPTY_BODIES = frozenset({"", "tbd", "todo", "n/a", "none", "-", "..."})
+MARKUP = re.compile(r"^(?:[-*+]\s+|[`*_\s])+|[`*_\s.:;,\-]+$")
 PLACEHOLDER = re.compile(r"<[^<>\n]{2,}>")
 MIN_BODY = 40
 SLUG_WIDTH = 40
@@ -134,7 +136,8 @@ class Ticket:
                 return None
             parent = f"#{found.group(1)}" if found.group(1) else found.group(2)
         if parent.endswith(".md") and not parent.startswith("#"):
-            return str(Path(self.ref).parent / parent) if "/" in self.ref else parent
+            folder = posixpath.dirname(self.ref) if "/" in self.ref else ""
+            return posixpath.normpath(posixpath.join(folder, parent))
         return parent
 
     @property
@@ -195,6 +198,8 @@ class Report:
     label: str = READY_ROLE
     critic: bool = False
     critic_reason: str = ""
+    parent: str | None = None
+    deployed: bool = False
     start: publish_check.Start | None = None
     named_gates: list[NamedGate] = field(default_factory=list)
 
@@ -301,9 +306,10 @@ def section(text: str, heading: str) -> str:
 
 def unfilled(text: str, template: str = "") -> str | None:
     text = text.strip()
-    if text.lower().rstrip(".") in EMPTY_BODIES:
+    bare = MARKUP.sub("", text).lower()
+    if bare in EMPTY_BODIES:
         return "nothing"
-    if template and text.rstrip(".").lower() == template.lower():
+    if template and bare == template.lower():
         return "the template's own words"
     first = PLACEHOLDER.search(text)
     if first and not re.search(r"\w", PLACEHOLDER.sub("", text)):
@@ -432,18 +438,28 @@ def operability_asked(root: Path) -> list[tuple[str, str]]:
     ]
 
 
+def operability_lines(ticket: Ticket, parent: Ticket | None) -> dict[str, str]:
+    lines: dict[str, str] = {}
+    for record in (ticket, parent):
+        block = "" if record is None else section(record.body, OPERABILITY)
+        for name, _question, _says in OPERABILITY_LINES:
+            found = operability_line(name).findall(block)
+            if found:
+                lines.setdefault(name, found[0])
+    return lines
+
+
 def operability_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
     asked = operability_asked(root)
     if not asked:
         return None
-    block = section(ticket.body, OPERABILITY)
+    lines = operability_lines(ticket, None)
     parent_ref = parent_of(ticket, root)
-    if not block.strip() and parent_ref is not None:
-        parent = fetch(parent_ref, root, gh)
-        block = section(parent.body, OPERABILITY) if parent is not None else ""
+    if parent_ref is not None and any(name not in lines for name, _says in asked):
+        lines = operability_lines(ticket, fetch(parent_ref, root, gh))
     lacking, templated = [], []
     for name, says in asked:
-        cause = unfilled("".join(operability_line(name).findall(block)[:1]), says)
+        cause = unfilled(lines.get(name, ""), says)
         if cause == "nothing":
             lacking.append(f"`{name}:` ({says})")
         elif cause is not None:
@@ -557,6 +573,7 @@ def check_ticket(report: Report, ticket: Ticket, label: str, *, root: Path, gh: 
     report.number, report.title = ticket.number, ticket.title
     report.slug = slug_of(ticket.title, ticket.number)
     report.branch = branch_of(ticket, report.slug)
+    report.parent = parent_of(ticket, root)
     if not ticket.is_open:
         report.fail("open", f"{ticket.ref} is not open")
     if (parts := split_parts(ticket, root)) is not None:
@@ -606,9 +623,11 @@ def check_fill_first(report: Report, root: Path) -> None:
         )
 
 
-def check_critic(report: Report, root: Path) -> None:
+def check_life_events(report: Report, root: Path) -> None:
     text = binding_text(root)
-    report.critic = text is not None and CRITIC_EVENT in application_types.declared_or_all(text)
+    declared = frozenset() if text is None else application_types.declared_or_all(text)
+    report.deployed = DEPLOYED_EVENT in declared
+    report.critic = CRITIC_EVENT in declared
     report.critic_reason = (
         f"the binding declares `{CRITIC_EVENT}`: others rely on it, so the change is attacked"
         " before review"
@@ -645,7 +664,7 @@ def preflight(ref: str, root: Path, *, base: str, branch: str | None, gh: Runner
     check_checkout(report, root, base=base, branch=branch)
     check_hooks(report, root)
     check_fill_first(report, root)
-    check_critic(report, root)
+    check_life_events(report, root)
     if branch is not None and report.ok:
         record_start(report, root, branch=branch, gh=gh)
     return report
