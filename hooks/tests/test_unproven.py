@@ -432,3 +432,18 @@ def test_a_time_is_an_instant_only_in_the_one_form_the_adapter_writes(
 ) -> None:
     when = unproven.instant(text)
     assert (None if when is None else when.isoformat()) == seen
+
+
+@pytest.mark.parametrize(
+    ("red", "green", "holds"),
+    [
+        ("2026-11-20T10:00:00+02:00", "2026-11-20T09:00:00Z", False),
+        ("2026-11-20T09:00:00Z", "2026-11-20T10:00:00+02:00", True),
+        ("2026-11-20T09:00:00.5Z", "2026-11-20T09:00:00Z", True),
+    ],
+)
+def test_the_later_instant_decides_a_commit_whatever_its_offset(
+    red: str, green: str, *, holds: bool
+) -> None:
+    runs = (on(0, "red", at=red), on(0, "green", at=green))
+    assert (held(*runs, gated=False) is not None) == holds
