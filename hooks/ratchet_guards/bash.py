@@ -1,6 +1,6 @@
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from itertools import dropwhile, pairwise, product
 from pathlib import Path, PurePosixPath
 
@@ -11,6 +11,9 @@ from ratchet_guards.shell import PLACEHOLDER, Script, SimpleCommand, parse
 from ratchet_guards.verdict import Verdict
 
 MAX_DEPTH = 8
+MAX_WORK = 150_000
+_JUDGING = 64
+_RUNNING_GIT = 2048
 SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
 WRAPPERS = frozenset(
     {"sudo", "doas", "env", "nohup", "time", "command", "builtin", "exec", "nice", "ionice"}
@@ -91,6 +94,26 @@ _UNCLOSED = Verdict(
     "unreadable", "the guard cannot tell where a quote or a substitution on the command line ends"
 )
 _SHELL = Spec("oO", frozenset({"--rcfile", "--init-file"}))
+_TOO_MUCH = Verdict(
+    "unreadable",
+    "the command is too long or nests scripts too deeply or too widely for the guard to read; "
+    "put the script in a file and run that",
+)
+
+
+class _TooMuchError(Exception):
+    pass
+
+
+@dataclass(slots=True)
+class _Work:
+    done: int = 0
+    judged: dict[tuple[str, Context, int], list[Verdict]] = field(default_factory=dict)
+
+    def spend(self, characters: int) -> None:
+        self.done += characters + _JUDGING
+        if self.done > MAX_WORK:
+            raise _TooMuchError
 
 
 def _name(word: str) -> str:
@@ -374,18 +397,26 @@ def _inner_scripts(head: str, words: Sequence[str]) -> list[str]:
 
 
 class _Checker:
-    def __init__(self, guard: Guard, depth: int, line: str) -> None:
+    def __init__(self, guard: Guard, depth: int, line: str, *, work: _Work) -> None:
         self.guard = guard
         self.depth = depth
         self.line = line
+        self.work = work
         self.modelled = True
 
     def _deeper(self) -> "_Checker":
-        return _Checker(self.guard, self.depth + 1, self.line)
+        return _Checker(self.guard, self.depth + 1, self.line, work=self.work)
 
     def script(self, text: str, context: Context) -> list[Verdict]:
         if self.depth > MAX_DEPTH:
             return [Verdict("unreadable", "the command nests scripts too deeply")]
+        key = (text, context, self.depth)
+        if key not in self.work.judged:
+            self.work.spend(len(text))
+            self.work.judged[key] = self._judged(text, context)
+        return self.work.judged[key]
+
+    def _judged(self, text: str, context: Context) -> list[Verdict]:
         parsed = _followed(text)
         self.modelled = parsed.modelled
         if any(map(_HIDDEN_SWITCH.search, parsed.nested)):
@@ -436,9 +467,12 @@ class _Checker:
 
     def _nested(self, parsed: Script, places: Sequence[Context]) -> list[Verdict]:
         inner = self._deeper()
+        scripts = dict.fromkeys(
+            (script, parsed.expanded.get(index, "")) for index, script in enumerate(parsed.nested)
+        )
         return [
-            replace(v, expanded=True) if index in parsed.expanded else v
-            for index, script in enumerate(parsed.nested)
+            replace(v, heredoc=heredoc) if heredoc else v
+            for script, heredoc in scripts
             for place in places
             for v in inner.script(script, place)
         ]
@@ -507,6 +541,7 @@ class _Checker:
         return verdicts + tickets.named(written, self.line, context, guard=self.guard)
 
     def words(self, words: Sequence[str], context: Context) -> list[Verdict]:
+        self.work.spend(sum(map(len, words)))
         assignments, rest = _assignments(words)
         names = _assigned(assignments)
         verdicts = _variables(names) + self._scripts(environment.commands(names), context)
@@ -541,6 +576,7 @@ class _Checker:
 
     def _ruled(self, head: str, words: Sequence[str], context: Context) -> list[Verdict]:
         if head == "git":
+            self.work.spend(_RUNNING_GIT)
             ran = self._scripts(git.scripts(words, context.cwd), context)
             return ran + git.check(words, context, self.guard)
         if head == "gh":
@@ -633,6 +669,12 @@ class _Checker:
 
 
 def check(command: str, context: Context, guard: Guard) -> list[Verdict]:
-    verdicts = tickets.together(_Checker(guard, 0, command).script(command, context))
+    try:
+        verdicts = _Checker(guard, 0, command, work=_Work()).script(command, context)
+    except _TooMuchError:
+        return [_TOO_MUCH]
+    elsewhere = {verdict for verdict in verdicts if not verdict.heredoc}
+    verdicts = [v for v in verdicts if not v.heredoc or replace(v, heredoc="") not in elsewhere]
+    verdicts = tickets.together(verdicts)
     refused = any(verdict.rule in _PATH_REFUSALS for verdict in verdicts)
     return [v for v in verdicts if not (refused and v.rule == "unresolved-directory")]

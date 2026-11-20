@@ -1,5 +1,6 @@
 import re
 import shlex
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 
 PLACEHOLDER = "_substitution_"
@@ -65,13 +66,13 @@ class Script:
     heredocs: tuple[str, ...]
     modelled: bool = True
     closed: bool = True
-    expanded: frozenset[int] = frozenset()
+    expanded: Mapping[int, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class _Shared:
     nested: list[str] = field(default_factory=list)
-    expanded: set[int] = field(default_factory=set)
+    expanded: dict[int, str] = field(default_factory=dict)
     heredocs: dict[int, str] = field(default_factory=dict)
     allocated: int = 0
     modelled: bool = True
@@ -79,8 +80,11 @@ class _Shared:
 
 
 class _Lexer:
-    def __init__(self, text: str, start: int, shared: _Shared, *, closer: str = "") -> None:
+    def __init__(
+        self, text: str, start: int, shared: _Shared, *, closer: str = "", inner: bool = False
+    ) -> None:
         self.text = text
+        self.inner = inner
         self.at = start
         self.shared = shared
         self.closer = closer
@@ -218,7 +222,7 @@ class _Lexer:
 
     def _function_substitution(self) -> None:
         self.shared.modelled = False
-        child = _Lexer(self.text, self.at + 3, self.shared, closer=_HOISTED)
+        child = _Lexer(self.text, self.at + 3, self.shared, closer=_HOISTED, inner=self.inner)
         child.run()
         self.shared.closed &= child.closed
         self.tokens += [Token(_HOIST, operator=True), *child.tokens, Token(_HOISTED, operator=True)]
@@ -267,15 +271,19 @@ class _Lexer:
                 end += 2 if self.text[end] == "\\" else 1
             end = min(end, len(self.text))
             self.shared.closed &= end < len(self.text)
-            self.shared.nested.append(_BACKTICK_ESCAPE.sub(r"\1", self.text[self.at + 1 : end]))
+            self._nests(_BACKTICK_ESCAPE.sub(r"\1", self.text[self.at + 1 : end]))
             self.at = end + 1
         else:
-            child = _Lexer(self.text, self.at + 2, self.shared, closer=")")
+            child = _Lexer(self.text, self.at + 2, self.shared, closer=")", inner=True)
             child.run()
             self.shared.closed &= child.closed
-            self.shared.nested.append(self.text[self.at + 2 : child.at - child.closed])
+            self._nests(self.text[self.at + 2 : child.at - child.closed])
             self.at = child.at
         self.word.append(PLACEHOLDER)
+
+    def _nests(self, script: str) -> None:
+        if not self.inner:
+            self.shared.nested.append(script)
 
     def _skip_comment(self) -> None:
         self.at = self._find("\n", self.at)
@@ -335,12 +343,14 @@ class _Lexer:
             self.shared.heredocs[index] = _BACKTICK_ESCAPE.sub(r"\1", text) if expands else text
             if expands:
                 first = len(self.shared.nested)
-                reader = _Lexer(text, 0, self.shared)
+                reader = _Lexer(text, 0, self.shared, inner=self.inner)
                 reader.expand()
-                self.shared.expanded.update(range(first, len(self.shared.nested)))
+                if sure:
+                    found = range(first, len(self.shared.nested))
+                    self.shared.expanded.update(dict.fromkeys(found, delimiter))
                 hoisted += [(after, reader.tokens)] if reader.tokens else []
             if not sure:
-                reader = _Lexer(text + "\n", 0, self.shared)
+                reader = _Lexer(text + "\n", 0, self.shared, inner=self.inner)
                 reader.run()
                 self.tokens += reader.tokens
         if hoisted:
@@ -498,5 +508,4 @@ def parse(text: str, *, subshells: bool = True) -> Script:
     commands = split(tokens, subshells=subshells and modelled)
     bodies = tuple(shared.heredocs.get(index, "") for index in range(shared.allocated))
     nested = tuple(shared.nested)
-    expanded = frozenset(shared.expanded)
-    return Script(tuple(commands), nested, bodies, modelled, shared.closed, expanded)
+    return Script(tuple(commands), nested, bodies, modelled, shared.closed, shared.expanded)
