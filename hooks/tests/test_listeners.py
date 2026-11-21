@@ -1,5 +1,6 @@
 import errno
 import fcntl
+import ipaddress
 import os
 import select
 import signal
@@ -431,12 +432,12 @@ def test_a_child_of_the_service_stays_the_services_once_its_parent_has_exited() 
         group = running.process.pid
         ours = listeners.Service(group, set())
         before, unseen = ours.scan(everyone=False)
-        assert unseen is None
+        assert unseen == []
         assert before
         os.kill(group, signal.SIGKILL)
         until(lambda: Path(f"/proc/{group}/stat").read_text(encoding="utf-8").split()[2] == "Z")
         after, unseen = ours.scan(everyone=False)
-    assert unseen is None
+    assert unseen == []
     assert after == before
 
 
@@ -453,4 +454,88 @@ def test_the_listening_rows_are_read_no_further_than_the_first_row_that_is_not(
     )
     (net / "tcp").write_text(f"header\n{listening}\n{connected}\nnot a row\n", encoding="utf-8")
     monkeypatch.setattr(listeners, "PROC", str(tmp_path))
-    assert listeners.tcp_listeners(7) == {"socket:[123]": 8080}
+    loopback = (ipaddress.ip_address("127.0.0.1"), 8080)
+    assert listeners.tcp_listeners(7) == ({"socket:[123]": loopback}, [])
+    assert listeners.tcp_listeners(8) is None, "a process with no table to read has no answer"
+
+
+ROW = "0: {} 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 123 1 0"
+
+
+@pytest.mark.parametrize(
+    ("text", "unread"),
+    [
+        ("header\n0: 0100007F:1F90\n", "'0: 0100007F:1F90'"),
+        (f"header\n{ROW.format('ZZ00007F:1F90')}\n", repr(ROW.format("ZZ00007F:1F90"))),
+        (f"header\n{ROW.format('0100007F:ZZ')}\n", repr(ROW.format("0100007F:ZZ"))),
+        (f"header\n{ROW.format('010:1F90')}\n", repr(ROW.format("010:1F90"))),
+        (f"header\n{ROW.format('01000000AA:1F90')}\n", repr(ROW.format("01000000AA:1F90"))),
+        ("", None),
+    ],
+    ids=["a short row", "not hex", "a port not hex", "odd hex", "a length no address has", "empty"],
+)
+def test_a_table_the_gate_cannot_read_is_said_not_raised(
+    text: str, unread: str | None, *, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    net = tmp_path / "7" / "net"
+    net.mkdir(parents=True)
+    (net / "tcp").write_text(text, encoding="utf-8")
+    monkeypatch.setattr(listeners, "PROC", str(tmp_path))
+    said = (
+        f"a row of the system's net/tcp table cannot be read: {unread}"
+        if unread
+        else "the system's net/tcp table is empty"
+    )
+    assert listeners.tcp_listeners(7) == ({}, [said])
+
+
+def test_a_table_the_gate_may_not_open_is_said(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    net = tmp_path / "7" / "net"
+    (net / "tcp").mkdir(parents=True)
+    monkeypatch.setattr(listeners, "PROC", str(tmp_path))
+    said = "the system's net/tcp table cannot be read: Is a directory"
+    assert listeners.tcp_listeners(7) == ({}, [said])
+
+
+def test_where_nothing_listens_for_the_boot_command_or_on_its_port_it_says_why() -> None:
+    with service() as running:
+        assert listeners.bound(running.process.pid, gatelib.free_port()) == listeners.Seen(
+            [(ipaddress.ip_address("127.0.0.1"), running.port)], [], [listeners.NOT_FOUND]
+        )
+        assert listeners.bound(running.process.pid, running.port).unchecked == []
+    nothing = listeners.Seen([], [], [listeners.NOT_FOUND])
+    assert listeners.bound(os.getpid(), gatelib.free_port()) == nothing
+
+
+def test_a_listener_of_the_group_is_the_products_even_when_its_process_table_is_gone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real = listeners.tcp_listeners
+    monkeypatch.setattr(
+        listeners, "tcp_listeners", lambda pid: real(pid) if pid == os.getpid() else None
+    )
+    with service() as running:
+        seen = listeners.bound(running.process.pid, running.port)
+        port = running.port
+    assert seen == listeners.Seen([(ipaddress.ip_address("127.0.0.1"), port)], [], [])
+
+
+def fake_process(proc: Path, pid: int, table: str) -> None:
+    (proc / str(pid) / "fd").mkdir(parents=True)
+    stat = f"{pid} (product) S 1 {pid} 0 0 0 0 0 0\n"
+    (proc / str(pid) / "stat").write_text(stat, encoding="utf-8")
+    (proc / str(pid) / "fd" / "3").symlink_to("socket:[999]")
+    (proc / str(pid) / "net").mkdir()
+    (proc / str(pid) / "net" / "tcp").write_text(table, encoding="utf-8")
+
+
+def test_a_row_of_a_product_process_table_that_cannot_be_read_is_said(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_process(tmp_path, os.getpid(), "header\n")
+    fake_process(tmp_path, 4242, "header\n0: 0100007F\n")
+    monkeypatch.setattr(listeners, "PROC", str(tmp_path))
+    said = "a row of the system's net/tcp table cannot be read: '0: 0100007F'"
+    assert listeners.bound(4242, 1) == listeners.Seen([], [], [said])

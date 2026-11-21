@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable
 from dataclasses import replace
 from functools import cache
@@ -51,11 +51,16 @@ from tests.route_model import (
 )
 from tests.support import PLUGIN_ROOT
 from tests.test_drain import MERGE, approval
+from tests.test_drain_model import LEASED
+from tests.test_pipeline_model import REPLAYED
 
 HOOKS_DIRECTORY = Path(__file__).resolve().parents[1]
 CHARTS = PLUGIN_ROOT / "docs/model/route.md"
 HOOKS_EVERY = 7
-SWEEP_CHUNKS = 64
+SWEEP_CHUNKS = 128
+SHARDS = int(os.environ.get("SHARDS") or 1)
+HELD = {mark.args[0] % SHARDS for mark in (REPLAYED, LEASED)}
+SWEEP_SLOTS = [slot for slot in range(SHARDS) if slot not in HELD] or [0]
 
 STEPS = settings(
     max_examples=4,
@@ -1303,7 +1308,11 @@ def hooks_checked_once(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.usefixtures("hooks_checked_once")
 @pytest.mark.parametrize(
-    "chunk", [pytest.param(n, marks=pytest.mark.shard_slot(n)) for n in range(SWEEP_CHUNKS)]
+    "chunk",
+    [
+        pytest.param(n, marks=pytest.mark.shard_slot(SWEEP_SLOTS[n % len(SWEEP_SLOTS)]))
+        for n in range(SWEEP_CHUNKS)
+    ],
 )
 def test_the_route_names_what_the_model_says_after_every_step(tmp_path: Path, chunk: int) -> None:
     span = spans()[chunk]
@@ -1313,6 +1322,15 @@ def test_the_route_names_what_the_model_says_after_every_step(tmp_path: Path, ch
     taken = sweep(repo, World(), span, scratch=tmp_path / "copies")
     tree = spanning()
     assert taken == sum(len(leaving()[tree.order[place]]) for place in span)
+
+
+def test_the_chunks_spread_evenly_over_the_shards_the_replay_and_the_lease_model_leave() -> None:
+    sweep = test_the_route_names_what_the_model_says_after_every_step
+    (chunks,) = [mark.args[1] for mark in sweep.pytestmark if mark.name == "parametrize"]
+    taken = Counter(chunk.marks[0].args[0] % SHARDS for chunk in chunks)
+    assert HELD.isdisjoint(taken) or len(HELD) == SHARDS, HELD & taken.keys()
+    assert len(taken) == min(SWEEP_CHUNKS, max(SHARDS - len(HELD), 1)), sorted(taken)
+    assert max(taken.values()) - min(taken.values()) <= 1, taken
 
 
 def disagreement(world: World, step: route.Step, path: list[str]) -> str:

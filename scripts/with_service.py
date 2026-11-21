@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import http.client
+import ipaddress
 import os
 import re
 import signal
@@ -24,6 +25,73 @@ SENDING_POLL = 0.01
 TAIL = 30
 HEAD = 30
 PORT_TOKEN = "{port}"  # noqa: S105 # -- a placeholder, not a credential
+HOST_TOKEN = "{host}"  # noqa: S105 # -- a placeholder, not a credential
+CURE = (
+    f"pass {HOST_TOKEN}, which stands for the ready URL's host, in the boot line where the "
+    "product takes its address"
+)
+HOSTED = f"point the ready URL at a loopback address, which {HOST_TOKEN} stands for"
+CHECKED = (
+    "when the product first answered, each listener of the boot command's process group and its "
+    "descendants, one on the ready URL's port among them, was on loopback or declared; a listener "
+    "of a process that is neither in that group nor a descendant of it, or one opened later, is "
+    "not judged"
+)
+DECLARE = "or declare the address with --listens"
+NOT_CHECKED_HERE = "where the product listens was not checked here"
+UNCHECKED = "where the product listens was not checked, so the command after -- did not run"
+LISTENS = (
+    "declare with --listens each address the product listens on, a loopback address if that is all"
+)
+
+
+def host_of(ready: str) -> str:
+    return urlsplit(ready).hostname or ""
+
+
+def place(address: listeners.Address, port: int) -> str:
+    return f"[{address}]:{port}" if ":" in str(address) else f"{address}:{port}"
+
+
+def judged(process: subprocess.Popen[bytes], options: argparse.Namespace) -> list[str]:
+    ready = urlsplit(options.ready)
+    seen = listeners.bound(process.pid, ready.port or (443 if ready.scheme == "https" else 80))
+    cure = HOSTED if options.hosted else CURE
+    session, declared = options.loopback_only, options.listens
+    wider = [(address, port) for address, port in seen.product if not address.is_loopback]
+    said = [
+        f"the product listened on {place(address, port)} when it first answered, as declared"
+        for address, port in wider
+        if address in declared
+    ]
+    said += [
+        f"{place(address, port)}, on the ready URL's port, is held by a process the gate did not "
+        "find among the boot command's, so it is not judged as the product's"
+        for address, port in seen.others
+        if not address.is_loopback
+    ]
+    wide = [
+        f"the product listened on {place(address, port)}, "
+        f"{'every interface' if address.is_unspecified else 'not a loopback address'}, when it "
+        "first answered, so the network could reach it"
+        for address, port in wider
+        if address not in declared
+    ]
+    refused = [f"{line} around the command after --; {cure}, {DECLARE}" for line in wide]
+    said += [] if session else [f"note: {line}; {cure}" for line in wide]
+    why = "; ".join(seen.unchecked)
+    addresses = " ".join(dict.fromkeys(str(address) for address in declared))
+    if seen.unchecked and declared:
+        said.append(f"{NOT_CHECKED_HERE}, as declared: {addresses} ({why})")
+    elif seen.unchecked and session:
+        refused.append(f"{UNCHECKED}: {why}; {LISTENS}")
+    elif seen.unchecked:
+        said += [f"where the product listens was not checked: {each}" for each in seen.unchecked]
+    elif session and not refused:
+        said.append(CHECKED)
+    for line in said:
+        print(f"with_service: {line}", flush=True)
+    return refused if session else []
 
 
 def probe(url: str) -> str | None:
@@ -200,6 +268,8 @@ def serve(
                     code = 1 if problems else 0
                 elif not_ready:
                     problems = [not_ready]
+                elif refused := judged(process, options):
+                    problems = refused
                 elif command and options.graceful is not None:
                     code, problems = run_signalled(process, options, command, env=env)
                 elif command:
@@ -223,6 +293,20 @@ def pair(text: str) -> tuple[str, str]:
     return key, value
 
 
+def addresses(text: str) -> list[listeners.Address]:
+    words = text.split()
+    if not words:
+        message = (
+            "names no address: write each address the product listens on on purpose, separated "
+            "by spaces, such as --listens '0.0.0.0 ::'"
+        )
+        raise argparse.ArgumentTypeError(message)
+    try:
+        return [listeners.unmapped(ipaddress.ip_address(word)) for word in words]
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
+
+
 def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(prog="with_service.py", usage="%(prog)s [options] [-- cmd...]")
     parser.add_argument("--boot", required=True, help="shell command that starts the service")
@@ -239,12 +323,27 @@ def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     )
     parser.add_argument("--signal-after", type=float, default=1.0, metavar="S")
     parser.add_argument("--refuses", action="append", default=[], metavar="NAME")
+    parser.add_argument(
+        "--loopback-only",
+        action="store_true",
+        help="refuse to run the command while the service listens beyond the loopback address",
+    )
+    parser.add_argument(
+        "--listens",
+        action="extend",
+        type=addresses,
+        default=[],
+        metavar="ADDRESSES",
+        help="addresses, separated by spaces, the service listens on on purpose: said, not refused",
+    )
     rest = argv[1:]
     split = rest.index("--") if "--" in rest else len(rest)
     options = parser.parse_args(rest[:split])
     command = rest[split + 1 :]
     if urlsplit(options.ready).scheme not in ("http", "https"):
         parser.error(f"--ready {options.ready!r} is not an http or https URL")
+    if HOST_TOKEN in options.ready:
+        parser.error(f"--ready cannot hold {HOST_TOKEN}, which stands for the ready URL's host")
     if options.graceful is not None and (options.graceful <= 0 or options.signal_after <= 0):
         parser.error("--graceful and --signal-after must be positive")
     if options.graceful is not None and not command:
@@ -259,16 +358,20 @@ def main(argv: list[str]) -> int:
     pairs = options.env
     texts = [options.boot, options.ready, *command, *(value for _, value in pairs)]
     picked = any(PORT_TOKEN in text for text in texts)
+    hosted = any(HOST_TOKEN in text for text in texts)
 
     def attempt(missing: str | None = None) -> tuple[int, list[str], bool]:
         env = dict(os.environ)
         if picked:
             env["PORT"] = str(gatelib.free_port())
+        port = env.get("PORT", PORT_TOKEN)
+        host = host_of(options.ready.replace(PORT_TOKEN, port))
 
         def expand(text: str) -> str:
-            return text.replace(PORT_TOKEN, env.get("PORT", PORT_TOKEN))
+            return text.replace(PORT_TOKEN, port).replace(HOST_TOKEN, host)
 
         ran = argparse.Namespace(**{**vars(options), "boot": expand(options.boot)})
+        ran.hosted = hosted
         ran.ready, ran.refuses = expand(options.ready), missing
         env[gatelib.READY_ENV] = ran.ready
         env.update({key: expand(value) for key, value in pairs})
