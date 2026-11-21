@@ -73,13 +73,17 @@ Two kinds of file act before any merge the judge could read:
 
 `.claude/worktrees/` is not an instruction directory, since each worktree under it is a checkout judged from its own root. Like every path rule this is on only once the manifest is on the default branch, so `/ratchet:adopt` writes its workflows and instructions without a prompt.
 
-### A merge or the agent-ready label: ask
+### A merge an agent types: deny once adopted
 
-Each prompt is a plain sentence the owner can answer without knowing the guard.
+A change reaches the default branch through the merge judge or by the owner's hand, and what merges by itself already runs: the merge job on a forge, the `merge` entry point with no forge. So once the manifest is on the default branch ([When the path rules are on](#when-the-path-rules-are-on)) and the `justfile` there defines both the `merge-ready` and the `merge` recipe, the hook denies a merge an agent types: `gh pr merge`, the forge's merge, branch-merge and auto-merge API, and, on the default branch, `git merge`, `pull`, `cherry-pick`, `am` and `read-tree`. The deny names what merges by itself and `merge-ready --head <branch>`, which prints each reason a change waits. A merge the judge leaves to the owner is the owner's to make, in the forge's interface or their own terminal.
 
-**Merging.** A change reaches the default branch through the merge judge or by the owner's hand.
+- **Before adoption, or where the default branch lacks either recipe,** there is no way out to name, so the hook asks the owner, with the same words as before. A recipe removed only in the work tree or on another branch still leaves the deny.
+- **A sync** passes in either case: a merge or a pull on the default branch whose every operand is the default branch's own remote-tracking ref, named or as its upstream, with or without `--ff-only`, and a resume (`--abort`, `--continue`, `--quit`, `--skip`). An operand git reads as anything else (`FETCH_HEAD`, another remote's branch, a local branch or tag of the same name, an upstream moved to another branch), a `-c` setting on the same `git`, or an earlier command on the line that may have changed what a name points to makes it a merge.
+- **A merge tried out locally** runs on a detached `HEAD` or a scratch branch, where no merge rule fires. Switch to it in a tool call of its own, so the guard reads where the merge lands.
 
-**The agent-ready label.** The label is the owner's agreement that a ticket is ready to build, and the feature preflight reads it as such.
+### The agent-ready label: ask
+
+The prompt is a plain sentence the owner can answer without knowing the guard. The label is the owner's agreement that a ticket is ready to build, and the feature preflight reads it as such.
 
 ### A locked file: deny
 
@@ -115,7 +119,7 @@ The path rules are on only once `guards/manifest.toml` is committed on the defau
 - **Until the adoption merges,** a manifest that is untracked or committed only on a branch guards nothing, and the command rules apply alone.
 - **After it merges,** the owner's merged manifest governs even if the work tree's copy is edited or deleted.
 
-The command rules are on from the first session, before `/ratchet:adopt` has written a binding. Anything an agent can set is something an agent can forge, so the guard has no off state and no "not adopted yet" state. `/ratchet:init` is written so that none of its steps provokes a denial. Its label step uses the [recorded label](#a-command-that-bypasses-a-gate-or-rewrites-history-deny) path.
+The command rules are on from the first session, before `/ratchet:adopt` has written a binding. Anything an agent can set is something an agent can forge, so the guard has no off state. The one command rule that reads the adoption is a merge an agent types, and it reads it from the same committed manifest, with the committed `justfile`'s `merge-ready` and `merge` recipes: before both are there, the hook asks the owner where after it denies. `/ratchet:init` is written so that none of its steps provokes a denial. Its label step uses the [recorded label](#a-command-that-bypasses-a-gate-or-rewrites-history-deny) path.
 
 ### The permission rules
 
@@ -248,7 +252,7 @@ Its manifest must instead guard at least what the template's does: every templat
 
 ## What only the owner does
 
-- Approves an `ask` at the prompt: a merge an agent types, and the agent-ready label.
+- Approves an `ask` at the prompt: the agent-ready label, and, before adoption or without the two merge recipes, a merge an agent types.
 - Declares a life event on the binding's `- Life events:` line.
 - Edits a locked file outside the harness, in a pull request the diff check will flag.
 - Runs a denied command in their own shell.
