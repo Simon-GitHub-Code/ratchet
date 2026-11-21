@@ -26,7 +26,7 @@ from ratchet_guards.manifest import (
 )
 from ratchet_guards.paths import Checkout, Hit, Locator
 from ratchet_guards.refs import MAIN_BRANCHES, REMOTE
-from ratchet_guards.verdict import OWNER_ASKS, Decision, LateError, Verdict, strictest
+from ratchet_guards.verdict import OWNER_ASKS, Decision, Verdict, strictest
 
 EDIT_TOOLS = {
     "Edit": "file_path",
@@ -349,7 +349,7 @@ def _judge(call: Call, target: str, context: Context, *, guard: Guard) -> Verdic
     path = context.cwd / target
     label = tickets.check(call.tool, call.tool_input, path, guard=guard)
     verdicts = [v for v in (_edit(call, path, context, guard=guard), label) if v is not None]
-    return strictest(verdicts + guard.acting([path]))
+    return strictest(guard.noted(verdicts + guard.acting([path])))
 
 
 def _patch(tool_input: dict[str, object], cwd: Path, guard: Guard) -> Verdict | None:
@@ -363,7 +363,8 @@ def _patch(tool_input: dict[str, object], cwd: Path, guard: Guard) -> Verdict | 
             verdicts.append(_hit_verdict(hit))
     paths = [match.group("path").strip() for match in PATCH_HEADER.finditer(text)]
     acting = guard.acting(cwd / path for path in paths)
-    return strictest(verdicts + acting + tickets.named(paths, text, context, guard=guard))
+    named = tickets.named(paths, text, context, guard=guard)
+    return strictest(guard.noted(verdicts + acting + named))
 
 
 def _edit(call: Call, path: Path, context: Context, *, guard: Guard) -> Verdict | None:
@@ -462,16 +463,23 @@ def _judged(
 ) -> tuple[object, Verdict | None]:
     payload: object = None
     verdict: Verdict | None = None
+    found: list[Verdict] = []
+    finished = False
     try:
         with _deadline(deadline):
             payload = json.loads(text)
-            verdict = decide(payload, make_guard())
-    except LateError as late:
-        found = [_unreadable(LATE), *late.found, *([verdict] if verdict else [])]
-        verdict = strictest(found)
+            guard = make_guard()
+            found = guard.found
+            verdict = decide(payload, guard)
+            finished = True
+    except LateError:
+        verdict = verdict if finished else strictest([_unreadable(LATE), *found])
     except Exception as error:  # noqa: BLE001 # -- fail closed: any failure must reach a human
         verdict = _unreadable(f"{type(error).__name__}: {error}")
     return payload, verdict
+
+
+class LateError(BaseException): ...
 
 
 def _late(_signal: int, _frame: FrameType | None) -> None:
@@ -489,8 +497,10 @@ def _deadline(seconds: float | None) -> Iterator[None]:
     try:
         yield
     finally:
-        arm(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous)
+        try:
+            arm(signal.ITIMER_REAL, 0)
+        finally:
+            signal.signal(signal.SIGALRM, previous)
 
 
 def common_directory(root: Path) -> Path | None:

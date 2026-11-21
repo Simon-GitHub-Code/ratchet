@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 import adapter
-from ratchet_guards import bash, hook
+from ratchet_guards import bash, events, git, hook, tickets
 from ratchet_guards.context import Guard
 from ratchet_guards.manifest import COMMITTED, EMPTY, MANIFEST_PATH, parse
 from ratchet_guards.paths import Checkout
@@ -378,6 +378,86 @@ def test_a_deny_the_guard_reached_before_its_deadline_stands(
     assert answer["permissionDecision"] == "deny"
     assert "force-pushes" in answer["permissionDecisionReason"]
     assert _answer(root, "ls; git push -f", deadline=60)[0]["permissionDecision"] == "ask"
+
+
+def _held(monkeypatch: pytest.MonkeyPatch, owner: object, name: str, *, call: int) -> None:
+    real = getattr(owner, name)
+    calls = [0]
+
+    def held(*args: object, **kwargs: object) -> object:
+        calls[0] += 1
+        if calls[0] == call:
+            time.sleep(30)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(owner, name, held)
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["env -C d1 git push -f", "sudo -D d1 git push -f", "x=d1 || x=d2; cd $x && git push -f"],
+)
+def test_a_deny_found_in_one_directory_stands_when_the_next_one_runs_past_the_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    root = checkout(tmp_path)
+    _held(monkeypatch, git, "check", call=2)
+    answer, spent = _answer(root, command, deadline=1)
+    assert answer["permissionDecision"] == "deny"
+    assert "force-pushes" in answer["permissionDecisionReason"]
+    assert spent < 5
+
+
+def test_a_deny_judged_in_full_stands_when_the_deadline_falls_after_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = checkout(tmp_path)
+    _held(monkeypatch, tickets, "together", call=1)
+    assert _answer(root, "git push -f", deadline=1)[0]["permissionDecision"] == "deny"
+    monkeypatch.undo()
+    judge = hook.decide
+
+    def rung(payload: object, guard: Guard) -> Verdict | None:
+        verdict = judge(payload, guard)
+        signal.raise_signal(signal.SIGALRM)
+        return verdict
+
+    monkeypatch.setattr(hook, "decide", rung)
+    assert _answer(root, "git push -f", deadline=60)[0]["permissionDecision"] == "deny"
+
+
+def test_an_alarm_as_the_answer_is_chosen_leaves_one_line_with_that_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = checkout(tmp_path)
+    arm = signal.setitimer
+
+    def disarm(which: int, seconds: float) -> tuple[float, float]:
+        left = arm(which, seconds)
+        if not seconds:
+            signal.raise_signal(signal.SIGALRM)
+        return left
+
+    monkeypatch.setattr(signal, "setitimer", disarm)
+    stdout = io.StringIO()
+    case = {"tool_name": "Bash", "tool_input": {"command": "git push -f"}, "cwd": str(root)}
+    assert hook.main(root, io.StringIO(json.dumps(case)), stdout, deadline=60) == 0
+    [line] = stdout.getvalue().splitlines()
+    assert json.loads(line)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_the_ask_at_the_deadline_is_logged_like_any_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = checkout(tmp_path)
+    monkeypatch.setattr(hook, "decide", _stalled(30))
+    _answer(root, "ls", deadline=0.2)
+    [line] = (root / ".git" / events.LOG_NAME).read_text(encoding="utf-8").splitlines()
+    logged = json.loads(line)
+    assert (logged["decision"], logged["rule"]) == ("ask", "unreadable")
+    assert logged["detail"] == hook.LATE
+    page = (PLUGIN_ROOT / "skills/method/guards.md").read_text(encoding="utf-8")
+    assert f"cannot finish judging in {hook.DEADLINE_SECONDS:g} s" in page
 
 
 def test_a_hook_that_finishes_in_time_answers_as_it_judged(

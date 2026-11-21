@@ -391,14 +391,20 @@ def _spelled(values: Callable[[int], str], count: int, then: str) -> str:
 
 
 def test_a_directory_spelled_from_more_readings_than_the_guard_keeps_still_asks() -> None:
-    command = _spelled(lambda i: f"x{i}=a || x{i}=b", 40, "ls")
+    command = _spelled(lambda i: f"x{i}=a || x{i}=b", 40, "echo hi > f")
     assert rules(command) == ["unreadable"]
 
 
-def test_a_directory_spelled_from_more_combinations_than_the_guard_reads_is_not_followed() -> None:
-    write = "echo hi > .github/workflows/ci.yml"
-    assert "unresolved-directory" in rules(_spelled(lambda i: f"x{i}=a || x{i}=aa", 9, write))
+@pytest.mark.parametrize(
+    "write", ["echo hi > f", "rm -f f", "git rm -q f", "python3 -c \"open('f', 'w')\""]
+)
+def test_a_directory_spelled_from_more_combinations_than_the_guard_reads_is_not_followed(
+    write: str,
+) -> None:
+    unread = ["unreadable", "unresolved-directory"]
+    assert rules(_spelled(lambda i: f"x{i}=a || x{i}=aa", 9, write)) == unread
     assert rules(_spelled(lambda i: f"x{i}=a || x{i}=aa", 8, write)) == []
+    assert rules(_spelled(lambda i: f"x{i}=a || x{i}=aa", 9, f"cd /tmp && {write}")) == unread[:1]
 
 
 PROSE = "This line of the note explains a step, with `code`, $5 and a path like src/app/main.py.\n"

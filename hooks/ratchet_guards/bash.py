@@ -8,7 +8,7 @@ from ratchet_guards import environment, gh, git, interpreters, tickets, writes
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.options import Options, Spec, scan
 from ratchet_guards.shell import PLACEHOLDER, Script, SimpleCommand, parse
-from ratchet_guards.verdict import LateError, Verdict
+from ratchet_guards.verdict import Verdict
 
 MAX_DEPTH = 8
 SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
@@ -159,20 +159,20 @@ def _dynamic(value: str) -> bool:
     return any(mark in value for mark in _DYNAMIC) or len(value.split()) != 1
 
 
-def _resolved(target: str, values: Mapping[str, frozenset[str | None]]) -> Iterator[str]:
+def _resolved(target: str, values: Mapping[str, frozenset[str | None]]) -> Iterator[str | None]:
     names = sorted({m.group(1) or m.group(2) for m in _VARIABLE.finditer(target)} & values.keys())
     options = [sorted(values[name], key=lambda value: value or "") for name in names]
     combinations = product(*options)
     for picks in islice(combinations, _PICKS):
         yield _substituted(target, dict(zip(names, picks, strict=True)))
     if next(combinations, None) is not None:
-        yield target
+        yield None
 
 
-def _homed(readings: Iterable[str], homes: Collection[str | None]) -> Iterator[str]:
+def _homed(readings: Iterable[str | None], homes: Collection[str | None]) -> Iterator[str | None]:
     tilded: list[str] = []
     for word in readings:
-        tilded += [word] if word == "~" or word.startswith("~/") else []
+        tilded += [word] if word and (word == "~" or word.startswith("~/")) else []
         yield word
     yield from (str(PurePosixPath(home, word[2:])) for word in tilded for home in homes if home)
 
@@ -217,8 +217,8 @@ def _followed(text: str) -> Script:
     return parsed
 
 
-def _anywhere(context: Context, seen: Sequence[Context]) -> list[Context]:
-    return [context, context.adrift(), *(context.moved_to(place.cwd) for place in seen)]
+def _anywhere(context: Context, lost: Context, seen: Sequence[Context]) -> list[Context]:
+    return [context, lost, *(context.moved_to(place.cwd) for place in seen)]
 
 
 def _assigning(
@@ -402,11 +402,6 @@ def _inner_scripts(head: str, words: Sequence[str]) -> list[str]:
 class _Memo:
     judged: dict[tuple[str, Context, int, str], list[Verdict]] = field(default_factory=dict)
     parsed: dict[str, _Read] = field(default_factory=dict)
-    found: list[Verdict] = field(default_factory=list)
-
-    def noted(self, verdicts: list[Verdict]) -> list[Verdict]:
-        self.found.extend(verdicts)
-        return verdicts
 
 
 class _Checker:
@@ -451,14 +446,14 @@ class _Checker:
         entered: list[tuple[list[Context], list[Context]]] = []
         for command in parsed.commands:
             if _redefines(command):
-                now = _distinct(p for place in now for p in _anywhere(place, seen))
+                now = _distinct(p for place in now for p in _anywhere(place, place.adrift(), seen))
                 crowded = crowded or len(now) > MAX_STATES
                 now = now[:MAX_STATES]
             entered += [(now, chain)] * command.opens
             pipeline.append(command)
             position = len(pipeline)
             for place in now:
-                verdicts += self.memo.noted(self._command(pipeline, parsed.heredocs, place))
+                verdicts += self._command(pipeline, parsed.heredocs, place)
             pipeline = pipeline if command.piped else []
             chained = command.then == _AND
             sure = trusted and chained and previous not in _UNSURE_AFTER
@@ -475,7 +470,8 @@ class _Checker:
                 after = _left(now, ran)
             chain = _distinct([*chain, *after])
             states = _levelled(after if chained else chain)
-            crowded = crowded or len(states) > MAX_STATES
+            unspelled = any(state.unspelled for state in states)
+            crowded = crowded or len(states) > MAX_STATES or unspelled
             now = states[:MAX_STATES]
             chain = chain if chained else now
             seen = _distinct([*seen, *now])
@@ -505,7 +501,7 @@ class _Checker:
         if _reads_script_from_stdin(command.words):
             verdicts += self._fed(pipeline, heredocs, context)
         verdicts += self._fed_interpreter(pipeline, heredocs, context)
-        return (
+        return self.guard.noted(
             [replace(v, heredoc=command.heredoc) for v in verdicts] if command.heredoc else verdicts
         )
 
@@ -534,10 +530,12 @@ class _Checker:
                 verdicts += inner.script(command, context)
             names = interpreters.named_paths(program)
             verdicts += tickets.named(names, self.line, context, guard=self.guard)
-            hits = self.guard.locator.words(names, context.cwd, destructive=call.removes(program))
+            removes = call.removes(program)
+            hits = self.guard.locator.words(names, context.cwd, destructive=removes)
             verdicts += self.guard.writes(
                 context, hits, lambda hit: interpreters.detail(call.name, hit.path, hit.group.name)
             )
+            verdicts += self.guard.unfollowed(context, names, destructive=removes, by=call.name)
             written = interpreters.written_names(program)
             verdicts += self.guard.acting(self.guard.locator.named(written, context.cwd))
         return verdicts
@@ -552,27 +550,26 @@ class _Checker:
             context, hits, lambda hit: f"{verb} {hit.path} ({hit.group.name})"
         )
         verdicts += self.guard.acting(self.guard.locator.paths([*written, *removed], cwd))
-        if context.lost:
-            locate = self.guard.locator.could_hit
-            by = "a redirect" if verb == _REDIRECT else verb
-            lost = [
-                *(f"{word}, changed by {by}" for word in locate(written, destructive=False)),
-                *(f"{word}, removed by {by}" for word in locate(removed, destructive=True)),
-            ]
-            verdicts += [Verdict("unresolved-directory", detail) for detail in lost]
+        by = "a redirect" if verb == _REDIRECT else verb
+        verdicts += self.guard.unfollowed(context, written, destructive=False, by=by)
+        verdicts += self.guard.unfollowed(context, removed, destructive=True, by=by)
         return verdicts + tickets.named(written, self.line, context, guard=self.guard)
 
     def words(self, words: Sequence[str], context: Context) -> list[Verdict]:
         assignments, rest = _assignments(words)
         names = _assigned(assignments)
-        verdicts = _variables(names) + self._scripts(environment.commands(names), context)
+        verdicts = self._environment(names, context)
         if not rest:
             return verdicts
         context = context.exporting(names)
         head = _name(rest[0])
         if head in WRAPPERS:
             return verdicts + self._wrapped(rest, context)
-        return verdicts + self._ruled(head, rest, context)
+        return self.guard.noted(verdicts + self._ruled(head, rest, context))
+
+    def _environment(self, names: Mapping[str, str], context: Context) -> list[Verdict]:
+        verdicts = self.guard.noted(_variables(names))
+        return verdicts + self._scripts(environment.commands(names), context)
 
     def _scripts(self, scripts: Sequence[str], context: Context) -> list[Verdict]:
         inner = self._deeper()
@@ -580,7 +577,7 @@ class _Checker:
 
     def _wrapped(self, words: Sequence[str], context: Context) -> list[Verdict]:
         names = _assigned(words)
-        verdicts = _variables(names) + self._scripts(environment.commands(names), context)
+        verdicts = self._environment(names, context)
         context = context.exporting(names)
         places = _distinct([context, *(self._entered(w, context) for w in _directories(words))])
         for index in range(len(words)):
@@ -606,7 +603,7 @@ class _Checker:
             return direct(words)
         declared = environment.declared(words)
         if declared:
-            return _variables(declared) + self._scripts(environment.commands(declared), context)
+            return self._environment(declared, context)
         inner = self._deeper()
         verdicts = [
             v for script in _inner_scripts(head, words) for v in inner.script(script, context)
@@ -672,10 +669,13 @@ class _Checker:
         for word in _homed(spelled, homes):
             if len(reached) > MAX_STATES:
                 break
+            if word is None:
+                places += _anywhere(context, context.unspelling(), seen)
+                continue
             target = self.guard.locator.filesystem.expand(word)
             unknown = stack or _unreadable(target)
             if unknown or _CDPATH in lookups or (_HOME in lookups and word.startswith("~")):
-                places += _anywhere(context, seen)
+                places += _anywhere(context, context.adrift(), seen)
             if unknown:
                 continue
             anchored = PurePosixPath(target).is_absolute()
@@ -686,11 +686,7 @@ class _Checker:
 
 
 def check(command: str, context: Context, guard: Guard) -> list[Verdict]:
-    memo = _Memo()
-    try:
-        verdicts = _Checker(guard, 0, command, memo=memo).script(command, context)
-    except LateError as late:
-        raise LateError(memo.found) from late
+    verdicts = _Checker(guard, 0, command, memo=_Memo()).script(command, context)
     elsewhere = {verdict for verdict in verdicts if not verdict.heredoc}
     verdicts = [v for v in verdicts if not v.heredoc or replace(v, heredoc="") not in elsewhere]
     verdicts = tickets.together(verdicts)
