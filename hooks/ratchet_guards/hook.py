@@ -2,12 +2,14 @@ import contextlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import FrameType
 from typing import TextIO
 
 from ratchet_guards import bash, events, records, tickets
@@ -68,6 +70,11 @@ PATCH_HEADER = re.compile(
 PATCH_DESTRUCTIVE = frozenset({"Delete File", "Move to"})
 GIT_TIMEOUT_SECONDS = 5
 LOG_TIMEOUT_SECONDS = 1.0
+DEADLINE_SECONDS = 7.0
+LATE = (
+    f"it used the {DEADLINE_SECONDS:g} s it gives itself before the harness's time limit, on a "
+    "busy machine or a command slow to read; a smaller tool call is read in time"
+)
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 STANDARD_MANIFEST = "skills/adopt/templates/guards/manifest.toml"
 
@@ -238,10 +245,13 @@ class GitRepoState:
     def __init__(self) -> None:
         self._heads: dict[Path, str | None] = {}
         self._defaults: dict[Path, frozenset[str]] = {}
+        self._branches: dict[Path, str | None] = {}
 
     def current_branch(self, cwd: Path) -> str | None:
-        head = _git(cwd, "symbolic-ref", "HEAD")
-        return head.removeprefix(_HEADS) if head else None
+        if cwd not in self._branches:
+            head = _git(cwd, "symbolic-ref", "HEAD")
+            self._branches[cwd] = head.removeprefix(_HEADS) if head else None
+        return self._branches[cwd]
 
     def checked_out(self, root: Path) -> str | None:
         if root not in self._heads:
@@ -339,7 +349,7 @@ def _judge(call: Call, target: str, context: Context, *, guard: Guard) -> Verdic
     path = context.cwd / target
     label = tickets.check(call.tool, call.tool_input, path, guard=guard)
     verdicts = [v for v in (_edit(call, path, context, guard=guard), label) if v is not None]
-    return strictest(verdicts + guard.acting([path]))
+    return strictest(guard.noted(verdicts + guard.acting([path])))
 
 
 def _patch(tool_input: dict[str, object], cwd: Path, guard: Guard) -> Verdict | None:
@@ -353,7 +363,8 @@ def _patch(tool_input: dict[str, object], cwd: Path, guard: Guard) -> Verdict | 
             verdicts.append(_hit_verdict(hit))
     paths = [match.group("path").strip() for match in PATCH_HEADER.finditer(text)]
     acting = guard.acting(cwd / path for path in paths)
-    return strictest(verdicts + acting + tickets.named(paths, text, context, guard=guard))
+    named = tickets.named(paths, text, context, guard=guard)
+    return strictest(guard.noted(verdicts + acting + named))
 
 
 def _edit(call: Call, path: Path, context: Context, *, guard: Guard) -> Verdict | None:
@@ -447,14 +458,49 @@ def run(text: str, make_guard: Callable[[], Guard]) -> str:
     return respond(verdict, antigravity=is_antigravity(payload))
 
 
-def _judged(text: str, make_guard: Callable[[], Guard]) -> tuple[object, Verdict | None]:
+def _judged(
+    text: str, make_guard: Callable[[], Guard], deadline: float | None = None
+) -> tuple[object, Verdict | None]:
     payload: object = None
+    verdict: Verdict | None = None
+    found: list[Verdict] = []
+    finished = False
     try:
-        payload = json.loads(text)
-        verdict = decide(payload, make_guard())
+        with _deadline(deadline):
+            payload = json.loads(text)
+            guard = make_guard()
+            found = guard.found
+            verdict = decide(payload, guard)
+            finished = True
+    except LateError:
+        verdict = verdict if finished else strictest([_unreadable(LATE), *found])
     except Exception as error:  # noqa: BLE001 # -- fail closed: any failure must reach a human
         verdict = _unreadable(f"{type(error).__name__}: {error}")
     return payload, verdict
+
+
+class LateError(BaseException): ...
+
+
+def _late(_signal: int, _frame: FrameType | None) -> None:
+    raise LateError
+
+
+@contextlib.contextmanager
+def _deadline(seconds: float | None) -> Iterator[None]:
+    arm = getattr(signal, "setitimer", None)
+    if seconds is None or arm is None:
+        yield
+        return
+    previous = signal.signal(signal.SIGALRM, _late)
+    arm(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        try:
+            arm(signal.ITIMER_REAL, 0)
+        finally:
+            signal.signal(signal.SIGALRM, previous)
 
 
 def common_directory(root: Path) -> Path | None:
@@ -513,8 +559,10 @@ def main(
     stdout: TextIO = sys.stdout,
     *,
     project: Path | None = None,
+    deadline: float = DEADLINE_SECONDS,
 ) -> int:
-    payload, verdict = _judged(stdin.read(), lambda: local_guard(root, project=project))
+    text = stdin.read()
+    payload, verdict = _judged(text, lambda: local_guard(root, project=project), deadline)
     answer = respond(verdict, antigravity=is_antigravity(payload))
     if answer:
         stdout.write(answer + "\n")
