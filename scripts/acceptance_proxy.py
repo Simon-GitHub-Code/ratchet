@@ -285,8 +285,8 @@ def locked(directory: Path) -> bool:
     return False
 
 
-def abandoned(directory: Path) -> bool:
-    return (directory / "live.lock").is_file() and not locked(directory)
+def going(directory: Path) -> bool:
+    return directory.is_dir() and locked(directory)
 
 
 def until_stopped(server: http.server.ThreadingHTTPServer, going: Callable[[], bool]) -> str:
@@ -306,12 +306,12 @@ def digest_of(path: Path) -> str | None:
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
 
 
-def serve(directory: Path, parent: int) -> int:
-    def going() -> bool:
-        return os.getppid() == parent and directory.is_dir() and not abandoned(directory)
-
-    if not going():
-        print("acceptance_proxy: the supervisor is gone; nothing was served", file=sys.stderr)
+def serve(directory: Path) -> int:
+    if not going(directory):
+        print(
+            "acceptance_proxy: whoever started the session is gone; nothing was served",
+            file=sys.stderr,
+        )
         return 1
     session = str(json.loads((directory / "session.json").read_text(encoding="utf-8"))["session"])
     facts: dict[str, object] = {"session": session}
@@ -327,7 +327,7 @@ def serve(directory: Path, parent: int) -> int:
         directory / "proxy.json",
         {"url": f"http://127.0.0.1:{port}/", "upstream": origin, "pid": os.getpid()},
     )
-    stopped = until_stopped(server, going)
+    stopped = until_stopped(server, lambda: going(directory))
     if not directory.is_dir():
         print(
             "acceptance_proxy: the session's directory was removed; nothing is sealed",
@@ -338,20 +338,19 @@ def serve(directory: Path, parent: int) -> int:
     return 0
 
 
-def null(parent: int) -> int:
+def null(directory: Path) -> int:
     port = int(os.environ["PORT"])
     server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Nothing)
-    until_stopped(server, lambda: os.getppid() == parent)
+    until_stopped(server, lambda: going(directory))
     return 0
 
 
 def main(argv: list[str]) -> int:
     for interrupt in gatelib.INTERRUPTS:
         signal.signal(interrupt, stopping)
-    parent = os.getppid()
-    if argv[1:] == ["--null"]:
-        return null(parent)
-    return serve(Path(argv[1]), parent)
+    if argv[1] == "--null":
+        return null(Path(argv[2]))
+    return serve(Path(argv[1]))
 
 
 if __name__ == "__main__":
