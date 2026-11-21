@@ -7,6 +7,7 @@ import signal
 import socket
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -497,11 +498,49 @@ def test_loopback_only_says_what_it_looked_at_and_when(capsys: pytest.CaptureFix
         *("--", "true"),
         capsys=capsys,
     )
-    checked = (
-        "with_service: when the product first answered, each of its listeners was on loopback or "
-        "declared; one opened later is not seen\n"
-    )
-    assert (code, out) == (0, checked + "with_service: green\n")
+    assert (code, out) == (0, CHECKED + "with_service: green\n")
+
+
+CHECKED = (
+    "with_service: when the product first answered, each listener held by a process of the boot "
+    "command's group or a child of one, the ready URL's among them, was on loopback or declared; "
+    "a listener of another process, such as a daemon that left the group, or one opened later, "
+    "is not judged\n"
+)
+OVERCLAIMED = "each of its listeners was on loopback or declared"
+
+
+def beside(kind: str, tmp_path: Path, asking: Callable[[str], str]) -> str:
+    marker, product = tmp_path / "opened", listening_on("127.0.0.1")
+    if kind == "daemon":
+        return servers.beside_a_daemon(marker, product)
+    return servers.beside_one_opened_outside(marker, asking, product)
+
+
+@pytest.mark.parametrize("kind", ["daemon", "outside"])
+def test_a_session_beside_a_wide_listener_no_process_of_the_group_holds_says_what_it_judged(
+    kind: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ran = tmp_path / "ran"
+    with servers.held_outside_the_group() as asking:
+        code, out = run(
+            *("--boot", beside(kind, tmp_path, asking), "--ready", READY, "--loopback-only"),
+            *("--", "touch", str(ran)),
+            capsys=capsys,
+        )
+    assert (code, out) == (0, CHECKED + "with_service: green\n"), out
+    assert ran.exists()
+    assert OVERCLAIMED not in out
+
+
+@pytest.mark.parametrize("kind", ["daemon", "outside"])
+def test_a_gate_beside_a_wide_listener_no_process_of_the_group_holds_is_green_and_silent(
+    kind: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with servers.held_outside_the_group() as asking:
+        code, out = run("--boot", beside(kind, tmp_path, asking), "--ready", READY, capsys=capsys)
+    assert (code, out) == (0, "with_service: green\n"), out
+    assert OVERCLAIMED not in out
 
 
 DECLARED = (
@@ -584,9 +623,7 @@ def test_a_listener_on_the_ready_port_held_by_another_process_is_said_and_never_
     other_line = (
         f"with_service: [::]:{port}, on the ready URL's port, is held by a process the gate did "
         "not find among the boot command's, so it is not judged as the product's\n"
-        "with_service: when the product first answered, each of its listeners was on loopback or "
-        "declared; one opened later is not seen\n"
-        "with_service: green\n"
+        f"{CHECKED}with_service: green\n"
     )
     assert (code, out) == (0, other_line), out
     assert ran.exists(), "another process's listener refused the session"

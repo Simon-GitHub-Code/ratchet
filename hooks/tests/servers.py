@@ -125,6 +125,7 @@ ASKS_ANOTHER_TO_LISTEN = (
     "hub.connect('\\0' + sys.argv[1])\n"
     "hub.sendall(f\"{sys.argv[2]} {os.environ['PORT']}\".encode())\n"
     "hub.recv(2)\n"
+    "if sys.argv[3:]: open(sys.argv[3], 'w').close()\n"
     "def stop(*_):\n"
     "    hub.sendall(b'close')\n"
     "    hub.recv(4)\n"
@@ -283,6 +284,31 @@ HELPS = (
 
 def helped_by(marker: Path, boot: str) -> str:
     return f"{python(HELPS)} {marker} & while [ ! -e {marker} ]; do sleep 0.05; done; {boot}"
+
+
+LEAVES_THE_GROUP = (
+    "import os, socket, sys, time\n"
+    "group = os.getpgrp()\n"
+    "if os.fork(): os._exit(0)\n"
+    "os.setsid()\n"
+    "if os.fork(): os._exit(0)\n"
+    "held = socket.create_server(('0.0.0.0', 0))\n"
+    "open(sys.argv[1], 'w').close()\n"
+    "while True:\n"
+    "    time.sleep(0.02)\n"
+    "    try: os.killpg(group, 0)\n"
+    "    except ProcessLookupError: os._exit(0)\n"
+)
+
+
+def beside_a_daemon(marker: Path, boot: str) -> str:
+    started = f"{python(LEAVES_THE_GROUP)} {marker}"
+    return f"{started}; while [ ! -e {marker} ]; do sleep 0.05; done; {boot}"
+
+
+def beside_one_opened_outside(marker: Path, asking: Callable[[str], str], boot: str) -> str:
+    opener = f"PORT=0 {asking('0.0.0.0')} {marker} &"  # noqa: S104 # -- the wide listener under test
+    return f"{opener} while [ ! -e {marker} ]; do sleep 0.05; done; {boot}"
 
 
 NEEDS = (

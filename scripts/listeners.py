@@ -46,8 +46,8 @@ NONE_FOUND = (
 )
 UNREADABLE = "this system has no /proc/<pid>/net/tcp or tcp6 to read a listener's address from"
 NOT_FOUND = (
-    "no process the boot command started, nor any child of one, listens on the ready URL's port "
-    "where this system shows it"
+    "no process of the boot command's group, nor any child of one, listens on the ready URL's "
+    "port where this system shows it"
 )
 Address = ipaddress.IPv4Address | ipaddress.IPv6Address
 Table = dict[str, tuple[Address, int]]

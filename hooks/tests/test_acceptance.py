@@ -28,6 +28,8 @@ from tests import products
 from tests.servers import (
     HIDES,
     SERVE,
+    beside_a_daemon,
+    beside_one_opened_outside,
     gone,
     held_outside_the_group,
     helped_by,
@@ -521,8 +523,7 @@ def test_a_product_the_justfile_says_listens_wider_on_purpose_is_served_and_said
         down(root, capsys)
     assert re.fullmatch(
         r"with_service: the product listened on 0\.0\.0\.0:\d+ when it first answered, as "
-        r"declared\nwith_service: when the product first answered, each of its listeners was on "
-        r"loopback or declared; one opened later is not seen\n",
+        rf"declared\n{re.escape(CHECKED)}",
         seen.err,
     ), seen.err
 
@@ -762,11 +763,35 @@ def test_a_wide_listener_beside_the_products_own_on_the_ready_port_is_said_and_s
         other.close()
     said = (
         f"with_service: [::]:{port}, on the ready URL's port, is held by a process the gate did "
-        "not find among the boot command's, so it is not judged as the product's\n"
-        "with_service: when the product first answered, each of its listeners was on loopback or "
-        "declared; one opened later is not seen\n"
+        f"not find among the boot command's, so it is not judged as the product's\n{CHECKED}"
     )
     holds(harness, "", expected=(0, re.escape(said)), judged=judged)
+
+
+CHECKED = (
+    "with_service: when the product first answered, each listener held by a process of the boot "
+    "command's group or a child of one, the ready URL's among them, was on loopback or declared; "
+    "a listener of another process, such as a daemon that left the group, or one opened later, "
+    "is not judged\n"
+)
+
+
+@pytest.mark.parametrize("harness", ["up", "replay"])
+@pytest.mark.parametrize("kind", ["daemon", "outside"])
+def test_a_session_beside_a_wide_listener_no_process_of_the_group_holds_says_what_it_judged(
+    kind: str, *, harness: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    app = f"exec {sys.executable} {tmp_path / 'product' / 'app.py'}"
+    marker = tmp_path / "opened"
+    with held_outside_the_group() as asking:
+        if kind == "daemon":
+            boot = beside_a_daemon(marker, app)
+        else:
+            boot = beside_one_opened_outside(marker, asking, app)
+        root = products.make(tmp_path / "product", boot=boot)
+        judged = judged_by(harness, root, capsys)
+    holds(harness, boot, expected=(0, re.escape(CHECKED)), judged=judged)
+    assert "each of its listeners was on loopback or declared" not in judged[1] + judged[2]
 
 
 @pytest.mark.parametrize("harness", ["up", "replay"])
