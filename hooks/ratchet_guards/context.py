@@ -4,10 +4,11 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Protocol
 
+from ratchet_guards.early import WORKFLOWS
 from ratchet_guards.environment import TRACKED
 from ratchet_guards.paths import Hit, Locator
 from ratchet_guards.refs import MAIN_BRANCHES
-from ratchet_guards.verdict import ACTING_RULES, UNADOPTED, Verdict
+from ratchet_guards.verdict import ACTING_RULES, NO_MERGE_JOB, UNADOPTED, Verdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import justfile_text
@@ -15,6 +16,7 @@ import justfile_text
 DETACHED = "HEAD"
 RECIPES = "justfile"
 MERGES_BY_ITSELF = ("merge-ready", "merge")
+MERGE_JOB = "/".join((*WORKFLOWS, "merge.yml"))
 
 
 class RepoState(Protocol):
@@ -137,10 +139,14 @@ class Guard:
         filesystem = self.locator.filesystem
         checkout = filesystem.guarded_checkout(filesystem.canonical(cwd))
         recipes = None if checkout is None else self.repo.default_file(checkout.root, RECIPES)
-        refused = recipes is not None and all(
-            justfile_text.defines_recipe(recipes, name) for name in MERGES_BY_ITSELF
-        )
-        return Verdict(rule if refused else UNADOPTED[rule], detail)
+        if (
+            checkout is None
+            or recipes is None
+            or not all(justfile_text.defines_recipe(recipes, name) for name in MERGES_BY_ITSELF)
+        ):
+            return Verdict(UNADOPTED[rule], detail)
+        job = self.repo.default_file(checkout.root, MERGE_JOB)
+        return Verdict(NO_MERGE_JOB[rule] if job is None else rule, detail)
 
     def acting(self, paths: Iterable[Path]) -> list[Verdict]:
         found = (self.locator.acting(path) for path in paths)

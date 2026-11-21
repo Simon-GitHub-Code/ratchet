@@ -25,6 +25,7 @@ _PULL = Spec("josX", _PULL_VALUES)
 _UPSTREAMS = frozenset({"@{u}", "@{upstream}"})
 _UPSTREAM = "@{upstream}"
 _REMOTE_DEFAULTS = MAIN_BRANCHES | {"HEAD"}
+_PRINTING = ("color.", "advice.")
 
 
 def _asks(call: Invocation, guard: Guard) -> list[Verdict]:
@@ -32,8 +33,14 @@ def _asks(call: Invocation, guard: Guard) -> list[Verdict]:
     return [guard.merging("merge-default", detail, call.cwd)]
 
 
+def _readable(call: Invocation, context: Context) -> bool:
+    keys = (config.partition("=")[0].lower() for config in call.configs)
+    inert = all(key.startswith(_PRINTING) for key in keys)
+    return inert and not (context.unread or context.unsettled)
+
+
 def _tracks(names: Sequence[str], call: Invocation, context: Context, *, guard: Guard) -> bool:
-    if context.unread or context.unsettled or call.configs:
+    if not _readable(call, context):
         return False
     defaults = guard.defaults(context, call.cwd)
     mains = sorted(guard.branches(context, call.cwd) & defaults)
@@ -59,7 +66,7 @@ def pull(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     repository, *refspecs = scan(call.args, _PULL).operands or (REMOTE,)
     sources = [spec.removeprefix("+").partition(":")[0] for spec in refspecs]
     named = {source.removeprefix("refs/heads/") for source in sources}
-    remote = repository == REMOTE and named <= _REMOTE_DEFAULTS and not call.configs
+    remote = repository == REMOTE and named <= _REMOTE_DEFAULTS and _readable(call, context)
     return (
         []
         if remote and (named or _tracks([_UPSTREAM], call, context, guard=guard))

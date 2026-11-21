@@ -62,6 +62,8 @@ _BRANCH_MERGE = re.compile(r"/merges/?$")
 _CONTENTS_ENDPOINT = re.compile(r"/contents/")
 _OTHER_BRANCH = re.compile(rf"\bbranch=(?!({_DEFAULT_NAMES})(\s|$))\S")
 _BODY_FILE = "--input"
+_FILE_FIELD = re.compile(r"(?:^|\s)(?:-F\s*|--field[=\s])[^\s=]+=@")
+_GRAPHQL = "graphql"
 _RELEASE_CREATE = ("release", "create")
 
 
@@ -88,6 +90,7 @@ class _Call:
     endpoint: str
     method: str
     text: str
+    unread_body: bool = False
 
     @property
     def writes(self) -> bool:
@@ -116,6 +119,7 @@ _API_RULES: list[tuple[str, Callable[[_Call], bool]]] = [
         lambda c: bool(
             (c.writes and (_MERGE_ENDPOINT.search(c.endpoint) or _BRANCH_MERGE.search(c.endpoint)))
             or _MERGE_MUTATION.search(c.text)
+            or (c.endpoint == _GRAPHQL and c.unread_body)
         ),
     ),
     ("default-ref", _writes_default_ref),
@@ -135,8 +139,7 @@ _API_RULES: list[tuple[str, Callable[[_Call], bool]]] = [
 ]
 
 
-def _api_rule(endpoint: str, method: str, text: str) -> str | None:
-    call = _Call(endpoint, method, text)
+def _api_rule(call: _Call) -> str | None:
     return next((rule for rule, fires in _API_RULES if fires(call)), None)
 
 
@@ -155,7 +158,8 @@ def _api(args: Sequence[str], context: Context, guard: Guard) -> list[Verdict]:
     endpoint = options.operands[0].lower()
     method = _method(options.values, options.flags)
     text = " ".join(args).lower()
-    rule = _api_rule(endpoint, method, text)
+    unread = _BODY_FILE in text or bool(_FILE_FIELD.search(" ".join(args)))
+    rule = _api_rule(_Call(endpoint, method, text, unread))
     return _verdicts(rule, f"gh api {method} {endpoint}", context=context, guard=guard)
 
 

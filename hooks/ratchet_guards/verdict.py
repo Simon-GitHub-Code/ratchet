@@ -29,6 +29,12 @@ OWNERS_HAND = (
     "A merge the judge leaves to the owner is the owner's to make, in the forge's interface or "
     "their own terminal: report its reasons to them."
 )
+WAITS = "`just merge-ready --head <branch>` prints each reason one waits, one a line."
+LOCALLY = (
+    "Where the default branch tracks a remote, `git pull --ff-only` brings it up to date. To try "
+    "a merge, a cherry-pick or a read-tree, first move to a detached `HEAD` (`git switch "
+    "--detach`) or a scratch branch in a tool call of its own, and run it there."
+)
 SWITCH_ALONE = (
     "Run the branch switch in a tool call of its own and make the change in the next one: the "
     "guard reads the branch then."
@@ -118,11 +124,24 @@ RULES: dict[str, Rule] = {
         "the merge entry point, the merge job or the owner does",
         "Leave it to what merges by itself: with no forge `just merge <branch>` merges a branch "
         "when the merge judge and `check` pass it, and on a forge the merge job merges its pull "
-        "request. `just merge-ready --head <branch>` prints each reason one waits, one a line. "
-        f"{OWNERS_HAND} Where the default branch tracks a remote, `git pull --ff-only` brings it "
-        "up to date. To try "
-        "a merge, a cherry-pick or a read-tree, first move to a detached `HEAD` (`git switch "
-        "--detach`) or a scratch branch in a tool call of its own, and run it there.",
+        f"request. {WAITS} {OWNERS_HAND} {LOCALLY}",
+    ),
+    "merge-pr-no-job": Rule(
+        Decision.DENY,
+        "merges a pull request, which in a project on the method with no merge job only the "
+        "owner does",
+        "The default branch holds no merge job, so nothing merges a pull request by itself: the "
+        "owner merges it, in the forge's interface or their own terminal. `just merge-ready "
+        "--head <branch>` prints each reason the merge judge gives, one a line: report them to "
+        "the owner.",
+    ),
+    "merge-default-no-job": Rule(
+        Decision.DENY,
+        "merges another branch into the default branch, which in a project on the method with "
+        "no merge job only the merge entry point or the owner does",
+        "With no forge `just merge <branch>` merges a branch when the merge judge and `check` "
+        "pass it. The default branch holds no merge job, so on a forge the owner merges. "
+        f"{WAITS} {OWNERS_HAND} {LOCALLY}",
     ),
     "merge-default-unadopted": Rule(
         Decision.ASK,
@@ -167,6 +186,7 @@ RULES: dict[str, Rule] = {
 
 ACTING_RULES = {Kind.WORKFLOW: "workflow-write", Kind.INSTRUCTIONS: "instructions-write"}
 UNADOPTED = {"merge-pr": "merge-pr-unadopted", "merge-default": "merge-default-unadopted"}
+NO_MERGE_JOB = {"merge-pr": "merge-pr-no-job", "merge-default": "merge-default-no-job"}
 OWNER_ASKS = frozenset({*ACTING_RULES.values(), "agent-ready-label", "unreadable"})
 
 
