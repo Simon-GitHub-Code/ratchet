@@ -9,8 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import documents
 import feature_preflight as preflight
 import gatelib
+import markdown_text
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import splits
@@ -19,6 +21,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 INHERITED = ("## Parent", "## Conjecture", "## Operability")
+PARENT_TO_LINE_END = re.compile(f"{preflight.PARENT_LINE.pattern}.*", preflight.PARENT_LINE.flags)
 SLUG = re.compile(r"[^a-z0-9]+")
 
 
@@ -61,17 +64,24 @@ def parent_now(root: Path, ref: str, gh: preflight.Runner) -> preflight.Ticket |
     return preflight.fetch(ref, root, gh)
 
 
-def child_body(parent: preflight.Ticket, part: Part, *, waits: list[str], label: str) -> str:
+def written(
+    parent: preflight.Ticket, part: Part, *, waits: list[str], label: str, carry: bool
+) -> str:
     sections = [
         f"{heading}\n\n{preflight.section(parent.body, heading).strip()}\n"
         for heading in INHERITED
         if preflight.section(parent.body, heading).strip()
     ]
+    answers = markdown_text.section(parent.body, documents.ANSWERS).strip() if carry else ""
+    if answers:
+        sections.append(f"{documents.ANSWERS}\n\n{answers}\n")
+    link = PARENT_TO_LINE_END.search(parent.body) if carry else None
     lines = [
         f"# {part.title}",
         "",
         *([f"**Status:** `{label}`", ""] if parent.ref.endswith(".md") else []),
         f"Split from: {parent.ref}",
+        *([link.group()] if link else []),
         f"Blocked by: {', '.join(waits) if waits else 'none'}",
         "",
         "## What to build",
@@ -84,6 +94,43 @@ def child_body(parent: preflight.Ticket, part: Part, *, waits: list[str], label:
         "",
     ]
     return "\n".join(lines) + "\n" + "\n".join(sections)
+
+
+def readings(ref: str, text: str) -> dict[str, object]:
+    ticket = preflight.local_ticket(ref, text)
+    return {
+        "title": ticket.title,
+        "labels": ticket.labels,
+        "blockers": ticket.blockers,
+        "formal model line": ticket.formal_model,
+        "conjecture": ticket.conjecture and ticket.conjecture.strip(),
+        "operability lines": preflight.operability_lines(ticket, None),
+        "acceptance criteria": preflight.criteria(text),
+        "size": preflight.section(text, preflight.SIZE).strip(),
+        "promises the judge counts": splits.promises(text),
+        "split from line": splits.split_from(text),
+        "status lines": splits.STATUS.findall(text),
+    }
+
+
+def uncarried(parent: preflight.Ticket, plain: str, candidate: str) -> str | None:
+    named = preflight.local_ticket(parent.ref, candidate).parent
+    if named != parent.parent:
+        return f"the part would name the parent {named}, not its ticket's {parent.parent}"
+    if documents.answers_of(candidate) != documents.answers_of(parent.body):
+        return "the part would read other answers than its ticket"
+    was, now = readings(parent.ref, plain), readings(parent.ref, candidate)
+    changed = [name for name in was if was[name] != now[name]]
+    return f"the copied text would change the part's {', '.join(changed)}" if changed else None
+
+
+def child_body(
+    parent: preflight.Ticket, part: Part, *, waits: list[str], label: str
+) -> tuple[str, str | None]:
+    plain = written(parent, part, waits=waits, label=label, carry=False)
+    candidate = written(parent, part, waits=waits, label=label, carry=True)
+    why = None if candidate == plain else uncarried(parent, plain, candidate)
+    return (plain, why) if why else (candidate, None)
 
 
 def problems(
@@ -115,11 +162,23 @@ def next_number(folder: Path) -> int:
 
 def body_of(
     parent: preflight.Ticket, parts: list[Part], names: list[str], *, index: int, label: str
-) -> str:
+) -> tuple[str, str | None]:
     waits = [names[i] for i in parts[index].after if 0 <= i < index]
     if index == 0:
         waits = [*parent.blockers, *waits]
     return child_body(parent, parts[index], waits=waits, label=label)
+
+
+def told(
+    parent: preflight.Ticket, parts: list[Part], names: list[str], *, index: int, label: str
+) -> str:
+    body, why = body_of(parent, parts, names, index=index, label=label)
+    if why:
+        print(
+            f"split: part {index + 1} ({parts[index].title}) does not carry its ticket's"
+            f" answers and Parent: line, so it is written as before: {why}"
+        )
+    return body
 
 
 def number_of(name: str) -> str:
@@ -137,7 +196,7 @@ def untouched(
 ) -> list[str]:
     names: list[str] = []
     for index in range(len(parts)):
-        body = body_of(parent, parts, names, index=index, label=label)
+        body = body_of(parent, parts, names, index=index, label=label)[0]
         recorded = Path(filed[index]).name if len(filed) == len(parts) else None
         if recorded is None or gatelib.read_text(folder / recorded) != body:
             return []
@@ -171,7 +230,7 @@ def file_locally(  # noqa: PLR0913 -- the parts, where they were filed, and who 
     names: list[str] = []
     texts: list[str] = []
     for index, part in enumerate(parts):
-        body = body_of(parent, parts, names, index=index, label=label)
+        body = told(parent, parts, names, index=index, label=label)
         recorded = Path(filed[index]).name if len(filed) == len(parts) else None
         if (
             recorded is not None
@@ -200,7 +259,7 @@ def file_on_tracker(
     for index, part in enumerate(parts):
         scratch = root / gatelib.STATE / "split-body.md"
         scratch.parent.mkdir(parents=True, exist_ok=True)
-        scratch.write_text(body_of(parent, parts, made, index=index, label=label), encoding="utf-8")
+        scratch.write_text(told(parent, parts, made, index=index, label=label), encoding="utf-8")
         out = preflight.run_gh(
             [
                 "issue",
@@ -239,7 +298,7 @@ def bodies(
         return {}
     names = [Path(path).name for path in filed]
     return {
-        path: body_of(parent, parts, names, index=index, label=label)
+        path: body_of(parent, parts, names, index=index, label=label)[0]
         for index, path in enumerate(filed[: len(parts)])
     }
 
