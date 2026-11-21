@@ -17,6 +17,7 @@ import parallel
 import pins
 import plugin_pin
 import suites as suites_module
+import with_service
 from tests import repos
 
 TEMPLATES = Path(__file__).resolve().parents[2] / "skills/adopt/templates"
@@ -356,6 +357,38 @@ def test_start_gives_the_port_to_the_whole_boot_line_as_the_gates_do(tmp_path: P
     assert "port is 3000" in run_template(tmp_path, boot, "start")
 
 
+@pytest.mark.parametrize(
+    "ready",
+    [
+        "http://127.0.0.1:{port}/health",
+        "https://[::1]:{port}/",
+        "http://localhost/",
+        "http://user:secret@127.0.0.1:{port}/",
+        "http://user@[::1]:{port}/x?y=1",
+        "http://LOCALHOST:{port}/",
+        "http://Example.TEST/",
+        "http://127.0.0.1?a=b@c",
+    ],
+)
+def test_start_gives_the_ready_urls_host_as_the_gates_do(tmp_path: Path, ready: str) -> None:
+    needs_just()
+    host = with_service.host_of(ready.replace("{port}", "3000"))
+    boot = {"boot": 'echo "on {host}:{port} with ${HOST-nothing}"', "ready": ready, "port": "3000"}
+    assert f"on {host}:3000 with nothing" in run_template(tmp_path, boot, "start")
+
+
+def test_start_leaves_host_as_written_when_nothing_answers_a_url(tmp_path: Path) -> None:
+    needs_just()
+    boot = {"boot": 'echo "on {host}:{port}"', "ready": "none", "port": "3000"}
+    assert "on {host}:3000" in run_template(tmp_path, boot, "start")
+
+
+def test_the_example_boot_line_hands_the_deliverable_its_address_and_port() -> None:
+    boot = next(line for line in JUSTFILE.splitlines() if line.startswith("boot := "))
+    assert "{host}" in boot
+    assert "{port}" in boot
+
+
 SERVE = f"{sys.executable} -m http.server --bind 127.0.0.1"
 
 
@@ -366,12 +399,19 @@ SERVE = f"{sys.executable} -m http.server --bind 127.0.0.1"
         (f"exec {SERVE} $PORT", None),
         (f"exec {SERVE} $PORT", "1"),
         (f'exec "{sys.executable}" -m http.server --bind 127.0.0.1 "$PORT"', None),
+        (f'exec "{sys.executable}" -m http.server --bind {{host}} {{port}}', None),
     ],
-    ids=["the placeholder", "PORT", "PORT set to another port", "a double quote"],
+    ids=["the placeholder", "PORT", "PORT set to another port", "a double quote", "the host"],
 )
 def test_smoke_boots_a_deliverable_on_the_port_the_gate_picked(
     tmp_path: Path, boot: str, port: str | None
 ) -> None:
+    out = smoke(tmp_path, ["--set", "boot", boot], port)
+    assert "with_service: green" in out
+    assert "note:" not in out, "the deliverable listens on loopback alone"
+
+
+def smoke(tmp_path: Path, sets: list[str], port: str | None = None) -> str:
     just = shutil.which("just")
     if just is None:
         pytest.skip("just is not installed")
@@ -381,7 +421,7 @@ def test_smoke_boots_a_deliverable_on_the_port_the_gate_picked(
     binding.parent.mkdir(parents=True)
     binding.write_text(f"{pin} tree {plugin_pin.copy_tree_id(copy)}\n", encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if k != "PORT"} | {"RATCHET_PLUGIN": str(copy)}
-    sets = ["--set", "boot", boot, "--set", "ready", "http://127.0.0.1:{port}/"]
+    sets = [*sets, "--set", "ready", "http://127.0.0.1:{port}/"]
     done = subprocess.run(  # noqa: S603 # -- a fixed argv; the justfile is the template's own
         [just, "--justfile", str(TEMPLATES / "justfile"), "-d", str(tmp_path), *sets, "smoke"],
         cwd=tmp_path,
@@ -391,7 +431,24 @@ def test_smoke_boots_a_deliverable_on_the_port_the_gate_picked(
         check=False,
     )
     assert done.returncode == 0, done.stderr
-    assert "with_service: green" in done.stdout + done.stderr
+    return done.stdout + done.stderr
+
+
+@pytest.mark.parametrize(
+    ("sets", "said"),
+    [
+        ([], "with_service: note: the product listened on 0.0.0.0:"),
+        (["--set", "listens", "0.0.0.0"], "when it first answered, as declared"),  # noqa: S104 # -- the declared address under test
+    ],
+    ids=["nothing declared", "declared"],
+)
+def test_smoke_passes_the_addresses_listens_declares(
+    tmp_path: Path, sets: list[str], said: str
+) -> None:
+    boot = f"exec {sys.executable} -m http.server --bind 0.0.0.0 {{port}}"
+    out = smoke(tmp_path, ["--set", "boot", boot, *sets])
+    assert said in out, out
+    assert "with_service: green" in out
 
 
 @pytest.mark.parametrize(
