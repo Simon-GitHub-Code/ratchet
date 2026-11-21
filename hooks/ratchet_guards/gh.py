@@ -6,7 +6,7 @@ from pathlib import Path
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.options import Spec, scan
 from ratchet_guards.refs import MAIN_BRANCHES
-from ratchet_guards.verdict import Verdict
+from ratchet_guards.verdict import UNADOPTED, Verdict
 
 _REPO_FLAGS = frozenset({"-R", "--repo", "--hostname"})
 _LABEL_WRITES = frozenset({"create", "edit", "delete", "clone"})
@@ -140,7 +140,15 @@ def _api_rule(endpoint: str, method: str, text: str) -> str | None:
     return next((rule for rule, fires in _API_RULES if fires(call)), None)
 
 
-def _api(args: Sequence[str]) -> list[Verdict]:
+def _verdicts(rule: str | None, detail: str, *, context: Context, guard: Guard) -> list[Verdict]:
+    if rule is None:
+        return []
+    if rule in UNADOPTED:
+        return [guard.merging(rule, detail, context.cwd)]
+    return [Verdict(rule, detail)]
+
+
+def _api(args: Sequence[str], context: Context, guard: Guard) -> list[Verdict]:
     options = scan(args, _API)
     if not options.operands:
         return []
@@ -148,7 +156,7 @@ def _api(args: Sequence[str]) -> list[Verdict]:
     method = _method(options.values, options.flags)
     text = " ".join(args).lower()
     rule = _api_rule(endpoint, method, text)
-    return [] if rule is None else [Verdict(rule, f"gh api {method} {endpoint}")]
+    return _verdicts(rule, f"gh api {method} {endpoint}", context=context, guard=guard)
 
 
 def _cells(line: str) -> list[str]:
@@ -234,7 +242,7 @@ def check(words: Sequence[str], context: Context, guard: Guard) -> list[Verdict]
         return []
     group = operands[0]
     if group == "api":
-        return _api(words[words.index("api") + 1 :])
+        return _api(words[words.index("api") + 1 :], context, guard)
     action = operands[1] if len(operands) > 1 else ""
     if group == "label":
         rule = "labels" if action in _LABEL_WRITES else None
@@ -249,4 +257,4 @@ def check(words: Sequence[str], context: Context, guard: Guard) -> list[Verdict]
         rule = "default-ref"
     else:
         rule = _COMMANDS.get((group, action))
-    return [] if rule is None else [Verdict(rule, f"gh {group} {action}")]
+    return _verdicts(rule, f"gh {group} {action}", context=context, guard=guard)
