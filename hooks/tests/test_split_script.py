@@ -470,6 +470,8 @@ BUILT_ON_WHAT_IT_CALLS = {
         "conjecture_failure",
         "named_gates",
         "operability_failure",
+        "unlinked_part",
+        "flag_of",
         "size_failure",
         "parent_of",
         "reads",
