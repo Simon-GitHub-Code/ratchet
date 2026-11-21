@@ -32,9 +32,10 @@ CURE = (
 )
 HOSTED = f"point the ready URL at a loopback address, which {HOST_TOKEN} stands for"
 CHECKED = (
-    "when the product first answered, each listener held by a process of the boot command's group "
-    "or a child of one, the ready URL's among them, was on loopback or declared; a listener of "
-    "another process, such as a daemon that left the group, or one opened later, is not judged"
+    "when the product first answered, each listener of the boot command's process group and its "
+    "descendants, one on the ready URL's port among them, was on loopback or declared; a listener "
+    "of a process that is neither in that group nor a descendant of it, or one opened later, is "
+    "not judged"
 )
 DECLARE = "or declare the address with --listens"
 NOT_CHECKED_HERE = "where the product listens was not checked here"
