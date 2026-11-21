@@ -345,6 +345,7 @@ def test_the_reader_reads_the_last_window_of_the_record_and_no_line_it_cuts(
         (rows[:full], b"", rows[:full]),
         (rows[: full + 1], b"", rows[1 : full + 1]),
         (rows, b'{"key": "k", "seconds": 1.0}\n'.rjust(32, b" "), rows[3:]),
+        ([b"x" + b" " * 62 + b'{"key": "cut", "seconds": 1.0}\n', *rows[3:]], b"", rows[3:]),
     ):
         path.write_bytes(b"".join(held) + tail)
         got = runrecord.read(path)

@@ -1251,7 +1251,7 @@ def slow_ceiling(root: Path) -> float | None:
     try:
         text = gatelib.read_text(root / gatelib.THRESHOLDS) or ""
         ceiling = budget.ceiling_of(text, SLOW_CEILING)
-    except tomllib.TOMLDecodeError:
+    except (tomllib.TOMLDecodeError, RecursionError):
         return None
     return ceiling if ceiling and ceiling > 0 else None
 

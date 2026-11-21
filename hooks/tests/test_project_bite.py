@@ -1891,6 +1891,16 @@ def test_no_fault_is_named_slow_without_a_tier0_ceiling_it_ran_over(
     assert "slow:" not in capsys.readouterr().out
 
 
+def test_thresholds_nested_too_deep_to_parse_name_nothing_slow(tmp_path: Path) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "whole"))
+    write(root, "quality/thresholds.toml", "a = " + "[" * 5000 + "]" * 5000 + "\n")
+    timing = root / runrecord.TIMING
+    timing.parent.mkdir()
+    fault = {"kind": "fault", "gate": "lint", "bite": "whole", "seconds": 9.0, "narrowed": False}
+    timing.write_text(json.dumps(fault) + "\n", encoding="utf-8")
+    assert project_bite.recorded_slow(root) == []
+
+
 def test_a_bite_left_whole_on_purpose_is_named_with_its_reason_by_the_proof_alone(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
