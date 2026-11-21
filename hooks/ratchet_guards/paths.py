@@ -92,12 +92,14 @@ class Locator:
             return manifest.group_below(relative, scope=scope)
         return manifest.group_of(relative, scope=scope)
 
+    def relative(self, words: Iterable[str]) -> list[str]:
+        expanded = ((word, self.filesystem.expand(word)) for word in words)
+        return [word for word, path in expanded if path and not path.startswith(("/", "~"))]
+
     def could_hit(self, words: Iterable[str], *, destructive: bool) -> list[str]:
         found: list[str] = []
-        for word in words:
+        for word in self.relative(words):
             expanded = self.filesystem.expand(word)
-            if not expanded or expanded.startswith(("/", "~")):
-                continue
             relative = PurePosixPath(posixpath.normpath(expanded))
             relative = PurePosixPath(*[part for part in relative.parts if part != ".."])
             if any(

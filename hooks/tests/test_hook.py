@@ -2,13 +2,16 @@ import io
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
-from ratchet_guards import hook
+import adapter
+from ratchet_guards import bash, events, git, hook, tickets
 from ratchet_guards.context import Guard
 from ratchet_guards.manifest import COMMITTED, EMPTY, MANIFEST_PATH, parse
 from ratchet_guards.paths import Checkout
@@ -331,6 +334,151 @@ def test_main_reads_stdin_and_writes_a_decision(tmp_path: Path) -> None:
     assert on_a_branch.getvalue() == ""
 
 
+def _stalled(seconds: float) -> object:
+    judge = hook.decide
+
+    def decide(payload: object, guard: Guard) -> Verdict | None:
+        time.sleep(seconds)
+        return judge(payload, guard)
+
+    return decide
+
+
+def _answer(root: Path, command: str, *, deadline: float) -> tuple[dict[str, str], float]:
+    stdout = io.StringIO()
+    case = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(root)}
+    start = time.monotonic()
+    assert hook.main(root, io.StringIO(json.dumps(case)), stdout, deadline=deadline) == 0
+    spent = time.monotonic() - start
+    return json.loads(stdout.getvalue() or "{}").get("hookSpecificOutput", {}), spent
+
+
+def test_the_hook_asks_before_its_limit_when_the_judging_stalls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = checkout(tmp_path)
+    monkeypatch.setattr(hook, "decide", _stalled(30))
+    answer, spent = _answer(root, "ls", deadline=0.2)
+    assert answer["permissionDecision"] == "ask"
+    assert "it used the 7 s it gives itself" in answer["permissionDecisionReason"]
+    assert spent < 5
+
+
+def test_a_deny_the_guard_reached_before_its_deadline_stands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = checkout(tmp_path)
+
+    def due(*_args: object, **_kwargs: object) -> list[object]:
+        signal.raise_signal(signal.SIGALRM)
+        return []
+
+    monkeypatch.setattr(bash._Checker, "_advance", due)  # noqa: SLF001 # -- the step after a command's verdicts
+    answer = _answer(root, "git push -f; ls", deadline=60)[0]
+    assert answer["permissionDecision"] == "deny"
+    assert "force-pushes" in answer["permissionDecisionReason"]
+    assert _answer(root, "ls; git push -f", deadline=60)[0]["permissionDecision"] == "ask"
+
+
+def _held(monkeypatch: pytest.MonkeyPatch, owner: object, name: str, *, call: int) -> None:
+    real = getattr(owner, name)
+    calls = [0]
+
+    def held(*args: object, **kwargs: object) -> object:
+        calls[0] += 1
+        if calls[0] == call:
+            time.sleep(30)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(owner, name, held)
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["env -C d1 git push -f", "sudo -D d1 git push -f", "x=d1 || x=d2; cd $x && git push -f"],
+)
+def test_a_deny_found_in_one_directory_stands_when_the_next_one_runs_past_the_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    root = checkout(tmp_path)
+    _held(monkeypatch, git, "check", call=2)
+    answer, spent = _answer(root, command, deadline=1)
+    assert answer["permissionDecision"] == "deny"
+    assert "force-pushes" in answer["permissionDecisionReason"]
+    assert spent < 5
+
+
+def test_a_deny_judged_in_full_stands_when_the_deadline_falls_after_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = checkout(tmp_path)
+    _held(monkeypatch, tickets, "together", call=1)
+    assert _answer(root, "git push -f", deadline=1)[0]["permissionDecision"] == "deny"
+    monkeypatch.undo()
+    judge = hook.decide
+
+    def rung(payload: object, guard: Guard) -> Verdict | None:
+        verdict = judge(payload, guard)
+        signal.raise_signal(signal.SIGALRM)
+        return verdict
+
+    monkeypatch.setattr(hook, "decide", rung)
+    assert _answer(root, "git push -f", deadline=60)[0]["permissionDecision"] == "deny"
+
+
+def test_an_alarm_as_the_answer_is_chosen_leaves_one_line_with_that_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = checkout(tmp_path)
+    arm = signal.setitimer
+
+    def disarm(which: int, seconds: float) -> tuple[float, float]:
+        left = arm(which, seconds)
+        if not seconds:
+            signal.raise_signal(signal.SIGALRM)
+        return left
+
+    monkeypatch.setattr(signal, "setitimer", disarm)
+    stdout = io.StringIO()
+    case = {"tool_name": "Bash", "tool_input": {"command": "git push -f"}, "cwd": str(root)}
+    assert hook.main(root, io.StringIO(json.dumps(case)), stdout, deadline=60) == 0
+    [line] = stdout.getvalue().splitlines()
+    assert json.loads(line)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_the_ask_at_the_deadline_is_logged_like_any_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = checkout(tmp_path)
+    monkeypatch.setattr(hook, "decide", _stalled(30))
+    _answer(root, "ls", deadline=0.2)
+    [line] = (root / ".git" / events.LOG_NAME).read_text(encoding="utf-8").splitlines()
+    logged = json.loads(line)
+    assert (logged["decision"], logged["rule"]) == ("ask", "unreadable")
+    assert logged["detail"] == hook.LATE
+    page = (PLUGIN_ROOT / "skills/method/guards.md").read_text(encoding="utf-8")
+    assert f"cannot finish judging in {hook.DEADLINE_SECONDS:g} s" in page
+
+
+def test_a_hook_that_finishes_in_time_answers_as_it_judged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = checkout(tmp_path)
+    monkeypatch.setattr(hook, "decide", _stalled(0.05))
+    assert _answer(root, "git push -f", deadline=5)[0]["permissionDecision"] == "deny"
+    assert _answer(root, "ls", deadline=5)[0] == {}
+    monkeypatch.delattr(signal, "setitimer")
+    assert _answer(root, "git push -f", deadline=0.01)[0]["permissionDecision"] == "deny"
+
+
+def test_the_hook_answers_well_inside_every_limit_a_harness_gives_it() -> None:
+    config = json.loads((PLUGIN_ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))
+    limits = [h["timeout"] for e in config["hooks"]["PreToolUse"] for h in e["hooks"]]
+    limits.append(adapter.TIMEOUT_SECONDS)
+    started = 2
+    assert hook.DEADLINE_SECONDS + hook.LOG_TIMEOUT_SECONDS + started <= min(limits)
+
+
 def test_local_filesystem(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     filesystem = hook.LocalFilesystem()
     root = checkout(tmp_path)
@@ -376,14 +524,14 @@ def test_git_repo_state(tmp_path: Path) -> None:
         "-m",
         "x",
     )
-    assert state.current_branch(tmp_path) == "trunk"
+    assert hook.GitRepoState().current_branch(tmp_path) == "trunk"
     assert state.head_is_pushed(tmp_path) is False
     assert state.full_name(tmp_path, "trunk") == "refs/heads/trunk"
     assert state.full_name(tmp_path, "HEAD") == "refs/heads/trunk"
     assert state.full_name(tmp_path, "nope") is None
     assert state.full_name(tmp_path, "trunk@{upstream}") is None
     _git(tmp_path, "tag", "trunk")
-    assert state.current_branch(tmp_path) == "trunk"
+    assert hook.GitRepoState().current_branch(tmp_path) == "trunk"
     assert state.full_name(tmp_path, "trunk") is None
     _git(tmp_path, "tag", "-d", "trunk")
     _git(tmp_path, "update-ref", "refs/remotes/origin/trunk", "HEAD")
@@ -402,7 +550,7 @@ def test_git_repo_state(tmp_path: Path) -> None:
     )
     assert state.head_is_pushed(tmp_path) is False
     _git(tmp_path, "checkout", "-q", "--detach")
-    assert state.current_branch(tmp_path) is None
+    assert hook.GitRepoState().current_branch(tmp_path) is None
 
 
 def test_git_repo_state_survives_a_missing_git(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -431,11 +579,14 @@ def test_one_state_reads_each_checkout_once(tmp_path: Path) -> None:
     root = checkout(tmp_path)
     state = hook.GitRepoState()
     assert (state.checked_out(root), state.default_branches(root)) == ("main", {"main", "master"})
+    assert state.current_branch(root) == "main"
     switch_to_a_branch(root)
     _git(root, "update-ref", "refs/remotes/origin/trunk", "HEAD")
     _git(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
     assert (state.checked_out(root), state.default_branches(root)) == ("main", {"main", "master"})
+    assert state.current_branch(root) == "main"
     fresh = hook.GitRepoState()
+    assert fresh.current_branch(root) == "feature/x"
     assert fresh.checked_out(root) == "feature/x"
     assert fresh.default_branches(root) == {"main", "master", "trunk"}
 
