@@ -127,14 +127,21 @@ def default_branches(root: Path) -> list[str]:
     return list(dict.fromkeys(candidates))
 
 
-def stacked(target: str, default: str) -> str:
+def stacked(target: str, default: str, beside: object = None) -> str:
+    wrong = (
+        f"the pull request targets `{target}`, not the default branch `{default}`, and the method"
+        f" judges a change against `{default}`"
+    )
+    if beside is not None:
+        return (
+            f"{wrong}. #{beside}, from the same branch, already targets `{default}`, so the owner"
+            " merges or closes this one"
+        )
     return (
-        f"the pull request targets `{target}`, not the default branch `{default}`. Merge the pull"
-        f" request from `{target}` first, and before it merges change this one's target to"
-        f" `{default}` on the pull request's page on the forge, which keeps it open; the owner then"
-        f" merges this one. Do not delete `{target}` before this one is retargeted: the merge job"
-        " deletes the branch of each pull request it merges, and a pull request whose target"
-        " branch is gone is closed and cannot be reopened or retargeted"
+        f"{wrong}. Change its target to `{default}` on the pull request's page on the forge, which"
+        " keeps it open; the owner then merges it. The change of target starts no ci run; once it"
+        f" targets `{default}`, a new commit on its branch starts one. If it is already closed,"
+        f" open a new pull request from its branch against `{default}`"
     )
 
 

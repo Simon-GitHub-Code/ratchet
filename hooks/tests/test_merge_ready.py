@@ -935,7 +935,7 @@ def test_a_pull_request_that_targets_another_branch_is_the_owners_and_says_what_
     assert text.startswith("the pull request targets `feature/3-base`, not the default branch")
     for step in (
         "the method judges a change against `main`",
-        "change its target to `main` on the pull request's page on the forge",
+        "its target to `main` on the pull request's page on the forge",
         "keeps it open",
         "the owner then merges it",
         "If it is already closed, open a new pull request from its branch against `main`",

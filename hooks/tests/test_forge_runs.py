@@ -281,7 +281,7 @@ def test_every_reason_the_owner_must_act_on_is_in_the_one_comment(
 
 
 RETARGET = [
-    "change its target to `main` on the pull request's page on the forge",
+    "its target to `main` on the pull request's page on the forge",
     "keeps it open",
     "the owner then merges it",
     "a new commit on its branch starts one",
