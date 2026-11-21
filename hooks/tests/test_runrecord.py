@@ -1,14 +1,20 @@
+import contextlib
+import io
 import json
 import os
 import re
+import resource
 import shlex
 import subprocess
 import sys
+import tempfile
 import threading
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 import budget
 import conformance
@@ -354,8 +360,10 @@ def test_a_missing_cache_is_held_however_many_records_follow_its_tier_run(work: 
 def test_the_reader_passes_over_a_line_longer_than_its_bound_and_reads_on(tmp_path: Path) -> None:
     path = tmp_path / "timing.jsonl"
     record = json.dumps(FAULT).encode()
-    longest = record.ljust(runrecord.LINE - 1) + b"\n"
-    path.write_bytes(b" " * runrecord.LINE * 3 + record + b"\n" + longest + record + b"\n")
+    longest = record.ljust(runrecord.LINE - 2) + b"\n"
+    at_the_bound = record.ljust(runrecord.LINE - 1) + b"\n"
+    long_lines = b" " * runrecord.LINE * 3 + record + b"\n" + longest + at_the_bound
+    path.write_bytes(long_lines + record + b"\n")
     assert list(runrecord.read(path)) == [FAULT, FAULT]
     path.write_bytes(record + b" " * runrecord.LINE)
     assert list(runrecord.read(path)) == []
@@ -516,6 +524,87 @@ def test_a_write_cut_short_is_said_and_the_next_record_still_parses(tmp_path: Pa
     )
     assert path.stat().st_size == len(json.dumps(FAULT)) + 1 + 50, "the write was cut short"
     runrecord.append(path, {"kind": "tier"}, root=tmp_path)
+    assert list(runrecord.read(path)) == [FAULT, {"kind": "tier"}]
+
+
+FULL = "ratchet: not recorded: .ratchet/timing.jsonl: no space left for it; free some space\n"
+
+
+def test_a_write_cut_short_in_this_process_is_said_and_the_record_still_parses(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / runrecord.TIMING
+    path.parent.mkdir()
+    path.write_text(json.dumps(FAULT) + "\n", encoding="utf-8")
+    soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+    resource.setrlimit(resource.RLIMIT_FSIZE, (path.stat().st_size + 50, hard))
+    try:
+        runrecord.append(path, {"pad": "x" * 200}, root=tmp_path)
+    finally:
+        resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
+    assert capsys.readouterr().out == FULL
+    assert path.stat().st_size == len(json.dumps(FAULT)) + 1 + 50, "the write was cut short"
+    assert list(runrecord.read(path)) == [FAULT]
+
+
+def fault_of_length(size: int) -> dict[str, object]:
+    bare = {**FAULT, "bite": ""}
+    return {**bare, "bite": "b" * (size - len(json.dumps(bare)) - 1)}
+
+
+TOO_LONG = (
+    "bite: not recorded: .ratchet/timing.jsonl: the record is too long to keep; shorten the name"
+    " it carries\n"
+)
+
+
+def test_a_record_one_byte_under_the_bound_is_kept_and_one_at_it_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / runrecord.TIMING
+    under, at = fault_of_length(runrecord.LINE - 1), fault_of_length(runrecord.LINE)
+    assert len(json.dumps(at)) + 1 == runrecord.LINE
+    runrecord.append(path, under, root=tmp_path, who="bite")
+    held = path.read_bytes()
+    assert capsys.readouterr().out == ""
+    runrecord.append(path, at, root=tmp_path, who="bite")
+    assert capsys.readouterr().out == TOO_LONG
+    assert path.read_bytes() == held, "the file is unchanged"
+    assert list(runrecord.read(path)) == [under]
+
+
+@settings(max_examples=40, deadline=None)
+@given(st.integers(min_value=runrecord.LINE - 48, max_value=runrecord.LINE + 48))
+def test_whatever_the_writer_keeps_the_reader_returns(size: int) -> None:
+    record = fault_of_length(size)
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        path = root / runrecord.TIMING
+        runrecord.append(path, FAULT, root=root)
+        with contextlib.redirect_stdout(io.StringIO()):
+            runrecord.append(path, record, root=root)
+        runrecord.append(path, FAULT, root=root)
+        got = list(runrecord.read(path))
+    assert got == ([FAULT, record, FAULT] if size < runrecord.LINE else [FAULT, FAULT])
+
+
+UNREADABLE_BY_ROOT = pytest.mark.skipif(os.geteuid() == 0, reason="root reads through modes")
+
+
+@UNREADABLE_BY_ROOT
+def test_a_record_its_owner_cannot_read_is_still_appended_on_a_line_of_its_own(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / runrecord.TIMING
+    path.parent.mkdir()
+    path.write_bytes(b'{"kind": "fau')
+    path.chmod(0o200)
+    try:
+        runrecord.append(path, FAULT, root=tmp_path)
+        runrecord.append(path, {"kind": "tier"}, root=tmp_path)
+    finally:
+        path.chmod(0o600)
+    assert capsys.readouterr().out == ""
     assert list(runrecord.read(path)) == [FAULT, {"kind": "tier"}]
 
 

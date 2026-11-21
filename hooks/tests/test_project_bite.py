@@ -1913,6 +1913,37 @@ def test_a_slow_fault_is_named_however_many_records_follow_it(tmp_path: Path) ->
     assert line.startswith(f"{REGISTRY}: lint: whole: 9.0s with no args"), line
 
 
+def test_conformance_reads_the_record_once_for_all_it_takes_from_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "whole"))
+    write(root, "quality/thresholds.toml", ceilings(tier0=0.5, tier2=3000))
+    fault = {"kind": "fault", "gate": "lint", "bite": "whole", "seconds": 9.0, "narrowed": False}
+    records = [
+        {"key": "bite-all", "seconds": 1234.0},
+        {"kind": runrecord.TIER},
+        {"kind": runrecord.CACHE_MISSING, "path": "deps.lock"},
+        fault,
+    ]
+    timing = root / runrecord.TIMING
+    timing.parent.mkdir()
+    timing.write_text("".join(json.dumps(each) + "\n" for each in records), encoding="utf-8")
+    read = runrecord.read
+    opened: list[Path] = []
+
+    def counted(path: Path) -> Iterator[dict[str, object]]:
+        opened.append(path)
+        return read(path)
+
+    monkeypatch.setattr(runrecord, "read", counted)
+    conformance.run(root)
+    out = capsys.readouterr().out
+    assert "the last full proof took 1234s" in out
+    assert "the Local caches bullet names deps.lock, which did not exist after the last tier" in out
+    assert f"slow: {REGISTRY}: lint: whole: 9.0s with no args" in out
+    assert opened == [timing], "one pass over the record for the whole run"
+
+
 def test_a_bite_left_whole_on_purpose_is_named_with_its_reason_by_the_proof_alone(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
