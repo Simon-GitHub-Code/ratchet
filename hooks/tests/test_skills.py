@@ -589,7 +589,9 @@ def test_a_redraft_keeps_the_answers_and_shows_the_owner_what_changed() -> None:
     assert "keeps every line under `## Answers`, asks only the forks the change opened" in records
 
 
-SPLIT_BINDING = "# Binding\n\n- Life events: depended-on\n\n## Gates\n\n- Application types: service\n"
+SPLIT_BINDING = (
+    "# Binding\n\n- Life events: depended-on\n\n## Gates\n\n- Application types: service\n"
+)
 SPLIT_CONJECTURE = (
     "## Conjecture\n\nParse the ticket once in a script; the refuter is a green run on a ticket"
     " without a label. Alternatives: an agent reads it (killed: it spawns first).\n\n"
@@ -602,7 +604,8 @@ SPLIT_SPEC = (
 SPLIT_TICKET = "Parent: #12\n\n## What to build\n\nThe list.\n\n## Acceptance criteria\n\n- [ ] a\n"
 SPLIT_PART = (
     "Split from: #13\nBlocked by: none\n\n## What to build\n\nThe list, part 2.\n\n"
-    f"## Acceptance criteria\n\n- [ ] b\n\n{SPLIT_CONJECTURE}## Size\n\n- Product lines: 40\n- Product files: 2\n"
+    f"## Acceptance criteria\n\n- [ ] b\n\n{SPLIT_CONJECTURE}"
+    "## Size\n\n- Product lines: 40\n- Product files: 2\n"
 )
 
 
@@ -637,7 +640,8 @@ def test_a_part_that_names_no_parent_is_given_its_tickets_parent_line_before_not
     )
     assert linked.ok, linked.failures
     step_1 = conjecture_step(1).lower()
-    nothing_to_write = step_1.split("there is nothing to write", 1)[1].split("say so and stop", 1)[0]
+    after = step_1.split("there is nothing to write", 1)[1]
+    nothing_to_write = after.split("say so and stop", 1)[0]
     assert "a part that still lacks the `parent:` line step 4 gives it" in nothing_to_write
     assert "write that line alone as step 4 says" in nothing_to_write
 
