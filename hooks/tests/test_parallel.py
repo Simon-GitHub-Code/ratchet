@@ -459,7 +459,8 @@ def test_the_report_has_the_records_budget_writes(tmp_path: Path) -> None:
     ours = tmp_path / "ours.jsonl"
     green, red = gate(EXIT, 0), gate(EXIT, 2)
     assert run("--report", str(ours), "--", green, red) == 1
-    budget.report(report, budget.Outcome("lint", 1.0, None, 0), runrecord.stamp(tmp_path, "tree"))
+    outcome = budget.Outcome("lint", 1.0, None, 0)
+    budget.report(report, outcome, runrecord.stamp(tmp_path, "tree"), root=tmp_path)
     template = json.loads(report.read_text())
     records = [
         json.loads(line) for line in ours.read_text().splitlines() if "key" in json.loads(line)
@@ -692,7 +693,7 @@ def test_a_serial_group_counts_as_the_sum_of_its_gates_and_keeps_its_order() -> 
 def recorded(path: Path, *runs: tuple[str, float]) -> None:
     for name, seconds in runs:
         outcome = budget.Outcome(name, seconds, None, 0)
-        budget.report(path, outcome, runrecord.stamp(path.parent, "tree"))
+        budget.report(path, outcome, runrecord.stamp(path.parent, "tree"), root=path.parent)
 
 
 def test_a_tier_starts_the_gates_its_record_says_take_longest_first(tmp_path: Path) -> None:

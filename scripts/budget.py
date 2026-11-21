@@ -121,7 +121,7 @@ def timed(command: list[str], cwd: Path) -> tuple[float, int]:
     return time.monotonic() - started, completed.returncode
 
 
-def report(path: Path, outcome: Outcome, stamp: dict[str, str]) -> None:
+def report(path: Path, outcome: Outcome, stamp: dict[str, str], *, root: Path) -> None:
     record: dict[str, object] = {
         "key": outcome.key,
         "seconds": round(outcome.seconds, 3),
@@ -130,7 +130,7 @@ def report(path: Path, outcome: Outcome, stamp: dict[str, str]) -> None:
         "exit": outcome.exit_code,
         **stamp,
     }
-    runrecord.append(path, record)
+    runrecord.append(path, record, root=root)
 
 
 def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
@@ -170,7 +170,7 @@ def main(argv: list[str]) -> int:
             " before runner variance turns it red"
         )
     if options.report:
-        report(root / options.report, outcome, runrecord.stamp(root, tree))
+        report(root / options.report, outcome, runrecord.stamp(root, tree), root=root)
     if options.headroom is not None and options.key == PROOF:
         print(f"ratchet-budget: the owner records {CEILINGS_TABLE}.{PROOF} by hand; --set skips it")
     elif options.headroom is not None and exit_code == 0:

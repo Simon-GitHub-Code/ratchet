@@ -1163,8 +1163,7 @@ def setting_reasons(change: Change, base_ref: str, asked: Asked) -> list[Reason]
         base_ref.removeprefix("refs/remotes/").removeprefix("refs/heads/").removeprefix("origin/")
     )
     if asked.target is not None and asked.target != default:
-        text = f"the pull request targets `{asked.target}`, not the default branch `{default}`"
-        reasons.append(Reason("target", text))
+        reasons.append(Reason("target", gatelib.stacked(asked.target, default)))
     if asked.current and change.fork != change.base:
         reasons.append(
             Reason(

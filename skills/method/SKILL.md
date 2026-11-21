@@ -148,6 +148,8 @@ Done when you can name the project's parts and what each may depend on, its decl
    - **With a forge:** open one pull request with every section of the template filled and the tail of `check` pasted.
    - **With no forge:** write the change description at `.scratch/changes/<branch>.md` (the branch's `/` written as `-`) with every section of the template filled and the tail of `check` pasted, then run `just merge <branch>`.
 
+A change is one pull request against the default branch, and a pull request opened on top of another branch is not supported: the gates that measure a change's size and reach compare it with the default branch, so it is measured as everything below it plus itself, and the merge judge counts only a run that tested it against the default branch. Open the next change after the one below has merged.
+
 Leave the merge to the merge judge: the merge job, or with no forge the `merge` entry point, merges a change the judge passes, and the owner merges the rest. Never merge by hand.
 
 Done when the pull request is open and green, or, with no forge, the change description is written and `just merge <branch>` has run.
