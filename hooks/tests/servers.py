@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -86,6 +87,68 @@ def reply(handler: http.server.BaseHTTPRequestHandler, status: int, body: bytes 
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
+
+
+HOLDS_FOR_OTHERS = (
+    "import contextlib, socket, sys, threading\n"
+    "def answer(listener):\n"
+    "    while True:\n"
+    "        try:\n"
+    "            connection, _ = listener.accept()\n"
+    "        except OSError:\n"
+    "            return\n"
+    "        connection.recv(65536)\n"
+    "        connection.sendall(b'HTTP/1.0 200 OK\\r\\nContent-Length: 0\\r\\n\\r\\n')\n"
+    "        connection.close()\n"
+    "def hold(client):\n"
+    "    address, port = client.recv(64).decode().split()\n"
+    "    family = socket.AF_INET6 if ':' in address else socket.AF_INET\n"
+    "    listener = socket.create_server((address, int(port)), family=family)\n"
+    "    threading.Thread(target=answer, args=(listener,), daemon=True).start()\n"
+    "    client.sendall(b'up')\n"
+    "    client.recv(64)\n"
+    "    listener.shutdown(socket.SHUT_RDWR)\n"
+    "    listener.close()\n"
+    "    with contextlib.suppress(OSError):\n"
+    "        client.sendall(b'down')\n"
+    "hub = socket.socket(socket.AF_UNIX)\n"
+    "hub.bind('\\0' + sys.argv[1])\n"
+    "hub.listen()\n"
+    "print('up', flush=True)\n"
+    "while True:\n"
+    "    threading.Thread(target=hold, args=(hub.accept()[0],), daemon=True).start()\n"
+)
+
+ASKS_ANOTHER_TO_LISTEN = (
+    "import os, signal, socket, sys\n"
+    "hub = socket.socket(socket.AF_UNIX)\n"
+    "hub.connect('\\0' + sys.argv[1])\n"
+    "hub.sendall(f\"{sys.argv[2]} {os.environ['PORT']}\".encode())\n"
+    "hub.recv(2)\n"
+    "def stop(*_):\n"
+    "    hub.sendall(b'close')\n"
+    "    hub.recv(4)\n"
+    "    os._exit(0)\n"
+    "signal.signal(signal.SIGTERM, stop)\n"
+    "while True:\n"
+    "    signal.pause()\n"
+)
+
+
+@contextmanager
+def held_outside_the_group() -> Iterator[Callable[[str], str]]:
+    name = f"ratchet-test-{uuid.uuid4().hex}"
+    with subprocess.Popen(  # noqa: S603 # -- this interpreter and a fixed script
+        [sys.executable, "-S", "-c", HOLDS_FOR_OTHERS, name],
+        stdout=subprocess.PIPE,
+        start_new_session=True,
+    ) as holder:
+        try:
+            assert holder.stdout is not None
+            assert holder.stdout.readline() == b"up\n", "the holder did not start"
+            yield lambda address: f"exec {python(ASKS_ANOTHER_TO_LISTEN)} {name} {address}"
+        finally:
+            holder.kill()
 
 
 def sleeper(tree: Path) -> subprocess.Popen[bytes]:

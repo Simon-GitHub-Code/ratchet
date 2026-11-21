@@ -17,6 +17,7 @@ import parallel
 import pins
 import plugin_pin
 import suites as suites_module
+import with_service
 from tests import repos
 
 TEMPLATES = Path(__file__).resolve().parents[2] / "skills/adopt/templates"
@@ -357,20 +358,29 @@ def test_start_gives_the_port_to_the_whole_boot_line_as_the_gates_do(tmp_path: P
 
 
 @pytest.mark.parametrize(
-    ("ready", "host"),
+    "ready",
     [
-        ("http://127.0.0.1:{port}/health", "127.0.0.1"),
-        ("https://[::1]:{port}/", "::1"),
-        ("http://localhost/", "localhost"),
-        ("none", "{host}"),
+        "http://127.0.0.1:{port}/health",
+        "https://[::1]:{port}/",
+        "http://localhost/",
+        "http://user:secret@127.0.0.1:{port}/",
+        "http://user@[::1]:{port}/x?y=1",
+        "http://LOCALHOST:{port}/",
+        "http://Example.TEST/",
+        "http://127.0.0.1?a=b@c",
     ],
 )
-def test_start_gives_the_ready_urls_host_as_the_gates_do(
-    tmp_path: Path, ready: str, host: str
-) -> None:
+def test_start_gives_the_ready_urls_host_as_the_gates_do(tmp_path: Path, ready: str) -> None:
     needs_just()
+    host = with_service.host_of(ready.replace("{port}", "3000"))
     boot = {"boot": 'echo "on {host}:{port} with ${HOST-nothing}"', "ready": ready, "port": "3000"}
     assert f"on {host}:3000 with nothing" in run_template(tmp_path, boot, "start")
+
+
+def test_start_leaves_host_as_written_when_nothing_answers_a_url(tmp_path: Path) -> None:
+    needs_just()
+    boot = {"boot": 'echo "on {host}:{port}"', "ready": "none", "port": "3000"}
+    assert "on {host}:3000" in run_template(tmp_path, boot, "start")
 
 
 def test_the_example_boot_line_hands_the_deliverable_its_address_and_port() -> None:

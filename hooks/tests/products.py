@@ -11,6 +11,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+import pytest
+
 import gatelib
 from tests import repos
 
@@ -115,7 +117,8 @@ class App(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
     do_PUT = do_PATCH = do_DELETE = do_POST
-Server((os.environ.get("HOST", "127.0.0.1"), int(os.environ["PORT"])), App).serve_forever()
+ADDRESS = os.environ.get("TEST_PRODUCT_ADDRESS", "127.0.0.1")
+Server((ADDRESS, int(os.environ["PORT"])), App).serve_forever()
 """
 
 TICKET = """# 01: Save a link and see it on the list
@@ -152,6 +155,32 @@ def make(
     (root / "docs" / "process" / "binding.md").write_text(binding, encoding="utf-8")
     (root / "ticket.md").write_text(TICKET, encoding="utf-8")
     return repos.repository(root, {".gitignore": "docs/features/\n"})
+
+
+NO_TABLE = """
+import runpy, sys
+sys.path[:0] = [{scripts!r}]
+import gatelib, listeners
+listeners.PROC = {proc!r}
+first = gatelib.interpreter
+def interpreter(*, inline=False):
+    return first(inline=inline) if inline else [*first(), __file__]
+gatelib.interpreter = interpreter
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+"""
+
+
+def without_a_listener_table(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    shim = tmp_path / "no_table.py"
+    scripts = str(Path(gatelib.__file__).parent)
+    shim.write_text(NO_TABLE.format(scripts=scripts, proc=str(tmp_path / "no-proc")), "utf-8")
+    first = gatelib.interpreter
+    monkeypatch.setattr(
+        gatelib,
+        "interpreter",
+        lambda *, inline=False: first(inline=inline) if inline else [*first(), str(shim)],
+    )
 
 
 @contextmanager

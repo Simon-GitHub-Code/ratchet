@@ -16,15 +16,18 @@ import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 
 import acceptance
 import gatelib
+import listeners
 from tests import products
-from tests.servers import HIDES, SERVE, gone, pid_of, python
+from tests.servers import HIDES, SERVE, gone, held_outside_the_group, pid_of, python
 
 SLUG = "save-link"
+WIDE = "TEST_PRODUCT_ADDRESS=0.0.0.0"
 SCRIPT = Path(acceptance.__file__)
 KEPT_ONLY_STATUS = {
     "id": "K9",
@@ -482,7 +485,7 @@ REACHABLE = (
 def test_a_product_reachable_around_the_proxy_does_not_start_a_session(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], extra: str
 ) -> None:
-    root = products.make(tmp_path / "product", env="HOST=0.0.0.0", extra=extra)
+    root = products.make(tmp_path / "product", env=WIDE, extra=extra)
     boot = acceptance.read_binding(root).boot
     assert boot is not None
     code, out = up(root, capsys)
@@ -498,7 +501,7 @@ def test_a_product_the_justfile_says_listens_wider_on_purpose_is_served_and_said
     tmp_path: Path, capsys: pytest.CaptureFixture[str], declared: str
 ) -> None:
     extra = f'listens := "{declared}"'
-    root = products.make(tmp_path / "product", env="HOST=0.0.0.0", extra=extra)
+    root = products.make(tmp_path / "product", env=WIDE, extra=extra)
     try:
         ticket = ["--ticket", str(root / "ticket.md"), "--root", str(root)]
         code = acceptance.main(["acceptance.py", "up", "--slug", SLUG, *ticket])
@@ -562,12 +565,163 @@ def test_replay_of_a_product_reachable_around_the_proxy_says_why_it_did_not_run(
 ) -> None:
     checks = tmp_path / "checks.json"
     checks.write_text(json.dumps({"schema": 1, "checks": [KEPT_ONLY_STATUS]}), encoding="utf-8")
-    root = products.make(tmp_path / "product", env="HOST=0.0.0.0")
+    root = products.make(tmp_path / "product", env=WIDE)
     code, out = run(root, "replay", "--checks", str(checks), capsys=capsys)
     assert code == 1
     assert out[0].startswith(
         "K9 (C1) was not run on a fresh boot: the product did not start: it listened on 0.0.0.0:"
     ), out[0]
+
+
+def judged_by(harness: str, root: Path, capsys: pytest.CaptureFixture[str]) -> tuple[int, str, str]:
+    if harness == "replay":
+        checks = root.parent / "checks.json"
+        checks.write_text(json.dumps({"schema": 1, "checks": [KEPT_ONLY_STATUS]}), "utf-8")
+        argv = ["replay", "--checks", str(checks)]
+    else:
+        argv = ["up", "--slug", SLUG, "--ticket", str(root / "ticket.md")]
+    code = acceptance.main(["acceptance.py", *argv, "--root", str(root)])
+    seen = capsys.readouterr()
+    if code == 0 and harness == "up":
+        assert products.request(seen.out.splitlines()[0])[0] == 200
+        down(root, capsys)
+    return code, seen.out, seen.err
+
+
+def refused_as(harness: str, boot: str) -> str:
+    if harness == "replay":
+        return re.escape("K9 (C1) was not run on a fresh boot: the product did not start: ")
+    return re.escape(f"It was started with `{boot}`, and ")
+
+
+def started_as(harness: str) -> str:
+    return "K9 \\(C1\\) holds on a fresh boot" if harness == "replay" else "http://127.0.0.1:\\d+/"
+
+
+CURED = re.escape(
+    ". Name in the justfile's `listens` each address it listens on, a loopback address if that "
+    'is all, as `listens := "127.0.0.1"`.'
+)
+NOT_CHECKED = re.escape(
+    "where it listens could not be checked, so a request might reach it around the session's "
+    "proxy and leave no line in its log, and no session starts on that: "
+)
+DECLARED_HERE = re.escape(
+    "with_service: where the product listens was not checked here, as declared: "
+)
+NO_TABLE = re.escape(listeners.UNREADABLE)
+NONE_HELD = re.escape(listeners.NOT_FOUND)
+Expected = tuple[int, str]
+
+
+def holds(harness: str, boot: str, *, expected: Expected, judged: tuple[int, str, str]) -> None:
+    code, said = expected
+    ran, out, err = judged
+    assert ran == code, (out, err)
+    if code:
+        assert re.match(refused_as(harness, boot) + said + "\n", out), out
+    else:
+        assert re.fullmatch(started_as(harness), out.splitlines()[0]), out
+        assert re.fullmatch(said, err), err
+
+
+@pytest.mark.parametrize("harness", ["up", "replay"])
+@pytest.mark.parametrize(
+    "case",
+    [
+        ("", "", (1, f"{NOT_CHECKED}{NO_TABLE}{CURED}")),
+        ("", 'listens := "127.0.0.1"', (0, rf"{DECLARED_HERE}127\.0\.0\.1 \({NO_TABLE}\)\n")),
+        (WIDE, 'listens := "0.0.0.0 ::"', (0, rf"{DECLARED_HERE}0\.0\.0\.0 :: \({NO_TABLE}\)\n")),
+    ],
+    ids=["none", "loopback declared", "wider declared"],
+)
+def test_where_there_is_no_listener_table_a_session_starts_on_what_the_project_declares(
+    case: tuple[str, str, Expected],
+    *,
+    harness: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    env, extra, expected = case
+    products.without_a_listener_table(tmp_path, monkeypatch)
+    root = products.make(tmp_path / "product", env=env, extra=extra)
+    boot = acceptance.read_binding(root).boot
+    assert boot is not None
+    holds(harness, boot.command, expected=expected, judged=judged_by(harness, root, capsys))
+    assert products.processes_naming(str(tmp_path)) == []
+
+
+@pytest.mark.parametrize("harness", ["up", "replay"])
+@pytest.mark.parametrize(
+    "case",
+    [
+        (
+            "127.0.0.1",
+            'listens := "127.0.0.1"',
+            (0, rf"{DECLARED_HERE}127\.0\.0\.1 \({NONE_HELD}\)\n"),
+        ),
+        (
+            "0.0.0.0",  # noqa: S104 # -- under test
+            'listens := "0.0.0.0"',
+            (
+                0,
+                (
+                    r"with_service: the product listened on 0\.0\.0\.0:\d+ when it first "
+                    rf"answered, as declared\n{DECLARED_HERE}0\.0\.0\.0 \({NONE_HELD}\)\n"
+                ),
+            ),
+        ),
+        ("0.0.0.0", "", (1, r"it listened on 0\.0\.0\.0:\d+, every interface, .*")),  # noqa: S104 # -- under test
+        ("127.0.0.1", "", (1, f"{NOT_CHECKED}{NONE_HELD}{CURED}")),
+    ],
+    ids=["loopback declared", "wide declared", "wide", "loopback"],
+)
+def test_a_listener_another_process_holds_on_the_ready_port_is_judged_as_the_products(
+    case: tuple[str, str, Expected],
+    *,
+    harness: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    address, extra, expected = case
+    with held_outside_the_group() as asking:
+        root = products.make(tmp_path / "product", boot=asking(address), extra=extra)
+        judged = judged_by(harness, root, capsys)
+        holds(harness, asking(address), expected=expected, judged=judged)
+
+
+@pytest.mark.parametrize("harness", ["up", "replay"])
+def test_a_declaration_never_waives_a_wider_listener_seen_beside_a_process_not_checked(
+    harness: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    hid = tmp_path / "hid"
+    app = f"{WIDE} exec {sys.executable} {tmp_path / 'product' / 'app.py'}"
+    boot = f"{python(HIDES)} {hid} & while [ ! -e {hid} ]; do sleep 0.05; done; {app}"
+    root = products.make(tmp_path / "product", boot=boot, extra='listens := "127.0.0.1"')
+    ran, out, _ = judged_by(harness, root, capsys)
+    assert ran == 1
+    wide = r"it listened on 0\.0\.0\.0:\d+, every interface, "
+    assert re.match(refused_as(harness, boot) + wide, out), out
+    assert products.processes_naming(str(tmp_path)) == []
+
+
+def test_the_boot_line_hands_the_product_the_ready_urls_host_and_it_listens_there(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    product = tmp_path / "product"
+    boot = f"TEST_PRODUCT_ADDRESS={{host}} exec {sys.executable} {product / 'app.py'}"
+    root = products.make(product, boot=boot, ready="http://127.0.0.2:{port}/")
+    try:
+        code, out = up(root, capsys)
+        assert code == 0, out
+        assert products.request(out[0])[0] == 200
+        upstream = json.loads((session(root) / "proxy.json").read_text(encoding="utf-8"))
+        port = urlsplit(str(upstream["upstream"])).port
+        assert urlsplit(str(upstream["upstream"])).hostname == "127.0.0.2"
+        assert not gatelib.listening(f"http://127.0.0.1:{port}/"), "the product kept its default"
+    finally:
+        down(root, capsys)
 
 
 @pytest.mark.parametrize(

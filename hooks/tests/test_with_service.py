@@ -633,7 +633,7 @@ def test_loopback_only_refuses_what_it_could_not_check(
     assert code == 1
     assert not ran.exists(), "a session started on a product it could not check"
     said = "where the product listens was not checked, so the command after -- did not run: "
-    assert re.match(rf"{said}{UNSEEN}\n", out), out
+    assert re.match(rf"{said}{UNSEEN}; {UNSEEN}; {re.escape(LISTENS_CURE)}\n", out), out
 
 
 def test_where_the_product_listens_is_not_checked_where_it_cannot_be_read(
@@ -665,8 +665,146 @@ def test_a_table_row_that_cannot_be_read_is_not_checked_and_refuses_a_session(
     assert code == 1
     assert out.startswith(
         "where the product listens was not checked, so the command after -- did not run: a row of "
-        "the system's net/tcp table cannot be read: '0: 0100007F:1F90'\n"
+        f"the system's net/tcp table cannot be read: '0: 0100007F:1F90'; {LISTENS_CURE}\n"
     ), out
+
+
+LISTENS_CURE = (
+    "declare with --listens each address the product listens on, a loopback address if that is all"
+)
+NOT_CHECKED_HERE = "with_service: where the product listens was not checked here, as declared: "
+
+
+@pytest.mark.parametrize(
+    "case",
+    [("127.0.0.1", "127.0.0.1"), ("0.0.0.0", "0.0.0.0 ::")],  # noqa: S104 # -- under test
+    ids=["loopback declared", "wider declared"],
+)
+@pytest.mark.parametrize("session", [True, False], ids=["session", "gate"])
+def test_where_there_is_no_table_what_the_project_declared_is_said_once_and_it_starts(
+    case: tuple[str, str],
+    *,
+    session: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    address, declared = case
+    monkeypatch.setattr(listeners, "PROC", str(tmp_path))
+    ran = tmp_path / "ran"
+    code, out = run(
+        *("--boot", listening_on(address), "--ready", READY, "--listens", declared),
+        *(["--loopback-only"] if session else []),
+        *("--", "touch", str(ran)),
+        capsys=capsys,
+    )
+    assert (code, out) == (
+        0,
+        f"{NOT_CHECKED_HERE}{declared} ({listeners.UNREADABLE})\nwith_service: green\n",
+    )
+    assert ran.exists()
+
+
+def test_where_there_is_no_table_and_nothing_is_declared_a_session_names_the_cure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(listeners, "PROC", str(tmp_path))
+    ran = tmp_path / "ran"
+    code, out = run(
+        *("--boot", listening_on("127.0.0.1"), "--ready", READY, "--loopback-only"),
+        *("--", "touch", str(ran)),
+        capsys=capsys,
+    )
+    assert code == 1
+    assert not ran.exists()
+    assert out.startswith(
+        "where the product listens was not checked, so the command after -- did not run: "
+        f"{listeners.UNREADABLE}; {LISTENS_CURE}\n"
+    ), out
+
+
+ELSEWHERE = re.escape(listeners.NOT_FOUND)
+EVERY = re.escape("0.0.0.0")  # noqa: S104 # -- the wide listener under test
+
+
+@pytest.mark.parametrize(
+    ("address", "flags", "code", "said"),
+    [
+        (
+            "127.0.0.1",
+            ["--listens", "127.0.0.1"],
+            0,
+            rf"{NOT_CHECKED_HERE}127\.0\.0\.1 \({ELSEWHERE}\)\n",
+        ),
+        (
+            "0.0.0.0",  # noqa: S104 # -- under test
+            ["--listens", "0.0.0.0"],  # noqa: S104 # -- under test
+            0,
+            DECLARED.format(where=EVERY) + rf"{NOT_CHECKED_HERE}{EVERY} \({ELSEWHERE}\)\n",
+        ),
+        (
+            "0.0.0.0",  # noqa: S104 # -- under test
+            [],
+            1,
+            (
+                r"the product listened on 0\.0\.0\.0:\d+, every interface, when it first "
+                r"answered, so the network could reach it around the command after --; "
+            ),
+        ),
+        (
+            "127.0.0.1",
+            [],
+            1,
+            (
+                "where the product listens was not checked, so the command after -- did not run: "
+                rf"{ELSEWHERE}; {re.escape(LISTENS_CURE)}\n"
+            ),
+        ),
+    ],
+    ids=["loopback declared", "wide declared", "wide", "loopback"],
+)
+def test_a_session_judges_the_ready_ports_listener_as_the_products_when_the_group_holds_none(
+    address: str, flags: list[str], *, code: int, said: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with servers.held_outside_the_group() as asking:
+        ran, out = run(
+            *("--boot", asking(address), "--ready", READY, "--loopback-only", *flags),
+            *("--", "true"),
+            capsys=capsys,
+        )
+    assert re.match(said, out), out
+    assert ran == code, out
+
+
+@pytest.mark.parametrize(
+    ("address", "said"),
+    [
+        ("127.0.0.1", ""),
+        ("0.0.0.0", noted("0.0.0.0", "every interface")),  # noqa: S104 # -- under test
+    ],
+)
+def test_a_gate_whose_listener_another_process_holds_keeps_its_colour(
+    address: str, said: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with servers.held_outside_the_group() as asking:
+        code, out = run("--boot", asking(address), "--ready", READY, capsys=capsys)
+    unseen = f"with_service: where the product listens was not checked: {ELSEWHERE}\n"
+    assert re.fullmatch(f"{said}{unseen}with_service: green\n", out), out
+    assert code == 0
+
+
+def test_a_declaration_never_waives_a_wider_listener_seen_beside_one_not_checked(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    boot = hidden_beside(tmp_path, "127.0.0.1", "0.0.0.0")  # noqa: S104 # -- under test
+    code, out = run(
+        *("--boot", boot, "--ready", READY, "--loopback-only", "--listens", "127.0.0.1"),
+        *("--", "true"),
+        capsys=capsys,
+    )
+    assert code == 1
+    refused = r"^the product listened on 0\.0\.0\.0:\d+, every interface"
+    assert re.search(refused, out, re.MULTILINE), out
 
 
 def test_a_bad_ready_url_or_env_pair_is_a_usage_error() -> None:
