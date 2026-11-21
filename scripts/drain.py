@@ -63,6 +63,78 @@ OWNER_FILE = 0o600
 LANDING_TRIES, LANDING_POLL = 20, 0.05
 LANDING_RUNNING = 3
 UNREAD = 3
+PLAIN = "100644"
+NOT_LANDED = 4
+ON_LANDING = "not landed: the parts are on `{}`, and the checkout does not hold them"
+IN_CHECKOUT = "not landed: the parts stay uncommitted in the checkout"
+CHECKED_OUT = (
+    "not landed: `{}` is checked out in a work tree, so it stays as it is: switch that work tree"
+    " to another branch"
+)
+HOLDS_OTHER = (
+    "not landed: `{}` holds other than just the parts this split writes, so it stays as it is:"
+    " take what is yours from it, delete it"
+)
+FOREIGN = (
+    "not landed: `{}` holds a commit this split did not make, so it stays as it is: take what is"
+    " yours from it, delete it"
+)
+TAKEN = (
+    "not landed: `{}` exists, and the split's note does not name it as the split's own, so it"
+    " stays as it is: rename it"
+)
+FORGED = (
+    "not landed: the split's note {} names `{}` as its landing branch, and this split lands on"
+    " `{}`, so no branch is touched: correct the note"
+)
+STAGED = (
+    "not landed: the checkout's index holds {}, so the parts stay uncommitted in the checkout:"
+    " unstage them"
+)
+HOOKS_ADDED = (
+    "not landed: `{}` holds what the commit hooks made besides the parts, so it stays as it is:"
+    " take what is yours from it, delete it; the parts stay uncommitted in the checkout"
+)
+HOOKS_CHANGED = (
+    "not landed: the commit hooks changed {} as they ran, so the parts stay uncommitted in the"
+    " checkout, and `{}` holds them as they were filed"
+)
+HOOKS_HURT = (
+    "not landed: what the owner staged changed in the checkout as the parts were committed, as"
+    " the lines above say, so nothing is merged: `{}` holds the parts, and they stay uncommitted"
+    " in the checkout"
+)
+CHANGED_BY = "a commit hook or another process {} `{}` as the parts were committed"
+WROTE = (
+    ", which the split wrote and no ref holds, so git's collection removes it once its grace"
+    " period is over"
+)
+NOT_READ = (0, "")
+SHA256_HEX = 64
+HOOKS_EMPTIED = (
+    "not landed: the commit hooks took the parts out of the commit, so `{}` holds a commit that"
+    " adds nothing, and it stays as it is: delete it"
+)
+HOOKS_SILENT = (
+    "`git commit` exited {} and printed nothing: a commit hook refused them, or moved the commit"
+    " off `{}`"
+)
+INDEX_LOCKED = (
+    "not landed: the parts are on `{}`, and `{}` locks the checkout's index, so the merge could"
+    " not move it: once no git command runs in this repository, delete that file"
+)
+UNFINISHED = (
+    "split: the checkout is in the middle of a merge or a rebase, or its index holds a conflict,"
+    " so nothing is filed: finish it"
+)
+IN_PROGRESS = ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply")
+CANNOT_LAND = "blocked: {}, and no branch holds it, so it cannot land"
+AGAIN = "{}; once the cause above is gone, run {} again"
+FORGE_PARTS = (
+    "next: this repository has a forge (`origin`): commit {} on a branch of their own and open"
+    " the pull request; its merge job merges records alone, and the plan lists the parts once the"
+    " default branch holds them"
+)
 CUT_OFF = "is not checked: its update was cut off after it moved the branch; run `update` again"
 LANDING_MAY_RUN = "a landing may be in flight in another drain"
 LOCK, LEASE = "ratchet-drain.lock", "ratchet-drain.lease"
@@ -117,6 +189,14 @@ class Seen:
     merged: frozenset[str]
     trees: frozenset[Path]
     queued: frozenset[str]
+
+
+@dataclass(frozen=True)
+class Exposed:
+    files: dict[str, tuple[int, str] | None]
+    written: frozenset[str]
+    stash: str | None
+    algorithm: str
 
 
 @dataclass(frozen=True)
@@ -446,14 +526,26 @@ def pending(entry: Entry, ticket: preflight.Ticket, *, drain: Drain, seen: Seen)
         why = preflight.unmet(blocker)
         if why is None:
             continue
-        if blocker.ticket is not None and key(blocker.ref) in seen.queued:
+        part = blocker.ticket is None and blocker.split_from and blocker.ref
+        if (blocker.ticket is not None and key(blocker.ref) in seen.queued) or (
+            part and on_a_branch(drain.root, blocker.ref)
+        ):
             waits.append(key(blocker.ref))
+        elif part:
+            refused.append(CANNOT_LAND.format(why))
         else:
             agent_ready = "" if blocker.ticket is None else " and is not agent-ready"
             refused.append(f"blocked: {why}{agent_ready}")
     if refused:
         return replace(entry, state=REFUSED, why=tuple(refused))
     return replace(entry, state=WAITING if waits else BUILDABLE, waits_on=tuple(waits))
+
+
+def on_a_branch(root: Path, path: str) -> bool:
+    tips = gatelib.git(root, "for-each-ref", "--format=%(objectname)", merge.HEADS, "refs/remotes/")
+    asked = "".join(f"{tip}:{path}\n" for tip in (tips or "").split())
+    found = merge.porcelain(root, "cat-file", "--batch-check", given=asked).stdout.splitlines()
+    return any(not line.endswith(" missing") for line in found)
 
 
 def classify(ticket: preflight.Ticket, drain: Drain, seen: Seen) -> Entry:
@@ -480,8 +572,8 @@ def classify(ticket: preflight.Ticket, drain: Drain, seen: Seen) -> Entry:
 
 
 def settled(entries: list[Entry]) -> list[Entry]:
-    live = {key(entry.ref) for entry in entries if entry.state in LIVE}
     waiting = [entry for entry in entries if entry.state == WAITING]
+    live = unlanded(entries) | {key(entry.ref) for entry in entries if entry.state in LIVE}
     reached = True
     while reached:
         reached = False
@@ -510,13 +602,19 @@ def settled(entries: list[Entry]) -> list[Entry]:
     ]
 
 
+def unlanded(entries: list[Entry]) -> set[str]:
+    return {ref for entry in entries for ref in entry.waits_on} - {
+        key(entry.ref) for entry in entries
+    }
+
+
 def ordered(entries: list[Entry]) -> list[Entry]:
     placed: list[Entry] = []
-    done: set[str] = set()
+    done = unlanded(entries)
     rest = entries
     while rest:
         placed += [entry for entry in rest if done.issuperset(entry.waits_on)]
-        done = {key(entry.ref) for entry in placed}
+        done = unlanded(entries) | {key(entry.ref) for entry in placed}
         rest = [entry for entry in rest if key(entry.ref) not in done]
     return placed
 
@@ -1533,23 +1631,305 @@ def split_ticket(drain: Drain, ticket: preflight.Ticket, options: argparse.Names
     except ValueError:
         plan_text = None
     result = result_of(options.result)
-    made, refused = split.apply(drain.root, ticket.ref, plan_text, gh=drain.tracker)
+    root, branch = drain.root, route.own_branch(ticket)
+    again = f"`drain.py split {ticket.ref} --plan {options.plan or '<file>'}`"
+    local = ticket.ref.endswith(".md")
+    if local and unfinished(root):
+        print(f"{UNFINISHED}, then run {again} again")
+        return 2
+    path = queue_notes.note_path(root, branch)
+    noted = queue_notes.read_note(root, branch)
+    filed = queue_notes.split_into(root, branch, ticket) or queue_notes.texts(noted.get("parts"))
+    landing = f"{merge.RECORDS}split-{branch.rpartition('/')[2]}"
+    kept = local and let_go(
+        root,
+        path,
+        landing=landing,
+        made=split.bodies(root, ticket.ref, plan_text, filed=filed, gh=drain.tracker),
+    )
+    if kept:
+        print(f"{kept}, then run {again} again")
+        return NOT_LANDED
+    made, refused = split.apply(
+        root,
+        ticket.ref,
+        plan_text,
+        gh=drain.tracker,
+        filed=filed,
+        noting=lambda paths: queue_notes.write_note(
+            path, {**queue_notes.read_note(root, branch), "parts": paths}
+        ),
+    )
     if refused:
         reasons = [f"too large, and the split was refused: {line}" for line in refused]
-        close(
-            drain.root, ticket, outcome=PARKED, reasons=reasons, result={**result, "tooLarge": True}
-        )
+        close(root, ticket, outcome=PARKED, reasons=reasons, result={**result, "tooLarge": True})
         return 1
     close(
-        drain.root,
+        root,
         ticket,
         outcome=SPLIT,
         reasons=[f"too large; split into {', '.join(made)}"],
         result=result,
         children=made,
     )
+    landed = land_parts(root, branch, landing=landing, made=made) if local else None
+    if landed is not None:
+        print(AGAIN.format(landed, again))
     print(json.dumps({"children": made}))
-    return 0
+    return 0 if landed is None else NOT_LANDED
+
+
+def unfinished(root: Path) -> bool:
+    return bool(gatelib.git(root, "ls-files", "--unmerged")) or any(
+        (root / (gatelib.git(root, "rev-parse", "--git-path", name) or name)).exists()
+        for name in IN_PROGRESS
+    )
+
+
+def let_go(root: Path, note: Path, *, landing: str, made: dict[str, str]) -> str | None:
+    noted = queue_notes.loaded(gatelib.read_text(note))
+    named = noted.get("landing")
+    if not isinstance(named, str):
+        return None
+    if named != landing:
+        return FORGED.format(note, named, landing)
+    held = merge.tip(root, landing)
+    if held is None:
+        return None
+    return drop_landing(root, noted, landing=landing, held=held, made=made)
+
+
+def drop_landing(
+    root: Path, noted: dict[str, object], *, landing: str, held: str, made: dict[str, str]
+) -> str | None:
+    if merge.checked_out(root, landing) is not None:
+        return CHECKED_OUT.format(landing)
+    base = gatelib.git(root, "merge-base", merge.local_default(root) or "", held) or ""
+    if base != held and (
+        not made
+        or gatelib.git(root, "rev-list", "--count", f"{base}..{held}") != "1"
+        or added(root, base, held) != {path: blob(root, path, text) for path, text in made.items()}
+    ):
+        return HOLDS_OTHER.format(landing)
+    if (
+        noted.get("committed", held) != held
+        or gatelib.git(root, "update-ref", "-d", f"{merge.HEADS}{landing}", held) is None
+    ):
+        return FOREIGN.format(landing)
+    return None
+
+
+def added(root: Path, base: str, tip: str) -> dict[str, str]:
+    raw = gatelib.git(root, "diff", "--raw", "-z", "--no-abbrev", "--no-renames", base, tip) or ""
+    fields = raw.split("\0")
+    rows = {fields[at + 1]: fields[at].split() for at in range(0, len(fields) - 1, 2)}
+    return {path: row[3] if row[1] == PLAIN and row[4] == "A" else "" for path, row in rows.items()}
+
+
+def blob(root: Path, path: str, text: str) -> str:
+    hashed = merge.porcelain(root, "hash-object", "--stdin", f"--path={path}", given=text)
+    return hashed.stdout.strip()
+
+
+def land_parts(root: Path, branch: str, *, landing: str, made: list[str]) -> str | None:
+    default = merge.local_default(root) or ""
+    if all(gatelib.show(root, default, path) is not None for path in made):
+        return None
+    if gatelib.git(root, "remote", "get-url", "origin") is not None:
+        print(FORGE_PARTS.format(", ".join(made)))
+        return None
+    unfit = unlandable(root, default, landing=landing, made=made)
+    if unfit is not None:
+        return unfit
+    path = queue_notes.note_path(root, branch)
+    noted = {k: v for k, v in queue_notes.read_note(root, branch).items() if k != "committed"}
+    queue_notes.write_note(path, {**noted, "landing": landing})
+    commit, why = commit_parts(root, merge.tip(root, default) or "", landing=landing, made=made)
+    if commit is None:
+        return why
+    queue_notes.write_note(path, {**queue_notes.read_note(root, branch), "committed": commit})
+    for part in made:
+        (root / part).unlink()
+    lock = root / (gatelib.git(root, "rev-parse", "--git-path", "index.lock") or "index.lock")
+    if lock.is_file():
+        return INDEX_LOCKED.format(landing, lock)
+    return None if merge.merge_records(root, landing) == 0 else ON_LANDING.format(landing)
+
+
+def unlandable(root: Path, default: str, *, landing: str, made: list[str]) -> str | None:
+    if merge.tip(root, landing) is not None:
+        return TAKEN.format(landing)
+    current = merge.on_branch(root)
+    if current is None:
+        print(
+            f"merge: the checkout's HEAD is detached, and the parts land from `{default}`: switch"
+            f" it to `{default}`"
+        )
+        return IN_CHECKOUT
+    if current != default:
+        print(f"merge: the checkout is on `{current}`, and the parts land from `{default}`")
+        return IN_CHECKOUT
+    staged = gatelib.git(root, "ls-files", "--", *(f":(literal){part}" for part in made))
+    return STAGED.format(", ".join(staged.splitlines())) if staged else None
+
+
+def commit_parts(root: Path, base: str, *, landing: str, made: list[str]) -> tuple[str | None, str]:
+    scratch = Path(tempfile.mkdtemp(prefix=merge.SCRATCH))
+    tree = scratch / "tree"
+    with merge.locked(scratch / merge.HELD):
+        try:
+            done, exposed = commit_aside(root, tree, base=base, landing=landing, made=made)
+        finally:
+            gatelib.git(root, "worktree", "remove", "--force", str(tree))
+            shutil.rmtree(scratch, ignore_errors=True)
+            gatelib.git(root, "worktree", "prune")
+    held, stash = tips(root, landing)
+    hurt = [] if exposed is None else harmed(root, exposed, stash)
+    for line in hurt:
+        print(f"records: {line}")
+    if held in {None, base}:
+        gatelib.git(root, "update-ref", "-d", f"{merge.HEADS}{landing}", base)
+        said = " / ".join((done.stdout + done.stderr).strip().splitlines()[-merge.HOOK_LINES :])
+        said = said or HOOKS_SILENT.format(done.returncode, landing)
+        print(f"records: the parts were not committed: {said}")
+        return None, IN_CHECKOUT
+    kept = merge.hashed(root, made)
+    alone = gatelib.git(
+        root, "rev-list", "--parents", "-n", "1", held
+    ) == f"{held} {base}" and added(root, base, held).keys() == set(made)
+    if not alone:
+        return None, (HOOKS_ADDED if added(root, base, held) else HOOKS_EMPTIED).format(landing)
+    if added(root, base, held) != {part: kept.get(part, "") for part in made}:
+        return None, HOOKS_CHANGED.format(", ".join(made), landing)
+    if hurt:
+        return None, HOOKS_HURT.format(landing)
+    return held, ""
+
+
+def tips(root: Path, landing: str) -> tuple[str | None, str | None]:
+    names = (f"{merge.HEADS}{landing}", "refs/stash")
+    shown = gatelib.git(root, "for-each-ref", "--format=%(refname) %(objectname)", *names) or ""
+    found = {name: tip for name, _, tip in (line.partition(" ") for line in shown.splitlines())}
+    return found.get(names[0]), found.get(names[1])
+
+
+def commit_aside(
+    root: Path, tree: Path, *, base: str, landing: str, made: list[str]
+) -> tuple[subprocess.CompletedProcess[str], Exposed | None]:
+    branched = merge.porcelain(
+        root, "worktree", "add", "--quiet", "--no-checkout", "-b", landing, str(tree), base
+    )
+    shown = merge.porcelain(
+        tree, "rev-parse", "--absolute-git-dir", "--verify", "--quiet", "refs/stash"
+    ).stdout.splitlines()
+    if branched.returncode or not shown:
+        return branched, None
+    aside = (f"--git-dir={shown[0]}", f"--work-tree={root}")
+    merge.porcelain(root, *aside, "read-tree", base)
+    listed = "".join(f"{part}\0" for part in made)
+    staged = merge.porcelain(
+        root,
+        *aside,
+        "--literal-pathspecs",
+        "add",
+        "--pathspec-from-file=-",
+        "--pathspec-file-nul",
+        given=listed,
+    )
+    if staged.returncode:
+        return staged, None
+    exposed = kept(root, protected(root, base), shown[1] if len(shown) > 1 else None)
+    message = f"{merge.SUBJECT}\n\nThe parts of a split, landed by `drain.py split`:\n\n" + "".join(
+        f"- {part}\n" for part in made
+    )
+    done = merge.porcelain(root, *aside, "commit", "-q", "--file=-", given=message)
+    return done, exposed
+
+
+def protected(root: Path, base: str) -> dict[str, tuple[str, ...]]:
+    listing = ["diff-index", "--cached", "-z", "--no-renames", "--no-abbrev", base]
+    listed = subprocess.run(
+        ["git", "-C", str(root), *listing],
+        capture_output=True,
+        text=True,
+        errors="surrogateescape",
+        check=False,
+    ).stdout.split("\0")
+    return {listed[at + 1]: tuple(listed[at].split()[2:4]) for at in range(0, len(listed) - 1, 2)}
+
+
+def kept(root: Path, listed: dict[str, tuple[str, ...]], stash: str | None) -> Exposed:
+    wide = any(len(known[0]) == SHA256_HEX for known in listed.values())
+    algorithm = "sha256" if wide else "sha1"
+    files: dict[str, tuple[int, str] | None] = {}
+    written: set[str] = set()
+    for path, known in listed.items():
+        try:
+            files[path], body = look(root / path, algorithm)
+        except OSError as error:
+            print(f"records: not saved: {path}: {error.strerror}")
+            files[path] = NOT_READ
+            continue
+        held = files[path]
+        if held is not None and stat.S_ISREG(held[0]) and held[1] not in known:
+            subprocess.run(
+                ["git", "-C", str(root), "hash-object", "-w", "--stdin"],
+                input=body,
+                capture_output=True,
+                check=False,
+            )
+            written.add(held[1])
+    return Exposed(files, frozenset(written), stash, algorithm)
+
+
+def look(path: Path, algorithm: str) -> tuple[tuple[int, str] | None, bytes]:
+    try:
+        mode = path.lstat().st_mode
+        body = path.read_bytes() if stat.S_ISREG(mode) else b""
+        target = str(path.readlink()) if stat.S_ISLNK(mode) else ""
+    except FileNotFoundError:
+        return None, b""
+    if not stat.S_ISREG(mode):
+        return (mode, target), body
+    return (mode, hashlib.new(algorithm, b"blob %d\0" % len(body) + body).hexdigest()), body
+
+
+def harmed(root: Path, exposed: Exposed, stash: str | None) -> list[str]:
+    lines = []
+    for path, was in exposed.files.items():
+        try:
+            now, _ = look(root / path, exposed.algorithm)
+        except OSError:
+            now = NOT_READ
+        if now != was:
+            lines.append(harm(path, was, now, written=exposed.written))
+    if stash != exposed.stash:
+        top = stash or exposed.stash
+        holds = gatelib.git(root, "diff", "--name-only", f"{top}^1", f"{top}") or ""
+        lines.append(
+            f"the commit hooks moved the stash: `stash@{{0}}` is now {stash or 'gone'}, and {top}"
+            f" holds {', '.join(holds.splitlines()) or 'no tracked file'} from the checkout:"
+            f" `git stash show -p {top}` prints them"
+        )
+    return lines
+
+
+def harm(
+    path: str, was: tuple[int, str] | None, now: tuple[int, str] | None, *, written: frozenset[str]
+) -> str:
+    if was is None:
+        return f"{CHANGED_BY.format('restored', path)}; the checkout did not have it"
+    mode, held = was
+    said = CHANGED_BY.format("deleted" if now is None else "changed", path)
+    if stat.S_ISREG(mode):
+        wrote = WROTE if held in written else ""
+        return (
+            f"{said}; the bytes it had are object {held}{wrote}: `git cat-file blob {held}` prints"
+            " them"
+        )
+    if was == NOT_READ:
+        return f"{said}; the split could not read it, so it was not saved"
+    return f"{said}; it was {f'a link to `{held}`' if stat.S_ISLNK(mode) else 'a folder'}"
 
 
 def show_plan(drain: Drain, _options: argparse.Namespace) -> int:

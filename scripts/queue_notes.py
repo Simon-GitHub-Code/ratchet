@@ -23,7 +23,7 @@ SIZE, QUESTIONS, GUARD = "size", "questions", "guard"
 SPLIT = "split"
 ERRORED = "errored"
 REASON_ROW = re.compile(r"\s*(?:[-*]\s+)?`?([a-z][a-z-]*)`?\s*:")
-MECHANICAL = frozenset({"behind", "moved", "conflict", "gates", "refs", ERRORED})
+MECHANICAL = frozenset({"behind", "moved", "conflict", "gates", "refs", "unproven", ERRORED})
 RETRIES = 3
 
 

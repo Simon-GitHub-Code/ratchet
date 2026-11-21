@@ -26,8 +26,10 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, NamedTuple, cast
 from urllib.parse import urlsplit
 
+import unproven
+
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterable, Iterator
     from types import FrameType
 
 FALLBACK_BRANCHES = ("main", "master")
@@ -73,11 +75,41 @@ def interpreter(*, inline: bool = False) -> list[str]:
     return argv
 
 
-def git(root: Path, *args: str) -> str | None:
+def git(root: Path, *args: str, errors: str | None = None) -> str | None:
     result = subprocess.run(
-        ["git", "-C", str(root), *args], capture_output=True, text=True, check=False
+        ["git", "-C", str(root), *args], capture_output=True, text=True, errors=errors, check=False
     )
     return result.stdout.strip() if result.returncode == 0 else None
+
+
+def chain(root: Path, tip: str, commits: Iterable[str] = ()) -> tuple[unproven.Landed, ...]:
+    listed = git(root, "log", "--format=%H %P%x09%s", tip, "--", errors="replace") or ""
+    parents: dict[str, list[str]] = {}
+    subjects: dict[str, str] = {}
+    for row in listed.splitlines():
+        shas, _, subject = row.partition("\t")
+        sha, *above = shas.split()
+        parents[sha], subjects[sha] = above, subject
+    line: list[str] = []
+    step = next(iter(subjects), None)
+    while step is not None:
+        line.append(step)
+        step = next(iter(parents[step]), None)
+    landing: dict[str, int] = {}
+    for index in reversed(range(len(line))):
+        reached = [line[index]]
+        while reached:
+            one = reached.pop()
+            if one not in landing:
+                landing[one] = index
+                reached.extend(parents[one])
+    merged: dict[int, set[str]] = {}
+    for one in set(commits).intersection(landing).difference(line):
+        merged.setdefault(landing[one], set()).add(one)
+    return tuple(
+        unproven.Landed(sha, subjects[sha], frozenset(merged.get(index, ())))
+        for index, sha in enumerate(line)
+    )
 
 
 def default_branches(root: Path) -> list[str]:
