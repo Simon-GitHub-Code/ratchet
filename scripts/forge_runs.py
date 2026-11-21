@@ -24,7 +24,8 @@ this repository that an event of the template started on a commit of the default
 on a tag named like the branch, or an old run started again, does not change the answer.
 Unreadable input is ``red``. ``forge_runs.py tier1`` answers the same of the ``ci.yml`` runs a
 push started. Where more runs match than one page holds, the newest page decides, and is ``red``
-when no run in it counts. Standard input that is not UTF-8 is unreadable to every command.
+when no run in it counts. In every locale, standard input is read as the C locale reads it: a
+byte that is not UTF-8 leaves its field equal to no word the commands compare it with.
 
 ``forge_runs.py deep --answer FILE`` reads the ``deep.yml`` runs of every status and writes what
 the merge judge reads with ``merge_ready.py --deep FILE`` (ADR 0077): each run of this repository
@@ -327,13 +328,6 @@ def read(path: str) -> str | None:
     return gatelib.read_text(Path(path))
 
 
-def decoded(data: bytes) -> str:
-    try:
-        return data.decode()
-    except UnicodeDecodeError:
-        return ""
-
-
 def main(argv: list[str] | None = None, runs: str | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -361,7 +355,7 @@ def main(argv: list[str] | None = None, runs: str | None = None) -> int:
     options = parser.parse_args(argv)
     if options.command == "speaks" and not COMMIT.fullmatch(options.commit):
         parser.error(f"argument --commit: {options.commit!a} is not a full commit name")
-    text = decoded(sys.stdin.buffer.read()) if runs is None else runs
+    text = sys.stdin.buffer.read().decode("utf-8", "surrogateescape") if runs is None else runs
     if options.command == "speaks" or options.answer is not None:
         return answer_or_speak(options, text)
     if options.command in ON_THE_DEFAULT_BRANCH:
