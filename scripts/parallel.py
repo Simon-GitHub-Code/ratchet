@@ -369,7 +369,8 @@ class Scheduler:
         self.finished.append(result)
         if self.report_to is not None:
             outcome = budget.Outcome(result.name, result.seconds, None, result.exit_code)
-            budget.report(self.report_to, outcome, runrecord.stamp(self.root, self.tree))
+            stamp = runrecord.stamp(self.root, self.tree)
+            budget.report(self.report_to, outcome, stamp, root=self.root)
         if self.fail_fast and not result.green:
             self.halted = True
 
@@ -467,10 +468,10 @@ def record(scheduler: Scheduler, wall: float, *, exit_code: int, gates: list[str
         "gates": gates,
         **stamp,
     }
-    runrecord.append(scheduler.report_to, whole)
+    runrecord.append(scheduler.report_to, whole, root=scheduler.root)
     for path in missing:
         found: dict[str, object] = {"kind": runrecord.CACHE_MISSING, "path": path, **stamp}
-        runrecord.append(scheduler.report_to, found)
+        runrecord.append(scheduler.report_to, found, root=scheduler.root)
 
 
 def verdict(scheduler: Scheduler, problems: list[str]) -> str:
