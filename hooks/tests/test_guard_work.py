@@ -175,7 +175,7 @@ FAMILIES: dict[str, Family] = {
     "many words after git": (2_000, lambda n: "echo " + " ".join(["git"] * n)),
 }
 INSIDE_ONE_CALL = frozenset({"many words after git"})
-TIMED = 3.0
+TIMED = 8.0
 SQUARED = 4.5
 SQUARE = frozenset(
     {
@@ -207,26 +207,33 @@ def work(command: str) -> int:
     return calls[0]
 
 
-def seconds(command: str) -> float:
+def seconds_grew(small: str, large: str) -> float:
     guard = make_guard()
-    spent = []
-    for _ in range(3):
-        start = time.process_time()
-        bash.check(command, Context(ROOT), guard)
-        spent.append(time.process_time() - start)
-    return min(spent)
+    bash.check(small, Context(ROOT), guard)
+    spent: tuple[list[float], list[float]] = ([], [])
+    for _ in range(5):
+        for side, command in zip(spent, (small, large), strict=True):
+            start = time.process_time()
+            bash.check(command, Context(ROOT), guard)
+            side.append(time.process_time() - start)
+    return min(spent[1]) / min(spent[0])
 
 
-@pytest.mark.parametrize("name", FAMILIES)
+@pytest.mark.parametrize("name", [name for name in FAMILIES if name not in INSIDE_ONE_CALL])
 def test_the_guards_work_grows_no_faster_than_its_input(name: str) -> None:
-    timed = name in INSIDE_ONE_CALL
-    factor = TIMED if timed else SQUARED if name in SQUARE else LINEAR
-    measure = seconds if timed else work
+    factor = SQUARED if name in SQUARE else LINEAR
     base, make = FAMILIES[name]
-    measure(make(base))
-    earlier = measure(make(base))
+    work(make(base))
+    earlier = work(make(base))
     for scale in (2, 4):
-        later = measure(make(base * scale))
+        later = work(make(base * scale))
         grew = later / earlier
         assert grew <= factor, f"{name}: work grew {grew:.3f} at {base * scale}, over {factor}"
         earlier = later
+
+
+@pytest.mark.parametrize("name", sorted(INSIDE_ONE_CALL))
+def test_the_guards_time_grows_no_faster_than_its_input(name: str) -> None:
+    base, make = FAMILIES[name]
+    grew = seconds_grew(make(base), make(base * 4))
+    assert grew <= TIMED, f"{name}: time grew {grew:.3f} from {base} to {base * 4}, over {TIMED}"
