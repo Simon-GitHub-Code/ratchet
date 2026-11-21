@@ -24,11 +24,29 @@ this repository that an event of the template started on a commit of the default
 on a tag named like the branch, or an old run started again, does not change the answer.
 Unreadable input is ``red``. ``forge_runs.py tier1`` answers the same of the ``ci.yml`` runs a
 push started. Where more runs match than one page holds, the newest page decides, and is ``red``
-when no run in it counts.
+when no run in it counts. In every locale, standard input is read as the C locale reads it: a
+byte that is not UTF-8 leaves its field equal to no word the commands compare it with.
+
+``forge_runs.py deep --answer FILE`` reads the ``deep.yml`` runs of every status and writes what
+the merge judge reads with ``merge_ready.py --deep FILE`` (ADR 0077): each run of this repository
+that an event of the template started, green, red or running. A run that is not completed is
+running, whatever word the forge gives its status, and a cancelled or skipped run is dropped. An
+unreadable answer, a kept run whose time is not an instant, or a page cut short that holds no
+finished run on the default branch's first-parent line, is not known. A red run on a commit off
+that line sits on the merge that brought the commit onto it. It prints ``start`` when no finished
+run covers the tip and no run goes on a commit nearer the tip than the nearest one a finished run
+covers.
+
+``forge_runs.py speaks --commit SHA --state green|red`` prints which merges of the default branch
+the deep run that checked out SHA, a full commit name, speaks for: its commit, or the merge that
+brought it onto the first-parent line, and each one below it down to, and not including, the
+nearest whose deciding run is green.
 
 Usage: ``forge_runs.py ci --pulls FILE --events FILE --number N --sha SHA --branch NAME --base
-NAME --repository OWNER/NAME [--report FILE]`` and ``forge_runs.py deep|tier1 --tip REF
---repository OWNER/NAME [--root DIR]``.
+NAME --repository OWNER/NAME [--report FILE]``, ``forge_runs.py deep|tier1 --tip REF
+--repository OWNER/NAME [--root DIR] [--answer FILE]`` (``--answer`` for ``deep`` only) and
+``forge_runs.py speaks --tip REF --repository OWNER/NAME [--root DIR] --commit SHA --state
+green|red``.
 """
 
 import argparse
@@ -37,9 +55,11 @@ import re
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import gatelib
+import unproven
 
 PAGE = 100
 CI_PATH = ".github/workflows/ci.yml"
@@ -54,6 +74,8 @@ DONE = ("completed", "success")
 UNREADABLE = "the forge's answer could not be read"
 MARKER = "<!-- ratchet:merge -->"
 OWNER = "merge: owner"
+START = "start"
+STARTS = "the merge job starts a deep run on the default branch's tip when it next runs"
 
 
 def at(value: object, *keys: str) -> object:
@@ -69,7 +91,7 @@ def documents(text: str) -> list[object] | None:
     while rest:
         try:
             document, end = decoder.raw_decode(rest)
-        except ValueError:
+        except (ValueError, RecursionError):
             return None
         found.append(document)
         rest = rest[end:].lstrip()
@@ -221,15 +243,85 @@ def on_the_tip(runs: str, *, root: Path, tip: str, repository: str, events: froz
     nearest: dict[int, list[object]] = {}
     for run in ran:
         ours = at(run, "head_repository", "full_name") == repository
-        counts = at(run, "status") == "completed" and at(run, "conclusion") not in UNCOUNTED
-        if not ours or not counts or at(run, "event") not in events:
-            continue
+        try:
+            counts = at(run, "status") == "completed" and at(run, "conclusion") not in UNCOUNTED
+            if not ours or not counts or at(run, "event") not in events:
+                continue
+        except TypeError:
+            return RED
         distance = _distance(root, at(run, "head_sha"), tip)
         if distance is not None:
             nearest.setdefault(distance, []).append(run)
     if not nearest:
         return NONE if whole else RED
     return GREEN if at(newest(nearest[min(nearest)]), "conclusion") == "success" else RED
+
+
+def state_of(run: object) -> unproven.State | None:
+    if at(run, "status") != "completed":
+        return unproven.RUNNING
+    conclusion = at(run, "conclusion")
+    if isinstance(conclusion, str) and conclusion in UNCOUNTED:
+        return None
+    return unproven.GREEN if conclusion == "success" else unproven.RED
+
+
+def deep_runs(items: list[object], repository: str) -> tuple[unproven.DeepRun, ...] | None:
+    found = []
+    for item in items:
+        sha, state, event = at(item, "head_sha"), state_of(item), at(item, "event")
+        ours = at(item, "head_repository", "full_name") == repository and isinstance(event, str)
+        if not ours or event not in DEEP_EVENTS or state is None:
+            continue
+        if not isinstance(sha, str) or not COMMIT.match(sha):
+            continue
+        when = unproven.instant(at(item, "created_at"))
+        if when is None:
+            return None
+        url, number = at(item, "html_url"), at(item, "id")
+        if not url or not unproven.printable(url):
+            url = f"run {number if isinstance(number, int) or unproven.printable(number) else '?'}"
+        found.append(unproven.DeepRun(sha, state, when, url))
+    return tuple(found)
+
+
+def asks_start(line: tuple[unproven.Landed, ...], deep: unproven.Deep) -> bool:
+    seen = None if deep.runs is None else unproven.reading(line, deep.runs)
+    return seen is not None and seen.nearest > 0 and seen.ender is None
+
+
+def speaks(line: tuple[unproven.Landed, ...], deep: unproven.Deep, *, sha: str, state: str) -> str:
+    head = f"deep: {state} at `{sha[: unproven.SHORT]}`."
+    if deep.runs is None:
+        return (
+            f"{head} The forge's answer could not be read, so which merges of the default branch"
+            " it speaks for is not known.\n"
+        )
+    said: unproven.State = unproven.RED if state == RED else unproven.GREEN
+    run = unproven.DeepRun(sha, said, datetime.now(UTC), "this run")
+    rows = "".join(
+        f"- `{merge.commit[: unproven.SHORT]}` {merge.subject}\n"
+        for merge in unproven.speaks_for(line, deep, run)
+    )
+    return f"{head} The merges of the default branch it speaks for:\n{rows}"
+
+
+def answer_or_speak(options: argparse.Namespace, runs: str) -> int:
+    page = newest_page(runs)
+    found = None if page is None else deep_runs(page[0], options.repository)
+    asked = [options.commit] if options.command == "speaks" else []
+    seen = [run.commit for run in found or ()]
+    line = gatelib.chain(Path(options.root), options.tip, [*seen, *asked])
+    covered = found is not None and unproven.reading(line, found).decider is not None
+    whole = page is not None and page[1]
+    deep = unproven.Deep(found if whole or covered else None, STARTS)
+    if options.command == "speaks":
+        print(speaks(line, deep, sha=options.commit, state=options.state), end="")
+        return 0
+    options.answer.write_text(unproven.written(deep), encoding="utf-8")
+    if asks_start(line, deep):
+        print(START)
+    return 0
 
 
 def read(path: str) -> str | None:
@@ -250,13 +342,22 @@ def main(argv: list[str] | None = None, runs: str | None = None) -> int:
     one.add_argument("--base", required=True)
     one.add_argument("--repository", required=True)
     one.add_argument("--report", type=Path)
-    for name in ON_THE_DEFAULT_BRANCH:
-        tier = commands.add_parser(name)
-        tier.add_argument("--tip", required=True)
-        tier.add_argument("--repository", required=True)
-        tier.add_argument("--root", default=".")
+    tiers = {}
+    for name in (*ON_THE_DEFAULT_BRANCH, "speaks"):
+        tiers[name] = commands.add_parser(name)
+        tiers[name].add_argument("--tip", required=True)
+        tiers[name].add_argument("--repository", required=True)
+        tiers[name].add_argument("--root", default=".")
+    tiers["deep"].add_argument("--answer", type=Path)
+    tiers["speaks"].add_argument("--commit", required=True)
+    tiers["speaks"].add_argument("--state", choices=(GREEN, RED), required=True)
+    parser.set_defaults(answer=None)
     options = parser.parse_args(argv)
-    text = sys.stdin.read() if runs is None else runs
+    if options.command == "speaks" and not COMMIT.fullmatch(options.commit):
+        parser.error(f"argument --commit: {options.commit!a} is not a full commit name")
+    text = sys.stdin.buffer.read().decode("utf-8", "surrogateescape") if runs is None else runs
+    if options.command == "speaks" or options.answer is not None:
+        return answer_or_speak(options, text)
     if options.command in ON_THE_DEFAULT_BRANCH:
         events = ON_THE_DEFAULT_BRANCH[options.command]
         root, tip, repository = Path(options.root), options.tip, options.repository
