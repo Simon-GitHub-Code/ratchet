@@ -79,7 +79,7 @@ Pick the mode from what the owner typed:
 
 6. **Publish.**
    - **With a forge:** push, and open the pull request as [The pull request](#the-pull-request) says.
-   - **With no forge:** `just merge <branch>` judges the branch, runs `check` on the merge result and merges it, or prints why the merge is the owner's.
+   - **With no forge:** `just merge <branch>` judges the branch, runs `check` on the merge result and merges it, or prints why the merge is the owner's. On `merge: wait`, run `just merge --deep` in the background, wait on its exit, then run the merge once more.
 
    Done when the pull request is open with every section filled, or `just merge` has printed its lines.
 
@@ -165,6 +165,7 @@ Run every command below from the repository's own checkout, on the default branc
    5. **The records.** Make them as [The records of an approved change](#the-records-of-an-approved-change) says, with the verdict record from the latest result.
    6. **Land it.**
       - **With no forge:** `D land <ticket> --root .` runs the binding's `merge` entry point, prints the judge's lines, removes the work tree and records merged or waiting with every reason. Exit 2 means it could not ask: report what it printed and leave the ticket.
+        - **It printed `merge: wait` with a reason that names `merge --deep`:** run `just merge --deep` in the background and wait on its exit, never on a timer, then run `D land <ticket> --root .` once more.
       - **With a forge:** push, and open the pull request as [The pull request](#the-pull-request) says. Wait for both workflows: `gh pr checks <n> --watch` for `ci`, then the `merge` run that follows it (`gh run list --workflow merge.yml --limit 1`, then `gh run watch <id>`).
         - When `gh pr view <n> --json state` says `MERGED`, run `git pull --ff-only` on the default branch and `D close <ticket> --outcome merged --root .`.
         - Otherwise run `D close <ticket> --outcome waits --root .`, with one `--reason` per line of the judge's comment on the pull request.

@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING
 
 import gatelib
 import merge_ready
+import project_bite
+import unproven
 from merge_ready import Reason
 
 if TYPE_CHECKING:
@@ -29,6 +31,9 @@ HEADS = "refs/heads/"
 CHECK = "check"
 TIER2 = "check-deep"
 NEXT = "next: "
+DEEP = "--deep"
+SETUP_LIMIT = project_bite.GATE_LIMIT
+EXITS = {unproven.GREEN: 0, unproven.RED: 1, unproven.UNRUN: 2}
 RECORDS = "records/"
 SUBJECT = "docs(records): land what the owner's conversation wrote"
 HOOK_LINES = 5
@@ -81,7 +86,7 @@ def state_dir(root: Path) -> Path:
 
 
 @contextlib.contextmanager
-def locked(path: Path, *, create: bool = True) -> Iterator[int | None]:
+def locked(path: Path, *, create: bool = True, wait: bool = False) -> Iterator[int | None]:
     try:
         descriptor = os.open(path, os.O_RDWR | (os.O_CREAT if create else 0), OWNER_FILE)
     except OSError:
@@ -89,7 +94,7 @@ def locked(path: Path, *, create: bool = True) -> Iterator[int | None]:
         return
     try:
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(descriptor, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
         except BlockingIOError:
             yield None
         else:
@@ -337,14 +342,19 @@ def recover(root: Path) -> list[str]:
     return recovery(root)[0]
 
 
-def attempt(root: Path, tree: Path, *, default: str, branch: str) -> tuple[list[Reason], str]:
+def attempt(
+    root: Path, tree: Path, *, default: str, branch: str, deep: unproven.Deep
+) -> tuple[list[Reason], str]:
     old, head = tip(root, default) or "", tip(root, branch) or ""
     if gatelib.git(root, "worktree", "add", "--quiet", "--detach", str(tree), old) is None:
         return [Reason("refs", f"no work tree of `{default}` could be made at {tree}")], ""
     message = f"Merge branch '{branch}'"
     if gatelib.git(tree, "merge", "--no-ff", "--quiet", "-m", message, head) is None:
         return [Reason("conflict", f"`{branch}` does not merge into `{default}` cleanly")], ""
-    asked = merge_ready.Asked(current=True)
+    fork = gatelib.git(root, "merge-base", old, head) or old
+    bound, _ = merge_ready.declared_bound(gatelib.show(root, fork, merge_ready.THRESHOLDS))
+    held = None if unproven.cannot_hold(deep, old, bound=bound) else deep
+    asked = merge_ready.Asked(current=True, deep=held)
     reasons = merge_ready.judge(root, f"{HEADS}{default}", head, asked=asked)
     if reasons:
         return reasons, ""
@@ -352,6 +362,67 @@ def attempt(root: Path, tree: Path, *, default: str, branch: str) -> tuple[list[
     gate = TIER2 if merge_ready.adopts(root, f"{HEADS}{default}", head) else CHECK
     red = run_check(tree, gate) or land(root, default, old=old, new=merged)
     return ([red] if red else []), merged
+
+
+@contextlib.contextmanager
+def scratch_tree(root: Path) -> Iterator[Path]:
+    scratch = Path(tempfile.mkdtemp(prefix=SCRATCH))
+    tree = scratch / "tree"
+    with locked(scratch / HELD):
+        try:
+            yield tree
+        finally:
+            gatelib.git(root, "worktree", "remove", "--force", str(tree))
+            shutil.rmtree(scratch, ignore_errors=True)
+            gatelib.git(root, "worktree", "prune")
+
+
+def record_path(root: Path) -> Path:
+    return state_dir(root) / unproven.RECORD
+
+
+def holding(root: Path) -> tuple[str, datetime] | None:
+    path = state_dir(root) / unproven.LOCK
+    if not lock_held(path):
+        return None
+    try:
+        return path.read_text(encoding="utf-8"), datetime.fromtimestamp(path.stat().st_mtime, UTC)
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def read_record(root: Path) -> bytes | None:
+    try:
+        return record_path(root).read_bytes()
+    except FileNotFoundError:
+        return b""
+    except OSError:
+        return None
+
+
+def proving(root: Path, default: str) -> str:
+    return f"run {again(root, DEEP)}, which proves the tip of `{default}`"
+
+
+def refused_next(
+    root: Path, *, default: str, branch: str, reasons: list[Reason], deep: unproven.Deep
+) -> str:
+    proves = f"{again(root, DEEP)} proves the tip of `{default}` again"
+    if any(reason.code == unproven.TIER2 for reason in reasons):
+        fix = "merges what fixes tier 2"
+        if deep.runs is None:
+            fix = f"removes {record_path(root)}, which does not parse"
+        return f"{NEXT}the owner {fix}, then {proves}"
+    if merge_ready.verdict(reasons) == merge_ready.WAIT:
+        return (
+            f"{NEXT}run {again(root, DEEP)} in the background and wait on its exit, then merge"
+            f" `{branch}` again: it proves the tip of `{default}`"
+        )
+    return (
+        f"{NEXT}the owner types `git switch {default} && git merge --no-ff {branch}`, then"
+        f" {again(root, DEEP)} on `{default}`: no gate ran on this merge, and tier 2 runs every"
+        " gate"
+    )
 
 
 def merge(root: Path, branch: str) -> int:
@@ -364,35 +435,158 @@ def merge(root: Path, branch: str) -> int:
         return 2
     for line in recover(root):
         print(line)
-    scratch = Path(tempfile.mkdtemp(prefix=SCRATCH))
-    tree = scratch / "tree"
-    with locked(scratch / HELD):
-        try:
-            reasons, merged = attempt(root, tree, default=default, branch=branch)
-        finally:
-            gatelib.git(root, "worktree", "remove", "--force", str(tree))
-            shutil.rmtree(scratch, ignore_errors=True)
-            gatelib.git(root, "worktree", "prune")
+    deep = unproven.recorded(read_record(root), start=proving(root, default), holding=holding(root))
+    with scratch_tree(root) as tree:
+        reasons, merged = attempt(root, tree, default=default, branch=branch, deep=deep)
     print(merge_ready.render(reasons), end="")
     if reasons and not any(reason.code in NOT_THE_JUDGES for reason in reasons):
-        command = gatelib.entry_point(root, TIER2)
-        deep = f"`{command}`" if command else f"the binding's `{TIER2}` entry point"
-        print(
-            f"{NEXT}the owner types `git switch {default} && git merge --no-ff {branch}`, then"
-            f" {deep} on `{default}`: no gate ran on this merge, and tier 2 runs every gate"
-        )
+        print(refused_next(root, default=default, branch=branch, reasons=reasons, deep=deep))
     if reasons:
         return 1
-    deep = gatelib.entry_point(root, TIER2) or f"the binding's `{TIER2}` entry point"
     print(f"merged: `{branch}` into `{default}` at {merged[:12]}")
     switch = ""
     if on_branch(root) == branch and not left(root, default):
         switch = f"`git switch {default}`, then "
     print(
-        f"{NEXT}{switch}{deep} on `{default}`: tier 2 runs after every merge, and a red one"
-        " comes first"
+        f"{NEXT}{switch}{again(root, DEEP)} on `{default}`: tier 2 runs after every merge, and a"
+        " red one comes first"
     )
     return 0
+
+
+@contextlib.contextmanager
+def deep_lock(root: Path, default: str) -> Iterator[int | None]:
+    path = state_dir(root) / unproven.LOCK
+    with locked(path) as held:
+        if held is not None:
+            yield held
+            return
+    waits = f"merge: another `merge {DEEP}` proves `{default}` now; this one waits for it"
+    print(waits, flush=True)
+    with locked(path, wait=True) as held:
+        yield held
+
+
+def ran(command: str, tree: Path, limit: float | None = None) -> int | str:
+    try:
+        return subprocess.run(
+            shlex.split(command), cwd=tree, env=copied(), check=False, timeout=limit
+        ).returncode
+    except OSError as error:
+        return f"`{command}` could not run: {error}"
+    except subprocess.TimeoutExpired:
+        return f"`{command}` timed out after {limit:g}s"
+
+
+def copied() -> dict[str, str]:
+    made = project_bite.environment()
+    del made[project_bite.BITING]
+    return made
+
+
+def prepared(root: Path, tree: Path, commit: str) -> str:
+    made = project_bite.run_git(root, "worktree", "add", "--quiet", "--detach", str(tree), commit)
+    if made.returncode:
+        return f"no work tree of {commit[:12]} could be made at {tree}"
+    text = gatelib.read_text(tree / project_bite.REGISTRY) or ""
+    registry, problems = project_bite.read_registry(text)
+    if problems:
+        return f"{project_bite.REGISTRY} does not read: {problems[0]}"
+    try:
+        for path in registry.include:
+            project_bite.carry_included(root, tree, path)
+    except (OSError, project_bite.Unprovable) as error:
+        return f"an `include` path could not be copied: {error}"
+    for command in registry.setup:
+        code = ran(command, tree, SETUP_LIMIT)
+        if code != 0:
+            return code if isinstance(code, str) else f"setup `{command}` exited {code}"
+    return ""
+
+
+def judged(root: Path, tree: Path, commit: str) -> tuple[unproven.Outcome, int | None, str, str]:
+    unready = prepared(root, tree, commit)
+    if unready:
+        return unproven.UNRUN, None, "", unready
+    entry = gatelib.entry_point(tree, TIER2)
+    if entry is None:
+        return unproven.UNRUN, None, "", f"the binding names no `{TIER2}` entry point"
+    code = ran(entry, tree)
+    if isinstance(code, str):
+        return unproven.UNRUN, None, entry, code
+    if code < 0:
+        return unproven.UNRUN, code, entry, f"`{entry}` was stopped by signal {-code}"
+    if code:
+        return unproven.RED, code, entry, f"`{entry}` exited {code}"
+    return unproven.GREEN, code, entry, ""
+
+
+def prove(root: Path) -> int:
+    default = local_default(root)
+    if gatelib.git(root, "remote", "get-url", "origin") is not None:
+        print("merge: this repository has a forge (`origin`): its deep workflow proves the tip")
+        return 2
+    if default is None:
+        print("merge: there is no local default branch to prove")
+        return 2
+    for line in recover(root):
+        print(line)
+    seen = (read_record(root) or b"").count(b"\n")
+    with deep_lock(root, default) as lock:
+        if lock is None:
+            print(f"merge: {state_dir(root) / unproven.LOCK} cannot be opened; nothing was proved")
+            return 2
+        return proved(root, default, lock=lock, seen=seen)
+
+
+def proved(root: Path, default: str, *, lock: int, seen: int) -> int:
+    commit = tip(root, default) or ""
+    data = read_record(root)
+    lines = None if data is None else unproven.lines_of(data)
+    if data is None or lines is None:
+        print(
+            f"merge: {record_path(root)} does not parse; the owner removes it, then"
+            f" {again(root, DEEP)} proves the tip of `{default}` again"
+        )
+        return 2
+    for line in lines[seen:]:
+        if line.commit == commit and line.status != unproven.UNRUN:
+            print(f"merge: `{default}` at {commit[:12]} was proved {line.status} while this waited")
+            return EXITS[line.status]
+    os.ftruncate(lock, 0)
+    os.write(lock, commit.encode())
+    at, started = datetime.now(UTC), time.monotonic()
+    with scratch_tree(root) as tree:
+        status, code, entry, why = judged(root, tree, commit)
+    seconds = round(time.monotonic() - started, 1)
+    speaks: tuple[unproven.Landed, ...] = ()
+    if status != unproven.UNRUN:
+        runs = unproven.recorded(data, start="").runs or ()
+        name = f"line {len(lines) + 1} of {unproven.RECORD}"
+        run = unproven.DeepRun(commit, status, at, name)
+        landed = gatelib.chain(root, commit, [*(each.commit for each in runs), commit])
+        speaks = unproven.speaks_for(landed, unproven.Deep((*runs, run), ""), run)
+    proof = unproven.Proof(
+        commit,
+        gatelib.git(root, "rev-parse", f"{commit}^{{tree}}") or "",
+        status,
+        code,
+        seconds,
+        at,
+        entry,
+        tuple(each.commit for each in speaks),
+        why,
+    )
+    written = unproven.proof_line(proof).encode()
+    descriptor = os.open(record_path(root), os.O_WRONLY | os.O_APPEND | os.O_CREAT, OWNER_FILE)
+    try:
+        os.write(descriptor, written)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    said = f"deep: {status} on `{default}` at {commit[:12]} in {seconds:g}s"
+    print(f"{said}: {why}" if why else said)
+    return EXITS[status]
 
 
 def left(root: Path, default: str) -> bool:
@@ -455,9 +649,9 @@ def commit_records(root: Path, default: str, paths: list[str]) -> str | Reason:
     return Reason("gates", f"the records stay uncommitted on the default branch, since {said}")
 
 
-def again(root: Path) -> str:
+def again(root: Path, flag: str = "--records") -> str:
     command = gatelib.entry_point(root, "merge")
-    return f"`{command} --records`" if command else "the binding's `merge` entry point --records"
+    return f"`{command} {flag}`" if command else f"the binding's `merge` entry point {flag}"
 
 
 def come_back(root: Path, default: str, branch: str) -> int | None:
@@ -537,14 +731,19 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("branch", nargs="?")
     parser.add_argument("--records", action="store_true")
+    parser.add_argument(DEEP, action="store_true")
     parser.add_argument("--root", default=".")
     options = parser.parse_args(argv[1:])
-    if options.records == (options.branch is not None):
+    if options.deep and (options.records or options.branch is not None):
+        parser.error(f"{DEEP} takes no branch and no --records")
+    if not options.deep and options.records == (options.branch is not None):
         parser.error("name a branch, or pass --records")
     top = gatelib.git(Path(options.root), "rev-parse", "--show-toplevel")
     if top is None:
         print(f"merge: {options.root} is not a git repository")
         return 2
+    if options.deep:
+        return prove(Path(top))
     if options.records:
         return land_records(Path(top))
     default = local_default(Path(top))

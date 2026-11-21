@@ -45,6 +45,8 @@ The feature preflight, the route and the `ratchet` recipe ask it, and each print
 
 `check` is tier 0 plus tier 1. `check-deep` adds tier 2. `check-fast` is `check` stopped at the first red, for the inner loop. Each tier is a list of small entry points, so a failure names the one that went red and that one reruns alone until green.
 
+With no forge, tier 2 after a merge is the `merge` entry point with `--deep`, which an agent runs in the background and waits on. It runs `check-deep` on the default branch's tip and records the result in `ratchet-deep.jsonl`, and the next merge reads that record: a red that no later green covers holds it, as a red deep run does on a forge. A proof that could not judge the tree, a failed `setup` or a signal among them, is unrun: it covers nothing and is not red.
+
 Every comparison against history uses the merge base with the default branch (`HEAD~1` on the default branch itself), so a loosening made in an earlier commit of the same branch is still seen. CI checks out full history.
 
 ## Tier 0: the shape of the code
