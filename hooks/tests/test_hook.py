@@ -8,9 +8,9 @@ import sys
 import time
 from pathlib import Path
 
-import adapter
 import pytest
 
+import adapter
 from ratchet_guards import bash, hook
 from ratchet_guards.context import Guard
 from ratchet_guards.manifest import COMMITTED, EMPTY, MANIFEST_PATH, parse

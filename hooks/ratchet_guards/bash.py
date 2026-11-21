@@ -1,6 +1,6 @@
 import re
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from itertools import dropwhile, islice, pairwise, product
 from pathlib import Path, PurePosixPath
 
@@ -398,48 +398,42 @@ def _inner_scripts(head: str, words: Sequence[str]) -> list[str]:
     return [] if script is None else [script]
 
 
+@dataclass(frozen=True, slots=True)
+class _Memo:
+    judged: dict[tuple[str, Context, int, str], list[Verdict]] = field(default_factory=dict)
+    parsed: dict[str, _Read] = field(default_factory=dict)
+    found: list[Verdict] = field(default_factory=list)
+
+    def noted(self, verdicts: list[Verdict]) -> list[Verdict]:
+        self.found.extend(verdicts)
+        return verdicts
+
+
 class _Checker:
-    def __init__(
-        self,
-        guard: Guard,
-        depth: int,
-        line: str,
-        *,
-        judged: dict[tuple[str, Context, int, str], list[Verdict]],
-        parsed: dict[str, _Read],
-        found: list[Verdict],
-    ) -> None:
+    def __init__(self, guard: Guard, depth: int, line: str, *, memo: _Memo) -> None:
         self.guard = guard
         self.depth = depth
         self.line = line
-        self.judged = judged
-        self.parsed = parsed
-        self.found = found
+        self.memo = memo
         self.modelled = True
 
     def _deeper(self) -> "_Checker":
-        return _Checker(
-            self.guard,
-            self.depth + 1,
-            self.line,
-            judged=self.judged,
-            parsed=self.parsed,
-            found=self.found,
-        )
+        return _Checker(self.guard, self.depth + 1, self.line, memo=self.memo)
 
     def script(self, text: str, context: Context, heredoc: str = "") -> list[Verdict]:
         key = (text, context, self.depth, heredoc)
-        if key in self.judged:
-            return self.judged[key]
+        judged, parsed = self.memo.judged, self.memo.parsed
+        if key in judged:
+            return judged[key]
         if heredoc:
             verdicts = [replace(v, heredoc=heredoc) for v in self.script(text, context)]
         elif self.depth > MAX_DEPTH:
             verdicts = [Verdict("unreadable", "the command nests scripts too deeply")]
         else:
-            if text not in self.parsed:
-                self.parsed[text] = _read(text)
-            verdicts = self._judged(self.parsed[text], context)
-        self.judged[key] = verdicts
+            if text not in parsed:
+                parsed[text] = _read(text)
+            verdicts = self._judged(parsed[text], context)
+        judged[key] = verdicts
         return verdicts
 
     def _judged(self, read: _Read, context: Context) -> list[Verdict]:
@@ -464,9 +458,7 @@ class _Checker:
             pipeline.append(command)
             position = len(pipeline)
             for place in now:
-                judged = self._command(pipeline, parsed.heredocs, place)
-                self.found += judged
-                verdicts += judged
+                verdicts += self.memo.noted(self._command(pipeline, parsed.heredocs, place))
             pipeline = pipeline if command.piped else []
             chained = command.then == _AND
             sure = trusted and chained and previous not in _UNSURE_AFTER
@@ -694,12 +686,11 @@ class _Checker:
 
 
 def check(command: str, context: Context, guard: Guard) -> list[Verdict]:
-    found: list[Verdict] = []
-    checker = _Checker(guard, 0, command, judged={}, parsed={}, found=found)
+    memo = _Memo()
     try:
-        verdicts = checker.script(command, context)
+        verdicts = _Checker(guard, 0, command, memo=memo).script(command, context)
     except LateError as late:
-        raise LateError(found) from late
+        raise LateError(memo.found) from late
     elsewhere = {verdict for verdict in verdicts if not verdict.heredoc}
     verdicts = [v for v in verdicts if not v.heredoc or replace(v, heredoc="") not in elsewhere]
     verdicts = tickets.together(verdicts)

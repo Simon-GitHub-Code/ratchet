@@ -1,6 +1,7 @@
 import re
 import sys
 from collections.abc import Callable
+from itertools import pairwise
 from types import FrameType
 
 import pytest
@@ -10,7 +11,9 @@ from ratchet_guards.context import Context
 from tests.support import ROOT, make_guard
 
 PROSE = "This line of the note explains a step, with `code`, $5 and a path like src/app/main.py.\n"
-PROGRAM = "".join(f"def f{i}(x):\n    return [y * 2 for y in x if y % 3 == {i} % 3]\n\n" for i in range(9))
+PROGRAM = "".join(
+    f"def f{i}(x):\n    return [y * 2 for y in x if y % 3 == {i} % 3]\n\n" for i in range(9)
+)
 LINEAR = 2.3
 
 
@@ -32,13 +35,16 @@ FAMILIES: dict[str, Family] = {
     "nested function substitutions": (10, lambda n: "echo " + "${ : " * n + "x" + "; }" * n),
     "nested subshells": (25, lambda n: "( " * n + "echo x" + " )" * n),
     "nested groups": (25, lambda n: "{ " * n + "echo x" + "; }" * n),
-    "nested heredocs": (5, lambda n: (
-        "cat <<E\n"
-        + "".join(f"$(cat <<F{i}\n" for i in range(n))
-        + "x"
-        + "".join(f"\nF{i}\n)" for i in reversed(range(n)))
-        + "\nE"
-    )),
+    "nested heredocs": (
+        5,
+        lambda n: (
+            "cat <<E\n"
+            + "".join(f"$(cat <<F{i}\n" for i in range(n))
+            + "x"
+            + "".join(f"\nF{i}\n)" for i in reversed(range(n)))
+            + "\nE"
+        ),
+    ),
     "nested evals": (10, lambda n: " ".join(["eval"] * n) + " x"),
     "nested process substitutions": (10, lambda n: "cat " + "<(a " * n + "x" + ")" * n),
     "commands after ;": (50, lambda n: "; ".join(f"echo {i}" for i in range(n))),
@@ -47,7 +53,10 @@ FAMILIES: dict[str, Family] = {
     "commands after &": (50, lambda n: " & ".join(f"echo {i}" for i in range(n))),
     "commands on lines": (50, lambda n: "\n".join(f"echo {i}" for i in range(n))),
     "a long pipeline": (50, lambda n: " | ".join(["grep -v x", "sort", "uniq -c"] * n)),
-    "words piped into a shell": (25, lambda n: "echo " + " ".join(f"w{i}" for i in range(n)) + " | bash"),
+    "words piped into a shell": (
+        25,
+        lambda n: "echo " + " ".join(f"w{i}" for i in range(n)) + " | bash",
+    ),
     "words piped into an interpreter": (
         25,
         lambda n: "echo " + " ".join(f"w{i}" for i in range(n)) + " | python3 -",
@@ -55,16 +64,22 @@ FAMILIES: dict[str, Family] = {
     "a huge word": (5_000, lambda n: "echo " + "a" * n),
     "a huge single-quoted string": (5_000, lambda n: "echo '" + _filled("a b ", n) + "'"),
     "a huge double-quoted string": (5_000, lambda n: 'echo "' + _filled("a $b ", n) + '"'),
-    "a huge quoted body": (5_000, lambda n: "cat > notes.md <<'EOF'\n" + _filled(PROSE, n) + "\nEOF"),
+    "a huge quoted body": (
+        5_000,
+        lambda n: "cat > notes.md <<'EOF'\n" + _filled(PROSE, n) + "\nEOF",
+    ),
     "a huge unquoted body": (
         5_000,
         lambda n: "cat > notes.md <<EOF\n" + _filled(PROSE.replace("`code`", "code"), n) + "\nEOF",
     ),
     "a huge commit message": (
         5_000,
-        lambda n: "git commit -m \"$(cat <<'EOF'\n" + _filled(PROSE, n) + "\nEOF\n)\"",
+        lambda n: """git commit -m "$(cat <<'EOF'\n""" + _filled(PROSE, n) + '\nEOF\n)"',
     ),
-    "a huge program on stdin": (5_000, lambda n: "python3 - <<'EOF'\n" + _filled(PROGRAM, n) + "\nEOF"),
+    "a huge program on stdin": (
+        5_000,
+        lambda n: "python3 - <<'EOF'\n" + _filled(PROGRAM, n) + "\nEOF",
+    ),
     "a huge program argument": (
         5_000,
         lambda n: "python3 -c '" + _filled(PROGRAM.replace("'", '"'), n) + "'",
@@ -80,27 +95,40 @@ FAMILIES: dict[str, Family] = {
     ),
     "many heredocs on one line": (
         50,
-        lambda n: "cat " + " ".join(f"<<E{i}" for i in range(n)) + "\n"
-        + "".join(f"b\nE{i}\n" for i in range(n)),
+        lambda n: (
+            "cat "
+            + " ".join(f"<<E{i}" for i in range(n))
+            + "\n"
+            + "".join(f"b\nE{i}\n" for i in range(n))
+        ),
     ),
     "many assignments": (50, lambda n: "; ".join(f"a{i}=1" for i in range(n))),
-    "many assignments before a command": (50, lambda n: " ".join(f"a{i}=1" for i in range(n)) + " echo x"),
+    "many assignments before a command": (
+        50,
+        lambda n: " ".join(f"a{i}=1" for i in range(n)) + " echo x",
+    ),
     "many exported names": (50, lambda n: "export " + " ".join(f"a{i}=1" for i in range(n))),
     "many files edited in place": (25, lambda n: "sed -i 's/a/b/' " + _files(n)),
     "many files removed": (25, lambda n: "rm -f " + _files(n)),
     "many files copied": (25, lambda n: "cp " + _files(n) + " out/"),
     "many files staged": (25, lambda n: "git add " + _files(n)),
     "a loop over many files": (25, lambda n: "for f in " + _files(n) + '; do wc -l "$f"; done'),
-    "a generated script": (25, lambda n: "\n".join(
-        f"mkdir -p out/d{i} && cp src/f{i}.txt out/d{i}/ && echo copied {i}" for i in range(n)
-    )),
+    "a generated script": (
+        25,
+        lambda n: "\n".join(
+            f"mkdir -p out/d{i} && cp src/f{i}.txt out/d{i}/ && echo copied {i}" for i in range(n)
+        ),
+    ),
     "many directory changes": (10, lambda n: "; ".join(f"cd d{i}" for i in range(n))),
-    "a directory spelled from many variables": (6, lambda n: (
-        "; ".join(f"x{i}=a || x{i}=b" for i in range(n))
-        + "; cd "
-        + "".join(f"$x{i}" for i in range(n))
-        + " && echo hi > f"
-    )),
+    "a directory spelled from many variables": (
+        6,
+        lambda n: (
+            "; ".join(f"x{i}=a || x{i}=b" for i in range(n))
+            + "; cd "
+            + "".join(f"$x{i}" for i in range(n))
+            + " && echo hi > f"
+        ),
+    ),
     "many commits": (25, lambda n: "; ".join(f"git commit -m m{i}" for i in range(n))),
     "many distinct substitutions": (50, lambda n: "echo " + " ".join(f"$(a{i})" for i in range(n))),
     "many equal substitutions": (50, lambda n: "echo " + " ".join("$(a)" for _ in range(n))),
@@ -108,8 +136,14 @@ FAMILIES: dict[str, Family] = {
     "many backticks": (50, lambda n: "echo " + " ".join(f"`a{i}`" for i in range(n))),
     "a run of backticks": (500, lambda n: "echo " + "`" * n),
     "one word of many substitutions": (50, lambda n: "echo " + "$()" * n),
-    "many case arms": (50, lambda n: "case x in " + " ".join(f"a{i}) :;;" for i in range(n)) + " esac"),
-    "a body of expansions": (1_000, lambda n: "cat <<E\n" + _filled("p $5 $HOME ${n} $$\n", n) + "\nE"),
+    "many case arms": (
+        50,
+        lambda n: "case x in " + " ".join(f"a{i}) :;;" for i in range(n)) + " esac",
+    ),
+    "a body of expansions": (
+        1_000,
+        lambda n: "cat <<E\n" + _filled("p $5 $HOME ${n} $$\n", n) + "\nE",
+    ),
     "a body of continued lines": (1_000, lambda n: "cat <<E\n" + "x\\\n" * (n // 3) + "\nE"),
     "a chain of wrappers": (25, lambda n: "sudo " * n + "echo x"),
     "a chain of wrappers that change directory": (10, lambda n: "sudo -D d " * n + "echo x"),
@@ -117,9 +151,18 @@ FAMILIES: dict[str, Family] = {
         10,
         lambda n: "".join(f"sudo -D d{i} " for i in range(n)) + "echo x",
     ),
-    "many assignments after env": (25, lambda n: "env " + " ".join(f"A{i}=1" for i in range(n)) + " echo x"),
-    "many commands run by find": (25, lambda n: "find . " + " ".join(f"-exec echo {i} ;" for i in range(n))),
-    "many git options": (25, lambda n: "git " + " ".join(f"-c a.b{i}=c" for i in range(n)) + " status"),
+    "many assignments after env": (
+        25,
+        lambda n: "env " + " ".join(f"A{i}=1" for i in range(n)) + " echo x",
+    ),
+    "many commands run by find": (
+        25,
+        lambda n: "find . " + " ".join(f"-exec echo {i} ;" for i in range(n)),
+    ),
+    "many git options": (
+        25,
+        lambda n: "git " + " ".join(f"-c a.b{i}=c" for i in range(n)) + " status",
+    ),
 }
 SQUARED = 4.5
 SQUARE = frozenset(
@@ -156,7 +199,7 @@ def growth(family: Family) -> list[float]:
     base, make = family
     work(make(base))
     spent = [work(make(base * scale)) for scale in (1, 2, 4)]
-    return [later / earlier for earlier, later in zip(spent, spent[1:], strict=False)]
+    return [later / earlier for earlier, later in pairwise(spent)]
 
 
 @pytest.mark.parametrize("name", FAMILIES)

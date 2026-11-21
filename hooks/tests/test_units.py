@@ -396,12 +396,12 @@ def test_a_directory_spelled_from_more_readings_than_the_guard_keeps_still_asks(
 
 
 def test_a_directory_spelled_from_more_combinations_than_the_guard_reads_is_not_followed() -> None:
-    command = _spelled(lambda i: f"x{i}=a || x{i}=aa", 9, "echo hi > .github/workflows/ci.yml")
-    assert "unresolved-directory" in rules(command)
-    assert rules(_spelled(lambda i: f"x{i}=a || x{i}=aa", 8, "echo hi > .github/workflows/ci.yml")) == []
+    write = "echo hi > .github/workflows/ci.yml"
+    assert "unresolved-directory" in rules(_spelled(lambda i: f"x{i}=a || x{i}=aa", 9, write))
+    assert rules(_spelled(lambda i: f"x{i}=a || x{i}=aa", 8, write)) == []
 
 
-PROSE ="This line of the note explains a step, with `code`, $5 and a path like src/app/main.py.\n"
+PROSE = "This line of the note explains a step, with `code`, $5 and a path like src/app/main.py.\n"
 
 
 def _filled(size: int) -> str:
