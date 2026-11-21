@@ -812,7 +812,11 @@ WIDE_REFUSED = (
             WIDE_REFUSED + "where the product listens was not checked, so the command after -- "
             rf"did not run: {ELSEWHERE}; {re.escape(LISTENS_CURE)}\n",
         ),
-        (["--listens", "127.0.0.1"], 1, WIDE_REFUSED),
+        (
+            ["--listens", "127.0.0.1"],
+            1,
+            rf"{NOT_CHECKED_HERE}127\.0\.0\.1 \({ELSEWHERE}\)\n{WIDE_REFUSED}",
+        ),
         (
             ["--listens", "0.0.0.0"],  # noqa: S104 # -- under test
             0,

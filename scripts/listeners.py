@@ -46,8 +46,8 @@ NONE_FOUND = (
 )
 UNREADABLE = "this system has no /proc/<pid>/net/tcp or tcp6 to read a listener's address from"
 NOT_FOUND = (
-    "no process the boot command started, nor any child of one, listens on a TCP port this "
-    "system shows"
+    "no process the boot command started, nor any child of one, listens on the ready URL's port "
+    "where this system shows it"
 )
 Address = ipaddress.IPv4Address | ipaddress.IPv6Address
 Table = dict[str, tuple[Address, int]]
@@ -231,8 +231,9 @@ def bound(group: int, port: int) -> Seen:
     others = list(
         dict.fromkeys(at for link, at in table.items() if at[1] == port and link not in sockets)
     )
-    if not product:
-        return Seen(others, [], list(dict.fromkeys(unchecked or [NOT_FOUND])))
+    if all(at[1] != port for at in product.values()):
+        judged = dict.fromkeys([*product.values(), *others])
+        return Seen(list(judged), [], list(dict.fromkeys(unchecked or [NOT_FOUND])))
     return Seen(list(dict.fromkeys(product.values())), others, list(dict.fromkeys(unchecked)))
 
 

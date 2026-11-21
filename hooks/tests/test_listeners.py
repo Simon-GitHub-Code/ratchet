@@ -502,8 +502,9 @@ def test_a_table_the_gate_may_not_open_is_said(
 def test_where_nothing_listens_for_the_boot_command_or_on_its_port_it_says_why() -> None:
     with service() as running:
         assert listeners.bound(running.process.pid, gatelib.free_port()) == listeners.Seen(
-            [(ipaddress.ip_address("127.0.0.1"), running.port)], [], []
+            [(ipaddress.ip_address("127.0.0.1"), running.port)], [], [listeners.NOT_FOUND]
         )
+        assert listeners.bound(running.process.pid, running.port).unchecked == []
     nothing = listeners.Seen([], [], [listeners.NOT_FOUND])
     assert listeners.bound(os.getpid(), gatelib.free_port()) == nothing
 
