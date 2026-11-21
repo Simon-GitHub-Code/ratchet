@@ -807,7 +807,8 @@ def part_of_a_split(change: Change, path: str) -> preflight.Ticket | None:
     return preflight.local_ticket(ticket, parent) if part and parent is not None else None
 
 
-def inheritance(ticket: preflight.Ticket, text: str, label: str) -> str | None:
+def inheritance(change: Change, path: str, ticket: preflight.Ticket, *, label: str) -> str | None:
+    text = change.after(path) or ""
     read = preflight.local_ticket(ticket.ref, text)
     part = split.Part(read.title, tuple(preflight.criteria(text)), "", ())
     body, why = split.child_body(ticket, part, waits=list(read.blockers), label=label)
@@ -825,7 +826,18 @@ def inheritance(ticket: preflight.Ticket, text: str, label: str) -> str | None:
                 f" branch, because {why}"
             )
         return f"it has a {piece} and {ticket.ref} has none on the default branch"
-    return None
+    filed = (PurePosixPath(ticket.ref).parent / PurePosixPath(path).name).as_posix()
+    with tracker_names(change, change.head) as names:
+        reads, meant = (
+            preflight.parent_of(preflight.local_ticket(where, words), names) or "no spec"
+            for where, words in ((path, text), (filed, body))
+        )
+    if reads == meant:
+        return None
+    return (
+        f"it reads {reads} as its spec and the part the split writes from {ticket.ref} on the"
+        f" default branch reads {meant}"
+    )
 
 
 def label_given(change: Change, path: str) -> str | None:
@@ -835,7 +847,7 @@ def label_given(change: Change, path: str) -> str | None:
             ticket = part_of_a_split(change, path)
             if ticket is None:
                 return f"gives a ticket the agent-ready label `{label}`, which is the owner's act"
-            differs = inheritance(ticket, change.after(path) or "", label)
+            differs = inheritance(change, path, ticket, label=label)
             return differs and (
                 f"gives a part the agent-ready label `{label}`, which is the owner's act when"
                 f" {differs}"
