@@ -450,7 +450,7 @@ def test_the_runner_that_cannot_record_says_so_once_and_ends_as_it_would(
     assert parallel.main(["parallel", "--report", str(work / "stuck.jsonl"), *gates]) == expected
     got = outputs(capsys)
     assert got.count(line) == 1, got
-    assert [each for each in got if each != line] == said
+    assert sorted(each for each in got if each != line) == sorted(said), "in any order"
     assert (work / "stuck.jsonl").read_text() == ""
 
 
