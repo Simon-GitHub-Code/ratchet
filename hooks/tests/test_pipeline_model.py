@@ -235,7 +235,7 @@ def described(
 Case = tuple[list[model.Action], model.Ending | None, world.Played]
 
 
-REPLAYED = pytest.mark.shard_slot(9)
+REPLAYED = pytest.mark.shard_slot(17)
 SHARED: list[Path] = []
 
 
