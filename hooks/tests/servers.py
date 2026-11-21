@@ -9,6 +9,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 PYTHON = f"{shlex.quote(sys.executable)} -S"
 SERVE = (
@@ -19,6 +20,10 @@ SERVE = (
     "    def log_message(self, *args): pass\n"
     "SilentWhenAClientHangsUp(('127.0.0.1', int(os.environ['PORT'])), Handler).serve_forever()"
 )
+
+
+Popen = subprocess.Popen[Any]
+Spawn = Callable[..., Popen]
 
 
 def python(code: str) -> str:

@@ -135,7 +135,10 @@ def stacked(target: str, default: str, beside: object = None) -> str:
     if beside is not None:
         return (
             f"{wrong}. #{beside}, from the same branch, already targets `{default}`, so the owner"
-            " merges or closes this one"
+            f" merges or closes this one. If it is merged, its commits are on `{target}` and the"
+            f" owner merges #{beside} to bring them to `{default}`; if it is closed, the owner"
+            f" merges #{beside}. The merge job leaves #{beside} to the owner either way, since its"
+            " branch has had a pull request against another base"
         )
     return (
         f"{wrong}. Change its target to `{default}` on the pull request's page on the forge, which"

@@ -92,12 +92,13 @@ class Boot:
         ]
 
 
-NULL = Boot(
-    f"exec {shlex.join(gatelib.interpreter())} {shlex.quote(str(PROXY))} --null",
-    "http://127.0.0.1:{port}/",
-    30.0,
-    listens="127.0.0.1",
-)
+def null(directory: Path) -> Boot:
+    return Boot(
+        f"exec {shlex.join([*gatelib.interpreter(), str(PROXY), '--null', str(directory)])}",
+        "http://127.0.0.1:{port}/",
+        30.0,
+        listens="127.0.0.1",
+    )
 
 
 @dataclass(frozen=True)
@@ -718,15 +719,17 @@ def check(root: Path, slug: str, *, kept: str | None, commit: str | None) -> int
 
 
 def replay_one(
-    check: kept_checks.Check, boot: Boot, *, root: Path, scratch: Path
+    check: kept_checks.Check, product: Boot | None, *, root: Path, scratch: Path
 ) -> tuple[kept_checks.Result, list[str]]:
     place = scratch / check.id
     place.mkdir()
     (place / "session.json").write_text(
         json.dumps({"session": f"replay-{secrets.token_hex(4)}"}), encoding="utf-8"
     )
+    boot = product or null(place)
     process: subprocess.Popen[bytes] | None = None
-    with (place / "boot.log").open("ab") as log:
+    with (place / "boot.log").open("ab") as log, (place / "live.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
         try:
             with gatelib.signals_held():
                 process = start(boot.argv(place), root, log)
@@ -784,11 +787,11 @@ def replay(root: Path, slug: str | None, checks_file: Path | None, *, control: b
             raise Usage(message)
         source = data.get("checks")
     written, checks = kept(source)
-    boot = NULL if control else read_binding(root).boot
-    if boot is None:
+    product = None if control else read_binding(root).boot
+    if product is None and not control:
         return gatelib.report("acceptance replay", [read_binding(root).why])
     with tempfile.TemporaryDirectory(prefix="ratchet-replay-") as scratch:
-        booted = [replay_one(item, boot, root=root, scratch=Path(scratch)) for item in checks]
+        booted = [replay_one(item, product, root=root, scratch=Path(scratch)) for item in checks]
     ran = [result for result, _ in booted]
     for line in [] if control else next((said for _, said in booted if said), []):
         print(line, file=sys.stderr)
