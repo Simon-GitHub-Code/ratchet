@@ -138,7 +138,7 @@ Run every command below from the repository's own checkout, on the default branc
 
    1. **Not approved.**
       - **A result with `tooLarge`** is split as [Too large](#too-large-the-agent-splits-it) says, or parked there when its split is refused. The parts join the plan and the drain goes on.
-      - **Any other `verdict` than `approve`** parks the ticket. Write the result to a file made with `mktemp` and run `D close <ticket> --outcome parked --result <file> --root .`. It removes the work tree, keeps what the agents left as the stash `<branch>: blocked run`, and holds the ticket until each kind of hold the result names is met. A file that holds no JSON object is refused and nothing is closed: write the result there again and rerun the close.
+      - **Any other `verdict` than `approve`** parks the ticket. Write the result to a file made with `mktemp` and run `D close <ticket> --outcome parked --result <file> --root .`. It removes the work tree, sets what the agents left aside as a file under the git directory with a `kept:` line that names the file and `drain.py restore <branch>`, and holds the ticket until each kind of hold the result names is met. A file that holds no JSON object is refused and nothing is closed: write the result there again and rerun the close.
       - Keep the result's `openQuestions` for step 7.
    2. **Commit.** On `approve`:
       - First run `D check <ticket> --final --root .`. On any exit but 0, settle it as [The publish check](#the-publish-check) says, and commit nothing.
@@ -187,10 +187,10 @@ Run every command below from the repository's own checkout, on the default branc
 
 6. **The report.**
    - When no run is in progress and the plan starts nothing more, run `D report --drain <token> --root .`.
-   - Print it to the owner whole, adding only the stash names of parked tickets.
+   - Print it to the owner whole, adding only the `kept:` line each parked ticket's close printed.
    - `git worktree list` then lists no queue work tree but one a `left:` or `kept:` line named. That one stays as the script left it.
 
-   Done when the report is printed whole, with the stash names of parked tickets added.
+   Done when the report is printed whole, with the `kept:` lines of parked tickets added.
 
 7. **The questions, then the route.**
    - After the report, ask every parked ticket's open questions as `feature.open-question`, all in one message, as [Questions for the owner](#questions-for-the-owner) says. An answer written to a ticket releases it.
@@ -204,7 +204,7 @@ Run every command below from the repository's own checkout, on the default branc
 Pass `--final` only on the check just before a commit.
 
 - **Exit 0:** nothing moved. Go on.
-- **Exit 1:** a role committed, pushed or opened a pull request, or the orchestrator committed before the final check. The check has parked the ticket, kept what was uncommitted as a stash, and holds the ticket until its text changes. Commit nothing and land nothing. Go on at step 5 (`D plan`), and the report names it. When the line is `check: <ref> is merged and is not checked`, the ticket has landed instead: go on at step 5.
+- **Exit 1:** a role committed, pushed or opened a pull request, or the orchestrator committed before the final check. The check has parked the ticket, set what was uncommitted aside as its `kept:` line says, and holds the ticket until its text changes. Commit nothing and land nothing. Go on at step 5 (`D plan`), and the report names it. When the line is `check: <ref> is merged and is not checked`, the ticket has landed instead: go on at step 5.
 - **Exit 2:** the note holds no start, which `open` records. Report the line, leave the ticket, and go on at step 5.
 - **Exit 3:** either the check found a rebase left unfinished or a state it cannot read, and has closed the ticket as waiting for a later drain to retry; or it refused before checking, since the ticket is held or its branch has no commit of its own and no work tree. Report the line and go on at step 5.
 

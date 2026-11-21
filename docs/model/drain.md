@@ -81,7 +81,7 @@ From the start the main graph reaches 49,223 states and 699,349 steps with the g
 | How the drains run | not yet said; each in a session of its own; or both under one process |
 | The lease | none, or held by drain 1 or drain 2 |
 | Each drain | its session alive or not; draining or stopped; whether it holds its token, which `clean --all` prints on stderr and a later command passes back as `--drain` |
-| The ticket's work tree | none, or opened by drain 1 or drain 2; a draft in it; a program running from it; a draft kept as a stash |
+| The ticket's work tree | none, or opened by drain 1 or drain 2; a draft in it; a program running from it; a draft set aside, which the model calls a stash and the code keeps as a file under the git directory |
 | A landing | none, or the drain whose `land` is past its checks and has not yet closed, with its merge landed or not yet. It is alive while `land` holds the lock on its ticket, which it takes before its checks |
 | A `merge.py` whose `land` was killed past its probe | none, or the drain whose `land` it was. It holds the merge lock until it lands the merge or ends |
 | A `merge.py` whose `land` was killed before its probe | none, or one still starting. It holds no lock, and it can only stop |
@@ -121,7 +121,7 @@ From the start the expiry graph reaches 1,237 states and 2,752 steps.
 | `drain.py update` | rebases the branch when the default branch has moved, first making the work tree of a built branch that has none, and after the rebase dropping a last commit that is the verdict record. On a branch with commits of its own and a start no check passed, it first runs the check as `check` does, once it has a tree: green marks the start `passed` before the rebase begins, and a branch that moved is parked. A rebase that moved the branch records its new head as the start, with no mark. On a landed branch it records the merge and does not rebase |
 | the check of `drain.py update` cannot read the present state | `update` is refused, having made the tree it would check, and changes nothing else |
 | `drain.py land` | refuses a start no check passed, after a held ticket and before `merge.py`. Otherwise it runs `merge.py`, and closes the ticket as merged, as waiting for a reason the drain resolves itself, or held for the owner |
-| `drain.py close --outcome parked` | writes the note that holds the ticket, then removes the tree with its uncommitted work kept as a stash |
+| `drain.py close --outcome parked` | writes the note that holds the ticket, then removes the tree with its uncommitted work set aside as a file under the git directory, which `drain.py restore <branch>` puts back |
 | `drain.py split` | files the parts `d` and `e`, closes `a` as `split` with the parts in its note's `children`, holds it on its text, and removes its tree. The parts of a local ticket are files the checkout does not yet hold, and the plan starts nothing until they are committed, so the step commits them too, which moves the default tip |
 | the owner closes the ticket | sets the split ticket's status to done on the default branch, which moves the default tip and changes its text. It is the owner's one edit of the history |
 | `drain.py clean`, `drain.py clean --all` | removes each tree of a merged branch, or every tree, after recording each merge no note says |
@@ -761,7 +761,7 @@ stateDiagram-v2
 - A run that errors and its resume, as steps of their own. The model has the check the skill runs between them, without `--final`, and a role's commit after that check stands for the resume, a step only without the gate: with it the guard refuses that commit. A check of a start a check already passed, which the skill never runs, as [above](#what-the-next-script-change-must-do) says.
 - A check of a ticket its note holds, which no run reaches, and the way a rebase is left unfinished: here the check finds one after a rebase that did not conflict.
 - More than two drains on the lease graph, and more than one ticket's work tree there.
-- A second draft in the ticket's work tree once one is kept as a stash. A history of the lease graph leaves one draft.
+- A second draft in the ticket's work tree once one is set aside. A history of the lease graph leaves one draft.
 - More than three tickets besides the parts, a cap above one, a ticket whose run errors, a conflict on rebase or merge, and a red `check`. The judge gives two reasons here: `behind`, which the drain resolves itself, and a verdict record that is not last, which it does not. Its other reasons act as the second.
 - A split of `b` or `c`, of a ticket with commits of its own, into more than two parts, or refused and parked as too large; a part split again, which `split.py` refuses; and the parts' other steps: `update`, `close`, the owner's edit and the kills.
 - An owner's edit of a split ticket, and a command on it. The edit of an open split ticket frees its hold, and the drain then builds it whole again: `queue_notes.split_into` reads an open ticket's parts only while the note's digest is its text, and a closed ticket's parts whatever its text. A split note with no parts is refused as malformed.

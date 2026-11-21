@@ -490,7 +490,7 @@ def test_a_close_after_the_landing_is_refused_and_the_merge_reported_once(tmp_pa
     assert "Alpha" not in play.named("drain.py report"), "a second report does not print it"
 
 
-def test_clean_all_leaves_a_tree_git_cannot_stash_and_a_killed_close_keeps_its_work(
+def test_clean_all_leaves_a_tree_git_cannot_read_and_a_killed_close_keeps_its_work(
     tmp_path: Path,
 ) -> None:
     play = Play(tmp_path)
@@ -502,14 +502,15 @@ def test_clean_all_leaves_a_tree_git_cannot_stash_and_a_killed_close_keeps_its_w
     assert (tree / DRAFT).read_text(encoding="utf-8") == "half done\n"
     play.named("a kill before the discard stops drain.py close --outcome parked c")
     finished = play.named("drain.py clean --all")
-    assert f"kept: the work tree stays at {tree}: git could not stash" in finished
+    assert f"kept: the work tree stays at {tree}: git could not read what it holds" in finished
     assert "discarding" not in drain.queue_notes.read_note(play.world.root, BRANCH[Name.C])
     play.named("the owner removes the stale index lock of c", compare=False)
     play.named("a kill before the discard stops drain.py close --outcome parked c")
     assert (tree / DRAFT).read_text(encoding="utf-8") == "half done\n", "the note came first"
     play.named("a kill after the stash stops drain.py close --outcome parked c")
     assert plan_of(play)[BRANCH[Name.C]].state == "held", "the note says parked"
-    assert git(play.world.root, "show", f"stash@{{0}}^3:{DRAFT}") == "half done"
+    [kept] = drain.kept_home(play.world.root, BRANCH[Name.C]).glob("*.kept")
+    assert b"\n+half done\n" in kept.read_bytes(), "the draft is set aside"
     play.cut(Kind.KILL_LAND_AFTER_DISCARD, Name.C)
     assert not tree.exists(), "land finishes the close's discard before a second kill"
     held = f"land: {REF[Name.C]} is held and is not landed: "
@@ -1140,8 +1141,8 @@ def test_one_process_running_both_drains_lets_the_second_take_the_first_tree(
         printed = two_drains.named(said)
     tree = two_drains.world.world.tree(Name.A)
     assert f"removed: {tree}: the drain that made it was interrupted" in printed
-    stash = git(two_drains.world.world.root, "stash", "list", "--format=%gs")
-    assert stash == f"On {BRANCH[Name.A]}: {BRANCH[Name.A]}: interrupted run", "the draft is kept"
+    kept = drain.kept_home(two_drains.world.world.root, BRANCH[Name.A]).glob("*.kept")
+    assert len(list(kept)) == 1, "the draft is kept"
 
 
 def test_one_process_running_both_drains_spares_a_tree_a_program_runs_from(
