@@ -285,6 +285,9 @@ def test_two_tickets_open_at_once_each_wait_for_their_own_final_check(
     capsys.readouterr()
     assert hooked(alpha) == "allowed"
     assert hooked(gamma) == refused(BRANCH_C)
+    other = queue_notes.feature_start_path(root, BRANCH_C)
+    assert other is not None
+    assert queue_notes.loaded(gatelib.read_text(other)).get("passed") is None
     assert run(root, "check", GAMMA, "--final") == 0
     capsys.readouterr()
     assert hooked(gamma) == "allowed"
@@ -388,6 +391,66 @@ def test_the_check_an_update_runs_before_its_rebase_passes_no_start_of_the_pipel
     assert updated(root, readable=False, change=2) == 0
     assert "start" not in queue_notes.read_note(root, BRANCH_A)
     capsys.readouterr()
+    assert not start_passed(root), "the check before the rebase is not the final check"
+    assert hooked(tree) == refused(BRANCH_A)
+
+
+def test_an_update_that_records_a_new_start_closes_the_pipelines_start_whatever_the_note_held(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    tree = tree_of(root)
+    pipeline_preflight(tree, ALPHA, BRANCH_A, capsys=capsys, monkeypatch=monkeypatch)
+    assert run(root, "check", ALPHA, "--final") == 0
+    path = queue_notes.note_path(root, BRANCH_A)
+    queue_notes.write_note(path, {**queue_notes.read_note(root, BRANCH_A), "rebasing": "0" * 40})
+    assert run(root, "update", ALPHA) == 0
+    by_hand(root, "passed")
+    capsys.readouterr()
+    assert not start_passed(root), "the new start closed the start the final check passed"
+    assert hooked(tree) == refused(BRANCH_A)
+
+
+def test_an_update_cut_off_in_its_rebase_has_closed_the_pipelines_start(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    tree = tree_of(root)
+    pipeline_preflight(tree, ALPHA, BRANCH_A, capsys=capsys, monkeypatch=monkeypatch)
+    assert run(root, "check", ALPHA, "--final") == 0
+    moved(root)
+    with pytest.MonkeyPatch.context() as patch:
+        killed(patch, "after_rebase")
+        with pytest.raises(KeyboardInterrupt):
+            run(root, "update", ALPHA)
+    note = queue_notes.read_note(root, BRANCH_A)
+    queue_notes.write_note(
+        queue_notes.note_path(root, BRANCH_A), {k: v for k, v in note.items() if k != "rebasing"}
+    )
+    capsys.readouterr()
+    assert not start_passed(root), "the rebase's mark closed the start the final check passed"
+    assert hooked(tree) == refused(BRANCH_A)
+
+
+def test_an_update_refused_after_its_first_check_passes_no_start_of_the_pipeline(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    tree = tree_of(root)
+    pipeline_preflight(tree, ALPHA, BRANCH_A, capsys=capsys, monkeypatch=monkeypatch)
+    assert run(root, "check", ALPHA, "--final") == 0
+    write(tree, "src/built.py", "B = 1\n")
+    commit(tree, "feat(core): built")
+    assert updated(root, change=1) == 0
+    git(root, "update-ref", f"refs/remotes/origin/{BRANCH_A}", BRANCH_A)
+    capsys.readouterr()
+    moved(root, "src/m2.py", "M = 2\n")
+    assert run(root, "update", ALPHA) == 1
+    assert "the branch is pushed" in capsys.readouterr().out
+    assert queue_notes.read_note(root, BRANCH_A).get("passed") is True
     assert not start_passed(root), "the check before the rebase is not the final check"
     assert hooked(tree) == refused(BRANCH_A)
 
