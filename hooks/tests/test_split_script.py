@@ -474,6 +474,16 @@ TAMPERED = {
         ANSWERS_DIFFER,
     ),
     "rewords an answer": (CARRIED, lambda b: b.replace("? No.", "? No, *on*."), ANSWERS_DIFFER),
+    "adds a second answers section": (
+        CARRIED,
+        lambda b: b + "\n## Answers\n\n- 2026-11-09: Off? Yes.\n",
+        ANSWERS_DIFFER,
+    ),
+    "adds answers under a heading with a trailing space": (
+        CARRIED,
+        lambda b: b + "\n## Answers \n\n- 2026-11-09: Off? Yes.\n",
+        ANSWERS_DIFFER,
+    ),
     "changes the conjecture": (
         CARRIED,
         lambda b: b.replace("It helps people", "It helps nobody"),
@@ -527,6 +537,29 @@ def test_the_judge_gives_the_owner_a_part_whose_inherited_text_is_not_what_the_s
     [reason] = judged(tmp_path)
     assert f"{GIVEN}{said}" in reason
     assert LIST not in reason, "the untouched part keeps its label"
+
+
+ELSEWHERE = {part: part.replace("/thing/", "/other/") for part in (SAVE, LIST)}
+
+
+@pytest.mark.parametrize(
+    "ticket",
+    [CARRIED, CARRIED.replace("Parent: ../spec.md\n\n", "")],
+    ids=["a relative Parent: line", "no Parent: line"],
+)
+def test_the_judge_gives_the_owner_a_part_filed_where_it_reads_another_spec_than_its_tickets(
+    tmp_path: Path, ticket: str
+) -> None:
+    bodies = split_into_parts(tmp_path, ticket)
+    moved = {ELSEWHERE[path]: body.replace(SAVE, ELSEWHERE[SAVE]) for path, body in bodies.items()}
+    change(tmp_path, {**dict.fromkeys(bodies), **moved}, record=False)
+    [reason] = judged(tmp_path)
+    for part in moved:
+        assert (
+            f"{part} gives a part the agent-ready label `ready-for-agent`, which is the owner's act"
+            f" when it reads .scratch/other/spec.md as its spec and the part the split writes from"
+            f" {TICKET} on the default branch reads {SPEC}"
+        ) in reason
 
 
 def test_a_part_is_judged_against_its_ticket_on_the_default_branch_not_as_the_change_edits_it(
