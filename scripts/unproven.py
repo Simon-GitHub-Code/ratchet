@@ -144,6 +144,15 @@ def held(line: Sequence[Landed], deep: Deep, *, gated: bool, bound: int | None) 
     return Hold(UNPROVEN, text)
 
 
+def cannot_hold(deep: Deep, tip: str, *, bound: int | None) -> bool:
+    if deep.runs is None:
+        return False
+    decider = deciders((Landed(tip, ""),), deep.runs).get(0)
+    if decider is not None:
+        return decider.state == GREEN
+    return bound is None and all(run.state != RED for run in deep.runs)
+
+
 def instant(value: object) -> datetime | None:
     if not isinstance(value, str) or not INSTANT.fullmatch(value):
         return None

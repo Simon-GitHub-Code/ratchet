@@ -351,7 +351,10 @@ def attempt(
     message = f"Merge branch '{branch}'"
     if gatelib.git(tree, "merge", "--no-ff", "--quiet", "-m", message, head) is None:
         return [Reason("conflict", f"`{branch}` does not merge into `{default}` cleanly")], ""
-    asked = merge_ready.Asked(current=True, deep=deep)
+    fork = gatelib.git(root, "merge-base", old, head) or old
+    bound, _ = merge_ready.declared_bound(gatelib.show(root, fork, merge_ready.THRESHOLDS))
+    held = None if unproven.cannot_hold(deep, old, bound=bound) else deep
+    asked = merge_ready.Asked(current=True, deep=held)
     reasons = merge_ready.judge(root, f"{HEADS}{default}", head, asked=asked)
     if reasons:
         return reasons, ""
@@ -415,11 +418,10 @@ def refused_next(
             f"{NEXT}run {again(root, DEEP)} in the background and wait on its exit, then merge"
             f" `{branch}` again: it proves the tip of `{default}`"
         )
-    command = gatelib.entry_point(root, TIER2)
-    checks = f"`{command}`" if command else f"the binding's `{TIER2}` entry point"
     return (
         f"{NEXT}the owner types `git switch {default} && git merge --no-ff {branch}`, then"
-        f" {checks} on `{default}`: no gate ran on this merge, and tier 2 runs every gate"
+        f" {again(root, DEEP)} on `{default}`: no gate ran on this merge, and tier 2 runs every"
+        " gate"
     )
 
 
@@ -467,15 +469,24 @@ def deep_lock(root: Path, default: str) -> Iterator[int | None]:
 
 def ran(command: str, tree: Path, limit: float | None = None) -> int | str:
     try:
-        return subprocess.run(shlex.split(command), cwd=tree, check=False, timeout=limit).returncode
+        return subprocess.run(
+            shlex.split(command), cwd=tree, env=copied(), check=False, timeout=limit
+        ).returncode
     except OSError as error:
         return f"`{command}` could not run: {error}"
     except subprocess.TimeoutExpired:
         return f"`{command}` timed out after {limit:g}s"
 
 
+def copied() -> dict[str, str]:
+    made = project_bite.environment()
+    del made[project_bite.BITING]
+    return made
+
+
 def prepared(root: Path, tree: Path, commit: str) -> str:
-    if gatelib.git(root, "worktree", "add", "--quiet", "--detach", str(tree), commit) is None:
+    made = project_bite.run_git(root, "worktree", "add", "--quiet", "--detach", str(tree), commit)
+    if made.returncode:
         return f"no work tree of {commit[:12]} could be made at {tree}"
     text = gatelib.read_text(tree / project_bite.REGISTRY) or ""
     registry, problems = project_bite.read_registry(text)

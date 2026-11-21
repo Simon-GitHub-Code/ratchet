@@ -162,7 +162,7 @@ Pull request 3 builds this section. Before it, `merge.py` judged with no tier 2 
 
 **The proving command is `merge.py --deep`.** It extends the `merge` entry point as `--records` does, so `just merge --deep` needs no new recipe or binding row. It belongs there because the record lives in the state `merge.py` already keeps, beside its locks, and `merge` is the entry point `/ratchet:next` already lets an agent run. It proves the default branch's tip:
 
-1. It takes the repository's one deep lock, `ratchet-deep.lock` in the common git directory, and writes into it the commit it proves. A second caller waits on the lock, then proves nothing when a line for the tip was appended after it started. So two callers never prove one commit twice.
+1. It takes the repository's one deep lock, `ratchet-deep.lock` in the common git directory, and writes into it the commit it proves. A second caller waits on the lock, then proves nothing when a green or red line for the tip was appended after it started; after an unrun line for the tip, it proves the tip again. So two callers never prove one commit twice.
 2. It makes a detached work tree of the commit, copies in the bite registry's `include` paths, which name the ignored folders a gate needs, and runs the registry's `setup` commands, as `project_bite.make_copy` does.
 3. It runs the binding's `check-deep` there and appends one line to the record.
 
