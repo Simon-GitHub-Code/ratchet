@@ -235,7 +235,7 @@ def described(
 Case = tuple[list[model.Action], model.Ending | None, world.Played]
 
 
-REPLAYED = pytest.mark.shard_slot(9)
+REPLAYED = pytest.mark.shard_slot(17)
 SHARED: list[Path] = []
 
 
@@ -284,8 +284,32 @@ def test_the_real_workflow_does_what_the_model_does_on_every_sequence_of_answers
     shortest = described(*min(differ, key=lambda run: len(run[0]))) if differ else ""
     assert not differ, f"{len(differ)} of {len(cases)} runs differ; the shortest:\n{shortest}"
     assert set(batch.effects) == set(model.Role), "every agent's prompt was read"
-    for role, commands in batch.effects.items():
-        assert commands <= model.COMMANDS[role], (role, sorted(commands - model.COMMANDS[role]))
+    assert not beyond(batch.effects), beyond(batch.effects)
+
+
+def beyond(effects: dict[model.Role, frozenset[str]]) -> dict[model.Role, list[str]]:
+    excess = {role: sorted(found - model.COMMANDS[role]) for role, found in effects.items()}
+    return {role: found for role, found in excess.items() if found}
+
+
+def test_the_model_check_refuses_a_command_planted_on_a_line_of_its_own(tmp_path: Path) -> None:
+    source = world.PIPELINE.read_text(encoding="utf-8")
+    anchor = "      git status --porcelain\n"
+    assert source.count(anchor) == 1, "the review lists its inputs one command to a line"
+    planted = tmp_path / "pipeline.js"
+    planted.write_text(source.replace(anchor, f"{anchor}      git rebase main\n"), encoding="utf-8")
+    review = [
+        model.Action(model.Start.BUILD),
+        model.Action(model.Preflight.YOUNG, model.Role.PREFLIGHT),
+        model.Action(model.Spec.FITS, model.Role.SPEC),
+        model.Action(model.Check.NO_GAP, model.Role.CHECK),
+        model.Action(model.Build.GREEN, model.Role.IMPLEMENT),
+        model.Action(model.Review.APPROVES, model.Role.REVIEW),
+    ]
+    assert not beyond(world.play([review]).effects), "the workflow as it stands passes"
+    assert beyond(world.play([review], pipeline=planted).effects) == {
+        model.Role.REVIEW: ["git rebase"]
+    }
 
 
 def told(actions: list[model.Action]) -> tuple[tuple[str, int], ...]:
