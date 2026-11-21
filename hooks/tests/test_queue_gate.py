@@ -1,3 +1,4 @@
+import concurrent.futures
 import contextlib
 import functools
 import io
@@ -7,6 +8,7 @@ import re
 import shutil
 import stat
 import sys
+import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -961,15 +963,20 @@ def level(walk: Walk, frontier: list[Node], seen: set[View]) -> list[Node]:
 UNCOMPARED = frozenset({"objects", "index"})
 WRITING = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
 MOVING = frozenset({"os.rename", "os.remove", "os.rmdir", "os.mkdir", "os.chmod"})
-TRIED: list[list[str]] = []
+TRIED: dict[int, list[str]] = {}
 
 
 def note_a_write(event: str, args: tuple[object, ...]) -> None:
-    if not TRIED:
+    tried = TRIED.get(threading.get_ident())
+    if tried is None:
         return
-    opened = event == "open" and isinstance(args[2], int) and args[2] & WRITING
-    if opened or event in MOVING:
-        TRIED[-1].append(os.fspath(args[0]))  # type: ignore[arg-type]
+    if event == "open" and len(args) > 2 and isinstance(args[2], int) and args[2] & WRITING:
+        named = args[:1]
+    elif event in MOVING:
+        named = args
+    else:
+        return
+    tried.extend(os.fsdecode(path) for path in named if isinstance(path, str | bytes | os.PathLike))
 
 
 @functools.cache
@@ -980,11 +987,29 @@ def watching() -> None:
 @contextlib.contextmanager
 def writes_watched() -> Iterator[list[str]]:
     watching()
-    TRIED.append([])
+    tried = TRIED[threading.get_ident()] = []
     try:
-        yield TRIED[-1]
+        yield tried
     finally:
-        TRIED.pop()
+        del TRIED[threading.get_ident()]
+
+
+def written_elsewhere(folder: Path) -> None:
+    descriptor = os.open(folder / "theirs", os.O_WRONLY | os.O_CREAT)
+    with os.fdopen(descriptor, "wb") as opened:
+        opened.write(b"x")
+    (folder / "theirs").rename(folder / "moved")
+
+
+def test_the_write_watch_sees_only_its_own_thread_and_never_raises(tmp_path: Path) -> None:
+    other = tmp_path / "other"
+    other.mkdir()
+    with writes_watched() as tried, concurrent.futures.ThreadPoolExecutor(1) as pool:
+        pool.submit(written_elsewhere, other).result()
+        with os.fdopen(os.open(tmp_path / "ours", os.O_WRONLY | os.O_CREAT), "wb") as opened:
+            opened.write(b"x")
+    assert not [path for path in tried if path.startswith(str(other))], tried
+    assert str(tmp_path / "ours") in tried, tried
 
 
 def held(walk: Walk) -> dict[str, object]:
