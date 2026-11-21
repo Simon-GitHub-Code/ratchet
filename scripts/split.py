@@ -18,7 +18,7 @@ from ratchet_guards import splits
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-INHERITED = ("## Parent", "## Conjecture", "## Operability")
+INHERITED = ("## Parent", "## Conjecture", "## Operability", "## Answers")
 SLUG = re.compile(r"[^a-z0-9]+")
 
 
@@ -67,11 +67,13 @@ def child_body(parent: preflight.Ticket, part: Part, *, waits: list[str], label:
         for heading in INHERITED
         if preflight.section(parent.body, heading).strip()
     ]
+    link = preflight.PARENT_LINE.search(parent.body)
     lines = [
         f"# {part.title}",
         "",
         *([f"**Status:** `{label}`", ""] if parent.ref.endswith(".md") else []),
         f"Split from: {parent.ref}",
+        *([parent.body[link.start() :].partition("\n")[0]] if link else []),
         f"Blocked by: {', '.join(waits) if waits else 'none'}",
         "",
         "## What to build",
