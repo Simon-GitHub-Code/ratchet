@@ -688,6 +688,25 @@ def test_a_merge_workflow_from_before_it_kept_a_targeted_branch_is_given_the_tem
     assert not [e for e in owed.read(root).entries if e.path == MERGE]
 
 
+def test_a_merge_workflow_that_deletes_a_branch_its_own_way_owes_the_template_s_step(
+    tmp_path: Path,
+) -> None:
+    root = fixture("0.9.2", tmp_path)
+    old = adopted.history("show", f"{BEFORE_KEPT_BRANCH}:skills/adopt/templates/{MERGE}")
+    own = old.replace(" --silent || echo", " || echo")
+    (root / MERGE).write_text(own + "\n")
+    repos.git(root, "add", MERGE)
+    repos.git(root, "commit", "-q", "-m", "ci: the project's own merge job")
+    repos.branch(root, "upgrade")
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    done = (root / MERGE).read_text(encoding="utf-8")
+    assert KEPT not in done
+    assert ' --silent || echo "branch $branch stays" ;;' not in done
+    problem = f"nothing {dict(conformance.MERGE_SHAPE)[KEPT]} ('{KEPT}' absent)"
+    assert [e.problem for e in owed.read(root).entries if e.path == MERGE] == [problem]
+    assert conformance.main(["conformance.py", str(root)]) == 0, "owed, not red"
+
+
 def test_an_upgrade_owes_the_bite_all_ceiling_a_project_adopted_before_it_lacks(
     tmp_path: Path,
 ) -> None:
