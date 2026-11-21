@@ -45,6 +45,13 @@ def test_only_mechanical_rows_leave_a_ticket_to_the_drain() -> None:
     assert not mechanical([])
 
 
+def test_a_hold_for_a_deep_run_is_retried_like_a_branch_behind() -> None:
+    behind, waits = Reason("behind", "main moved: x"), Reason("unproven", "wait for run 7")
+    assert mechanical(rows([waits]))
+    assert mechanical(rows([behind, waits]))
+    assert not mechanical(rows([waits, Reason("guard", "a guard path changed")]))
+
+
 def test_a_blocked_run_is_released_only_when_a_path_it_named_changes_on_the_default_branch(
     tmp_path: Path,
 ) -> None:
