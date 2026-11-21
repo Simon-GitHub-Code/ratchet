@@ -1043,11 +1043,13 @@ def test_a_held_deep_lock_reads_as_a_run_on_the_commit_it_names(
         assert second.endswith(
             f"allows 0: wait for the `merge --deep` holding ratchet-deep.lock on `{tip[:12]}`"
         )
-        lock.truncate(0)
-        lock.write(b"not a commit")
-        lock.flush()
-        assert run(root) == 1
-        assert capsys.readouterr().out.splitlines()[1].endswith("which proves the tip of `main`")
+        for named in (b"not a commit", b"\xff"):
+            lock.truncate(0)
+            lock.write(named)
+            lock.flush()
+            assert run(root) == 1
+            said = capsys.readouterr().out.splitlines()[1]
+            assert said.endswith("which proves the tip of `main`"), named
 
 
 SHA = "0" * 40
@@ -1160,6 +1162,31 @@ def test_a_caller_that_waited_on_the_lock_proves_nothing_once_the_tip_was_proved
     )
     assert not log.exists(), "no second proof"
     assert len(recorded(root)) == 1
+
+
+def test_a_caller_that_waited_proves_the_tip_when_the_other_proof_was_unrun(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = proving(tmp_path / "repo")
+    tip = git(root, "rev-parse", "main")
+    log = tmp_path / "deep.log"
+    monkeypatch.setenv("DEEP_LOG", str(log))
+    held = deep_lock(root).open("a+b")
+    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    real = merge.locked
+
+    def the_other_proof_is_unrun(
+        path: Path, *, create: bool = True, wait: bool = False
+    ) -> contextlib.AbstractContextManager[int | None]:
+        if wait:
+            merge.record_path(root).write_text(proof(tip, "unrun"), encoding="utf-8")
+            held.close()
+        return real(path, create=create, wait=wait)
+
+    monkeypatch.setattr(merge, "locked", the_other_proof_is_unrun)
+    assert prove(root) == 0
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 1, "this caller proved the tip"
+    assert [line["status"] for line in recorded(root)] == ["unrun", "green"]
 
 
 def started(root: Path, *, piped: bool = False, **env: str) -> subprocess.Popen[str]:
