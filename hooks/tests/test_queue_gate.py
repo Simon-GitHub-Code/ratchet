@@ -1,11 +1,14 @@
 import contextlib
+import functools
 import io
 import json
 import os
+import re
 import shutil
 import stat
+import sys
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
 
@@ -696,6 +699,66 @@ def test_a_drain_with_no_start_of_its_tree_to_close_runs_as_before(
     assert folder.is_dir() is (where != "no folder")
 
 
+def test_an_update_that_would_make_its_work_tree_again_fails_first_when_its_start_is_locked(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    tree = tree_of(root)
+    pipeline_preflight(tree, ALPHA, BRANCH_A, capsys=capsys, monkeypatch=monkeypatch)
+    assert run(root, "check", ALPHA, "--final") == 0
+    write(tree, "src/built.py", "B = 1\n")
+    commit(tree, "feat(core): built")
+    assert run(root, "close", ALPHA, "--outcome", "waits", "--reason", "behind: later") == 0
+    moved(root)
+    capsys.readouterr()
+    walk = Walk(tmp_path, root, tree, capsys)
+    saved = save(tmp_path, tmp_path / "saved" / "waiting")
+    every_command_with_its_start_unwritable(walk, saved, ("final", "commit", "close", "moved"))
+    as_passed(walk, saved)
+    with locked(root):
+        before = held(walk)
+        code = run(root, "update", ALPHA)
+        after = held(walk)
+    said = capsys.readouterr().out
+    assert code == 2, said
+    told_to_unlock(said, tmp_path)
+    assert [k for k in before.keys() | after.keys() if before.get(k) != after.get(k)] == []
+    assert run(root, "update", ALPHA) == 0
+    capsys.readouterr()
+    assert hooked(tree) == refused(BRANCH_A)
+
+
+def test_an_update_with_nothing_to_move_keeps_the_commit_its_final_check_let_through(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    tree = tree_of(root)
+    pipeline_preflight(tree, ALPHA, BRANCH_A, capsys=capsys, monkeypatch=monkeypatch)
+    assert run(root, "check", ALPHA, "--final") == 0
+    assert run(root, "update", ALPHA) == 0
+    capsys.readouterr()
+    assert hooked(tree) == "allowed"
+    real = drain.update
+
+    def locking_after(*args: object) -> int:
+        code = real(*args)  # type: ignore[arg-type]
+        started(root).parent.chmod(stat.S_IRUSR | stat.S_IXUSR)
+        return code
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(drain, "update", locking_after)
+        try:
+            code = run(root, "update", ALPHA)
+        finally:
+            started(root).parent.chmod(stat.S_IRWXU)
+    said = capsys.readouterr().out
+    assert code == 0, said
+    assert "stays unpassed, so a commit in its work tree is refused, and `update` ran;" in said
+    assert hooked(tree) == refused(BRANCH_A)
+
+
 class View(NamedTuple):
     tree: bool
     noted: bool
@@ -724,6 +787,7 @@ class Walk:
     tree: Path
     capsys: Out
     changes: int = 0
+    probed: dict[tuple[bool, ...], tuple[str, ...]] = field(default_factory=dict)
 
 
 def final_as(walk: Walk, present: tuple[list[str], bool, str | None]) -> int:
@@ -889,8 +953,157 @@ def level(walk: Walk, frontier: list[Node], seen: set[View]) -> list[Node]:
             if after.view.tree and after.view.noted:
                 by_every_hand(walk, after)
             saved = save(walk.home, walk.home / "saved" / str(len(seen)))
+            walk.probed.setdefault(after.view[:6], after.steps)
             reached.append(Node(saved, after.steps, after.view, after.mains))
     return reached
+
+
+UNCOMPARED = frozenset({"objects", "index"})
+WRITING = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
+MOVING = frozenset({"os.rename", "os.remove", "os.rmdir", "os.mkdir", "os.chmod"})
+TRIED: list[list[str]] = []
+
+
+def note_a_write(event: str, args: tuple[object, ...]) -> None:
+    if not TRIED:
+        return
+    opened = event == "open" and isinstance(args[2], int) and args[2] & WRITING
+    if opened or event in MOVING:
+        TRIED[-1].append(os.fspath(args[0]))  # type: ignore[arg-type]
+
+
+@functools.cache
+def watching() -> None:
+    sys.addaudithook(note_a_write)
+
+
+@contextlib.contextmanager
+def writes_watched() -> Iterator[list[str]]:
+    watching()
+    TRIED.append([])
+    try:
+        yield TRIED[-1]
+    finally:
+        TRIED.pop()
+
+
+def held(walk: Walk) -> dict[str, object]:
+    found: dict[str, object] = {}
+    for base in (walk.root, walk.home / "tmp"):
+        for top, folders, files in os.walk(base):
+            folders[:] = [name for name in folders if name not in UNCOMPARED]
+            for name in files:
+                if name not in UNCOMPARED:
+                    found[str(Path(top, name))] = Path(top, name).read_bytes()
+    listing = gatelib.git(walk.root, "worktree", "list", "--porcelain") or ""
+    found["work trees"] = listing
+    for line in listing.splitlines():
+        if line.startswith("worktree "):
+            tree = Path(line.removeprefix("worktree "))
+            found[f"{tree} index"] = gatelib.git(tree, "ls-files", "--stage")
+    return found
+
+
+@functools.cache
+def subcommands() -> tuple[str, ...]:
+    shown = io.StringIO()
+    with contextlib.redirect_stdout(shown), pytest.raises(SystemExit):
+        drain.main(["drain", "--help"])
+    (listed,) = re.findall(r"positional arguments:\n\s+\{([^}]*)\}", shown.getvalue())
+    return tuple(listed.split(","))
+
+
+def commit_answer(walk: Walk) -> str | None:
+    return hooked(walk.tree) if walk.tree.is_dir() else None
+
+
+def as_passed(walk: Walk, saved: Path) -> None:
+    load(walk.home, saved)
+    path = started(walk.root)
+    queue_notes.write_note(path, {**queue_notes.loaded(gatelib.read_text(path)), "passed": True})
+
+
+def ran(walk: Walk, name: str) -> int:
+    code = run(walk.root, name, ALPHA, "--final")
+    walk.capsys.readouterr()
+    return code
+
+
+def every_command_with_its_start_unwritable(
+    walk: Walk, saved: Path, steps: tuple[str, ...]
+) -> None:
+    as_passed(walk, saved)
+    folder = str(started(walk.root).parent)
+    for name in subcommands():
+        with locked(walk.root), writes_watched() as tried:
+            before = held(walk)
+            ran(walk, name)
+            after = held(walk)
+        if after == before or not any(path.startswith(folder) for path in tried):
+            continue
+        answer = commit_answer(walk)
+        as_passed(walk, saved)
+        basis = checked_basis(walk)
+        ran(walk, name)
+        assert start_passed(walk.root), f"{steps} {name}: it changed things before it closed S"
+        assert checked_basis(walk) == basis or not walk.tree.is_dir() or passed_by_note(walk), (
+            f"{steps} {name}: S stays passed for a tree the drain's note does not pass"
+        )
+        assert answer == commit_answer(walk), f"{steps} {name}: the commit's answer turned on S"
+        as_passed(walk, saved)
+
+
+def checked_basis(walk: Walk) -> tuple[str | None, object]:
+    head = gatelib.git(walk.tree, "rev-parse", "HEAD") if walk.tree.is_dir() else None
+    return head, queue_notes.read_note(walk.root, BRANCH_A).get("start")
+
+
+def passed_by_note(walk: Walk) -> bool:
+    return queue_notes.read_note(walk.root, BRANCH_A).get("passed") is True
+
+
+DRAIN_STATES: list[tuple[str, ...]] = [
+    ("close",),
+    ("final",),
+    ("final", "close"),
+    ("final", "final red"),
+    ("final", "final red", "update unread"),
+    ("final", "final red", "update unread", "close"),
+    ("final", "final red", "update unread", "park"),
+    ("final", "park"),
+    ("final red",),
+    ("park",),
+    ("update unread",),
+]
+
+
+def replayed(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch, *, steps: tuple[str, ...]
+) -> Walk:
+    root = project(tmp_path)
+    monkeypatch.setattr(preflight, "run_gh", lambda _args: "[]")
+    walk = Walk(tmp_path, root, tree_of(root), capsys)
+    assert run(root, "open", ALPHA) == 0
+    assert preflight_in(walk) == 0
+    for name in steps:
+        STEPS[name][1](walk)
+    capsys.readouterr()
+    return walk
+
+
+@pytest.mark.parametrize(
+    "steps",
+    [
+        pytest.param(steps, marks=pytest.mark.shard_slot(20 + n), id=", ".join(steps))
+        for n, steps in enumerate(DRAIN_STATES)
+    ],
+)
+def test_every_drain_command_on_a_locked_start_fails_changing_nothing_or_closes_nothing(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch, *, steps: tuple[str, ...]
+) -> None:
+    walk = replayed(tmp_path, capsys, monkeypatch, steps=steps)
+    saved = save(tmp_path, tmp_path / "saved" / "probe")
+    every_command_with_its_start_unwritable(walk, saved, steps)
 
 
 @pytest.mark.shard_slot(10)
@@ -912,3 +1125,4 @@ def test_no_run_of_the_drain_lets_through_a_commit_main_refuses_unless_its_final
     for _ in range(WALK_DEPTH):
         frontier = level(walk, frontier, seen)
     assert frontier == [], f"the walk reached a new state in {WALK_DEPTH + 1} steps"
+    assert sorted(walk.probed.values()) == sorted(DRAIN_STATES), "add the new path to DRAIN_STATES"
