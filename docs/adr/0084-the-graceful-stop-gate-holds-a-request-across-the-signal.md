@@ -48,21 +48,47 @@ None of these waits out a limit the project did not set: each ends on what the g
 
 ## What a project sees
 
-The recipe `graceful-stop` keeps its spelling, every flag keeps its name, and the exit codes are those of before. The template's bind text now asks for a route that takes a body and reads all of it before it answers. An upgrade does not rewrite a bound recipe, so an adopted project keeps its route. A project whose bound route takes a body is judged by the held request, and `--signal-after` counts from the service accepting it. A project whose route takes none, or whose acceptor is a forwarder outside the boot command's group, or whose service runs where the gate cannot read its tables or files, is judged as before, and sees one line that says so, why, and what to bind to be judged by a held request. No project green before turns red for a reason other than a request it dropped: every stand-in that drains and was green on the old gate is green on this one (Evidence).
+The recipe `graceful-stop` keeps its spelling, every flag keeps its name, and the exit codes are those of before. The template's bind text now asks for a route that takes a body and reads all of it before it answers. An upgrade does not rewrite a bound recipe, so an adopted project keeps its route. A project whose bound route takes a body is judged by the held request, and `--signal-after` counts from the service accepting it. A project whose route takes none, or whose acceptor is a forwarder outside the boot command's group, or whose service runs where the gate cannot read its tables or files, is judged as before, and sees one line that says so, why, and what to bind to be judged by a held request. Every stand-in that drains and was green on the old gate is green on this one (Evidence). The one green that can turn red is on a Linux system with no process tables, where the old gate never sent the signal at all; this one sends it and judges the older way.
 
 ## Evidence
 
-Observed on a shared 16-core Linux machine, with the gate's tests run four at a time beside other work.
+Observed on a shared 16-core Linux machine, beside other work.
 
-| Run | Fault planted | Cure | One-minute load |
-| --- | ---: | ---: | --- |
-| the ticket's fault, a server that exits on SIGTERM without draining, under 8 connections | red in 50 of 50 | green in 50 of 50 | 15.7 at the start, 24.5 at the end |
+**Where a server has committed to a request.** Each server kind on this machine was sent a request and SIGTERM with the request at three points, and the rest was sent at once and 0.5 s after the signal: the head not yet whole, the head whole with the body pending, and the handler running. One-minute load was 12.6 to 22.3.
 
-Before the change, all ten new cases failed on the old gate, in one run. The fault with the signal between two requests was green. The clean service whose first request came after the signal, and the one slow to accept, were red. A command that ended first was red as a drop. Under 8 connections the old gate happened to catch the fault in that run, by one reset of 8, the other 7 excused as never accepted. The ticket's third sighting is the run where it caught none.
+| Server | head not whole | body pending | handler running |
+| --- | --- | --- | --- |
+| a threaded server, a forking server, an event-loop runtime of another language | answered | answered | answered |
+| the test stand-ins that drain: one process, workers that keep or close the listener, a handoff to another session, a forwarder, a grandchild, a daemon | answered | not run: their routes took no body | answered |
+| a stand-in that leaves its handler thread behind when it exits | answered at once, closed 0.5 s later | not run | answered |
+
+No server here closed a partial head, but servers are known that close, at a stop, a connection whose head has not arrived in full. So the gate holds a byte of the body, never of the head, and `CLOSES_HALF_SENT` in the tests is such a server: green with a body, judged as before without one.
+
+**Never worse than before.** The old gate and this one ran over 30 stand-ins, 21 that drain and 9 that drop, each with a route without a body and one with a body, beside a one-minute load of 14.8 to 21.0.
+
+| Gate | right on the 42 runs that drain | right on the 18 that drop | runs judged by the held request |
+| --- | ---: | ---: | ---: |
+| the old gate | 35 | 17 | 0 |
+| this one | 37 | 18 | 28 |
+
+Every run this gate got wrong the old gate got wrong too, and with the same verdict. Those are a server that stops listening while connections wait in its queue, judged the older way, and two servers that close, at the stop, a connection whose head has not arrived in full. The held request was answered on both, but a load request caught mid-send was closed, and the load's own requests are still judged as before. The old gate was also wrong on a handoff to another session and green on a planted drop.
+
+**The ticket's fault.** A server that exits on SIGTERM without draining, under 8 connections, and its cure, run side by side 30 times, two at a time: the fault was red on the held request in 30 of 30, and the cure green in 30 of 30. One-minute load was 14.0 to 17.1 at the start of each pair. The whole of `test_with_service.py`, four at a time, passed in 30 runs of 30, at a load of 13.0 to 19.7.
+
+**The cases the first round got wrong.** Run on the old gate, the first round and this one, each with both routes:
+
+| Case | old gate | first round | this one |
+| --- | --- | --- | --- |
+| workers that keep the inherited listener while they finish, two stand-ins | green | red, waiting on a listener that never closes | green: held with a body, the older way without |
+| an acceptor outside the boot command's group | green | exit 3 | green, the older way |
+| a system with no process tables | green, but the signal was never sent: the thread that sends it died reading the tables | hung | the older way at once |
+
+On that last case this gate signals and judges the older way, which can be red on a request the server reset while it waited in the queue, as the older way always could; the old gate was green there because it judged nothing.
 
 ## Known limits, and what #139 still owes
 
 - On the older way the ticket's race is still open: a project judged so is green or red as it was before this change, by timing. That covers every route without a body, a forwarder outside the boot command's group, a container's network namespace, a system without the tables, and a process that hides its open files.
+- On the held path the load's own requests are still judged by the older rule. A server that closes, at a stop, a connection whose head has not arrived in full answers the held request, but can close a load request caught mid-send, and is then red, as it was before.
 - A route without a body cannot be held where a server has committed to it. Some servers close, at a stop, a connection whose request head has not arrived in full, which is a graceful thing to do, so a byte held in the head could turn such a server red by chance. Holding no byte would leave nothing in flight. A later change could hold such a route by another means.
 - A service whose thread that takes the signal is not the one that reads the held connection can read the last byte before it acts on the stop. If it then answers, the gate is green on a request the service did finish, and a drop of the load's requests is judged as before.
 - A server whose read timeout is shorter than `--signal-after` answers or closes the held request before the signal, and is judged the older way.
