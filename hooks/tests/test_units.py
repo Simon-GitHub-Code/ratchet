@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from ratchet_guards import bash, gh, git, gitcall
+from ratchet_guards import bash, gh, git, gitcall, hook, shell
 from ratchet_guards.context import Context
 from ratchet_guards.manifest import (
     DoorRule,
@@ -20,7 +20,15 @@ from ratchet_guards.manifest import (
 from ratchet_guards.options import NO_VALUES, Spec, scan
 from ratchet_guards.paths import Hit, Locator
 from ratchet_guards.refs import MAIN_BRANCHES
-from ratchet_guards.shell import HEREDOC_MARK, PLACEHOLDER, SimpleCommand, lex, unquote
+from ratchet_guards.shell import (
+    HEREDOC_MARK,
+    PLACEHOLDER,
+    Script,
+    SimpleCommand,
+    Token,
+    lex,
+    unquote,
+)
 from ratchet_guards.shell import parse as parse_shell
 from ratchet_guards.verdict import (
     DISPUTE,
@@ -229,6 +237,204 @@ def test_lexer_reads_every_heredoc_body() -> None:
     assert lex("cat <<-E\n  E\nXE\n\tE\nafter")[2] == ("  E\nXE",)
     assert lex("cat <<E\n\tE\nE")[2] == ("\tE",)
     assert lex("x $(cat <<EOF) y")[2] == ("",)
+
+
+def test_an_unquoted_heredoc_body_is_read_as_bash_reads_it() -> None:
+    body = "$(a) `b` \\$(c) \\`c\\` \\\\$(d) '$(e)' \"$(f)\" ${x:-$(g)} $(h $(i))"
+    assert lex(f"cat <<E\n{body}\nE")[1] == ("a", "b", "d", "e", "f", "g", "i", "h $(i)")
+    assert lex("cat <<E\na\\\nb\\\\\n\\$x\nE")[2] == ("ab\\\n$x",)
+    assert lex("cat <<E\nE\\\n\nx\nE")[2] == ("",)
+    assert lex("cat <<-E\n\tE\\\n\nx\nE")[2] == ("",)
+
+
+@pytest.mark.parametrize("opener", ["<<'E'", '<<"E"', "<<\\E"])
+def test_a_quoted_heredoc_delimiter_keeps_the_body_as_text(opener: str) -> None:
+    assert lex(f"cat {opener}\n$(a) `b` \\$c\\\nE\nE")[1:] == ((), ("$(a) `b` \\$c\\",))
+
+
+@pytest.mark.parametrize(
+    ("command", "outside", "delimiter"),
+    [
+        ("cat <<EOF > notes.md\nRun `git push -f` to publish.\nEOF", "git push -f", "EOF"),
+        (
+            "cat <<EOF > notes.md\nRun `git push -f` to publish.\nEOF",
+            'echo "$(git push -f)"',
+            "EOF",
+        ),
+        ("x=$(cat <<EOF\n# Notes\nRun `gh pr merge 1` here.\nEOF\n)", "x=$(gh pr merge 1)", "EOF"),
+        ("cat <<-E\n\t$(echo hi > AGENTS.md)\n\tE", "echo hi > AGENTS.md", "E"),
+        ("cat <<E\n${ git push -f; }\nE", "git push -f", "E"),
+        ("cat <<E >x\nsee ${ echo $(git push -f); }\nE", "git push -f", "E"),
+    ],
+)
+def test_a_finding_in_an_unquoted_heredoc_body_names_the_delimiter_to_quote(
+    command: str, outside: str, delimiter: str
+) -> None:
+    inside = _message(command)
+    assert f"heredoc body whose delimiter `{delimiter}` is unquoted" in inside, inside
+    assert f"(`'{delimiter}'`)" in inside, inside
+    assert "heredoc body" not in _message(outside)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash <<E\n$(git push -f)\nE",
+        "sh <<E\n$(git push -f)\nE",
+        "cat <<E | bash\n$(git push -f)\nE",
+        "cat <<E\n$(git push -f)\nE\ngit push -f",
+        "(( x = 1 << y ))\n$(git push -f)\ny",
+        "cat <<E\n${ git push -f; }\nE\ngit push -f",
+        "cat <<E\nx\\\nE\n$(git push -f)\nE",
+        "for ((i=0;i<1;i++)); do cat <<'EOF'\nsee: cat <<X\n`git push -f`\nX\nEOF\ndone",
+        "cat <<E''\n$(cat <<F\n$(git push -f)\nF\n)\nE",
+    ],
+)
+def test_the_heredoc_cure_is_not_named_where_quoting_the_delimiter_leaves_the_finding(
+    command: str,
+) -> None:
+    assert "heredoc body" not in _message(command)
+
+
+def _message(command: str) -> str:
+    verdict = strictest(verdicts(command))
+    assert verdict is not None, command
+    return hook.reason(verdict)
+
+
+def _reads(monkeypatch: pytest.MonkeyPatch, command: str) -> list[str]:
+    read: list[str] = []
+    original = bash.parse
+
+    def reading(text: str, *, subshells: bool = True) -> Script:
+        read.append(text)
+        return original(text, subshells=subshells)
+
+    monkeypatch.setattr(bash, "parse", reading)
+    bash.check(command, Context(ROOT), make_guard())
+    return read
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        lambda n: "cat <<E\n" + "$(\n" * n + "E",
+        lambda n: "echo " + "$(\n" * n,
+        lambda n: "echo " + "$(" * n + "x" + ")" * n,
+        lambda n: "cat <<E\n" + "$(" * n + "x" + ")" * n + "\nE",
+        lambda n: (
+            "echo "
+            + "".join(f"$(cat <<F{i}\n" for i in range(n))
+            + "x"
+            + "".join(f"\nF{i}\n)" for i in reversed(range(n)))
+        ),
+    ],
+)
+def test_the_scripts_the_guard_reads_grow_linearly_with_nesting(
+    monkeypatch: pytest.MonkeyPatch, shape: Callable[[int], str]
+) -> None:
+    read = [len(_reads(monkeypatch, shape(nesting))) for nesting in (20, 40, 60)]
+    assert read[2] - read[1] <= read[1] - read[0], read
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        lambda n: "cat <<E\n" + "``" * n + "\nE",
+        lambda n: "echo " + "``" * n,
+        lambda n: "echo " + "$(ls) " * n,
+        lambda n: "cat <<E\n" + "$(ls) " * n + "\nE",
+    ],
+)
+def test_the_guard_reads_identical_nested_scripts_once(
+    monkeypatch: pytest.MonkeyPatch, shape: Callable[[int], str]
+) -> None:
+    assert len(_reads(monkeypatch, shape(1000))) == len(_reads(monkeypatch, shape(1)))
+
+
+FORCE = "git push -f"
+
+
+@pytest.mark.parametrize("depth", [9, 10, 12, 20, 40])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        lambda inner, depth: "echo " + "$(a " * depth + f"$({inner})" + ")" * depth,
+        lambda inner, depth: "cat <<E\n" + "$(a " * depth + f"$({inner})" + ")" * depth + "\nE",
+        lambda inner, depth: (
+            "echo "
+            + "".join(f"$(cat <<F{i}\n" for i in range(depth))
+            + f"$({inner})"
+            + "".join(f"\nF{i}\n)" for i in reversed(range(depth)))
+        ),
+    ],
+)
+def test_a_command_nested_deeper_than_the_guard_follows_is_still_judged(
+    shape: Callable[[str, int], str], depth: int
+) -> None:
+    assert "force-push" in rules(shape(FORCE, depth))
+
+
+PROSE = "This line of the note explains a step, with `code`, $5 and a path like src/app/main.py.\n"
+
+
+def _filled(size: int) -> str:
+    return (PROSE * (size // len(PROSE) + 1))[:size]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git commit -m \"$(cat <<'EOF'\n" + _filled(60_000) + '\nEOF\n)"',
+        "gh pr create --title t --body \"$(cat <<'EOF'\n" + _filled(60_000) + '\nEOF\n)"',
+        "for f in "
+        + " ".join(f"src/module_{i:04d}/file_{i:04d}.py" for i in range(3000))
+        + '; do wc -l "$f"; done',
+        "cat > notes.md <<'EOF'\n" + _filled(140_000) + "\nEOF",
+        "cat > notes.md <<'EOF'\n" + _filled(149_000) + "\nEOF",
+        "cat > notes.md <<'EOF'\n" + _filled(1_000_000) + "\nEOF",
+    ],
+)
+def test_a_long_ordinary_command_is_allowed(command: str) -> None:
+    assert rules(command) == []
+
+
+class _Scanned:
+    def __init__(self, pattern: re.Pattern[str]) -> None:
+        self.pattern = pattern
+        self.characters = 0
+
+    def search(self, text: str) -> re.Match[str] | None:
+        self.characters += len(text)
+        return self.pattern.search(text)
+
+
+@pytest.mark.parametrize("line", ["x\\\n", "\\\\\\\n"])
+def test_the_reader_scans_continued_body_lines_once_each(
+    monkeypatch: pytest.MonkeyPatch, line: str
+) -> None:
+    scanned = _Scanned(vars(shell)["_CONTINUED"])
+    monkeypatch.setattr(shell, "_CONTINUED", scanned)
+    body = line * 2048
+    lex(f"cat <<E\n{body}E")
+    assert scanned.characters <= len(body), scanned.characters
+
+
+def test_the_reader_finds_many_heredocs_on_one_line_without_searching_its_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compared: list[object] = []
+    original = Token.__eq__
+
+    def comparing(token: Token, other: object) -> bool:
+        compared.append(other)
+        return original(token, other)
+
+    monkeypatch.setattr(Token, "__eq__", comparing)
+    count = 2000
+    opened = " ".join(f"<<E{index}" for index in range(count))
+    lex(f"cat {opened}\n" + "".join(f"b\nE{index}\n" for index in range(count)))
+    assert len(compared) <= count, len(compared)
 
 
 def test_lexer_survives_unterminated_constructs() -> None:

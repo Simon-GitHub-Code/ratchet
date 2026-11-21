@@ -161,14 +161,47 @@ def kept(found: Counter[Key]) -> gatelib.Want:
     return keep
 
 
-def recorded(added: Sequence[Entry]) -> gatelib.Want:
+def recorded(added: Sequence[Entry], gone: Sequence[Entry] = ()) -> gatelib.Want:
     def record(text: str | None) -> str:
         ledger = parse(text)
-        if not added or ledger.problems:
+        entries = [*(Counter(ledger.entries) - Counter(gone)).elements(), *added]
+        if ledger.problems or Counter(entries) == Counter(ledger.entries):
             return text or ""
-        return render([*ledger.entries, *added])
+        return render(entries)
 
     return record
+
+
+def next_base(root: Path, branch: str | None = None) -> str | None:
+    head = gatelib.git(root, "rev-parse", "--verify", "-q", "HEAD")
+    on = gatelib.git(root, "rev-parse", "--abbrev-ref", "HEAD")
+    for name in [branch] if branch else gatelib.default_branches(root):
+        if (found := gatelib.git(root, "merge-base", "HEAD", name)) is not None:
+            return head if on in (name, name.removeprefix("origin/")) else found
+    return head
+
+
+def brought(
+    before: Sequence[Entry], after: Sequence[Entry], renamed: Mapping[str, str]
+) -> tuple[Counter[Entry], list[tuple[Entry, Entry]]]:
+    new = Counter(after) - Counter(before)
+    left = Counter(before) - Counter(after)
+    edits = []
+    for entry in sorted(new.elements()):
+        held = next(
+            (
+                old
+                for old in sorted(left.elements())
+                if (old.rule, old.problem) == (entry.rule, entry.problem)
+                and entry.path in (old.path, renamed.get(old.path))
+            ),
+            None,
+        )
+        if held is not None:
+            left[held] -= 1
+            new[entry] -= 1
+            edits.append((entry, held))
+    return +new, edits
 
 
 def moved(before: str | None, after: str | None, *, floor: str | None) -> plugin_pin.Pin | None:
