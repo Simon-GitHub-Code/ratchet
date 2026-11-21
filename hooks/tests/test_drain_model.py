@@ -1586,6 +1586,10 @@ def lease_tour() -> list[list[str]]:
     return walks
 
 
+LEASED = pytest.mark.shard_slot(22)
+
+
+@LEASED
 def test_two_real_drains_agree_with_the_lease_model_on_every_decision(tmp_path: Path) -> None:
     for at, walk in enumerate(lease_tour()):
         play = LeasePlay(tmp_path / str(at))
