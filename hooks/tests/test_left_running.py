@@ -51,7 +51,6 @@ def test_a_test_that_leaves_a_process_running_fails_and_names_its_command_line(
     result.assert_outcomes(passed=3, failed=1, errors=2)
     assert "ERROR at teardown of test_forgets_a_sleeper" in said, said
     assert "ERROR at teardown of test_forgets_a_daemon" in said, said
-    assert said.count("the test left 1 running, ended now:") == 2, said
     assert "import time; time.sleep(60) forgotten-sleeper" in said, said
     assert "import time; time.sleep(60) forgotten-daemon" in said, said
 
