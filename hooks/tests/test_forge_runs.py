@@ -314,7 +314,7 @@ def test_a_pull_request_on_another_branch_is_told_only_the_steps_true_of_it(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], case: str
 ) -> None:
     pulls, codes, says = STACKED[case]
-    named = [{"number": forge_runs.at(p, "number"), "base": forge_runs.at(p, "base")} for p in pulls]
+    named = [{key: forge_runs.at(each, key) for key in ("number", "base")} for each in pulls]
     code, said, written = comment_for(
         tmp_path, capsys, page(run(pull_requests=named)), pulls=json.dumps(pulls)
     )
@@ -338,9 +338,7 @@ def test_after_a_change_of_target_the_note_still_says_who_merges_and_what_is_nee
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     runs = page(run(pull_requests=[]))
-    _, _, written = comment_for(
-        tmp_path, capsys, runs, events='[{"event": "base_ref_changed"}]'
-    )
+    _, _, written = comment_for(tmp_path, capsys, runs, events='[{"event": "base_ref_changed"}]')
     assert written is not None
     found = rows_of(written)
     assert "the owner merges this one" in found["retargeted"]
@@ -883,8 +881,8 @@ def test_bytes_that_are_not_utf_8_in_a_field_the_logic_reads_are_a_value_it_cann
     spoke = run_script(tmp_path, asked, data, locale=locale)
     assert (spoke.returncode, spoke.stderr) == (0, b"")
     tested = spoilt(page(run(html_url="u")), field)
-    done = ci_script(tmp_path, tested, locale)
-    assert (done[0], done[1].split(b";")[0].rstrip(b"\n"), done[2]) == (code, said.rstrip(b"\n"), b"")
+    found, out, err = ci_script(tmp_path, tested, locale)
+    assert (found, out.split(b";")[0].rstrip(b"\n"), err) == (code, said.rstrip(b"\n"), b"")
 
 
 def test_speaks_refuses_a_commit_that_is_not_a_commit_name(
