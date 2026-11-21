@@ -744,6 +744,9 @@ elif path.endswith("/workflows/ci.yml/runs"):
     print(json.dumps(world["ci"][fields["head_sha"]]))
 elif path.endswith("/pulls") and "base" in fields:
     body = world["above"][fields["base"]]
+    if isinstance(body, dict):
+        print(body["raw"])
+        sys.exit(0)
     jq = ["jq", "-r", args[args.index("--jq") + 1]]
     sys.exit(subprocess.run(jq, input=body, text=True).returncode)
 elif path.endswith("/pulls") and "GET" in args:
@@ -906,11 +909,23 @@ UNREAD = "branch feat/a stays: the forge did not say whether an open pull reques
         ({"feat/a": ""}, UNREAD),
         ({"feat/a": '{"message": "Not Found"}'}, UNREAD),
         ({"feat/a": '"[]"'}, UNREAD),
+        ({"feat/a": '[{"title": "x"}]'}, UNREAD),
+        ({"feat/a": {"raw": "gh: Not Found (HTTP 404)"}}, UNREAD),
     ],
-    ids=["targeted", "unread", "untargeted", "null", "empty", "object", "string"],
+    ids=[
+        "targeted",
+        "unread",
+        "untargeted",
+        "null",
+        "empty",
+        "object",
+        "string",
+        "no-number",
+        "message",
+    ],
 )
 def test_the_merge_job_keeps_a_merged_branch_while_an_open_pull_request_targets_it(
-    tmp_path: Path, above: dict[str, str], kept: str | None
+    tmp_path: Path, above: dict[str, str | dict[str, str]], kept: str | None
 ) -> None:
     world = forge({1: ("aaaa", "feat/a")})
     world["above"] = above
