@@ -616,6 +616,7 @@ def open_ticket(drain: Drain, ref: str) -> int:
     prior = queue_notes.loaded(gatelib.read_text(path))
     keep = prior.get("reported") is False and prior.get("outcome") not in {None, MERGED}
     kept = {k: v for k, v in prior.items() if k not in START_DROPPED} if keep else {}
+    gate_start(drain.root, entry.branch, passed=False)
     queue_notes.write_note(path, {**kept, **asdict(entry), "opened": opened, "start": start})
     named = [asdict(n) for n in preflight.ticket_named_gates(entry.ref, tree, drain.tracker)]
     print(
@@ -724,7 +725,13 @@ def passed(root: Path, branch: str) -> bool:
 def mark_passed(root: Path, branch: str) -> None:
     note = queue_notes.read_note(root, branch)
     queue_notes.write_note(queue_notes.note_path(root, branch), {**note, "passed": True})
-    queue_notes.pass_feature_start(root, branch, tree=tree_of(root, branch))
+
+
+def gate_start(root: Path, branch: str, *, passed: bool) -> None:
+    try:
+        queue_notes.gate_feature_start(root, branch, tree_of(root, branch), passed=passed)
+    except (OSError, ValueError) as error:
+        print(f"the one-ticket start of `{branch}` cannot be written: {error}", file=sys.stderr)
 
 
 def read_present(
@@ -788,6 +795,8 @@ def checkable(drain: Drain, ticket: preflight.Ticket) -> tuple[publish_check.Sta
 
 
 def check(drain: Drain, ticket: preflight.Ticket, *, final: bool) -> int:
+    if final:
+        gate_start(drain.root, route.own_branch(ticket), passed=False)
     ready = checkable(drain, ticket)
     if isinstance(ready, int):
         return ready
@@ -810,6 +819,8 @@ def check(drain: Drain, ticket: preflight.Ticket, *, final: bool) -> int:
         why = f"conflict: the rebase onto `{base}` was left unfinished"
         close(root, ticket, outcome=WAITS, reasons=[why])
         return UNREAD
+    if final:
+        gate_start(root, branch, passed=True)
     print(publish_check.GREEN)
     return 0
 
@@ -838,6 +849,7 @@ def restarted(
     branch: str,
     rebase_onto: str | None = None,
 ) -> dict[str, object]:
+    gate_start(drain.root, branch, passed=False)
     kept = {k: v for k, v in note.items() if k not in {"start", "passed"}}
     try:
         start = publish_check.start_of(tree, branch, forge_gh(drain), rebase_onto=rebase_onto)
@@ -885,6 +897,7 @@ def rebase(drain: Drain, ticket: preflight.Ticket) -> int:
     if refusal is not None:
         print(f"update: {ticket.ref} is not rebased: {refusal}")
         return 1
+    gate_start(drain.root, branch, passed=False)
     queue_notes.write_note(path, {**note, "rebasing": head})
     return rebase_tree(drain, tree, note, branch=branch)
 
