@@ -1,3 +1,4 @@
+import contextlib
 import errno
 import ipaddress
 import os
@@ -19,13 +20,17 @@ import listeners
 import with_service
 from tests import servers
 from tests.servers import (
+    ACCEPTS_OUTSIDE_THE_GROUP,
     ANSWERS_UNREAD,
+    CLOSES_HALF_SENT,
     EXITS_ON_SIGNAL,
     FORGE,
     HIDES,
+    KEEPS_THE_LISTENER,
     LISTENS,
     NAMES_ITSELF,
     NEEDS,
+    READS_THE_BODY,
     SERVE,
     SLOW_TO_ACCEPT,
     STOPS,
@@ -1037,19 +1042,23 @@ SENDS_THEN_WAITS = (
     "open(os.environ['RATCHET_SENDING'], 'w').close()\n"
     "while not os.path.exists(os.environ['RATCHET_STOPPING']): time.sleep(0.01)\n"
 )
-BETWEEN_TWO_REQUESTS = (
-    "import os, sys, time, urllib.request as u\n"
-    "assert u.urlopen(sys.argv[1]).status == 200\n"
-    "open(os.environ['RATCHET_SENDING'], 'w').close()\n"
-    "while not os.path.exists(os.environ['RATCHET_STOPPING']): time.sleep(0.01)\n"
+ANNOUNCES = (
+    "import json, os, sys, time\n"
+    "pending = os.environ['RATCHET_SENDING'] + '.pending'\n"
+    "open(pending, 'w').write(json.dumps([['POST', sys.argv[1], 200, '{}']]))\n"
+    "os.replace(pending, os.environ['RATCHET_SENDING'])\n"
+    "while sys.argv[2:] and not os.path.exists(os.environ['RATCHET_STOPPING']): time.sleep(0.01)\n"
 )
+BETWEEN_TWO_REQUESTS = (
+    f"import sys, urllib.request as u\nassert u.urlopen(sys.argv[1]).status == 200\n{ANNOUNCES}"
+)
+HOLDS = "http://127.0.0.1:{port}/work"
 ENDS_FIRST = (
     "import os, sys\n"
     "open(os.environ['RATCHET_SENDING'], 'w').close()\n"
     "print('the load failed: every request was refused', flush=True)\n"
     "sys.exit(123)\n"
 )
-AFTER_THE_SIGNAL = 'while [ ! -e "$RATCHET_STOPPING" ]; do sleep 0.01; done; '
 STOPS_AT_ONCE = (
     "import os, signal, threading, time, http.server as h\n"
     "class Handler(h.BaseHTTPRequestHandler):\n"
@@ -1061,36 +1070,46 @@ STOPS_AT_ONCE = (
     "        self.wfile.flush()\n"
     "        time.sleep(0.05)\n"
     "        self.wfile.write(b'ok')\n"
+    f"{READS_THE_BODY}"
     "server = h.ThreadingHTTPServer(('127.0.0.1', int(os.environ['PORT'])), Handler)\n"
     "signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown).start())\n"
     "server.daemon_threads = False\n"
     "server.serve_forever()\n"
     "server.server_close()"
 )
-DROPPED = re.compile(r"^\d+ x GET http://127\.0\.0\.1:\d+/work: (\w+)(?::|$)", re.MULTILINE)
-HELD = "the request the gate held, GET http://127.0.0.1:"
+DROPPED = re.compile(r"^\d+ x POST http://127\.0\.0\.1:\d+/work: (\w+)(?::|$)", re.MULTILINE)
 DROPPED_HELD = re.compile(
-    r"^the request the gate held, GET http://127\.0\.0\.1:\d+/\w*, which the service accepted "
+    r"^the request the gate held, POST http://127\.0\.0\.1:\d+/work, which the service accepted "
     r"before the stop signal, was dropped: (.+)$",
     re.MULTILINE,
 )
 ANSWERED_HELD = re.compile(
-    r"^with_service: the service accepted the request the gate held, GET "
-    r"http://127\.0\.0\.1:\d+/\w*, before the stop signal and answered it after$",
+    r"^with_service: the service accepted the request the gate held, POST "
+    r"http://127\.0\.0\.1:\d+/work, before the stop signal and answered it after$",
     re.MULTILINE,
 )
-NOT_JUDGED = "with_service: could not judge\n"
+OLDER = (
+    "with_service: the gate judged the stop the older way, by the command's own requests, since "
+)
 
 
 def smoke(
-    *, starts_after: str = "0", reaches_late: bool = False, concurrency: str = "4"
+    *,
+    starts_after: str = "0",
+    reaches_late: bool = False,
+    concurrency: str = "4",
+    url: str = f"POST {HOLDS} 200 {{}}",
 ) -> list[str]:
     late = f'touch "${gatelib.SENDING_ENV}" && sleep 1 && ' if reaches_late else ""
     return [
         *("sh", "-c", f'{late}sleep {starts_after} && exec "$@"', "late", sys.executable),
-        *(str(LOAD), "--url", "http://127.0.0.1:{port}/work", *BUSY),
+        *(str(LOAD), "--url", url, *BUSY),
         *("--concurrency", concurrency),
     ]
+
+
+def announces(*, waits: bool = True) -> list[str]:
+    return [sys.executable, "-c", ANNOUNCES, HOLDS, *(["waits"] if waits else [])]
 
 
 def graceful(
@@ -1134,7 +1153,7 @@ def test_the_request_a_service_accepted_and_dropped_is_red_beside_those_it_never
 ) -> None:
     code, out = graceful("abandon", capsys=capfd)
     assert "load-smoke: 4 connection(s) reset after the stop signal are not counted" in out
-    assert " x GET " not in out, "the smoke counts none of the connections the gate took"
+    assert " x POST " not in out, "the smoke counts none of the connections the gate took"
     assert DROPPED_HELD.search(out), out
     assert (code, out.endswith("with_service: red\n")) == (1, True)
 
@@ -1160,25 +1179,97 @@ def test_a_service_that_shuts_its_listener_down_is_judged_the_older_way_and_says
 ) -> None:
     code, out = graceful("shut", capsys=capfd)
     assert "is judged the older, less exact way, because the service shut its listener " in out
-    assert re.search(r"\n4 x GET http://127\.0\.0\.1:\d+/work: ConnectionResetError", out), out
-    assert ANSWERED_HELD.search(out), "a shut listener is not listening, so the gate sends"
+    assert re.search(r"\n4 x POST http://127\.0\.0\.1:\d+/work: ConnectionResetError", out), out
+    assert ANSWERED_HELD.search(out), out
     assert code == 1
 
 
-@pytest.mark.parametrize(
-    ("hidden", "said"),
-    [
-        ("now", "the gate cannot see whether the service accepted the request the gate held, "),
-        ("later", "the gate cannot see whether the service still listens after the stop signal"),
-    ],
-)
-def test_a_drain_the_gate_cannot_look_into_could_not_be_judged_and_says_why(
-    hidden: str, said: str, capsys: pytest.CaptureFixture[str]
+def test_a_correct_drain_the_gate_cannot_look_into_is_judged_as_before_and_green(
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    code, out = graceful("drain", capsys=capsys, hidden=hidden)
+    code, out = graceful("drain", capsys=capsys, hidden="now")
+    said = f"{OLDER}the gate cannot see whether the service accepted the request the gate held, "
     assert said in out, out
-    assert "the gate is not allowed to look at the open files of process " in out
-    assert (code, out.endswith(NOT_JUDGED)) == (3, True)
+    assert "since the gate is not allowed to look at the open files of process " in out
+    assert (code, out.endswith("with_service: green\n")) == (0, True)
+
+
+def test_a_service_that_hides_only_once_signalled_is_judged_by_the_held_request(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code, out = graceful("drain", capsys=capsys, hidden="later")
+    assert ANSWERED_HELD.search(out), out
+    assert (code, out.endswith("with_service: green\n")) == (0, True)
+
+
+def test_where_no_table_can_be_read_the_stop_is_judged_as_before_at_once_and_green(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(listeners, "PROC", str(tmp_path / "no-process-table"))
+    code, out = graceful("drain", capsys=capsys)
+    said = f"{OLDER}the gate cannot see whether the service accepted the request the gate held, "
+    assert f"{said}POST " in out, out
+    assert ", since this system shows no TCP table the gate can read\n" in out
+    assert (code, out.endswith("with_service: green\n")) == (0, True)
+
+
+def test_a_service_whose_acceptor_is_outside_the_group_is_judged_as_before_at_once(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    daemon = tmp_path / "daemon"
+    try:
+        code, out = run(
+            *("--boot", f"exec {python(ACCEPTS_OUTSIDE_THE_GROUP)} {daemon}", "--ready", READY),
+            *("--timeout", "5", "--graceful", "60", "--signal-after", "0.5"),
+            *("--", *announces()),
+            capsys=capsys,
+        )
+    finally:
+        if daemon.exists():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid_of(daemon), signal.SIGKILL)
+    assert f"since {listeners.TAKEN_ELSEWHERE}\n" in out, out
+    assert OLDER in out
+    assert (code, out.endswith("with_service: green\n")) == (0, True)
+
+
+def test_workers_that_keep_the_listener_while_they_finish_are_green(
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    code, out = run(
+        *("--boot", f"exec {python(KEEPS_THE_LISTENER)}", "--ready", READY),
+        *("--graceful", "60", "--signal-after", "0.5", "--", *smoke()),
+        capsys=capfd,
+    )
+    assert ANSWERED_HELD.search(out), out
+    assert (code, out.endswith("with_service: green\n")) == (0, True)
+
+
+@pytest.mark.parametrize(
+    ("command", "said"),
+    [
+        (announces(), ""),
+        (
+            [sys.executable, "-c", SENDS_THEN_WAITS],
+            f"{OLDER}GET http://127.0.0.1:",
+        ),
+    ],
+    ids=["with a body", "without one"],
+)
+def test_a_server_that_closes_half_sent_requests_at_a_stop_is_green(
+    command: list[str], said: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, out = run(
+        *("--boot", f"exec {python(CLOSES_HALF_SENT)}", "--ready", READY),
+        *("--graceful", "60", "--signal-after", "0.5", "--", *command),
+        capsys=capsys,
+    )
+    if said:
+        assert said in out, out
+        assert " sends no body, so a byte the gate held back would fall in the request's " in out
+    else:
+        assert ANSWERED_HELD.search(out), out
+    assert (code, out.endswith("with_service: green\n")) == (0, True)
 
 
 def test_a_smoke_slow_to_start_still_has_requests_in_flight_at_the_signal(
@@ -1202,17 +1293,24 @@ def test_the_signal_is_timed_from_the_command_sending_for_a_service_that_stops_a
     assert code == 0
 
 
-@pytest.mark.parametrize("reaches_late", [False, True])
 def test_a_service_that_drops_the_requests_in_flight_is_red_for_them(
-    capfd: pytest.CaptureFixture[str], *, reaches_late: bool
+    capfd: pytest.CaptureFixture[str],
 ) -> None:
-    code, out = graceful("drop", capsys=capfd, command=smoke(reaches_late=reaches_late))
+    code, out = graceful("drop", capsys=capfd)
     assert DROPPED.search(out), out
     held = DROPPED_HELD.search(out)
     assert held, out
-    assert held.group(1).endswith(", a ConnectionResetError"), "the kind a project's bite expects"
-    assert code == 1
-    assert out.endswith("with_service: red\n")
+    assert "ConnectionResetError" in held.group(1), "the kind of drop a project's bite expects"
+    assert (code, out.endswith("with_service: red\n")) == (1, True)
+
+
+def test_a_smoke_that_says_it_sends_after_the_gate_looked_is_judged_as_before_and_red(
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    code, out = graceful("drop", capsys=capfd, command=smoke(reaches_late=True))
+    assert f"{OLDER}GET http://127.0.0.1:" in out, out
+    assert DROPPED.search(out), out
+    assert (code, out.endswith("with_service: red\n")) == (1, True)
 
 
 @pytest.mark.parametrize(
@@ -1220,7 +1318,6 @@ def test_a_service_that_drops_the_requests_in_flight_is_red_for_them(
     [
         ("late", "the service exited with code 1 ", "60"),
         ("ignore", "the service was still running 1s after SIGTERM", "1"),
-        ("ignore", "the service still listened on port ", "1"),
         ("slow", "the service was still running 1s after SIGTERM", "1"),
         ("die", "the service exited with code 5 before it was signalled", "60"),
         ("stall", "was dropped: it was not answered before --graceful ran out", "1"),
@@ -1236,7 +1333,7 @@ def test_each_way_of_stopping_badly_is_red(
     assert out.endswith("with_service: red\n")
 
 
-def test_the_marker_exists_only_from_the_signal_and_a_command_that_ends_first_is_not_judged(
+def test_the_marker_exists_only_from_the_signal_and_a_command_that_ends_first_is_red(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     seen = tmp_path / "seen"
@@ -1246,8 +1343,8 @@ def test_the_marker_exists_only_from_the_signal_and_a_command_that_ends_first_is
         capsys=capsys,
     )
     assert seen.read_text(encoding="utf-8") == "False", "no signal yet, so no marker"
-    assert "the command ended before the stop signal, so the gate judged no stop" in out
-    assert (code, out.endswith(NOT_JUDGED)) == (3, True)
+    assert "the command ended before the 30s signal: nothing was in flight" in out
+    assert code == 1
 
 
 def exits_on_signal(
@@ -1263,19 +1360,21 @@ def exits_on_signal(
 def test_a_service_that_drops_while_the_signal_falls_between_two_requests_is_red(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    command = [sys.executable, "-c", BETWEEN_TWO_REQUESTS, "http://127.0.0.1:{port}/work"]
+    command = [sys.executable, "-c", BETWEEN_TWO_REQUESTS, HOLDS, "waits"]
     code, out = exits_on_signal("drop", command, capsys=capsys)
-    assert DROPPED_HELD.search(out), out
+    held = DROPPED_HELD.search(out)
+    assert held, out
+    assert "ConnectionResetError" in held.group(1), out
     assert (code, out.endswith("with_service: red\n")) == (1, True)
 
 
 def test_a_clean_service_whose_first_request_arrives_after_the_signal_is_green(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    load = [str(LOAD), "--url", "http://127.0.0.1:{port}/work", *BUSY]
-    late = f'touch "${gatelib.SENDING_ENV}"; {AFTER_THE_SIGNAL}exec "$@"'
+    load = [str(LOAD), "--url", f"POST {HOLDS} 200 {{}}", *BUSY]
+    late = [sys.executable, "-c", f"{ANNOUNCES}os.execv(sys.argv[3], sys.argv[3:])\n"]
     code, out = exits_on_signal(
-        "drain", ["sh", "-c", late, "late", sys.executable, *load], capsys=capsys
+        "drain", [*late, HOLDS, "waits", sys.executable, *load], capsys=capsys
     )
     assert ANSWERED_HELD.search(out), out
     assert (code, out.endswith("with_service: green\n")) == (0, True)
@@ -1310,7 +1409,7 @@ def test_a_clean_service_however_slow_to_accept_is_signalled_only_once_it_has_ac
     assert (code, out.endswith("with_service: green\n")) == (0, True)
 
 
-def test_a_service_that_never_accepts_the_held_request_could_not_be_judged(
+def test_a_service_that_never_accepts_the_held_request_is_judged_as_before(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     code, out = run(
@@ -1319,19 +1418,34 @@ def test_a_service_that_never_accepts_the_held_request_could_not_be_judged(
         *("--", *smoke(concurrency="1")),
         capsys=capsys,
     )
-    assert "the service did not accept the request the gate held, GET http://127.0.0.1:" in out, out
-    assert " within 2s: it was still waiting in the listener's queue; a service slower" in out
-    assert (code, out.endswith(NOT_JUDGED)) == (3, True)
+    said = f"{OLDER}the service did not accept the request the gate held, POST http://127.0.0.1:"
+    assert said in out, out
+    assert " in 2s: it was still waiting in the listener's queue; a service slower" in out
+    assert "the service exited with code 9 " in out, "signalled while it would not accept"
+    assert (code, out.endswith("with_service: red\n")) == (1, True)
 
 
-def test_a_command_that_ends_before_the_signal_could_not_be_judged_and_says_why(
+def test_a_command_that_ends_before_the_signal_is_red_and_says_why(
     capfd: pytest.CaptureFixture[str],
 ) -> None:
     code, out = exits_on_signal("drain", [sys.executable, "-c", ENDS_FIRST], capsys=capfd)
     assert out.startswith("the load failed: every request was refused\n"), out
     assert "the command exited with code 123" in out
-    assert "the command ended before the stop signal, so the gate judged no stop: run it " in out
-    assert (code, out.endswith(NOT_JUDGED)) == (3, True)
+    assert "the command ended before the 0.5s signal: nothing was in flight" in out
+    assert out.endswith("with_service: red\n")
+    assert code == 123
+
+
+def test_a_command_that_ends_before_the_signal_leaves_the_held_request_to_judge_the_stop(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code, out = run(
+        *("--boot", f"MODE=drain exec {python(EXITS_ON_SIGNAL)}", "--ready", READY),
+        *("--graceful", "60", "--signal-after", "600", "--", *announces(waits=False)),
+        capsys=capsys,
+    )
+    assert ANSWERED_HELD.search(out), out
+    assert (code, out.endswith("with_service: green\n")) == (0, True)
 
 
 @pytest.mark.parametrize(
@@ -1346,24 +1460,18 @@ def test_the_tickets_planted_fault_under_eight_connections_is_red_and_its_cure_g
     assert exited == code
 
 
-@pytest.mark.parametrize(
-    ("mode", "said"),
-    [
-        ("now", "the service answered or closed the request the gate held, GET "),
-        ("signal", "after the stop signal but before the gate sent its last byte: bind a route "),
-    ],
-)
-def test_a_route_that_answers_before_its_request_is_whole_could_not_be_judged(
-    mode: str, said: str, capsys: pytest.CaptureFixture[str]
+def test_a_route_that_answers_before_its_request_is_whole_is_judged_as_before(
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     code, out = run(
-        *("--boot", f"MODE={mode} exec {python(ANSWERS_UNREAD)}", "--ready", READY),
+        *("--boot", f"exec {python(ANSWERS_UNREAD)}", "--ready", READY),
         *("--graceful", "60", "--signal-after", "0.5", "--", *smoke(concurrency="1")),
         capsys=capsys,
     )
+    said = f"{OLDER}the service answered or closed the request the gate held, POST http://"
     assert said in out, out
-    assert "bind a route that reads its whole request before it answers" in out
-    assert (code, out.endswith(NOT_JUDGED)) == (3, True)
+    assert "bind a route that waits for its whole request, longer than --signal-after," in out
+    assert (code, out.endswith("with_service: green\n")) == (0, True)
 
 
 def test_the_marker_is_written_before_the_signal_so_a_failure_after_it_is_judged_by_it(
@@ -1390,17 +1498,18 @@ def test_the_marker_is_written_before_the_signal_so_a_failure_after_it_is_judged
     assert code == 0
 
 
-def test_a_route_the_gate_cannot_reach_could_not_be_judged_and_says_why(
+def test_a_route_the_gate_cannot_reach_is_judged_as_before_and_says_why(
     capfd: pytest.CaptureFixture[str],
 ) -> None:
-    load = [str(LOAD), "--url", "http://127.0.0.1:1/work", *BUSY]
+    load = [str(LOAD), "--url", "POST http://127.0.0.1:1/work 200 {}", *BUSY]
     code, out = exits_on_signal("drain", [sys.executable, *load], capsys=capfd)
-    assert "the gate could not send GET http://127.0.0.1:1/work to hold it across the " in out
+    said = f"{OLDER}the gate could not send POST http://127.0.0.1:1/work to hold it across the "
+    assert said in out, out
     assert "ConnectionRefusedError: [Errno 111] Connection refused; bind a route the " in out
-    assert (code, out.endswith(NOT_JUDGED)) == (3, True)
+    assert (code, out.endswith("with_service: red\n")) == (1, True)
 
 
-def test_a_command_that_never_starts_sending_could_not_be_judged_and_is_not_signalled(
+def test_a_command_that_never_starts_sending_is_red_and_the_service_is_not_signalled(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     code, out = run(
@@ -1410,7 +1519,7 @@ def test_a_command_that_never_starts_sending_could_not_be_judged_and_is_not_sign
     )
     assert "the command did not start sending within 2s: the signal waits until it " in out
     assert f"creates ${gatelib.SENDING_ENV}, as load_smoke.py --until-stopped does" in out
-    assert (code, out.endswith(NOT_JUDGED)) == (3, True)
+    assert code == 1
 
 
 def test_a_service_killed_by_the_signal_is_told_to_exec(

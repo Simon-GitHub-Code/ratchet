@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import enum
 import http.client
 import ipaddress
 import os
@@ -48,6 +47,10 @@ CHECKED = (
 DECLARE = "or declare the address with --listens"
 NOT_CHECKED_HERE = "where the product listens was not checked here"
 UNCHECKED = "where the product listens was not checked, so the command after -- did not run"
+QUEUED = (
+    "it was still waiting in the listener's queue; a service slower to accept a connection "
+    "needs a longer --timeout"
+)
 LISTENS = (
     "declare with --listens each address the product listens on, a loopback address if that is all"
 )
@@ -167,19 +170,6 @@ def sends_within(sending: Path, within: float, ended: threading.Event) -> bool:
     return True
 
 
-class Outcome(enum.IntEnum):
-    GREEN = 0
-    RED = 1
-    NOT_JUDGED = 3
-
-
-SEVERITY = (Outcome.GREEN, Outcome.NOT_JUDGED, Outcome.RED)
-
-
-def worst(*outcomes: Outcome) -> Outcome:
-    return max(outcomes, key=SEVERITY.index)
-
-
 class Recorded:
     def __init__(self) -> None:
         self.data = bytearray()
@@ -206,11 +196,17 @@ class Hold:
 
 
 def hold_request(goal: load_smoke.Target, timeout: float) -> Hold | str:
+    if not goal.body:
+        return (
+            f"{goal.label()} sends no body, so a byte the gate held back would fall in the "
+            "request's head, which a server may close at a stop: bind a route with a body, "
+            "METHOD URL STATUS BODY, to have one of its requests held across the signal"
+        )
     parts = urlsplit(goal.url)
     connect = gatelib.ToldTLS if parts.scheme == "https" else gatelib.Told
     connection = connect(parts.hostname or "", parts.port, timeout=timeout)
     recorded = Recorded()
-    headers = {"Content-Type": "application/json"} if goal.body is not None else {}
+    headers = {"Content-Type": "application/json"}
     try:
         connection.connect()
         sock = connection.sock
@@ -231,42 +227,46 @@ def hold_request(goal: load_smoke.Target, timeout: float) -> Hold | str:
 
 def early(hold: Hold) -> str:
     return (
-        f"the service answered or closed {hold.label()} before the gate sent its last byte, so no "
-        "request was held in flight at the stop signal: bind a route that reads its whole "
-        "request before it answers"
+        f"the service answered or closed {hold.label()} before the gate sent its last byte, so it "
+        "was not in flight at the stop signal: bind a route that waits for its whole request, "
+        "longer than --signal-after, before it answers"
     )
 
 
 def until_signal(
-    process: subprocess.Popen[bytes], options: argparse.Namespace, hold: Hold, *, stop: Stop
-) -> listeners.Listening | str:
+    process: subprocess.Popen[bytes], options: argparse.Namespace, *, hold: Hold, stop: Stop
+) -> str | None:
     service = listeners.Service(process.pid, {process.pid})
     deadline = time.monotonic() + options.timeout
-    accepted: listeners.Listening | None = None
+    signal_at: float | None = None
     while not hold.ended(WATCH):
-        if accepted is None:
-            seen = listeners.accepted(service, hold.at, hold.client)
-            if isinstance(seen, listeners.Listening):
-                accepted, deadline = seen, time.monotonic() + options.signal_after
-                stop.release()
-            elif isinstance(seen, str):
-                return (
-                    f"the gate cannot see whether the service accepted {hold.label()} since {seen}"
-                )
-            elif time.monotonic() >= deadline:
-                return (
-                    f"the service did not accept {hold.label()} within {options.timeout:g}s: "
-                    f"{seen.value}"
-                )
-        elif stop.ended.is_set():
-            return (
-                "the command ended before the stop signal, so the gate judged no stop: run it for "
-                f"longer than --signal-after, {options.signal_after:g}s, and read its output "
-                "above for why it ended"
-            )
+        if signal_at is not None:
+            if stop.ended.is_set() or time.monotonic() >= signal_at:
+                return None
+            continue
+        seen = listeners.accepted(service, hold.at, hold.client)
+        if seen is True:
+            stop.release(held=True)
+            signal_at = time.monotonic() + options.signal_after
+        elif seen:
+            return f"the gate cannot see whether the service accepted {hold.label()} since {seen}"
         elif time.monotonic() >= deadline:
-            return accepted
+            return f"the service did not accept {hold.label()} in {options.timeout:g}s: {QUEUED}"
     return early(hold)
+
+
+def take_hold(
+    process: subprocess.Popen[bytes], options: argparse.Namespace, stop: Stop
+) -> Hold | str:
+    ready = load_smoke.Target("GET", options.ready, None, None)
+    hold = hold_request(load_smoke.announced(stop.sending) or ready, options.timeout)
+    if isinstance(hold, str):
+        return hold
+    waited = until_signal(process, options, hold=hold, stop=stop)
+    if waited is None:
+        return hold
+    hold.connection.close()
+    return waited
 
 
 def lost(error: BaseException) -> str:
@@ -275,74 +275,36 @@ def lost(error: BaseException) -> str:
     return f"{said}, a ConnectionResetError" if family else said
 
 
-def reply(hold: Hold, deadline: float, last: bytes) -> str | None:
+def reply(hold: Hold, deadline: float) -> str | None:
     hold.connection.sock.settimeout(max(deadline - time.monotonic(), WATCH))
     try:
-        hold.connection.sock.sendall(last)
+        hold.connection.sock.sendall(hold.last)
         response = hold.connection.getresponse()
         response.read()
     except TimeoutError:
         return "it was not answered before --graceful ran out"
     except (OSError, http.client.HTTPException) as error:
         return lost(error)
+    finally:
+        hold.connection.close()
     return None if hold.goal.accepts(response.status) else f"it was answered HTTP {response.status}"
 
 
-def dropped(hold: Hold, wrong: str) -> list[str]:
-    return [
-        f"{hold.label()} which the service accepted before the stop signal, was dropped: {wrong}"
-    ]
-
-
-def answer(
-    hold: Hold, listening: listeners.Listening, deadline: float
-) -> tuple[Outcome, list[str]]:
-    while not hold.ended(WATCH):
-        state = listening.listens()
-        if isinstance(state, str):
-            return Outcome.NOT_JUDGED, [
-                (
-                    "the gate cannot see whether the service still listens after the stop signal, "
-                    f"so it did not send the last byte of {hold.label()} since {state}"
-                )
-            ]
-        if not state:
-            return sent(hold, deadline)
-        if time.monotonic() >= deadline:
-            return Outcome.RED, [
-                (
-                    f"the service still listened on port {hold.at[1]} when --graceful ran out, "
-                    f"so the gate never sent the last byte of {hold.label()} which it sends once "
-                    "the service stops listening, as a service does when it is signalled"
-                )
-            ]
-    wrong = reply(hold, deadline, b"")
-    if wrong is None:
-        return Outcome.NOT_JUDGED, [
+def answered(hold: Hold, deadline: float) -> list[str]:
+    wrong = reply(hold, deadline)
+    if wrong is not None:
+        return [
             (
-                f"the service answered {hold.label()} after the stop signal but before the gate "
-                "sent its last byte: bind a route that reads its whole request before it answers"
+                f"{hold.label()} which the service accepted before the stop signal, was dropped: "
+                f"{wrong}"
             )
         ]
-    return Outcome.RED, dropped(hold, wrong)
-
-
-def sent(hold: Hold, deadline: float) -> tuple[Outcome, list[str]]:
-    wrong = reply(hold, deadline, hold.last)
-    if wrong is None:
-        print(
-            f"with_service: the service accepted {hold.label()} before the stop signal and "
-            "answered it after",
-            flush=True,
-        )
-        return Outcome.GREEN, []
-    return Outcome.RED, dropped(hold, wrong)
-
-
-def before(process: subprocess.Popen[bytes], reason: str) -> tuple[Outcome, list[str]]:
-    if process.poll() is None and listeners.hiding(process.pid) is not None:
-        return Outcome.NOT_JUDGED, [reason]
-    return Outcome.RED, [f"the service exited with code {process.wait()} before it was signalled"]
+    print(
+        f"with_service: the service accepted {hold.label()} before the stop signal and "
+        "answered it after",
+        flush=True,
+    )
+    return []
 
 
 @dataclass
@@ -351,39 +313,59 @@ class Stop:
     sending: Path
     ended: threading.Event = field(default_factory=threading.Event)
     started: list[threading.Thread] = field(default_factory=list)
+    released: float | None = None
 
-    def release(self) -> None:
-        load_smoke.holding(self.sending).touch()
+    def release(self, *, held: bool) -> None:
+        path = load_smoke.holding(self.sending)
+        pending = path.with_name(f"{path.name}.pending")
+        pending.write_text(load_smoke.HELD if held else "", encoding="utf-8")
+        pending.replace(path)
+        if self.released is None:
+            self.released = time.monotonic()
 
 
 def signal_midway(
     process: subprocess.Popen[bytes], options: argparse.Namespace, stop: Stop
-) -> tuple[Outcome, list[str]]:
+) -> list[str]:
     if not sends_within(stop.sending, options.timeout, stop.ended) and not stop.ended.is_set():
-        return Outcome.NOT_JUDGED, [
+        return [
             (
                 f"the command did not start sending within {options.timeout:g}s: the signal "
                 f"waits until it creates ${gatelib.SENDING_ENV}, as load_smoke.py "
                 "--until-stopped does"
             )
         ]
-    ready = load_smoke.Target("GET", options.ready, None, None)
+    hold: Hold | str = ""
     try:
-        hold = hold_request(load_smoke.announced(stop.sending) or ready, options.timeout)
-        if isinstance(hold, str):
-            return before(process, hold)
-        with contextlib.closing(hold.connection):
-            return held_across(process, options, hold, stop=stop)
+        hold = take_hold(process, options, stop)
     finally:
-        stop.release()
+        stop.release(held=isinstance(hold, Hold))
+    if isinstance(hold, str):
+        return older(process, options, stop=stop, why=hold)
+    with contextlib.closing(hold.connection):
+        return stop_now(process, options, stop=stop, hold=hold)
 
 
-def held_across(
-    process: subprocess.Popen[bytes], options: argparse.Namespace, hold: Hold, *, stop: Stop
-) -> tuple[Outcome, list[str]]:
-    accepted = until_signal(process, options, hold, stop=stop)
-    if isinstance(accepted, str):
-        return before(process, accepted)
+def older(
+    process: subprocess.Popen[bytes], options: argparse.Namespace, *, stop: Stop, why: str
+) -> list[str]:
+    print(
+        "with_service: the gate judged the stop the older way, by the command's own requests, "
+        f"since {why}",
+        flush=True,
+    )
+    released = stop.released or time.monotonic()
+    if stop.ended.wait(max(released + options.signal_after - time.monotonic(), 0)):
+        after = options.signal_after
+        return [f"the command ended before the {after:g}s signal: nothing was in flight"]
+    return stop_now(process, options, stop=stop, hold=None)
+
+
+def stop_now(
+    process: subprocess.Popen[bytes], options: argparse.Namespace, *, stop: Stop, hold: Hold | None
+) -> list[str]:
+    if process.poll() is not None:
+        return [f"the service exited with code {process.returncode} before it was signalled"]
     held = listeners.grab(process.pid)
     gatelib.write_stopping(stop.marker, listeners.told(held))
     signalled = time.monotonic()
@@ -392,10 +374,8 @@ def held_across(
     taker.start()
     stop.started.append(taker)
     deadline = signalled + options.graceful
-    outcome, said = answer(hold, accepted, deadline)
-    hold.connection.close()
-    exit_lines = stopped(process, signalled, deadline)
-    return worst(outcome, Outcome.RED if exit_lines else Outcome.GREEN), [*said, *exit_lines]
+    said = [] if hold is None else answered(hold, deadline)
+    return [*said, *stopped(process, signalled, deadline)]
 
 
 def stopped(process: subprocess.Popen[bytes], signalled: float, deadline: float) -> list[str]:
@@ -420,15 +400,15 @@ def run_signalled(
     command: list[str],
     *,
     env: dict[str, str],
-) -> tuple[Outcome, list[str]]:
+) -> tuple[int, list[str]]:
     with tempfile.TemporaryDirectory() as scratch:
         stop = Stop(Path(scratch) / "stopping", Path(scratch) / "sending")
         env[gatelib.STOPPING_ENV], env[gatelib.SENDING_ENV] = str(stop.marker), str(stop.sending)
-        found: list[tuple[Outcome, list[str]]] = []
+        found: list[str] = []
 
         def watch() -> None:
             try:
-                found.append(signal_midway(process, options, stop))
+                found.extend(signal_midway(process, options, stop))
             finally:
                 gatelib.stop_group(process)
 
@@ -441,10 +421,7 @@ def run_signalled(
             watcher.join()
             for thread in stop.started:
                 thread.join()
-    outcome, said = found[0]
-    if code and outcome is Outcome.GREEN:
-        outcome = Outcome.RED
-    return outcome, [*problems, *said]
+    return (code or int(bool(found))), [*problems, *found]
 
 
 def refusal(
@@ -620,9 +597,6 @@ def main(argv: list[str]) -> int:
         )
         print("\n".join(problems), file=sys.stderr)
         code, problems, _ = attempt()
-    if code is Outcome.NOT_JUDGED:
-        print("\n".join([*problems, "with_service: could not judge"]))
-        return code
     gatelib.report("with_service", problems)
     return code
 

@@ -266,6 +266,28 @@ def until_stopped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path
     return marker, sending
 
 
+@pytest.mark.parametrize("held", [True, False], ids=["held", "judged as before"])
+def test_only_while_the_gate_holds_a_request_is_a_slow_answer_no_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    held: bool,
+) -> None:
+    _, sending = until_stopped(tmp_path, monkeypatch)
+    load_smoke.holding(sending).write_text(load_smoke.HELD if held else "", encoding="utf-8")
+    RELEASE.clear()
+    try:
+        with servers.server(handle) as url:
+            args = ["--url", f"{url}/slow", "--seconds", "0.1", "--concurrency", "1"]
+            code, out = smoke("--until-stopped", *args, "--timeout", "0.2", capsys=capsys)
+            RELEASE.set()
+    finally:
+        RELEASE.set()
+    assert (code, f"x GET {url}/slow: timed out after 0.2s" in out) == (int(not held), not held)
+    assert ("under the floor" in out) == (not held)
+
+
 @pytest.mark.parametrize("missing", [gatelib.STOPPING_ENV, gatelib.SENDING_ENV])
 def test_until_stopped_needs_both_paths_with_service_exports(
     missing: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -58,6 +58,7 @@ SERVICE = (
     "    if line == 'close\\n': listener.close()\n"
     "    if line == 'shut\\n': listener.shutdown(socket.SHUT_RDWR)\n"
     "    if line == 'hide\\n': hide()\n"
+    "    if line == 'accept\\n': taken = listener.accept()\n"
     "    print('done', flush=True)\n"
 )
 
@@ -376,17 +377,20 @@ def test_where_the_gate_holds_no_listener_the_smoke_judges_every_port_the_older_
     assert told.inexact(8000) == "the host is not Linux"
 
 
-def test_a_connection_is_seen_queued_then_accepted_by_whoever_holds_it_or_nowhere() -> None:
+def test_a_connection_is_seen_queued_then_accepted_by_whoever_holds_it_or_nowhere(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     nobody = listeners.Service(-1, set())
-    with socket.create_server(("127.0.0.1", 0)) as listener:
-        client = socket.create_connection(listener.getsockname())
-        with client:
-            at, me = listeners.end(client.getpeername()), listeners.end(client.getsockname())
-            assert listeners.accepted(nobody, at, me) is listeners.Seat.QUEUED
-            connection, _ = listener.accept()
-            with connection:
-                assert listeners.accepted(nobody, at, me) is listeners.Seat.ELSEWHERE
-            assert listeners.accepted(nobody, at, (me[0], 1)) is listeners.Seat.ABSENT
+    with service() as running, socket.create_connection(("127.0.0.1", running.port)) as client:
+        ours = listeners.Service(running.process.pid, {running.process.pid})
+        at, me = listeners.end(client.getpeername()), listeners.end(client.getsockname())
+        assert listeners.accepted(ours, at, me) is False, "still in the listener's queue"
+        assert running.tell("accept") == "done"
+        assert listeners.accepted(ours, at, me) is True
+        assert listeners.accepted(nobody, at, me) == listeners.TAKEN_ELSEWHERE
+        assert listeners.accepted(ours, at, (me[0], 1)) == listeners.ABSENT
+        monkeypatch.setattr(listeners, "PROC", str(tmp_path / "none"))
+        assert listeners.accepted(ours, at, me) == listeners.NO_TABLE
 
 
 @pytest.mark.parametrize(

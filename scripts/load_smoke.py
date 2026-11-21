@@ -21,6 +21,7 @@ SPEC = re.compile(rf"(?:({'|'.join(METHODS)}) )?(\S+)(?: (\d{{3}})(?: (.+))?)?",
 FAILED = 400
 LISTED = 5
 HELD_POLL = 0.01
+HELD = "held"
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,10 @@ def wait_for(path: Path) -> None:
         time.sleep(HELD_POLL)
 
 
+def is_held(sending: Path) -> bool:
+    return holding(sending).read_text(encoding="utf-8") == HELD
+
+
 def described(error: BaseException) -> str:
     said = str(error)
     return f"{type(error).__name__}: {said}" if said else type(error).__name__
@@ -135,8 +140,12 @@ class Cutoff(Exception):  # noqa: N818 # -- carries a failure to judge, not a fa
         self.cut = cut
 
 
+def slow(timeout: float) -> str:
+    return f"timed out after {timeout:g}s"
+
+
 def attempt(
-    goal: Target, timeout: float | None, stopping: Path | None = None
+    goal: Target, timeout: float, stopping: Path | None = None
 ) -> tuple[float | None, str | None]:
     clients: list[gatelib.Connection] = []
     late = stopping is not None and stopping.exists()
@@ -149,9 +158,8 @@ def attempt(
             timeout=timeout,
             connecting=clients.append,
         )
-    except TimeoutError as error:
-        said = f"timed out after {timeout:g}s" if timeout else described(error)
-        return None, f"{goal.label()}: {said}"
+    except TimeoutError:
+        return None, f"{goal.label()}: {slow(timeout)}"
     except (OSError, http.client.HTTPException) as error:
         if stopping is None or not stopping.exists() or not clients:
             return None, f"{goal.label()}: {described(error)}"
@@ -173,12 +181,7 @@ class Worked:
 
 
 def work(
-    targets: list[Target],
-    first: int,
-    deadline: float,
-    *,
-    timeout: float | None,
-    stopping: Path | None,
+    targets: list[Target], first: int, deadline: float, *, timeout: float, stopping: Path | None
 ) -> Worked:
     worked = Worked()
     turn = first
@@ -234,6 +237,16 @@ def judge(
     return errors, notes
 
 
+def counted(
+    errors: collections.Counter[str], timeout: float, *, held: bool
+) -> collections.Counter[str]:
+    if not held:
+        return errors
+    return collections.Counter(
+        {what: n for what, n in errors.items() if not what.endswith(slow(timeout))}
+    )
+
+
 def percentile(sorted_values: list[float], fraction: float) -> float:
     return sorted_values[min(len(sorted_values) - 1, int(fraction * len(sorted_values)))]
 
@@ -243,7 +256,7 @@ def hammer(
     concurrency: int,
     seconds: float,
     *,
-    timeout: float | None,
+    timeout: float,
     stopping: Path | None = None,
 ) -> Worked:
     deadline = time.monotonic() + seconds
@@ -298,9 +311,11 @@ def main(argv: list[str]) -> int:
         announce(Path(sending), targets)
         wait_for(holding(Path(sending)))
     marker = Path(stopping) if options.until_stopped and stopping else None
-    timeout = None if marker else options.timeout
-    worked = hammer(targets, options.concurrency, options.seconds, timeout=timeout, stopping=marker)
-    latencies, errors = worked.latencies, worked.errors
+    worked = hammer(
+        targets, options.concurrency, options.seconds, timeout=options.timeout, stopping=marker
+    )
+    held = bool(options.until_stopped and sending and is_held(Path(sending)))
+    latencies, errors = worked.latencies, counted(worked.errors, options.timeout, held=held)
     if marker and marker.exists():
         told = gatelib.ask(marker)
         cut, notes = judge(worked.cuts, told, [goal.port() for goal in targets])
@@ -316,7 +331,7 @@ def main(argv: list[str]) -> int:
     problems = [f"{count} x {what}" for what, count in errors.most_common(LISTED)]
     if len(errors) > LISTED:
         problems.append(f"and {len(errors) - LISTED} more kinds of error")
-    if len(latencies) < options.min_requests and not marker:
+    if len(latencies) < options.min_requests and not held:
         problems.append(
             f"{len(latencies)} requests answered, under the floor of {options.min_requests}: "
             "the service hangs or is too slow for this window"

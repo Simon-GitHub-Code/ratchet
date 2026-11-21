@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
-import enum
 import errno
 import functools
 import ipaddress
@@ -53,21 +52,15 @@ NOT_FOUND = (
 Address = ipaddress.IPv4Address | ipaddress.IPv6Address
 End = tuple[Address, int]
 Table = dict[str, End]
-
-
-class Seat(enum.Enum):
-    QUEUED = (
-        "it was still waiting in the listener's queue; a service slower to accept a connection "
-        "needs a longer --timeout"
-    )
-    ELSEWHERE = (
-        "it left the listener's queue, but no process of the service holds it, as when a process "
-        "outside the boot command's group accepts connections for the service"
-    )
-    ABSENT = (
-        "the gate found the service's end of that connection nowhere in this system's TCP table, "
-        "as when the service runs in another network namespace, such as a container's"
-    )
+TAKEN_ELSEWHERE = (
+    "it left the listener's queue, but no process of the service holds it, as when a process "
+    "outside the boot command's group accepts connections for the service"
+)
+ABSENT = (
+    "the gate found the service's end of that connection nowhere in this system's TCP table, "
+    "as when the service runs in another network namespace, such as a container's"
+)
+NO_TABLE = "this system shows no TCP table the gate can read"
 
 
 @dataclass(frozen=True)
@@ -176,27 +169,12 @@ def points(descriptor: Path, link: str) -> bool:
         return False
 
 
-@dataclass
-class Listening:
-    service: Service
-    holders: dict[str, list[Path]]
-
-    def listens(self) -> bool | str:
-        if not any(points(holder, link) for link, held in self.holders.items() for holder in held):
-            found, unseen = self.service.scan(everyone=False)
-            if unseen:
-                return unseen[0]
-            self.holders = {link: found[link] for link in self.holders if link in found}
-        listening = {link for _, _, state, link in rows() if state == LISTENING}
-        return not listening.isdisjoint(self.holders)
-
-
 def end(address: tuple[object, ...]) -> End:
     host, port = gatelib.end(address)
     return ipaddress.ip_address(host), port
 
 
-def rows() -> Iterator[tuple[End, End, str, str]]:
+def rows() -> Iterator[tuple[End, End, str]]:
     for kind in ("tcp", "tcp6"):
         with (
             contextlib.suppress(OSError),
@@ -205,37 +183,25 @@ def rows() -> Iterator[tuple[End, End, str, str]]:
             for line in lines:
                 fields = line.split()
                 try:
-                    row = (
-                        bound_at(fields[1]),
-                        bound_at(fields[2]),
-                        fields[3],
-                        f"socket:[{fields[9]}]",
-                    )
+                    row = (bound_at(fields[1]), bound_at(fields[2]), f"socket:[{fields[9]}]")
                 except (IndexError, ValueError):
                     continue
                 yield row
 
 
-def accepted(service: Service, at: End, client: End) -> Listening | Seat | str:
+def accepted(service: Service, at: End, client: End) -> bool | str:
     seen = list(rows())
-    link = next((link for local, remote, _, link in seen if (local, remote) == (at, client)), None)
+    if not seen:
+        return NO_TABLE
+    link = next((link for local, remote, link in seen if (local, remote) == (at, client)), None)
     if link is None:
-        return Seat.ABSENT
+        return ABSENT
     if link == "socket:[0]":
-        return Seat.QUEUED
+        return False
     sockets, unseen = service.scan(everyone=False)
     if unseen:
         return unseen[0]
-    if link not in sockets:
-        return Seat.ELSEWHERE
-    return Listening(
-        service,
-        {
-            listener: sockets[listener]
-            for local, _, state, listener in seen
-            if state == LISTENING and local[1] == at[1] and listener in sockets
-        },
-    )
+    return link in sockets or TAKEN_ELSEWHERE
 
 
 def unmapped(found: Address) -> Address:
@@ -355,6 +321,8 @@ def listens(sock: socket.socket) -> bool:
 def grab(group: int) -> list[Listener] | str:
     if sys.platform != "linux" or not hasattr(os, "pidfd_open"):
         return NOT_LINUX
+    if not Path(PROC).is_dir():
+        return UNREADABLE
     service = Service(group, {group})
     sockets, unseen = service.scan(everyone=False)
     if unseen:
