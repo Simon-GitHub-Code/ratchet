@@ -3,12 +3,15 @@ import json
 import os
 import re
 import subprocess
+import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 import feature_preflight as preflight
 import merge_ready
+import unproven
 from tests import dependency_stack as stack
 from tests.repos import branch, commit, git, repository, write
 
@@ -902,7 +905,7 @@ def test_a_record_that_is_not_a_clean_approval_is_the_owners(
     assert judged(root) == [f"record: {RECORD}: {problem}"]
 
 
-@pytest.mark.parametrize("text", ["not json\n", "[]\n"])
+@pytest.mark.parametrize("text", ["not json\n", "[]\n", "[" * 200_000 + "]" * 200_000])
 def test_a_record_that_is_not_an_object_is_no_record(root: Path, text: str) -> None:
     change(root, {"src/a.py": "x = 2\n", RECORD: text}, record=False)
     assert judged(root) == [f"record: {RECORD} is gone or is not a JSON object"]
@@ -2162,3 +2165,460 @@ def test_the_judge_reads_the_parent_from_the_default_branch_not_from_the_change(
     unlabelled = AGREED.replace("ready-for-agent", "needs-triage")
     change(tracked, {TICKET: unlabelled, PART: part("It saves a link.")}, record=False)
     assert LABEL_REFUSED in judged(tracked) or FROZEN in " ".join(judged(tracked))
+
+
+GATES = (
+    "\n## Gates\n\n| Question | Tool | Tier | Threshold | Command |\n"
+    "| --- | --- | --- | --- | --- |\n"
+)
+FUZZ = "| fuzzing | the fuzzer | 2 | | `just fuzz` |\n"
+BITES = (
+    "| every gate bites | `ratchet` plugin `scripts/bite.py` and `scripts/project_bite.py` | 2 |"
+    " `quality/bites.toml` | `just bite-all` |\n"
+)
+UNBOUND = "| end to end | | 2 | | `just e2e` |\n"
+BOUND_ONE = "\n[ceilings.deep]\nunproven = 1\n"
+STARTS = "start a deep run on the tip"
+RUN = "https://forge.example/runs/{}"
+
+
+def landed(root: Path, *, gates: str = FUZZ, bound: str = "") -> list[str]:
+    binding = BASE[BINDING] + (GATES + gates if gates else "")
+    repository(root, BASE | {BINDING: binding, "quality/thresholds.toml": THRESHOLDS + bound})
+    tips = [git(root, "rev-parse", "HEAD")]
+    for number in (1, 2, 3):
+        write(root, f"src/m{number}.py", f"m = {number}\n")
+        tips.append(commit(root, f"feat(core): merge {number}"))
+    branch(root, "feature/4-thing")
+    change(root, {"src/a.py": "x = 2\n"})
+    return tips[::-1]
+
+
+def run(sha: str, state: str, number: int) -> unproven.DeepRun:
+    at = datetime(2026, 11, 20, 9, tzinfo=UTC)
+    return unproven.DeepRun(sha, state, at, RUN.format(number))  # type: ignore[arg-type]
+
+
+def answer(tmp_path: Path, *runs: unproven.DeepRun) -> Path:
+    path = tmp_path / "answer.json"
+    path.write_text(unproven.written(unproven.Deep(runs, STARTS)), encoding="utf-8")
+    return path
+
+
+def verdict(
+    repo: Path, deep: Path, capsys: pytest.CaptureFixture[str], *more: str
+) -> tuple[int, list[str]]:
+    capsys.readouterr()
+    code = merge_ready.main(["merge_ready", "--root", str(repo), "--deep", str(deep), *more])
+    return code, capsys.readouterr().out.splitlines()
+
+
+def deep_judged(repo: Path, deep: Path) -> list[str]:
+    asked = merge_ready.Asked(deep=unproven.read(deep))
+    return [str(reason) for reason in merge_ready.judge(repo, "main", "HEAD", asked=asked)]
+
+
+def test_a_red_deep_run_names_every_merge_since_the_last_green(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = tmp_path / "repo"
+    tip, below, green, _ = landed(repo, gates="")
+    deep = answer(tmp_path, run(tip, "red", 9), run(green, "green", 8))
+    assert verdict(repo, deep, capsys) == (
+        1,
+        [
+            "merge: owner",
+            (
+                f"tier2: tier 2 is red on the default branch: {RUN.format(9)} on `{tip[:12]}`"
+                f" speaks for `{tip[:12]}` feat(core): merge 3; `{below[:12]}` feat(core): merge"
+                " 2, and the owner merges what fixes it"
+            ),
+        ],
+    )
+
+
+def test_a_declared_bound_exceeded_waits_for_the_run_that_ends_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = tmp_path / "repo"
+    _, below, green, _ = landed(repo, bound=BOUND_ONE)
+    report = tmp_path / "comment.md"
+    deep = answer(tmp_path, run(below, "running", 5), run(green, "green", 4))
+    assert verdict(repo, deep, capsys, "--report", str(report)) == (
+        1,
+        [
+            "merge: wait",
+            (
+                "unproven: no finished deep run covers the newest 2 of the default branch's"
+                f" merges, and `ceilings.deep.unproven` allows 1: wait for {RUN.format(5)} on"
+                f" `{below[:12]}`"
+            ),
+        ],
+    )
+    written = report.read_text(encoding="utf-8")
+    assert written.startswith("<!-- ratchet:merge -->\n**merge: wait** at `")
+    assert "Nothing here is the owner's to decide" in written
+    assert "- `unproven`: no finished deep run covers the newest 2" in written
+    assert verdict(repo, answer(tmp_path), capsys)[1][1].endswith(f"allows 1: {STARTS}")
+
+
+def test_no_bound_declared_lets_a_change_through_while_a_deep_run_goes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = tmp_path / "repo"
+    tip, *_, first = landed(repo)
+    deep = answer(tmp_path, run(tip, "running", 2), run(first, "green", 1))
+    assert verdict(repo, deep, capsys) == (0, ["merge: agent"])
+
+
+@pytest.mark.parametrize(
+    ("base", "head", "unproven_reason"),
+    [
+        pytest.param(
+            {"bound": BOUND_ONE},
+            {"quality/thresholds.toml": THRESHOLDS},
+            True,
+            id="a change that drops its bound",
+        ),
+        pytest.param(
+            {},
+            {"quality/thresholds.toml": THRESHOLDS + "\n[ceilings.deep]\nunproven = 0\n"},
+            False,
+            id="a change that declares a bound",
+        ),
+        pytest.param(
+            {"gates": "", "bound": BOUND_ONE},
+            {BINDING: BASE[BINDING] + GATES + FUZZ},
+            False,
+            id="a change that binds a tier 2 gate",
+        ),
+    ],
+)
+def test_the_bound_and_the_tier_2_gate_are_read_from_the_merge_base(
+    tmp_path: Path,
+    *,
+    base: dict[str, str],
+    head: dict[str, str],
+    unproven_reason: bool,
+) -> None:
+    repo = tmp_path / "repo"
+    _, _, green, _ = landed(repo, **base)
+    change(repo, dict(head))
+    reasons = deep_judged(repo, answer(tmp_path, run(green, "green", 1)))
+    assert any(reason.startswith("unproven: ") for reason in reasons) == unproven_reason
+    assert any(reason.startswith("guard: ") for reason in reasons)
+
+
+def test_a_change_only_behind_is_still_the_owners_and_waits_beside_a_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = tmp_path / "repo"
+    tip, below, *_ = landed(repo, bound=BOUND_ONE)
+    git(repo, "checkout", "-q", "main")
+    write(repo, "src/later.py", "y = 1\n")
+    commit(repo, "feat(core): merged since")
+    git(repo, "checkout", "-q", "feature/4-thing")
+    code, out = verdict(repo, answer(tmp_path, run(tip, "green", 1)), capsys, "--current")
+    assert (code, out[0], [line.split(":")[0] for line in out[1:]]) == (
+        1,
+        "merge: owner",
+        ["behind"],
+    )
+    code, out = verdict(repo, answer(tmp_path, run(below, "green", 1)), capsys, "--current")
+    assert (code, out[0], [line.split(":")[0] for line in out[1:]]) == (
+        1,
+        "merge: wait",
+        ["behind", "unproven"],
+    )
+
+
+def test_a_hold_for_a_deep_run_beside_a_reason_of_the_owners_is_the_owners(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = tmp_path / "repo"
+    _, _, green, _ = landed(repo, bound=BOUND_ONE)
+    change(repo, {"justfile": "check:\n    false\n"})
+    code, out = verdict(repo, answer(tmp_path, run(green, "green", 1)), capsys)
+    assert (code, out[0]) == (1, "merge: owner")
+    assert [line.split(":")[0] for line in out[1:3]] == ["unproven", "guard"]
+
+
+def test_a_deep_answer_and_a_tier_2_word_are_refused_together(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = tmp_path / "repo"
+    landed(repo)
+    with pytest.raises(SystemExit) as stopped:
+        verdict(repo, answer(tmp_path), capsys, "--tier2", "none")
+    assert stopped.value.code == 2
+    assert "not allowed with argument" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("text", [None, "", "{", '{"runs": [], "start": 1}'])
+def test_a_deep_answer_that_does_not_parse_is_not_known(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], text: str | None
+) -> None:
+    repo = tmp_path / "repo"
+    landed(repo)
+    deep = tmp_path / "answer.json"
+    if text is not None:
+        deep.write_text(text, encoding="utf-8")
+    code, out = verdict(repo, deep, capsys)
+    assert (code, out[0]) == (1, "merge: owner")
+    assert out[1].startswith("tier2: tier 2 on the default branch is not known: ")
+
+
+READ_AS_ZERO = (
+    "; `ceilings.deep.unproven` at the merge base is not a whole number of 0 or more, so it is"
+    " read as 0"
+)
+UNPARSED = (
+    "; quality/thresholds.toml does not parse at the merge base, so `ceilings.deep.unproven` is"
+    " read as 0"
+)
+
+
+@pytest.mark.parametrize(
+    ("thresholds", "said"),
+    [
+        (THRESHOLDS + "\n[ceilings.deep]\nunproven = -1\n", READ_AS_ZERO),
+        (THRESHOLDS + "\n[ceilings.deep]\nunproven = 1.5\n", READ_AS_ZERO),
+        (THRESHOLDS + "\n[ceilings.deep]\nunproven = true\n", READ_AS_ZERO),
+        (THRESHOLDS + '\n[ceilings.deep]\nunproven = "two"\n', READ_AS_ZERO),
+        ("[ceilings.deep\n", UNPARSED),
+    ],
+)
+def test_a_bound_that_is_not_a_whole_number_is_read_as_0_and_the_hold_says_so(
+    tmp_path: Path, thresholds: str, said: str
+) -> None:
+    repo = tmp_path / "repo"
+    repository(
+        repo, BASE | {BINDING: BASE[BINDING] + GATES + FUZZ, "quality/thresholds.toml": thresholds}
+    )
+    tip = git(repo, "rev-parse", "HEAD")
+    write(repo, "src/m.py", "m = 1\n")
+    later = commit(repo, "feat(core): merge 1")
+    branch(repo, "feature/4-thing")
+    change(repo, {"src/a.py": "x = 2\n"})
+    (reason,) = deep_judged(repo, answer(tmp_path, run(tip, "green", 1)))
+    assert reason.startswith("unproven: no finished deep run covers the newest 1 ")
+    assert reason.endswith(f"{STARTS}{said}")
+    (red,) = deep_judged(repo, answer(tmp_path, run(later, "red", 2)))
+    assert red.startswith("tier2: ")
+    assert said not in red
+
+
+@pytest.mark.parametrize(
+    ("gates", "waits"),
+    [
+        (BITES, True),
+        (UNBOUND, False),
+        ("| fuzzing | none: no fuzzer | 2 | | `just fuzz` |\n", False),
+    ],
+)
+def test_a_tier_2_gate_is_bound_or_the_plugins_own(
+    tmp_path: Path,
+    gates: str,
+    waits: bool,  # noqa: FBT001
+) -> None:
+    repo = tmp_path / "repo"
+    _, _, green, _ = landed(repo, gates=gates, bound=BOUND_ONE)
+    reasons = deep_judged(repo, answer(tmp_path, run(green, "green", 1)))
+    assert bool(reasons) == waits
+
+
+def listed(
+    sha: str, state: str, number: int, *, at: str = "2026-11-20T09:00:00Z"
+) -> dict[str, str]:
+    return {"commit": sha, "state": state, "at": at, "name": RUN.format(number)}
+
+
+def answered_as(tmp_path: Path, *runs: dict[str, str]) -> Path:
+    path = tmp_path / "answer.json"
+    path.write_text(json.dumps({"runs": list(runs), "start": STARTS}), encoding="utf-8")
+    return path
+
+
+NOT_KNOWN = "tier2: tier 2 on the default branch is not known: "
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "nested",
+        "nested runs",
+        "not utf-8",
+        "a number too long",
+        "past the size",
+        "a time that does not parse",
+        "a time with no offset",
+        "a week date",
+        "a name that is not text",
+        "a name over two lines",
+        "unreadable",
+        "a directory",
+    ],
+)
+def test_an_answer_file_the_judge_cannot_read_is_not_known(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], kind: str
+) -> None:
+    repo = tmp_path / "repo"
+    tip, *_ = landed(repo)
+    path = answered_as(tmp_path, listed(tip, "green", 1))
+    good = path.read_bytes()
+    written = {
+        "nested": b"[" * 200_000 + b"]" * 200_000,
+        "nested runs": b'{"runs": ' + b"[" * 200_000 + b"]" * 200_000 + b', "start": "s"}',
+        "not utf-8": good[:-1] + b', "note": "\xff"}',
+        "a number too long": good[:-1] + b', "note": ' + b"9" * 5_000 + b"}",
+        "past the size": good + b" " * (1 << 20),
+        "a time that does not parse": json.dumps(
+            {"runs": [listed(tip, "green", 1, at="not a time")], "start": STARTS}
+        ).encode(),
+        "a time with no offset": json.dumps(
+            {"runs": [listed(tip, "green", 1, at="2026-11-20T09:00:00")], "start": STARTS}
+        ).encode(),
+        "a week date": json.dumps(
+            {"runs": [listed(tip, "green", 1, at="2026-W47-5T09:00:00Z")], "start": STARTS}
+        ).encode(),
+        "a name that is not text": json.dumps(
+            {"runs": [listed(tip, "green", 1) | {"name": "run \ud800"}], "start": STARTS}
+        ).encode(),
+        "a name over two lines": json.dumps(
+            {"runs": [listed(tip, "green", 1) | {"name": "run\nbehind: x"}], "start": STARTS}
+        ).encode(),
+    }
+    if kind in written:
+        path.write_bytes(written[kind])
+    elif kind == "unreadable":
+        path.chmod(0)
+    else:
+        path.unlink()
+        path.mkdir()
+    code, out = verdict(repo, path, capsys)
+    assert (code, out[0]) == (1, "merge: owner"), out
+    assert out[1].startswith(NOT_KNOWN), out
+
+
+@pytest.mark.parametrize(
+    "locale",
+    [{"PYTHONIOENCODING": "utf-8:strict", "LC_ALL": "C.UTF-8"}, {"LC_ALL": "C"}],
+    ids=["strict", "C"],
+)
+def test_the_judge_answers_an_answer_file_of_hostile_text_in_any_locale(
+    tmp_path: Path, locale: dict[str, str]
+) -> None:
+    repo = tmp_path / "repo"
+    tip, *_ = landed(repo)
+    path = answered_as(tmp_path, listed(tip, "red", 1) | {"name": "run \ud800"})
+    kept = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("PYTHON", "LC_", "LANG"))
+    }
+    for data in (path.read_bytes(), path.read_bytes().replace(b"run \\ud800", b"run \xff")):
+        path.write_bytes(data)
+        done = subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
+            [sys.executable, merge_ready.__file__, "--root", str(repo), "--deep", str(path)],
+            capture_output=True,
+            check=False,
+            env=kept | locale,
+        )
+        assert (done.returncode, done.stderr) == (1, b""), done.stderr[-400:]
+        assert done.stdout.decode().splitlines()[1].startswith(NOT_KNOWN)
+
+
+def test_the_judge_loads_no_forge_adapter() -> None:
+    loaded = subprocess.run(
+        [sys.executable, "-c", "import merge_ready, sys; print('forge_runs' in sys.modules)"],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=Path(merge_ready.__file__).parent,
+    )
+    assert loaded.stdout == "False\n"
+
+
+@pytest.mark.parametrize(
+    ("red", "green", "verdict_line"),
+    [
+        pytest.param(
+            "2026-11-20T09:00:00.500Z",
+            "2026-11-20T09:00:00Z",
+            "merge: owner",
+            id="the red half a second later",
+        ),
+        pytest.param(
+            "2026-11-20T10:00:00+02:00",
+            "2026-11-20T09:00:00Z",
+            "merge: agent",
+            id="the red an hour earlier at another offset",
+        ),
+        pytest.param(
+            "2026-11-20T09:00:00Z",
+            "2026-11-20T11:00:00+02:00",
+            "merge: owner",
+            id="the same instant at another offset",
+        ),
+        pytest.param(
+            "2026-11-20T09:00:00Z",
+            "2026-11-20T09:00:00Z",
+            "merge: owner",
+            id="the same instant",
+        ),
+    ],
+)
+def test_two_runs_on_one_commit_are_ordered_by_the_instant_and_a_tie_is_red(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], *, red: str, green: str, verdict_line: str
+) -> None:
+    repo = tmp_path / "repo"
+    tip, *_ = landed(repo)
+    deep = answered_as(tmp_path, listed(tip, "red", 1, at=red), listed(tip, "green", 2, at=green))
+    assert verdict(repo, deep, capsys)[1][0] == verdict_line
+
+
+def pulled(root: Path) -> dict[str, str]:
+    landed(root, gates="")
+    git(root, "checkout", "-q", "main")
+    shas = {"base": git(root, "rev-parse", "HEAD")}
+    git(root, "checkout", "-q", "-b", "earlier")
+    write(root, "src/remote.py", "r = 1\n")
+    shas["remote"] = commit(root, "feat(core): the default branch's tip then")
+    git(root, "checkout", "-q", "main")
+    write(root, "src/local.py", "l = 1\n")
+    shas["local"] = commit(root, "feat(core): committed on a main that moved")
+    git(root, "merge", "-q", "--no-ff", "-m", "Merge the default branch", "earlier")
+    shas["pulled"] = git(root, "rev-parse", "HEAD")
+    git(root, "checkout", "-q", "feature/4-thing")
+    return shas
+
+
+@pytest.mark.parametrize(
+    ("runs", "held"),
+    [
+        pytest.param([("remote", "red", 2), ("base", "green", 1)], True, id="a red off the line"),
+        pytest.param(
+            [("remote", "red", 2), ("pulled", "green", 1)], False, id="its merge's own green"
+        ),
+        pytest.param([("remote", "green", 2), ("base", "red", 1)], True, id="a green off the line"),
+    ],
+)
+def test_a_red_on_a_commit_a_merge_brought_onto_the_line_holds_and_a_green_there_covers_nothing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    runs: list[tuple[str, str, int]],
+    held: bool,
+) -> None:
+    repo = tmp_path / "repo"
+    shas = pulled(repo)
+    deep = answered_as(tmp_path, *(listed(shas[name], state, n) for name, state, n in runs))
+    code, out = verdict(repo, deep, capsys)
+    assert (code, out[0]) == ((1, "merge: owner") if held else (0, "merge: agent")), out
+    if held and runs[0] == ("remote", "red", 2):
+        pulled_at, local, remote = (shas[name][:12] for name in ("pulled", "local", "remote"))
+        assert out[1] == (
+            f"tier2: tier 2 is red on the default branch: {RUN.format(2)} on `{remote}` speaks"
+            f" for `{pulled_at}` Merge the default branch; `{local}` feat(core): committed on a"
+            " main that moved, and the owner merges what fixes it"
+        )

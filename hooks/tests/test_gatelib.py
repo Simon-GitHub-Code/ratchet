@@ -3,23 +3,27 @@ import errno
 import http.server
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 import gatelib
 import listeners
+import unproven
 from tests import servers
 from tests.repos import branch, commit, git, repository, write
 
@@ -662,3 +666,185 @@ def test_a_stop_marker_is_replaced_whole_so_a_reader_never_sees_half_of_it(
     monkeypatch.undo()
     assert [json.loads(read)["ports"] for read in reads] == [{"80": None}]
     assert gatelib.read_stopping(marker) == after
+
+
+def side_merged(root: Path) -> dict[str, str]:
+    repository(root)
+    shas = {"first": git(root, "rev-parse", "HEAD")}
+    git(root, "switch", "-q", "-c", "side")
+    shas["aside"] = commit(root, "feat(core): on the side")
+    git(root, "switch", "-q", "-c", "never")
+    shas["never"] = commit(root, "feat(core): never merged")
+    git(root, "switch", "-q", "main")
+    shas["second"] = commit(root, "feat(core): second")
+    git(root, "merge", "-q", "--no-ff", "-m", "Merge side", "side")
+    shas["merged"] = git(root, "rev-parse", "HEAD")
+    return shas
+
+
+def test_the_chain_is_the_first_parent_line_and_each_merge_holds_the_runs_it_brought(
+    tmp_path: Path,
+) -> None:
+    shas = side_merged(tmp_path)
+    aside = shas["aside"]
+    asked = [aside, shas["first"], shas["never"], "--all", aside.upper(), aside[:12]]
+    assert gatelib.chain(tmp_path, "main", asked) == (
+        unproven.Landed(shas["merged"], "Merge side", frozenset({aside})),
+        unproven.Landed(shas["second"], "feat(core): second"),
+        unproven.Landed(shas["first"], "feat(core): the clean state"),
+    )
+    assert gatelib.chain(tmp_path, "nowhere", asked) == ()
+
+
+def undecodable(root: Path, parent: str, subject: bytes) -> str:
+    tree, above = git(root, "rev-parse", f"{parent}^{{tree}}"), git(root, "rev-parse", parent)
+    body = (
+        (
+            f"tree {tree}\nparent {above}\nauthor A <a@example.com> 0 +0000\n"
+            "committer A <a@example.com> 0 +0000\nencoding no-such-charset\n\n"
+        ).encode()
+        + subject
+        + b"\n"
+    )
+    return (
+        subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
+            ["git", "-C", str(root), "hash-object", "-t", "commit", "-w", "--stdin"],  # noqa: S607 # -- PATH
+            input=body,
+            capture_output=True,
+            check=True,
+        )
+        .stdout.decode()
+        .strip()
+    )
+
+
+def test_a_subject_that_is_not_utf_8_is_read_with_a_stand_in(tmp_path: Path) -> None:
+    made = undecodable(repository(tmp_path), "HEAD", b"caf\xe9 \xff")
+    assert gatelib.chain(tmp_path, made)[0] == unproven.Landed(made, "caf� �")
+
+
+def two_merges(root: Path) -> dict[str, str]:
+    repository(root)
+    shas = {"base": git(root, "rev-parse", "HEAD")}
+    for name in ("older", "newer"):
+        git(root, "switch", "-q", "-c", name, shas["base"])
+        shas[f"by {name}"] = commit(root, f"feat(core): brought by the {name} merge")
+    git(root, "switch", "-q", "main")
+    for name in ("older", "newer"):
+        git(root, "merge", "-q", "--no-ff", "-m", f"Merge {name}", name)
+        shas[name] = git(root, "rev-parse", "HEAD")
+    shas["tip"] = commit(root, "feat(core): after both merges")
+    return shas
+
+
+@pytest.mark.parametrize(("red", "green"), [("older", "newer"), ("newer", "older")])
+def test_an_off_line_red_sits_on_the_merge_that_brought_it_whichever_merge_is_green(
+    tmp_path: Path, red: str, green: str
+) -> None:
+    shas = two_merges(tmp_path)
+    when = datetime(2026, 11, 20, 9, tzinfo=UTC)
+    runs = (
+        unproven.DeepRun(shas[f"by {red}"], "red", when, "the red"),
+        unproven.DeepRun(shas[green], "green", when, "the green"),
+    )
+    line = gatelib.chain(tmp_path, "main", [run.commit for run in runs])
+    assert [landed.merged for landed in line] == [
+        frozenset(),
+        {shas["by newer"]} if red == "newer" else frozenset(),
+        {shas["by older"]} if red == "older" else frozenset(),
+        frozenset(),
+    ]
+    deep = unproven.Deep(runs, "start one")
+    hold = unproven.held(line, deep, gated=False, bound=None)
+    if red == "older":
+        assert hold is None, "a green on the newer merge judged a tree that holds the red's commit"
+    else:
+        assert hold is not None
+        assert hold.code == "tier2"
+        assert unproven.speaks_for(line, deep, runs[0]) == (line[1],)
+
+
+STEPS = st.lists(
+    st.tuples(
+        st.sampled_from(["commit", "merge", "pull", "octopus"]),
+        st.integers(0, 5),
+        st.integers(1, 2),
+    ),
+    min_size=1,
+    max_size=8,
+)
+
+
+def grown(root: Path, steps: list[tuple[str, int, int]]) -> list[str]:
+    tree = git(root, "rev-parse", "HEAD^{tree}")
+    shas = [git(root, "rev-parse", "HEAD")]
+
+    def made(*parents: int) -> int:
+        on = [argument for one in parents for argument in ("-p", shas[one])]
+        shas.append(git(root, "commit-tree", tree, *on, "-m", f"commit {len(shas)}"))
+        return len(shas) - 1
+
+    tip = 0
+    for kind, back, length in steps:
+        if kind == "commit":
+            tip = made(tip)
+            continue
+        side = max(0, len(shas) - 1 - back)
+        for _ in range(length):
+            side = made(side)
+        if kind == "merge":
+            tip = made(tip, side)
+        elif kind == "pull":
+            tip = made(side, tip)
+        else:
+            tip = made(tip, side, made(max(0, len(shas) - 2 - back)))
+    return shas
+
+
+def one_walk_per_commit(root: Path, tip: str, commits: list[str]) -> tuple[unproven.Landed, ...]:
+    listed = gatelib.git(root, "log", "--first-parent", "--format=%H %s", tip, "--") or ""
+    line = [row.partition(" ")[::2] for row in listed.splitlines()]
+    where = {sha: index for index, (sha, _) in enumerate(line)}
+    merged: dict[int, set[str]] = {}
+    for sha in {sha for sha in commits if re.fullmatch("[0-9a-f]{40}", sha)} - where.keys():
+        later = gatelib.git(root, "rev-list", "--ancestry-path", f"{sha}..{tip}", "--") or ""
+        landing = max((where[one] for one in later.split() if one in where), default=None)
+        if landing is not None:
+            merged.setdefault(landing, set()).add(sha)
+    return tuple(
+        unproven.Landed(sha, subject, frozenset(merged.get(index, ())))
+        for index, (sha, subject) in enumerate(line)
+    )
+
+
+@settings(max_examples=40, deadline=None)
+@given(STEPS, st.integers(0, 40))
+def test_the_chain_places_every_commit_where_one_walk_per_commit_places_it(
+    steps: list[tuple[str, int, int]], at: int
+) -> None:
+    with tempfile.TemporaryDirectory() as scratch:
+        root = repository(Path(scratch) / "repo")
+        shas = grown(root, steps)
+        tip = shas[at % len(shas)]
+        asked = [*shas, "f" * 40, "--all"]
+        assert gatelib.chain(root, tip, asked) == one_walk_per_commit(root, tip, asked)
+
+
+def test_the_chain_reads_git_as_often_for_one_run_off_its_line_as_for_many(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository(tmp_path)
+    shas = grown(tmp_path, [("merge", 0, 2), ("commit", 0, 1)] * 8 + [("pull", 3, 1)])
+    calls: list[object] = []
+    real = subprocess.run
+
+    def counted(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[Any]:  # noqa: ANN401
+        calls.append(args[0])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", counted)
+    line = gatelib.chain(tmp_path, shas[-1], shas[1:2])
+    one = len(calls)
+    many = gatelib.chain(tmp_path, shas[-1], shas)
+    assert len(calls) - one == one, calls
+    assert sum(len(landed.merged) for landed in many) > sum(len(landed.merged) for landed in line)
