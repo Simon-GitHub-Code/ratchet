@@ -35,6 +35,16 @@ CHECKED = (
     "when the product first answered, each of its listeners was on loopback or declared; one "
     "opened later is not seen"
 )
+DECLARE = "or declare the address with --listens"
+NOT_CHECKED_HERE = "where the product listens was not checked here"
+UNCHECKED = "where the product listens was not checked, so the command after -- did not run"
+LISTENS = (
+    "declare with --listens each address the product listens on, a loopback address if that is all"
+)
+
+
+def host_of(ready: str) -> str:
+    return urlsplit(ready).hostname or ""
 
 
 def place(address: listeners.Address, port: int) -> str:
@@ -45,44 +55,41 @@ def judged(process: subprocess.Popen[bytes], options: argparse.Namespace) -> lis
     ready = urlsplit(options.ready)
     seen = listeners.bound(process.pid, ready.port or (443 if ready.scheme == "https" else 80))
     cure = HOSTED if options.hosted else CURE
-    said, problems = [], []
-    for address, port in seen.product:
-        where = place(address, port)
-        if address.is_loopback:
-            continue
-        if address in options.listens:
-            said.append(f"the product listened on {where} when it first answered, as declared")
-            continue
-        what = "every interface" if address.is_unspecified else "not a loopback address"
-        wide = (
-            f"the product listened on {where}, {what}, when it first answered, so the network "
-            "could reach it"
-        )
-        if options.loopback_only:
-            problems.append(
-                f"{wide} around the command after --; {cure}, or declare the address with --listens"
-            )
-        else:
-            said.append(f"note: {wide}; {cure}")
+    session, declared = options.loopback_only, options.listens
+    wider = [(address, port) for address, port in seen.product if not address.is_loopback]
+    said = [
+        f"the product listened on {place(address, port)} when it first answered, as declared"
+        for address, port in wider
+        if address in declared
+    ]
     said += [
         f"{place(address, port)}, on the ready URL's port, is held by a process the gate did not "
         "find among the boot command's, so it is not judged as the product's"
         for address, port in seen.others
         if not address.is_loopback
     ]
-    for why in seen.unchecked:
-        if options.loopback_only:
-            problems.append(
-                f"where the product listens was not checked, so the command after -- did not "
-                f"run: {why}"
-            )
-        else:
-            said.append(f"where the product listens was not checked: {why}")
-    if options.loopback_only and not problems:
+    wide = [
+        f"the product listened on {place(address, port)}, "
+        f"{'every interface' if address.is_unspecified else 'not a loopback address'}, when it "
+        "first answered, so the network could reach it"
+        for address, port in wider
+        if address not in declared
+    ]
+    refused = [f"{line} around the command after --; {cure}, {DECLARE}" for line in wide]
+    said += [] if session else [f"note: {line}; {cure}" for line in wide]
+    why = "; ".join(seen.unchecked)
+    addresses = " ".join(dict.fromkeys(str(address) for address in declared))
+    if seen.unchecked and declared:
+        said.append(f"{NOT_CHECKED_HERE}, as declared: {addresses} ({why})")
+    elif seen.unchecked and session:
+        refused.append(f"{UNCHECKED}: {why}; {LISTENS}")
+    elif seen.unchecked:
+        said += [f"where the product listens was not checked: {each}" for each in seen.unchecked]
+    elif session and not refused:
         said.append(CHECKED)
     for line in said:
         print(f"with_service: {line}", flush=True)
-    return problems
+    return refused if session else []
 
 
 def probe(url: str) -> str | None:
@@ -356,7 +363,7 @@ def main(argv: list[str]) -> int:
         if picked:
             env["PORT"] = str(gatelib.free_port())
         port = env.get("PORT", PORT_TOKEN)
-        host = urlsplit(options.ready.replace(PORT_TOKEN, port)).hostname or ""
+        host = host_of(options.ready.replace(PORT_TOKEN, port))
 
         def expand(text: str) -> str:
             return text.replace(PORT_TOKEN, port).replace(HOST_TOKEN, host)

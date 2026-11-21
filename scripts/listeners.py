@@ -228,14 +228,12 @@ def bound(group: int, port: int) -> Seen:
             at = theirs[0].get(link)
         if at:
             product[link] = at
-    others = [at for link, at in table.items() if at[1] == port and link not in sockets]
-    if not product and not unchecked:
-        unchecked.append(NOT_FOUND)
-    return Seen(
-        list(dict.fromkeys(product.values())),
-        list(dict.fromkeys(others)),
-        list(dict.fromkeys(unchecked)),
+    others = list(
+        dict.fromkeys(at for link, at in table.items() if at[1] == port and link not in sockets)
     )
+    if not product:
+        return Seen(others, [], list(dict.fromkeys(unchecked or [NOT_FOUND])))
+    return Seen(list(dict.fromkeys(product.values())), others, list(dict.fromkeys(unchecked)))
 
 
 def copy_of(descriptor: Path) -> socket.socket:

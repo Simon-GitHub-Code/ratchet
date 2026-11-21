@@ -55,7 +55,9 @@ WIDE = re.compile(
     re.MULTILINE,
 )
 UNSEEN = re.compile(
-    r"^where the product listens was not checked, so the command after -- did not run: (.+)$",
+    r"^where the product listens was not checked, so the command after -- did not run: (.+); "
+    r"declare with --listens each address the product listens on, a loopback address if that "
+    r"is all$",
     re.MULTILINE,
 )
 LISTENS = (
@@ -94,6 +96,7 @@ NULL = Boot(
     f"exec {shlex.join(gatelib.interpreter())} {shlex.quote(str(PROXY))} --null",
     "http://127.0.0.1:{port}/",
     30.0,
+    listens="127.0.0.1",
 )
 
 
@@ -287,13 +290,14 @@ def prune(place: Path, now: dt.datetime) -> None:
 
 
 def reachable(text: str) -> str | None:
-    if unseen := UNSEEN.search(text):
+    wide = WIDE.search(text)
+    if wide is None and (unseen := UNSEEN.search(text)):
         return (
             "where it listens could not be checked, so a request might reach it around the "
             "session's proxy and leave no line in its log, and no session starts on that: "
-            f"{unseen[1]}"
+            f"{unseen[1]}. Name in the justfile's `listens` each address it listens on, a "
+            'loopback address if that is all, as `listens := "127.0.0.1"`.'
         )
-    wide = WIDE.search(text)
     if wide is None:
         return None
     where, what, cure = wide[1], wide[2], wide[3]
@@ -303,6 +307,10 @@ def reachable(text: str) -> str | None:
         f"and leave no line in its log. To keep it on loopback, {cure}; if it listens there on "
         f'purpose, add the address to the justfile\'s `listens`, as `listens := "{address}"`.'
     )
+
+
+def said_by_gate(text: str) -> list[str]:
+    return re.findall(r"^with_service: .*$", text, re.MULTILINE)
 
 
 def what_it_did(log: Path) -> str:
@@ -396,7 +404,7 @@ def launch(root: Path, directory: Path, boot: Boot) -> int:
         said = what_it_did(directory / "boot.log")
         how = ", and" if reachable(printed) else " and did not answer:"
         return cannot_start(directory, f"It was started with `{boot.command}`{how} {said}")
-    for line in re.findall(r"^with_service: .*$", printed, re.MULTILINE):
+    for line in said_by_gate(printed):
         print(line, file=sys.stderr)
     print(url)
     print(directory / "tester")
@@ -711,7 +719,7 @@ def check(root: Path, slug: str, *, kept: str | None, commit: str | None) -> int
 
 def replay_one(
     check: kept_checks.Check, boot: Boot, *, root: Path, scratch: Path
-) -> kept_checks.Result:
+) -> tuple[kept_checks.Result, list[str]]:
     place = scratch / check.id
     place.mkdir()
     (place / "session.json").write_text(
@@ -725,8 +733,9 @@ def replay_one(
             url = wait_serving(lambda: process.poll() is None, place, 2 * boot.timeout + DOWN_WAIT)
             if url is None:
                 said = f"the product did not start: {what_it_did(place / 'boot.log')}"
-                return kept_checks.Result(kept_checks.Outcome.NOT_RUN, said)
-            return kept_checks.run(check, url, place)
+                return kept_checks.Result(kept_checks.Outcome.NOT_RUN, said), []
+            lines = said_by_gate(gatelib.read_text(place / "boot.log") or "")
+            return kept_checks.run(check, url, place), lines
         finally:
             stop(process)
 
@@ -779,7 +788,10 @@ def replay(root: Path, slug: str | None, checks_file: Path | None, *, control: b
     if boot is None:
         return gatelib.report("acceptance replay", [read_binding(root).why])
     with tempfile.TemporaryDirectory(prefix="ratchet-replay-") as scratch:
-        ran = [replay_one(item, boot, root=root, scratch=Path(scratch)) for item in checks]
+        booted = [replay_one(item, boot, root=root, scratch=Path(scratch)) for item in checks]
+    ran = [result for result, _ in booted]
+    for line in [] if control else next((said for _, said in booted if said), []):
+        print(line, file=sys.stderr)
     if directory is not None:
         results = [
             {

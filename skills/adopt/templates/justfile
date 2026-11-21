@@ -99,7 +99,7 @@ default:
 
 start *args:
     @{{ if ready =~ '^https?://' { "echo 'open " + replace(ready, "{port}", port) + " once it is up; Ctrl-C stops it'" } else { "true" } }}
-    export PORT={{port}}; {{ replace(replace(boot, "{port}", port), "{host}", if ready =~ '^https?://' { replace_regex(ready, '^[a-z]+://(?:\[([^]]*)\]|([^/:]*)).*$', '${1}${2}') } else { "{host}" }) }} {{args}}
+    export PORT={{port}}; {{ replace(replace(boot, "{port}", port), "{host}", if ready =~ '^https?://' { lowercase(replace_regex(ready, '^[a-z]+://(?:[^/?#]*@)?(?:\[([^]]*)\]|([^/?#:]*)).*$', '${1}${2}')) } else { "{host}" }) }} {{args}}
 
 test-files *files:
     {{test_runner}} {{files}}
