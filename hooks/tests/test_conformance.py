@@ -423,6 +423,35 @@ def test_a_missing_kind_of_door_and_a_door_with_no_paths_are_the_owner_s_to_sett
     assert unbound.fix.ask.startswith("Which paths shut the door 'contracts' (Contract artefacts")
 
 
+DEEP_RECORD_LINE = '    ".git/ratchet-deep.jsonl",\n'
+DEEP_RECORD_FINDING = (
+    "guards/manifest.toml: '.git/ratchet-deep.jsonl' is not in an edit = \"deny\" group"
+)
+
+
+def test_a_manifest_that_lets_an_agent_write_the_deep_record_is_the_owner_s_and_can_be_owed(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    replace(MANIFEST, DEEP_RECORD_LINE, "")(repo)
+    [finding] = conformance.findings(repo)
+    assert str(finding) == DEEP_RECORD_FINDING
+    assert isinstance(finding.fix, conformance.Owner)
+    assert finding.fix.ask.startswith("Add '.git/ratchet-deep.jsonl' to the `local-git` group")
+    entry = owed.Entry(finding.path, finding.rule, finding.problem, "0.13.0")
+    (repo / owed.LEDGER).write_text(owed.render([entry]), encoding="utf-8")
+    capsys.readouterr()
+    assert conformance.run(repo) == 0
+    assert capsys.readouterr().out == (
+        f"owed: {DEEP_RECORD_FINDING}\nconformance: green (0 failures; 1 owed since an upgrade,"
+        " listed in quality/owed.toml)\n"
+    )
+
+
+def test_a_deny_pattern_that_covers_the_deep_record_needs_no_line_of_its_own(repo: Path) -> None:
+    replace(MANIFEST, DEEP_RECORD_LINE, '    ".git/ratchet-*",\n')(repo)
+    assert red(repo) == []
+
+
 def test_the_life_events_question_shows_the_signs_the_tree_holds(tmp_path: Path) -> None:
     files = {
         str(path.relative_to(pristine())): path.read_text(encoding="utf-8")
