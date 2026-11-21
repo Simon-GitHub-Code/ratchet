@@ -5,7 +5,6 @@ import http.server
 import inspect
 import json
 import os
-import shlex
 import shutil
 import signal
 import socket
@@ -23,7 +22,7 @@ import pytest
 import acceptance_proxy
 import gatelib
 from tests import products
-from tests.servers import gone, pid_of
+from tests.servers import Popen, Spawn, gone
 
 PROXY = Path(acceptance_proxy.__file__)
 SESSION = "20261113T000000000000Z-abcd1234"
@@ -35,15 +34,17 @@ def proxied(tmp_path: Path, upstream: str, monkeypatch: pytest.MonkeyPatch) -> I
     directory.mkdir(exist_ok=True)
     (directory / "session.json").write_text(json.dumps({"session": SESSION}), encoding="utf-8")
     monkeypatch.setenv(gatelib.READY_ENV, upstream)
-    serving = threading.Thread(target=acceptance_proxy.serve, args=(directory, os.getppid()))
-    serving.start()
-    try:
-        products.wait_for(directory / "proxy.json")
-        yield json.loads((directory / "proxy.json").read_text(encoding="utf-8"))["url"]
-    finally:
-        acceptance_proxy.STOP.set()
-        serving.join()
-        acceptance_proxy.STOP.clear()
+    with (directory / "live.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        serving = threading.Thread(target=acceptance_proxy.serve, args=(directory,))
+        serving.start()
+        try:
+            products.wait_for(directory / "proxy.json")
+            yield json.loads((directory / "proxy.json").read_text(encoding="utf-8"))["url"]
+        finally:
+            acceptance_proxy.STOP.set()
+            serving.join()
+            acceptance_proxy.STOP.clear()
 
 
 @dataclass(frozen=True)
@@ -296,36 +297,84 @@ def test_the_seal_waits_for_an_answer_still_going_out_and_counts_its_line(
     assert (seal["requests"], seal["unlogged"]) == (1, 0)
 
 
-def test_a_session_is_abandoned_only_when_its_lock_is_there_and_nothing_holds_it(
+def test_a_session_goes_on_only_while_its_directory_is_there_and_something_holds_its_lock(
     tmp_path: Path,
 ) -> None:
-    assert not acceptance_proxy.abandoned(tmp_path)
+    assert not acceptance_proxy.going(tmp_path), "no lock, so no one started it"
     lock = tmp_path / "live.lock"
-    lock.write_text("1", encoding="utf-8")
-    assert acceptance_proxy.abandoned(tmp_path)
+    lock.write_text(str(os.getpid()), encoding="utf-8")
+    assert not acceptance_proxy.going(tmp_path), "the pid it names lives, but holds nothing"
     with lock.open("rb") as held:
         fcntl.flock(held, fcntl.LOCK_EX)
-        assert not acceptance_proxy.abandoned(tmp_path)
-    assert acceptance_proxy.abandoned(tmp_path)
+        assert acceptance_proxy.going(tmp_path)
+        assert not acceptance_proxy.going(tmp_path / "removed")
+    assert not acceptance_proxy.going(tmp_path)
 
 
-def run_proxy(tmp_path: Path, *args: str, env: dict[str, str]) -> subprocess.Popen[bytes]:
-    return subprocess.Popen(  # noqa: S603 # -- this interpreter and the proxy script
-        [sys.executable, str(PROXY), *args],
-        env={**os.environ, **env},
-        cwd=tmp_path,
-        start_new_session=True,
+def test_a_proxy_whose_starter_is_gone_when_it_first_looks_serves_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    directory = tmp_path / "session"
+    directory.mkdir()
+    (directory / "session.json").write_text(json.dumps({"session": SESSION}), encoding="utf-8")
+    (directory / "live.lock").write_text(str(os.getpid()), encoding="utf-8")
+    monkeypatch.setenv(gatelib.READY_ENV, f"http://127.0.0.1:{gatelib.free_port()}/")
+    assert acceptance_proxy.main(["acceptance_proxy.py", str(directory)]) == 1
+    assert not (directory / "proxy.json").exists()
+    assert capsys.readouterr().err == (
+        "acceptance_proxy: whoever started the session is gone; nothing was served\n"
     )
+
+
+STARTER = """
+import fcntl, subprocess, sys
+lock = open(sys.argv[1] + "/live.lock", "w")
+fcntl.flock(lock, fcntl.LOCK_EX)
+proxy = subprocess.Popen([sys.executable, *sys.argv[2:]], start_new_session=True)
+print(proxy.pid, flush=True)
+sys.stdin.readline()
+"""
+
+
+def started_by_a_lock_holder(
+    spawn: Spawn, directory: Path, *args: str, env: dict[str, str]
+) -> tuple[Popen, int]:
+    starter = spawn(
+        [sys.executable, "-c", STARTER, str(directory), str(PROXY), *args],
+        env={**os.environ, **env},
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+    )
+    return starter, int(starter.stdout.readline())  # type: ignore[union-attr]
+
+
+def session_directory(tmp_path: Path) -> Path:
+    directory = tmp_path / "session"
+    directory.mkdir()
+    (directory / "session.json").write_text(json.dumps({"session": SESSION}), encoding="utf-8")
+    return directory
+
+
+@contextmanager
+def holding(directory: Path) -> Iterator[None]:
+    with (directory / "live.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def run_proxy(spawn: Spawn, tmp_path: Path, *args: str, env: dict[str, str]) -> Popen:
+    return spawn([sys.executable, str(PROXY), *args], env={**os.environ, **env}, cwd=tmp_path)
 
 
 @pytest.mark.parametrize("signum", gatelib.INTERRUPTS)
 def test_the_null_product_answers_like_nothing_and_stops_on_a_signal(
-    tmp_path: Path, signum: signal.Signals
+    tmp_path: Path, signum: signal.Signals, spawn: Spawn
 ) -> None:
     port = gatelib.free_port()
     url = f"http://127.0.0.1:{port}/"
-    process = run_proxy(tmp_path, "--null", env={"PORT": str(port)})
-    try:
+    directory = session_directory(tmp_path)
+    with holding(directory):
+        process = run_proxy(spawn, tmp_path, "--null", str(directory), env={"PORT": str(port)})
         while not gatelib.listening(url):
             assert process.poll() is None
             time.sleep(0.02)
@@ -335,30 +384,42 @@ def test_the_null_product_answers_like_nothing_and_stops_on_a_signal(
         assert (saved.status, saved.headers["Location"], saved.body) == (303, "/", b"")
         head = exchange(url, "HEAD", "/")
         assert (head.status, head.body) == (200, b"")
-    finally:
         process.send_signal(signum)
         assert process.wait(timeout=30) == 0
     assert not gatelib.listening(url)
 
 
-def test_the_proxy_stops_and_seals_when_whoever_started_it_is_gone(tmp_path: Path) -> None:
-    directory = tmp_path / "session"
-    directory.mkdir()
-    (directory / "session.json").write_text(json.dumps({"session": SESSION}), encoding="utf-8")
-    pid = tmp_path / "pid"
+def test_the_null_product_stops_when_whoever_started_it_is_gone(
+    tmp_path: Path, spawn: Spawn
+) -> None:
+    port = gatelib.free_port()
+    url = f"http://127.0.0.1:{port}/"
+    directory = session_directory(tmp_path)
+    starter, pid = started_by_a_lock_holder(
+        spawn, directory, "--null", str(directory), env={"PORT": str(port)}
+    )
+    while not gatelib.listening(url):
+        assert not gone(pid, wait=0), "the null product did not start"
+        time.sleep(0.02)
+    starter.kill()
+    starter.wait()
+    assert gone(pid, wait=30), "the null product outlived the process that started it"
+    assert not gatelib.listening(url)
+
+
+def test_the_proxy_stops_and_seals_when_whoever_started_it_is_gone(
+    tmp_path: Path, spawn: Spawn
+) -> None:
+    directory = session_directory(tmp_path)
     nothing = f"http://127.0.0.1:{gatelib.free_port()}/"
-    started = f"{shlex.quote(sys.executable)} {shlex.quote(str(PROXY))} {directory}"
-    parent = subprocess.Popen(  # noqa: S603 # -- a fixed shell line this test wrote
-        ["bash", "-c", f"{started} & echo $! > {pid}; read -r"],  # noqa: S607 # -- bash from PATH
-        env={**os.environ, gatelib.READY_ENV: nothing},
-        stdin=subprocess.PIPE,
-        start_new_session=True,
+    starter, pid = started_by_a_lock_holder(
+        spawn, directory, str(directory), env={gatelib.READY_ENV: nothing}
     )
     products.wait_for(directory / "proxy.json")
     url = json.loads((directory / "proxy.json").read_text(encoding="utf-8"))["url"]
     assert products.request(url)[0] == 502
-    parent.communicate(b"\n", timeout=30)
-    assert gone(pid_of(pid), wait=30), "the proxy outlived the process that started it"
+    starter.communicate(b"\n", timeout=30)
+    assert gone(pid, wait=30), "the proxy outlived the process that started it"
     seal = json.loads((directory / "seal.json").read_text(encoding="utf-8"))
     assert seal["requests"] == 1
     assert not gatelib.listening(url)
@@ -423,19 +484,13 @@ def test_a_stop_asked_for_before_the_server_is_up_is_honoured_once_it_is() -> No
 
 
 def test_a_proxy_whose_session_directory_is_removed_stops_and_seals_nothing(
-    tmp_path: Path,
+    tmp_path: Path, spawn: Spawn
 ) -> None:
-    directory = tmp_path / "session"
-    directory.mkdir()
-    (directory / "session.json").write_text(json.dumps({"session": SESSION}), encoding="utf-8")
+    directory = session_directory(tmp_path)
     nothing = f"http://127.0.0.1:{gatelib.free_port()}/"
-    process = run_proxy(tmp_path, str(directory), env={gatelib.READY_ENV: nothing})
-    try:
+    with holding(directory):
+        process = run_proxy(spawn, tmp_path, str(directory), env={gatelib.READY_ENV: nothing})
         products.wait_for(directory / "proxy.json")
         shutil.rmtree(directory)
         assert process.wait(timeout=30) == 1
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait()
     assert not directory.exists()
