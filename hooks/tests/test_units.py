@@ -115,8 +115,22 @@ def test_the_rule_catalogue_is_pinned() -> None:
                 "leaves nothing to tell the orchestrator's commit from a role's"
             ),
         ),
-        "merge-pr": ("ASK", "merges a pull request"),
-        "merge-default": ("ASK", "merges another branch into the default branch"),
+        "merge-pr": (
+            "DENY",
+            (
+                "merges a pull request, which in a project on the method only the merge job or "
+                "the owner does"
+            ),
+        ),
+        "merge-pr-unadopted": ("ASK", "merges a pull request"),
+        "merge-default": (
+            "DENY",
+            (
+                "merges another branch into the default branch, which in a project on the method "
+                "only the merge entry point, the merge job or the owner does"
+            ),
+        ),
+        "merge-default-unadopted": ("ASK", "merges another branch into the default branch"),
         "branch-protection": ("DENY", "reads or changes branch protection or rulesets"),
         "repo-settings": ("DENY", "changes repository, secret, variable or workflow settings"),
         "labels": ("DENY", "manages labels"),
@@ -156,7 +170,9 @@ def test_only_a_rule_with_a_way_out_of_its_own_points_somewhere_other_than_a_dis
         "push-main",
         "queue-final-check",
         "merge-pr",
+        "merge-pr-unadopted",
         "merge-default",
+        "merge-default-unadopted",
         "unreadable",
         *allow,
         *rewriting,
@@ -168,9 +184,22 @@ def test_only_a_rule_with_a_way_out_of_its_own_points_somewhere_other_than_a_dis
     assert "git switch -c" in RULES["guard-path-default"].way_out
 
 
+def test_a_merge_deny_names_what_merges_by_itself_and_what_prints_why_it_waits() -> None:
+    pull_request, default = RULES["merge-pr"].way_out, RULES["merge-default"].way_out
+    assert "merge job" in pull_request
+    assert "`just merge-ready --head <branch>`" in pull_request
+    assert "owner" in pull_request
+    for named in ("merge job", "`just merge <branch>`", "`just merge-ready --head <branch>`"):
+        assert named in default
+    assert "`git pull --ff-only`" in default
+    assert "`git switch --detach`" in default
+    assert "scratch branch" in default
+
+
 def test_deny_outranks_ask_and_the_first_of_equals_wins() -> None:
     assert Decision.DENY > Decision.ASK
-    ask, deny, deny2 = Verdict("merge-pr", "a"), Verdict("labels", "b"), Verdict("labels", "c")
+    ask = Verdict("merge-pr-unadopted", "a")
+    deny, deny2 = Verdict("labels", "b"), Verdict("labels", "c")
     assert strictest([ask, deny, deny2]) is deny
     assert strictest([ask]) is ask
     assert strictest([]) is None
