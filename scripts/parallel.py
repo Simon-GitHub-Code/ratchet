@@ -52,6 +52,12 @@ Usage::
   Repeat the option for more groups. A gate is in at most one group. When a group's gates took
   longer one after another than the slowest gate outside every group and ``--alone``, the group
   set the run's wall clock, and one line after the closing summary says so. It is never red.
+* The binding at ``--root`` states the schedule once for this runner and the bite proof, in the
+  ``- Apart:``, ``- Alone:`` and ``- Wide:`` lines of its ``## Speed`` section (ADR 0086): each
+  code span of ``Apart`` is a group, names split by spaces. Each kind it states replaces
+  ``--serial``, ``--alone`` or ``--wide``, kept to this run's gates. A flag of a stated kind
+  that names other gates is said in one line before the gates start, which says the binding
+  wins; it is never red. A kind the binding does not state keeps its flag.
 * ``--report PATH`` appends one JSON line per finished gate, in the record ``budget.py``
   writes (``key``, ``seconds``, ``ceiling``, ``status``, ``exit``, and ``at``, ``run`` and
   ``tree`` from ``runrecord.py``), so one reader serves both. The ceiling is null: a parallel
@@ -106,7 +112,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections import Counter, deque
+from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -118,13 +124,14 @@ import budget
 import gatelib
 import project_bite
 import runrecord
+import schedule
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
 POLL = 0.05
-ALONE = -1
 RECENT = 5
+FLAGS = {schedule.APART: "--serial", schedule.ALONE: "--alone", schedule.WIDE: "--wide"}
 WINDOW = 2**20
 UNREADABLE = (ValueError, TypeError, KeyError, OverflowError, RecursionError)
 NO_RECORD: Mapping[str, float] = MappingProxyType({})
@@ -276,10 +283,16 @@ class Scheduler:
     def __init__(
         self, units: list[tuple[str, ...]], runner: list[str], options: argparse.Namespace
     ) -> None:
-        self.pending = [deque(unit) for unit in units]
         self.groups = [unit for unit in units if len(unit) > 1]
         self.measured_alone = frozenset(options.alone)
-        self.alone: deque[str] = deque(options.alone)
+        kept = schedule.Schedule(
+            {
+                schedule.APART: tuple(self.groups),
+                schedule.ALONE: tuple((name,) for name in options.alone),
+            }
+        )
+        order = [*(name for unit in units for name in unit), *options.alone]
+        self.board = schedule.Board(order, kept, str)
         self.runner = runner
         self.root: Path = options.root
         self.jobs: int = options.jobs
@@ -288,7 +301,7 @@ class Scheduler:
         self.report_to: Path | None = options.report
         self.tree = runrecord.tree_id(self.root) if options.report else None
         self.tools = tools(self.root)
-        self.live: dict[int, Live] = {}
+        self.live: dict[str, Live] = {}
         self.finished: list[Finished] = []
         self.stopped: list[str] = []
         self.halted = False
@@ -297,11 +310,8 @@ class Scheduler:
         try:
             while True:
                 self.start_ready()
-                self.start_alone()
                 if not self.live:
-                    if self.halted or not self.not_started():
-                        return
-                    continue
+                    return
                 time.sleep(POLL)
                 self.settle_exited()
                 if self.halted:
@@ -311,26 +321,22 @@ class Scheduler:
             raise
 
     def not_started(self) -> list[str]:
-        return [*(name for queue in self.pending for name in queue), *self.alone]
+        return list(self.board.pending)
 
     def start_ready(self) -> None:
-        for index, queue in enumerate(self.pending):
-            if self.halted or len(self.live) >= self.jobs:
+        while not self.halted and len(self.live) < self.jobs:
+            name = self.board.take()
+            if name is None:
                 return
-            if queue and index not in self.live:
-                self.begin(index, queue.popleft())
+            self.begin(name)
 
-    def start_alone(self) -> None:
-        if self.alone and not (self.halted or self.live or any(self.pending)):
-            self.begin(ALONE, self.alone.popleft())
-
-    def begin(self, index: int, name: str) -> None:
+    def begin(self, name: str) -> None:
         with gatelib.signals_held():
             started = self.launch(name)
             if isinstance(started, Finished):
                 self.settle(started)
             else:
-                self.live[index] = started
+                self.live[name] = started
 
     def launch(self, name: str) -> Live | Finished:
         command = [*self.runner, *shlex.split(name)]
@@ -355,13 +361,14 @@ class Scheduler:
         return Live(name, process, log, time.monotonic(), shlex.split(name)[-1] in self.tools)
 
     def settle_exited(self) -> None:
-        for index, gate in list(self.live.items()):
+        for name, gate in list(self.live.items()):
             code = gate.process.poll()
             if code is not None:
-                del self.live[index]
+                del self.live[name]
                 self.settle(collect(gate, code))
 
     def settle(self, result: Finished) -> None:
+        self.board.done(result.name)
         if result.output:
             say(f"==> {result.name} <==")
             say(result.output.rstrip("\n"))
@@ -488,6 +495,21 @@ def verdict(scheduler: Scheduler, problems: list[str]) -> str:
     return f"parallel: green ({', '.join([f'{counts[Standing.GREEN]} ran', *waits])})"
 
 
+def spans(groups: schedule.Groups) -> str:
+    return " ".join(f"`{' '.join(group)}`" for group in groups) or "none"
+
+
+def contradicted(stated: schedule.Schedule, given: schedule.Schedule) -> list[str]:
+    return [
+        f"parallel: the recipe passes {FLAGS[kind]} {spans(given.groups[kind])} to this run, and"
+        f" the binding's Speed section says {kind}: {spans(groups)}; the binding's line wins,"
+        " since the bite proof reads only it: give the recipe the same gates, or take"
+        f" {FLAGS[kind]} out of it"
+        for kind, groups in stated.groups.items()
+        if given.groups[kind] and frozenset(given.groups[kind]) != frozenset(groups)
+    ]
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="parallel.py", usage="%(prog)s [options] -- GATE...", description=__doc__
@@ -514,8 +536,19 @@ def main(argv: list[str]) -> int:
         options.report = options.root / options.report
     if options.jobs < 1:
         parser.error("--jobs is at least 1")
-    options.alone = [name for name in gates if name in options.alone]
-    options.wide = [name for name in gates if name in options.wide]
+    given = schedule.Schedule(
+        {
+            schedule.APART: tuple(map(tuple, options.serial)),
+            schedule.ALONE: tuple((name,) for name in options.alone if name in gates),
+            schedule.WIDE: tuple((name,) for name in options.wide if name in gates),
+        }
+    )
+    binding = gatelib.read_text(options.root / gatelib.BINDING) or ""
+    stated = schedule.stated(binding).among(gates)
+    chosen = stated.over(given)
+    options.serial = [list(group) for group in chosen.apart]
+    options.alone = [name for name in gates if name in chosen.alone]
+    options.wide = [name for name in gates if name in chosen.wide]
     timings: Path | None = None if options.fail_fast else options.report
     seconds = NO_RECORD if timings is None else expected_seconds(timings)
     try:
@@ -523,6 +556,8 @@ def main(argv: list[str]) -> int:
         units = plan(gates, options.serial, frozenset(options.alone), seconds=seconds)
     except ValueError as error:
         parser.error(str(error))
+    for line in contradicted(stated, given):
+        say(line)
     scheduler = Scheduler(units, runner, options)
     started = time.monotonic()
     try:
