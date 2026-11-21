@@ -8,10 +8,14 @@ import stat
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import gatelib
 import markdown_text
 import report
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 NO_RUN = "none: RATCHET_RUN is not set"
 NO_TREE = "unknown: the tree's content could not be read"
@@ -21,12 +25,27 @@ FAULT = "fault"
 TIMING = gatelib.STATE / "timing.jsonl"
 SPEED = "## Speed"
 LOCAL_CACHES = "Local caches"
-WINDOW = 2**20
+LINE = 2**20
 FOLDER = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
 READ = os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC
-WRITE = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY
+WRITE = os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY
 WRITE |= os.O_CLOEXEC
-UNRECORDED: set[Path] = set()
+SPECIAL = "it is not a regular file; remove it"
+FULL = "no space left for it; free some space"
+NOT_WRITABLE = "permission denied; make it and its folder writable"
+NOT_A_FOLDER = "its folder is not a folder; remove what is there"
+REFUSED = {
+    errno.ELOOP: "it or its folder is a symbolic link; remove the link",
+    errno.EISDIR: "it is a directory; remove it",
+    errno.EEXIST: NOT_A_FOLDER,
+    errno.ENOTDIR: NOT_A_FOLDER,
+    errno.EACCES: NOT_WRITABLE,
+    errno.EPERM: NOT_WRITABLE,
+    errno.ENOSPC: FULL,
+    errno.EDQUOT: FULL,
+    errno.EFBIG: FULL,
+}
+UNRECORDED: set[tuple[Path, str]] = set()
 
 
 def tree_id(root: Path) -> str:
@@ -53,37 +72,41 @@ def written(path: Path, line: bytes) -> str | None:
         finally:
             os.close(folder)
         try:
-            if not stat.S_ISREG(os.fstat(handle).st_mode):
-                return "not a regular file"
-            os.write(handle, line)
+            held = os.fstat(handle)
+            if not stat.S_ISREG(held.st_mode):
+                return SPECIAL
+            if held.st_size and os.pread(handle, 1, held.st_size - 1) != b"\n":
+                line = b"\n" + line
+            if os.write(handle, line) < len(line):
+                return FULL
         finally:
             os.close(handle)
     except OSError as error:
-        return "a symbolic link" if error.errno == errno.ELOOP else error.strerror or str(error)
+        cure = "remove or replace it, or make it writable"
+        return REFUSED.get(error.errno or 0, f"{error.strerror or error}; {cure}")
     return None
 
 
-def append(path: Path, record: dict[str, object], *, who: str = "ratchet") -> None:
+def append(path: Path, record: dict[str, object], *, root: Path, who: str = "ratchet") -> None:
     why = written(path, (json.dumps(record) + "\n").encode())
-    if why is not None and path not in UNRECORDED:
-        UNRECORDED.add(path)
-        print(f"{who}: not recorded: {path}: {why}", flush=True)
+    if why is not None and (path, why) not in UNRECORDED:
+        UNRECORDED.add((path, why))
+        print(f"{who}: not recorded: {os.path.relpath(path, root)}: {why}", flush=True)
 
 
-def tail(path: Path) -> list[bytes]:
+def lines(path: Path) -> Iterator[bytes]:
     try:
-        handle = os.open(path, READ)
-        try:
-            held = os.fstat(handle)
-            if not stat.S_ISREG(held.st_mode):
-                return []
-            start = max(0, held.st_size - WINDOW - 1)
-            lines = os.pread(handle, WINDOW + 1, start).split(b"\n")
-        finally:
-            os.close(handle)
+        with os.fdopen(os.open(path, READ), "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                return
+            while line := handle.readline(LINE):
+                if line.endswith(b"\n") or len(line) < LINE:
+                    yield line
+                    continue
+                while (rest := handle.readline(LINE)) and not rest.endswith(b"\n"):
+                    pass
     except OSError:
-        return []
-    return lines[1:] if start else lines
+        return
 
 
 def well_formed(record: dict[str, object]) -> bool:
@@ -100,16 +123,14 @@ def well_formed(record: dict[str, object]) -> bool:
     )
 
 
-def read(path: Path) -> list[dict[str, object]]:
-    records = []
-    for line in tail(path):
+def read(path: Path) -> Iterator[dict[str, object]]:
+    for line in lines(path):
         try:
             record = json.loads(line.decode("utf-8", errors="replace"))
         except (ValueError, RecursionError):
             continue
-        if isinstance(record, dict):
-            records.append(record)
-    return list(filter(well_formed, records))
+        if isinstance(record, dict) and well_formed(record):
+            yield record
 
 
 def cache_paths(binding: str) -> list[str]:

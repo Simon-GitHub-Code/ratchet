@@ -1306,7 +1306,7 @@ def run_lanes(
                 with printing:
                     print(outcome.lines(), flush=True)
                     record = {**outcome.record(), **stamp}
-                    runrecord.append(root / runrecord.TIMING, record, who="bite")
+                    runrecord.append(root / runrecord.TIMING, record, root=root, who="bite")
                 outcomes.append(outcome)
         return outcomes
 

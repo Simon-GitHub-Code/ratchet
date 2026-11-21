@@ -3277,21 +3277,23 @@ def check_bite_all_ceiling(root: Path) -> Iterable[Finding]:
 
 
 def check_cache_written(root: Path) -> Iterable[Finding]:
-    records = runrecord.read(root / runrecord.TIMING)
-    tiers = [at for at, record in enumerate(records) if record.get("kind") == runrecord.TIER]
-    after = records[tiers[-1] + 1 :] if tiers else []
-    for record in after:
-        if record.get("kind") == runrecord.CACHE_MISSING:
-            yield agent(
-                f"{BINDING_PATH}: the Local caches bullet names {record.get('path')}, which did not"
-                " exist after the last tier run",
-                then=(
-                    (
-                        "make the recipe that owns the cache write it, or take the path off the"
-                        " Local caches bullet, then run the tier again"
-                    ),
+    after: list[dict[str, object]] | None = None
+    for record in runrecord.read(root / runrecord.TIMING):
+        if record.get("kind") == runrecord.TIER:
+            after = []
+        elif record.get("kind") == runrecord.CACHE_MISSING and after is not None:
+            after.append(record)
+    for record in after or []:
+        yield agent(
+            f"{BINDING_PATH}: the Local caches bullet names {record.get('path')}, which did not"
+            " exist after the last tier run",
+            then=(
+                (
+                    "make the recipe that owns the cache write it, or take the path off the"
+                    " Local caches bullet, then run the tier again"
                 ),
-            )
+            ),
+        )
 
 
 def full_proof_problem(root: Path, text: str) -> str:
