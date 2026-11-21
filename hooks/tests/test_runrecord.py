@@ -355,7 +355,7 @@ def test_the_reader_passes_over_a_line_longer_than_its_bound_and_reads_on(tmp_pa
     path = tmp_path / "timing.jsonl"
     record = json.dumps(FAULT).encode()
     longest = record.ljust(runrecord.LINE - 1) + b"\n"
-    path.write_bytes(record + b" " * runrecord.LINE * 3 + b"\n" + longest + record + b"\n")
+    path.write_bytes(b" " * runrecord.LINE * 3 + record + b"\n" + longest + record + b"\n")
     assert list(runrecord.read(path)) == [FAULT, FAULT]
     path.write_bytes(record + b" " * runrecord.LINE)
     assert list(runrecord.read(path)) == []
