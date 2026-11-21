@@ -242,7 +242,14 @@ TWIN_ROW = (
 RETARGET_ROW = (
     "- `retargeted`: its base branch was changed, so ci may have run against the earlier one\n"
 )
-TARGET_ROW = "- `target`: the pull request targets `weak`, not the default branch `main`\n"
+TARGET_ROW = (
+    "- `target`: the pull request targets `weak`, not the default branch `main`. Merge the pull"
+    " request from `weak` first, and before it merges change this one's target to `main` on the"
+    " pull request's page on the forge, which keeps it open; the owner then merges this one. Do"
+    " not delete `weak` before this one is retargeted: the merge job deletes the branch of each"
+    " pull request it merges, and a pull request whose target branch is gone is closed and cannot"
+    " be reopened or retargeted\n"
+)
 UNNAMED_ROW = f"- `unnamed`: no ci run on {SHA} names it against `main`\n"
 
 

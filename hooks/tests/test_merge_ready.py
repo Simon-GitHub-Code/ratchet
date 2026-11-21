@@ -918,12 +918,30 @@ def test_deleting_a_merged_record_is_not_a_record(tmp_path: Path) -> None:
     assert judged(tmp_path) == [f"record: {RECORD} is gone or is not a JSON object"]
 
 
-def test_a_pull_request_that_targets_another_branch_is_the_owners(root: Path) -> None:
+def test_a_pull_request_that_targets_another_branch_is_the_owners_and_says_what_to_do_next(
+    root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     change(root, {"src/a.py": "x = 2\n"})
     assert judged(root, target="main") == []
-    assert judged(root, target="feature/3-base") == [
-        "target: the pull request targets `feature/3-base`, not the default branch `main`"
+    report = root.parent / "report.md"
+    argv = ["merge_ready", "--root", str(root), "--base", "main", "--target", "feature/3-base"]
+    capsys.readouterr()
+    code = merge_ready.main([*argv, "--report", str(report)])
+    said = capsys.readouterr().out.splitlines()
+    assert (code, said[0]) == (1, "merge: owner")
+    label, text = said[1].split(": ", 1)
+    assert label == "target"
+    assert f"- `target`: {text}\n" in report.read_text(encoding="utf-8")
+    steps = [
+        "the pull request targets `feature/3-base`, not the default branch `main`",
+        "Merge the pull request from `feature/3-base` first",
+        "change this one's target to `main` on the pull request's page on the forge",
+        "keeps it open",
+        "Do not delete `feature/3-base`",
+        "closed and cannot be reopened or retargeted",
     ]
+    assert all(step in text for step in steps), text
+    assert [text.index(step) for step in steps] == sorted(text.index(step) for step in steps)
 
 
 def test_a_branch_behind_the_default_branch_ran_its_gates_on_an_older_one(root: Path) -> None:
