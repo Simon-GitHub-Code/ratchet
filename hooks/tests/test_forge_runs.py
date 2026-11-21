@@ -729,7 +729,7 @@ def hostile(at: dict[str, str]) -> dict[str, bytes]:
 
 
 @pytest.mark.parametrize("locale", [STRICT, C_LOCALE], ids=["strict", "C"])
-def test_bytes_that_are_not_utf_8_on_standard_input_are_a_page_that_could_not_be_read(
+def test_bytes_that_are_not_utf_8_on_standard_input_are_read_as_the_c_locale_reads_them(
     tmp_path: Path, locale: dict[str, str]
 ) -> None:
     at = history(tmp_path)
@@ -742,19 +742,85 @@ def test_bytes_that_are_not_utf_8_on_standard_input_are_a_page_that_could_not_be
         )
         assert (answered.returncode, answered.stderr) == (0, b""), kind
         read = unproven.read(target)
-        if kind == "a lone surrogate":
-            assert [run.name for run in read.runs or ()] == ["run 1"], kind
-        else:
+        if kind == "after the page":
             assert read.runs is None, kind
+        else:
+            assert [run.name for run in read.runs or ()] == ["run 1"], kind
         spoke = run_script(
             tmp_path, ["speaks", *where, "--commit", tip, "--state", "red"], data, locale=locale
         )
         assert (spoke.returncode, spoke.stderr) == (0, b""), kind
         assert spoke.stdout.decode().startswith(f"deep: red at `{tip[:12]}`."), kind
-        said = b"green\n" if kind == "a lone surrogate" else b"red\n"
+        said = b"red\n" if kind == "after the page" else b"green\n"
         for word in ("deep", "tier1"):
             legacy = run_script(tmp_path, [word, *where], data, locale=locale)
             assert (legacy.returncode, legacy.stderr, legacy.stdout) == (0, b"", said), (kind, word)
+
+
+LOCALES = {"C": C_LOCALE, "C.UTF-8": {"LC_ALL": "C.UTF-8"}, "POSIX": {"LC_ALL": "POSIX"}}
+
+
+def spoilt(document: str, field: str) -> bytes:
+    marker = f'"{field}": "'.encode()
+    assert marker in document.encode()
+    return document.encode().replace(marker, marker + b"\xe9")
+
+
+def ci_script(root: Path, data: bytes, locale: dict[str, str]) -> tuple[int, bytes, bytes]:
+    (root / "pulls.json").write_text(json.dumps([pull()]))
+    (root / "events.json").write_text("[]")
+    argv = ["ci", "--pulls", str(root / "pulls.json"), "--events", str(root / "events.json")]
+    argv += ["--number", "1", "--sha", SHA, "--branch", BRANCH, "--base", "main"]
+    done = run_script(root, [*argv, "--repository", REPO], data, locale=locale)
+    return done.returncode, done.stdout, done.stderr
+
+
+@pytest.mark.parametrize("locale", [*LOCALES.values(), STRICT], ids=[*LOCALES, "strict"])
+def test_bytes_that_are_not_utf_8_in_a_field_no_logic_reads_change_no_answer(
+    tmp_path: Path, locale: dict[str, str]
+) -> None:
+    at = history(tmp_path)
+    where = ["--tip", at["tip"], "--repository", REPO, "--root", str(tmp_path)]
+    data = spoilt(page(tier2(at["tip"], display_title="cafe")), "display_title")
+    for word in ("deep", "tier1"):
+        done = run_script(tmp_path, [word, *where], data, locale=locale)
+        assert (done.returncode, done.stdout, done.stderr) == (0, b"green\n", b""), word
+    tested = spoilt(page(run(display_title="cafe")), "display_title")
+    assert ci_script(tmp_path, tested, locale) == (0, b"green\n", b"")
+
+
+UNNAMED = f"no ci run on {SHA} names it against `main`\n".encode()
+READ = {
+    "conclusion": ("red", (1, f"ci is not green on {SHA}\n".encode()), [("red", "u")]),
+    "event": ("none", (1, UNNAMED), []),
+    "head_sha": ("none", (1, UNNAMED), []),
+    "created_at": ("green", (0, b"green\n"), None),
+    "html_url": ("green", (0, b"green\n"), [("green", "run 1")]),
+}
+
+
+@pytest.mark.parametrize("locale", [C_LOCALE, STRICT], ids=["C", "strict"])
+@pytest.mark.parametrize("field", READ)
+def test_bytes_that_are_not_utf_8_in_a_field_the_logic_reads_are_a_value_it_cannot_trust(
+    tmp_path: Path, field: str, locale: dict[str, str]
+) -> None:
+    word, (code, said), kept = READ[field]
+    at = history(tmp_path)
+    where = ["--tip", at["tip"], "--repository", REPO, "--root", str(tmp_path)]
+    data = spoilt(page(tier2(at["tip"], html_url="u")), field)
+    for legacy in ("deep", "tier1"):
+        done = run_script(tmp_path, [legacy, *where], data, locale=locale)
+        assert (done.returncode, done.stdout, done.stderr) == (0, f"{word}\n".encode(), b"")
+    target = tmp_path / "answer.json"
+    done = run_script(tmp_path, ["deep", *where, "--answer", str(target)], data, locale=locale)
+    assert (done.returncode, done.stderr) == (0, b"")
+    runs = unproven.read(target).runs
+    assert kept == (None if runs is None else [(run.state, run.name) for run in runs])
+    asked = ["speaks", *where, "--commit", at["tip"], "--state", "red"]
+    spoke = run_script(tmp_path, asked, data, locale=locale)
+    assert (spoke.returncode, spoke.stderr) == (0, b"")
+    tested = spoilt(page(run(html_url="u")), field)
+    assert ci_script(tmp_path, tested, locale) == (code, said, b"")
 
 
 def test_speaks_refuses_a_commit_that_is_not_a_commit_name(
