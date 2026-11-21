@@ -5,7 +5,7 @@ from typing import Protocol
 
 from ratchet_guards.paths import Hit, Locator
 from ratchet_guards.refs import MAIN_BRANCHES
-from ratchet_guards.verdict import ACTING_RULES, Verdict
+from ratchet_guards.verdict import ACTING_RULES, UNADOPTED, Verdict
 
 DETACHED = "HEAD"
 
@@ -111,6 +111,11 @@ class Guard:
                 continue
             verdicts.append(Verdict(rule, detail(hit), hit.group.source))
         return verdicts
+
+    def merging(self, rule: str, detail: str, cwd: Path) -> Verdict:
+        filesystem = self.locator.filesystem
+        adopted = filesystem.guarded_checkout(filesystem.canonical(cwd)) is not None
+        return Verdict(rule if adopted else UNADOPTED[rule], detail)
 
     def acting(self, paths: Iterable[Path]) -> list[Verdict]:
         found = (self.locator.acting(path) for path in paths)
