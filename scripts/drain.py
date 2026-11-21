@@ -384,9 +384,12 @@ def keep(root: Path, branch: str, aside: Aside) -> Path | str:
     digest = hashlib.sha256(body).hexdigest()[:16]
     try:
         home.mkdir(mode=OWNER_ONLY, parents=True, exist_ok=True)
-        path = next(home.glob(f"*-{digest}.kept"), None)
+        held = sorted(home.glob("*.kept"))
+        path = next((kept for kept in held if kept.stem.endswith(f"-{digest}")), None)
         if path is None:
-            path = home / f"{now():%Y%m%dT%H%M%S}-{digest}.kept"
+            numbers = [kept.name.partition("-")[0] for kept in held]
+            after = max((int(number) for number in numbers if number.isdigit()), default=0)
+            path = home / f"{after + 1:04d}-{now():%Y%m%dT%H%M%S}-{digest}.kept"
             partial = home / f".{path.name}.partial"
             partial.write_bytes(body)
             partial.replace(path)
@@ -418,6 +421,7 @@ def set_aside(root: Path, tree: Path, branch: str) -> Path | str | None:
         return kept
     gatelib.git(tree, "reset", "--hard", "--quiet")
     gatelib.git(tree, "clean", "-d", "--force", "--quiet")
+    print(kept_line(branch, kept))
     return (
         "what it holds uncommitted is still there after it was set aside" if unsaved(tree) else kept
     )
@@ -434,11 +438,9 @@ def discard(root: Path, tree: Path, branch: str) -> str | None:
         if not isinstance(kept, str):
             for pid in gatelib.end_running_from(tree.resolve()):
                 print(f"ended: process {pid}, which ran a program of {tree}")
-            kept = set_aside(root, tree, branch) or kept
+            kept = set_aside(root, tree, branch)
         if isinstance(kept, str):
             return kept
-        if kept is not None:
-            print(kept_line(branch, kept))
         gatelib.git(root, "worktree", "remove", "--force", str(tree))
         shutil.rmtree(tree, ignore_errors=True)
     elif tree.is_dir() and not any(tree.iterdir()):
