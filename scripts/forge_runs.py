@@ -188,8 +188,15 @@ def doubts(pull: Pull, forge: Forge) -> Iterator[Doubt]:
         this = next((twin for twin in twins if at(twin, "number") == pull.number), None)
         base = at(this, "base", "ref")
         if at(this, "state") == "open" and isinstance(base, str) and base != pull.base:
-            text = f"the pull request targets `{base}`, not the default branch `{pull.base}`"
-            yield Doubt("target", text, owner=True)
+            beside = next(
+                (
+                    at(twin, "number")
+                    for twin in twins
+                    if at(twin, "state") == "open" and at(twin, "base", "ref") == pull.base
+                ),
+                None,
+            )
+            yield Doubt("target", gatelib.stacked(base, pull.base, beside), owner=True)
         else:
             text = f"it is not open on {pull.sha} against `{pull.base}`"
             yield Doubt("moved", text, owner=False)
@@ -202,12 +209,20 @@ def doubts(pull: Pull, forge: Forge) -> Iterator[Doubt]:
             )
             yield Doubt("twin", text, owner=True)
     if any(at(change, "event") in RETARGETS for change in forge.events):
-        text = "its base branch was changed, so ci may have run against the earlier one"
+        text = (
+            "its base branch was changed, so ci may have run against the earlier one; the owner"
+            " merges this one, and a new commit on its branch starts a ci run against the branch"
+            " it targets now"
+        )
         yield Doubt("retargeted", text, owner=True)
     counted = [run for run in forge.runs if pull.tested(run)]
     if not counted:
         finished = any(at(run, "status") == "completed" for run in forge.runs)
-        text = f"no ci run on {pull.sha} names it against `{pull.base}`"
+        text = (
+            f"no ci run on {pull.sha} names it against `{pull.base}`; while it targets"
+            f" `{pull.base}`, a new commit on its branch starts one, and the merge job judges it"
+            " again when that run is green"
+        )
         yield Doubt("unnamed", text, owner=finished)
     elif (at(newest(counted), "status"), at(newest(counted), "conclusion")) != DONE:
         yield Doubt("ci", f"ci is not green on {pull.sha}", owner=False)
