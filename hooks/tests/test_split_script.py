@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import documents
 import feature_preflight as preflight
 import split
 from tests.repos import repository
@@ -200,6 +201,43 @@ def test_a_part_carries_the_parent_line_as_its_ticket_wrote_it_under_its_split_f
     }
     assert set(reach.values()) == {preflight.local_ticket(PARENT_REF, ticket).parent}
     assert None not in reach.values()
+
+
+@pytest.mark.parametrize("beside", [False, True], ids=["no spec beside", "a spec beside"])
+@pytest.mark.parametrize(
+    "lines",
+    ["Parent:\n../../other/spec.md", "**Parent:**\n`../../other/spec.md`  <!-- the plan -->"],
+    ids=["plain", "markup"],
+)
+def test_a_part_resolves_and_passes_as_its_ticket_does_when_the_ref_is_on_the_next_line(
+    tmp_path: Path, lines: str, *, beside: bool
+) -> None:
+    spec = "# Spec\n\n## Conjecture\n\nSaving a list lets people come back to it, as they asked.\n"
+    ticket = PARENT.replace("\n\n- [ ]", f"\n\n{lines}\n\n- [ ]", 1)
+    nearby = {".scratch/f/spec.md": spec.replace("Spec", "Beside")} if beside else {}
+    root = repository(tmp_path, {PARENT_REF: ticket, ".scratch/other/spec.md": spec, **nearby})
+    children, refused = split.apply(root, PARENT_REF, HALVES, gh=tracker(None))
+    assert refused == []
+    for child in children:
+        assert f"\nSplit from: {PARENT_REF}\n{lines}\nBlocked by: " in (root / child).read_text(
+            encoding="utf-8"
+        )
+    reports = [
+        preflight.preflight(ref, root, base="main", branch=None, gh=tracker(None))
+        for ref in [PARENT_REF, *children]
+    ]
+    assert [report.parent for report in reports] == [".scratch/other/spec.md"] * 3
+    assert [[f.check for f in r.failures if f.check != "blocked"] for r in reports] == [[]] * 3
+
+
+def test_a_part_carries_every_answers_section_its_ticket_has_so_both_read_the_same_answers() -> (
+    None
+):
+    text = f"{PARENT}\n## Answers\n\n- a? b.\n\n## Notes\n\nx\n\n## Answers\n\n- c? d.\n"
+    body = split.child_body(
+        preflight.local_ticket(PARENT_REF, text), split.parts_of(HALVES)[0], waits=[], label="L"
+    )
+    assert documents.answers_of(body) == documents.answers_of(text) == ["- a? b.", "- c? d."]
 
 
 def test_a_part_of_a_ticket_with_no_parent_line_and_no_answers_is_written_as_before() -> None:
