@@ -155,6 +155,8 @@ REVIEW_RED = re.compile(r"triggers: architecture review owed: '([^']+)' gained \
 DEFAULT_WORDS = "the default branch"
 UNREADABLE_CODE = "refs"
 START_DROPPED = frozenset({"hold", "attempts", "rebasing", "discarding", "start", "passed"})
+CLOSERS = frozenset({"open", "update", "check"})
+NO_TICKET = "it is not an open agent-ready ticket"
 BEHIND = (
     "behind the default branch: `update` it and judge it again before it lands, since its last"
     " review was of a tree the default branch has moved past"
@@ -661,7 +663,7 @@ def plan(drain: Drain) -> Plan:
 
 def not_started(entry: Entry | None, drafted: Plan) -> list[str]:
     if entry is None:
-        return ["it is not an open agent-ready ticket"]
+        return [NO_TICKET]
     if entry.state != BUILDABLE:
         return [f"it is {entry.state}", *entry.why, *(f"waits on {r}" for r in entry.waits_on)]
     return list(drafted.blocked) or [f"{drafted.concurrency} tickets are building: the cap"]
@@ -689,7 +691,6 @@ def open_ticket(drain: Drain, ref: str) -> int:
     if entry is None or entry.ref not in drafted.start:
         print(f"open: {ref} is not started: " + "; ".join(not_started(entry, drafted)))
         return 1
-    gate_start(drain.root, entry.branch, passed=False)
     tree = Path(entry.worktree)
     for directory in (users_home(), tree.parent):
         directory.mkdir(mode=OWNER_ONLY, exist_ok=True)
@@ -825,15 +826,15 @@ def mark_passed(root: Path, branch: str) -> None:
     queue_notes.write_note(queue_notes.note_path(root, branch), {**note, "passed": True})
 
 
-def gate_start(root: Path, branch: str, *, passed: bool) -> None:
+def gate_start(root: Path, branch: str, *, passed: bool, done: str = "nothing was changed") -> bool:
     try:
-        queue_notes.gate_feature_start(root, branch, tree_of(root, branch), passed=passed)
+        return queue_notes.gate_feature_start(root, branch, tree_of(root, branch), passed=passed)
     except OSError as error:
         stays = "unpassed, so a commit in its work tree is refused" if passed else "passed"
         message = (
             f"`{queue_notes.feature_start_name(branch)}` in the git directory cannot be written"
-            f" ({error.strerror}): the one-ticket start of `{branch}` stays {stays}, and nothing"
-            " was changed; make that folder writable, then run this again"
+            f" ({error.strerror}): the one-ticket start of `{branch}` stays {stays}, and {done};"
+            " make that folder writable, then run this again"
         )
         raise RefusedError(message) from None
 
@@ -899,8 +900,6 @@ def checkable(drain: Drain, ticket: preflight.Ticket) -> tuple[publish_check.Sta
 
 
 def check(drain: Drain, ticket: preflight.Ticket, *, final: bool) -> int:
-    if final:
-        gate_start(drain.root, route.own_branch(ticket), passed=False)
     ready = checkable(drain, ticket)
     if isinstance(ready, int):
         return ready
@@ -916,7 +915,7 @@ def check(drain: Drain, ticket: preflight.Ticket, *, final: bool) -> int:
         close(root, ticket, outcome=WAITS, reasons=[f"{UNREADABLE_CODE}: {line}"])
         return UNREAD
     if final and not halted:
-        gate_start(root, branch, passed=True)
+        gate_start(root, branch, passed=True, done="the check was green, yet no pass is recorded")
     if final:
         mark_passed(root, branch)
     if halted:
@@ -953,7 +952,6 @@ def restarted(
     branch: str,
     rebase_onto: str | None = None,
 ) -> dict[str, object]:
-    gate_start(drain.root, branch, passed=False)
     kept = {k: v for k, v in note.items() if k not in {"start", "passed"}}
     try:
         start = publish_check.start_of(tree, branch, forge_gh(drain), rebase_onto=rebase_onto)
@@ -1001,7 +999,6 @@ def rebase(drain: Drain, ticket: preflight.Ticket) -> int:
     if refusal is not None:
         print(f"update: {ticket.ref} is not rebased: {refusal}")
         return 1
-    gate_start(drain.root, branch, passed=False)
     queue_notes.write_note(path, {**note, "rebasing": head})
     return rebase_tree(drain, tree, note, branch=branch)
 
@@ -1558,6 +1555,9 @@ def on_ticket(drain: Drain, options: argparse.Namespace) -> int:
     ticket = preflight.fetch(options.ref or "", drain.root, drain.tracker) or noted(
         drain.root, options.ref or ""
     )
+    if ticket is None and options.action == "open":
+        print(f"open: {options.ref} is not started: {NO_TICKET}")
+        return 1
     if ticket is None:
         candidates = preflight.numbered_locally(options.ref or "", drain.root)
         if candidates:
@@ -1579,7 +1579,7 @@ def act_on(drain: Drain, ticket: preflight.Ticket, options: argparse.Namespace) 
     if options.action == "land":
         return land(drain, ticket)
     branch = route.own_branch(ticket)
-    holder = landing_holder(drain.root, branch)
+    holder = None if options.action == "open" else landing_holder(drain.root, branch)
     if holder is not None:
         what, why = (
             ("a landing", ": the landing records the ticket's outcome itself")
@@ -1591,6 +1591,33 @@ def act_on(drain: Drain, ticket: preflight.Ticket, options: argparse.Namespace) 
             f" done; wait for it to end, then run plan{why}"
         )
         return LANDING_RUNNING
+    if options.action in CLOSERS and (options.action != "check" or options.final):
+        return closing(drain, ticket, options)
+    return acted(drain, ticket, options)
+
+
+def closing(drain: Drain, ticket: preflight.Ticket, options: argparse.Namespace) -> int:
+    root, branch = drain.root, route.own_branch(ticket)
+    tip = gatelib.git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")
+    was_passed = gate_start(root, branch, passed=False)
+    code = acted(drain, ticket, options)
+    if (
+        not was_passed
+        or options.action == "check"
+        or not passed(root, branch)
+        or gatelib.git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}") != tip
+    ):
+        return code
+    try:
+        gate_start(root, branch, passed=True, done=f"`{options.action}` ran")
+    except RefusedError as refused:
+        print(f"drain: {refused}")
+    return code
+
+
+def acted(drain: Drain, ticket: preflight.Ticket, options: argparse.Namespace) -> int:
+    if options.action == "open":
+        return open_ticket(drain, options.ref or "")
     if options.action == "update":
         return update(drain, ticket)
     if options.action == "check":
@@ -1939,7 +1966,6 @@ def show_plan(drain: Drain, _options: argparse.Namespace) -> int:
 
 WHOLE: dict[str, Callable[[Drain, argparse.Namespace], int]] = {
     "plan": show_plan,
-    "open": lambda drain, options: open_ticket(drain, options.ref or ""),
     "clean": lambda drain, options: clean(
         drain.root,
         everything=options.everything,
@@ -1952,7 +1978,9 @@ WHOLE: dict[str, Callable[[Drain, argparse.Namespace], int]] = {
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=[*WHOLE, "update", "check", "land", "close", "split"])
+    parser.add_argument(
+        "action", choices=[*WHOLE, "open", "update", "check", "land", "close", "split"]
+    )
     parser.add_argument(
         "ref",
         nargs="?",

@@ -102,17 +102,19 @@ def pass_feature_start(root: Path, branch: str) -> None:
         write_note(path, {**loaded(gatelib.read_text(path)), "passed": True})
 
 
-def gate_feature_start(root: Path, branch: str, tree: Path, *, passed: bool) -> None:
+def gate_feature_start(root: Path, branch: str, tree: Path, *, passed: bool) -> bool:
     path = feature_start_path(root, branch)
     if path is None or not path.is_file():
-        return
+        return False
     note = loaded(gatelib.read_text(path))
     where = note.get("worktree")
     if not isinstance(where, str) or (note.get("passed") is True) == passed:
-        return
-    if Path(where).resolve() == tree.resolve():
-        kept = {k: v for k, v in note.items() if k != "passed"}
-        write_note(path, {**kept, "passed": True} if passed else kept)
+        return False
+    if Path(where).resolve() != tree.resolve():
+        return False
+    kept = {k: v for k, v in note.items() if k != "passed"}
+    write_note(path, {**kept, "passed": True} if passed else kept)
+    return True
 
 
 def read_note(root: Path, branch: str) -> dict[str, object]:
