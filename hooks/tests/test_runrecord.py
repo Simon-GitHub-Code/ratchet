@@ -1,10 +1,20 @@
+import contextlib
+import io
 import json
+import os
 import re
+import resource
 import shlex
+import subprocess
 import sys
+import tempfile
+import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 import budget
 import conformance
@@ -284,3 +294,371 @@ def test_a_malformed_local_caches_bullet_is_a_finding(tmp_path: Path) -> None:
     root = repos.repository(tmp_path / "ok", {str(gatelib.BINDING): ok})
     assert list(conformance.check_local_caches(root)) == []
     assert list(conformance.check_local_caches(tmp_path / "ok" / "docs")) == []
+
+
+FAULT = {
+    "kind": runrecord.FAULT,
+    "gate": "lint",
+    "bite": "whole",
+    "seconds": 9.0,
+    "narrowed": False,
+}
+UNWRITABLE_BY_ROOT = pytest.mark.skipif(os.geteuid() == 0, reason="root writes through modes")
+
+
+def test_the_reader_returns_only_records_of_the_shape_their_callers_read(tmp_path: Path) -> None:
+    kept = [FAULT, {**FAULT, "seconds": 0}, {"key": "lint", "seconds": "9"}, {"kind": "tier"}]
+    dropped = [
+        {**FAULT, "gate": ["lint"]},
+        {**FAULT, "bite": {"a": 1}},
+        {**FAULT, "seconds": "9"},
+        {**FAULT, "seconds": True},
+        {**FAULT, "seconds": -1.0},
+        {**FAULT, "narrowed": "false"},
+        {key: value for key, value in FAULT.items() if key != "narrowed"},
+        [FAULT],
+        "a string",
+    ]
+    odd = [
+        json.dumps(FAULT).replace("9.0", "NaN"),
+        json.dumps(FAULT).replace("9.0", "Infinity"),
+        "not json",
+        "[" * 100_000,
+        "1" * 5_000,
+    ]
+    rows = [*map(json.dumps, dropped), *odd, *map(json.dumps, kept)]
+    path = tmp_path / "timing.jsonl"
+    path.write_bytes(b"\xff\xfe\x80\n" + "\n".join(rows).encode() + b'\n{"kind": "fau')
+    assert list(runrecord.read(path)) == kept
+
+
+LATER = {**FAULT, "bite": "later", "seconds": 0.2}
+
+
+def recorded_before_mebibytes(root: Path, first: list[dict[str, object]], mebibytes: int) -> None:
+    later = (json.dumps(LATER) + "\n").encode()
+    path = root / runrecord.TIMING
+    path.parent.mkdir(exist_ok=True)
+    held = b"".join(json.dumps(each).encode() + b"\n" for each in first)
+    path.write_bytes(held + later * (mebibytes * 2**20 // len(later) + 1))
+
+
+def test_the_last_full_proof_is_named_however_many_records_follow_it(work: Path) -> None:
+    recorded_before_mebibytes(work, [{"key": "bite-all", "seconds": 1234.0}], 3)
+    problem = conformance.full_proof_problem(work, "[ceilings.seconds]\ntier2 = 3000\n")
+    assert problem.endswith("; the last full proof took 1234s"), problem
+
+
+def test_the_last_full_proof_is_the_last_one_recorded(work: Path) -> None:
+    proofs = [{"key": "bite-all", "seconds": 1000}, {"key": "bite-all", "seconds": 1500.5}]
+    recorded_before_mebibytes(work, proofs, 0)
+    assert conformance.last_full_proof(work) == 1500.5
+
+
+def test_a_missing_cache_is_held_however_many_records_follow_its_tier_run(work: Path) -> None:
+    missing = {"kind": runrecord.CACHE_MISSING, "path": "deps.lock"}
+    recorded_before_mebibytes(work, [{"kind": runrecord.TIER}, missing], 3)
+    assert [found.problem for found in conformance.check_cache_written(work)] == [
+        "the Local caches bullet names deps.lock, which did not exist after the last tier run"
+    ]
+
+
+def test_the_reader_passes_over_a_line_longer_than_its_bound_and_reads_on(tmp_path: Path) -> None:
+    path = tmp_path / "timing.jsonl"
+    record = json.dumps(FAULT).encode()
+    longest = record.ljust(runrecord.LINE - 2) + b"\n"
+    at_the_bound = record.ljust(runrecord.LINE - 1) + b"\n"
+    long_lines = b" " * runrecord.LINE * 3 + record + b"\n" + longest + at_the_bound
+    path.write_bytes(long_lines + record + b"\n")
+    assert list(runrecord.read(path)) == [FAULT, FAULT]
+    path.write_bytes(record + b" " * runrecord.LINE)
+    assert list(runrecord.read(path)) == []
+
+
+def finished(task: Callable[[], object]) -> bool:
+    worker = threading.Thread(target=task, daemon=True)
+    worker.start()
+    worker.join(10)
+    return not worker.is_alive()
+
+
+def test_the_reader_reads_only_a_regular_file_and_never_blocks(tmp_path: Path) -> None:
+    os.mkfifo(tmp_path / "fifo")
+    (tmp_path / "zero").symlink_to("/dev/zero")
+    (tmp_path / "urandom").symlink_to("/dev/urandom")
+    for name in ("", "absent.jsonl", "fifo", "zero", "urandom"):
+        got: list[object] = []
+        path = tmp_path / name
+        assert finished(lambda got=got, path=path: got.extend(runrecord.read(path))), name
+        assert got == [], name
+
+
+def linked_record(path: Path, outside: Path) -> None:
+    path.parent.mkdir()
+    path.symlink_to(outside / "timing.jsonl")
+
+
+def linked_folder(path: Path, outside: Path) -> None:
+    path.parent.symlink_to(outside)
+
+
+def read_only_record(path: Path, _: Path) -> None:
+    path.parent.mkdir()
+    path.write_text("", encoding="utf-8")
+    path.chmod(0o444)
+
+
+def folder_record(path: Path, _: Path) -> None:
+    path.mkdir(parents=True)
+
+
+def state_file(path: Path, _: Path) -> None:
+    path.parent.write_text("", encoding="utf-8")
+
+
+LINKED = "it or its folder is a symbolic link; remove the link"
+NOT_WRITABLE = "permission denied; make it and its folder writable"
+
+
+@UNWRITABLE_BY_ROOT
+@pytest.mark.parametrize(
+    ("unwritable", "why"),
+    [
+        (linked_record, LINKED),
+        (linked_folder, LINKED),
+        (read_only_record, NOT_WRITABLE),
+        (folder_record, "it is a directory; remove it"),
+        (state_file, "its folder is not a folder; remove what is there"),
+    ],
+)
+def test_the_writer_appends_only_to_a_regular_file_in_a_real_folder_and_says_so_once(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    unwritable: Callable[[Path, Path], None],
+    why: str,
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "timing.jsonl").write_text("", encoding="utf-8")
+    root = tmp_path / "repo"
+    path = root / runrecord.TIMING
+    root.mkdir()
+    unwritable(path, outside)
+    runrecord.append(path, FAULT, root=root, who="bite")
+    runrecord.append(path, FAULT, root=root, who="bite")
+    assert capsys.readouterr().out == f"bite: not recorded: .ratchet/timing.jsonl: {why}\n"
+    assert (outside / "timing.jsonl").read_text() == ""
+    assert [each.name for each in outside.iterdir()] == ["timing.jsonl"]
+
+
+@UNWRITABLE_BY_ROOT
+def test_the_writer_says_each_reason_once_in_a_process(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / runrecord.TIMING
+    read_only_record(path, tmp_path)
+    runrecord.append(path, FAULT, root=tmp_path)
+    runrecord.append(path, FAULT, root=tmp_path)
+    path.unlink()
+    path.mkdir()
+    runrecord.append(path, FAULT, root=tmp_path)
+    runrecord.append(path, FAULT, root=tmp_path)
+    assert capsys.readouterr().out.splitlines() == [
+        f"ratchet: not recorded: .ratchet/timing.jsonl: {NOT_WRITABLE}",
+        "ratchet: not recorded: .ratchet/timing.jsonl: it is a directory; remove it",
+    ]
+
+
+SPECIAL = "ratchet: not recorded: .ratchet/timing.jsonl: it is not a regular file; remove it"
+
+
+def test_the_writer_refuses_a_fifo_another_process_reads(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / runrecord.TIMING
+    path.parent.mkdir()
+    os.mkfifo(path)
+    reader = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        runrecord.append(path, FAULT, root=tmp_path)
+        assert os.read(reader, 4096) == b""
+    finally:
+        os.close(reader)
+    assert capsys.readouterr().out == SPECIAL + "\n"
+
+
+def test_the_writer_makes_the_state_folder_and_the_record(tmp_path: Path) -> None:
+    path = tmp_path / runrecord.TIMING
+    runrecord.append(path, FAULT, root=tmp_path)
+    runrecord.append(path, {"kind": "tier"}, root=tmp_path)
+    assert lines(path) == [FAULT, {"kind": "tier"}]
+
+
+def test_the_writer_never_appends_onto_an_unfinished_line(tmp_path: Path) -> None:
+    path = tmp_path / runrecord.TIMING
+    path.parent.mkdir()
+    path.write_bytes(b'{"kind": "fau')
+    runrecord.append(path, FAULT, root=tmp_path)
+    assert list(runrecord.read(path)) == [FAULT]
+
+
+FILLED = """
+import resource, sys
+from pathlib import Path
+sys.path[:0] = sys.argv[3:]
+import runrecord
+path = Path(sys.argv[1])
+room = path.stat().st_size + int(sys.argv[2])
+resource.setrlimit(resource.RLIMIT_FSIZE, (room, room))
+runrecord.append(path, {"pad": "x" * 200}, root=path.parents[1])
+"""
+
+
+def test_a_write_cut_short_is_said_and_the_next_record_still_parses(tmp_path: Path) -> None:
+    path = tmp_path / runrecord.TIMING
+    path.parent.mkdir()
+    path.write_text(json.dumps(FAULT) + "\n", encoding="utf-8")
+    places = [str(Path(runrecord.__file__).parent), str(Path(gatelib.__file__).parent)]
+    command = [sys.executable, "-c", FILLED, str(path), "50", *places]
+    run = subprocess.run(  # noqa: S603 # -- this interpreter and the plugin's own writer
+        command, capture_output=True, text=True, timeout=60, check=False
+    )
+    assert run.returncode == 0, run.stderr
+    assert run.stdout == (
+        "ratchet: not recorded: .ratchet/timing.jsonl: no space left for it; free some space\n"
+    )
+    assert path.stat().st_size == len(json.dumps(FAULT)) + 1 + 50, "the write was cut short"
+    runrecord.append(path, {"kind": "tier"}, root=tmp_path)
+    assert list(runrecord.read(path)) == [FAULT, {"kind": "tier"}]
+
+
+FULL = "ratchet: not recorded: .ratchet/timing.jsonl: no space left for it; free some space\n"
+
+
+def test_a_write_cut_short_in_this_process_is_said_and_the_record_still_parses(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / runrecord.TIMING
+    path.parent.mkdir()
+    path.write_text(json.dumps(FAULT) + "\n", encoding="utf-8")
+    soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+    resource.setrlimit(resource.RLIMIT_FSIZE, (path.stat().st_size + 50, hard))
+    try:
+        runrecord.append(path, {"pad": "x" * 200}, root=tmp_path)
+    finally:
+        resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
+    assert capsys.readouterr().out == FULL
+    assert path.stat().st_size == len(json.dumps(FAULT)) + 1 + 50, "the write was cut short"
+    assert list(runrecord.read(path)) == [FAULT]
+
+
+def fault_of_length(size: int) -> dict[str, object]:
+    bare = {**FAULT, "bite": ""}
+    return {**bare, "bite": "b" * (size - len(json.dumps(bare)) - 1)}
+
+
+TOO_LONG = (
+    "bite: not recorded: .ratchet/timing.jsonl: the record is too long to keep; shorten the name"
+    " it carries\n"
+)
+
+
+def test_a_record_one_byte_under_the_bound_is_kept_and_one_at_it_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / runrecord.TIMING
+    under, at = fault_of_length(runrecord.LINE - 1), fault_of_length(runrecord.LINE)
+    assert len(json.dumps(at)) + 1 == runrecord.LINE
+    runrecord.append(path, under, root=tmp_path, who="bite")
+    held = path.read_bytes()
+    assert capsys.readouterr().out == ""
+    runrecord.append(path, at, root=tmp_path, who="bite")
+    assert capsys.readouterr().out == TOO_LONG
+    assert path.read_bytes() == held, "the file is unchanged"
+    assert list(runrecord.read(path)) == [under]
+
+
+@settings(max_examples=40, deadline=None)
+@given(st.integers(min_value=runrecord.LINE - 48, max_value=runrecord.LINE + 48))
+def test_whatever_the_writer_keeps_the_reader_returns(size: int) -> None:
+    record = fault_of_length(size)
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        path = root / runrecord.TIMING
+        runrecord.append(path, FAULT, root=root)
+        with contextlib.redirect_stdout(io.StringIO()):
+            runrecord.append(path, record, root=root)
+        runrecord.append(path, FAULT, root=root)
+        got = list(runrecord.read(path))
+    assert got == ([FAULT, record, FAULT] if size < runrecord.LINE else [FAULT, FAULT])
+
+
+UNREADABLE_BY_ROOT = pytest.mark.skipif(os.geteuid() == 0, reason="root reads through modes")
+
+
+@UNREADABLE_BY_ROOT
+def test_a_record_its_owner_cannot_read_is_still_appended_on_a_line_of_its_own(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / runrecord.TIMING
+    path.parent.mkdir()
+    path.write_bytes(b'{"kind": "fau')
+    path.chmod(0o200)
+    try:
+        runrecord.append(path, FAULT, root=tmp_path)
+        runrecord.append(path, {"kind": "tier"}, root=tmp_path)
+    finally:
+        path.chmod(0o600)
+    assert capsys.readouterr().out == ""
+    assert list(runrecord.read(path)) == [FAULT, {"kind": "tier"}]
+
+
+def outputs(capsys: pytest.CaptureFixture[str]) -> list[str]:
+    said = re.sub(r"; slowest: .*", "", capsys.readouterr().out)
+    return [re.sub(r"\d+\.\d+s", "Ns", line) for line in said.splitlines()]
+
+
+def stuck(path: Path) -> str:
+    path.write_text("", encoding="utf-8")
+    path.chmod(0o444)
+    return f"ratchet: not recorded: {path.name}: {NOT_WRITABLE}"
+
+
+@UNWRITABLE_BY_ROOT
+@pytest.mark.parametrize("first", [PASS, shlex.join([sys.executable, "-c", "raise SystemExit(3)"])])
+def test_the_runner_that_cannot_record_says_so_once_and_ends_as_it_would(
+    work: Path, capsys: pytest.CaptureFixture[str], first: str
+) -> None:
+    gates = ["--root", str(work), "--", first, shlex.join([sys.executable, "-c", "print()"])]
+    expected = parallel.main(["parallel", "--report", str(work / "kept.jsonl"), *gates])
+    said = outputs(capsys)
+    line = stuck(work / "stuck.jsonl")
+    assert parallel.main(["parallel", "--report", str(work / "stuck.jsonl"), *gates]) == expected
+    got = outputs(capsys)
+    assert got.count(line) == 1, got
+    assert sorted(each for each in got if each != line) == sorted(said), "in any order"
+    assert (work / "stuck.jsonl").read_text() == ""
+
+
+@UNWRITABLE_BY_ROOT
+def test_budget_that_cannot_record_says_so_and_ends_as_it_would(
+    work: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    line = stuck(work / "stuck.jsonl")
+    timed = ["budget", "lint", "--root", str(work), "--report", "stuck.jsonl", "--", "true"]
+    assert budget.main(timed) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == line
+
+
+def test_the_runner_given_a_fifo_for_its_report_finishes_and_says_so(work: Path) -> None:
+    fifo = work / "timing.jsonl"
+    os.mkfifo(fifo)
+    command = [sys.executable, parallel.__file__, "--root", str(work), "--report", str(fifo)]
+    command += ["--", PASS]
+    run = subprocess.run(  # noqa: S603 # -- this interpreter and the plugin's own runner
+        command, capture_output=True, text=True, timeout=60, check=False
+    )
+    assert run.returncode == 0, run.stdout + run.stderr
+    said = [line for line in run.stdout.splitlines() if "not recorded" in line]
+    assert said == [SPECIAL.replace(".ratchet/", "")]
