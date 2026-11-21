@@ -334,6 +334,23 @@ def test_a_pull_request_on_another_branch_is_told_only_the_steps_true_of_it(
     assert "delete" not in target
 
 
+def test_beside_a_twin_on_the_default_the_note_gives_the_next_step_of_each_choice(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    named = [{"number": 1, "base": {"ref": "low"}}, {"number": 2, "base": {"ref": "main"}}]
+    pulls = json.dumps([pull(base="low"), pull(2)])
+    _, _, written = comment_for(tmp_path, capsys, page(run(pull_requests=named)), pulls=pulls)
+    assert written is not None
+    target = rows_of(written)["target"]
+    assert "If it is merged, its commits are on `low` and the owner merges #2" in target
+    assert "if it is closed, the owner merges #2" in target
+    assert "The merge job leaves #2 to the owner either way" in target
+    for state in ("open", "closed"):
+        twin = json.dumps([pull(), pull(2, "low", state=state)])
+        code, _, written = comment_for(tmp_path, capsys, page(run()), pulls=twin)
+        assert (code, written and list(rows_of(written))) == (1, ["twin"]), state
+
+
 def test_after_a_change_of_target_the_note_still_says_who_merges_and_what_is_needed(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
