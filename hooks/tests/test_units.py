@@ -352,6 +352,16 @@ def test_the_guard_reads_identical_nested_scripts_once(
     assert len(_reads(monkeypatch, shape(1000))) == len(_reads(monkeypatch, shape(1)))
 
 
+@pytest.mark.parametrize(
+    "command",
+    [": " + "$(\n" * 20, "cat <<E\n" + "$(\n" * 20 + "\nE", "echo " + "$(a " * 20],
+)
+def test_an_unclosed_substitution_is_read_once_at_every_depth(
+    monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    assert len(_reads(monkeypatch, command)) <= 22
+
+
 FORCE = "git push -f"
 
 
@@ -373,6 +383,28 @@ def test_a_command_nested_deeper_than_the_guard_follows_is_still_judged(
     shape: Callable[[str, int], str], depth: int
 ) -> None:
     assert "force-push" in rules(shape(FORCE, depth))
+
+
+def _spelled(values: Callable[[int], str], count: int, then: str) -> str:
+    names = "".join(f"$x{i}" for i in range(count))
+    return "; ".join(values(i) for i in range(count)) + f"; cd {names} && {then}"
+
+
+def test_a_directory_spelled_from_more_readings_than_the_guard_keeps_still_asks() -> None:
+    command = _spelled(lambda i: f"x{i}=a || x{i}=b", 40, "echo hi > f")
+    assert rules(command) == ["unreadable"]
+
+
+@pytest.mark.parametrize(
+    "write", ["echo hi > f", "rm -f f", "git rm -q f", "python3 -c \"open('f', 'w')\""]
+)
+def test_a_directory_spelled_from_more_combinations_than_the_guard_reads_is_not_followed(
+    write: str,
+) -> None:
+    unread = ["unreadable", "unresolved-directory"]
+    assert rules(_spelled(lambda i: f"x{i}=a || x{i}=aa", 9, write)) == unread
+    assert rules(_spelled(lambda i: f"x{i}=a || x{i}=aa", 8, write)) == []
+    assert rules(_spelled(lambda i: f"x{i}=a || x{i}=aa", 9, f"cd /tmp && {write}")) == unread[:1]
 
 
 PROSE = "This line of the note explains a step, with `code`, $5 and a path like src/app/main.py.\n"
@@ -439,8 +471,8 @@ def test_the_reader_finds_many_heredocs_on_one_line_without_searching_its_tokens
 
 def test_lexer_survives_unterminated_constructs() -> None:
     assert lex("echo 'open")[0][1].text == "'open\n"
-    assert lex("echo `open")[1] == ("open\n",)
-    assert lex("echo $(ls")[1] == ("ls\n",)
+    assert lex("echo `open")[1] == ("open",)
+    assert lex("echo $(ls")[1] == ("ls",)
     assert lex('echo "open')[0][1].text == '"open\n"'
     assert lex("cat <<EOF\nnever closed")[2] == ("never closed",)
     assert f"{HEREDOC_MARK}0" in [token.text for token in lex("cat <<")[0]]
