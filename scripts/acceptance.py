@@ -5,6 +5,7 @@ import argparse
 import contextlib
 import datetime as dt
 import fcntl
+import ipaddress
 import json
 import os
 import re
@@ -47,6 +48,22 @@ RECORD = Path("tester/record.json")
 BACKGROUND = '"$@" </dev/null >&2 & echo "$!"'
 EXITED = re.compile(r"^the service exited with code (-?\d+) before")
 SILENT = re.compile(r" did not answer within (\S+?);")
+WIDE = re.compile(
+    r"^the product listened on (\S+), (every interface|not a loopback address), when it first "
+    r"answered, so the network could reach it around the command after --; (.+), or declare the "
+    r"address with --listens$",
+    re.MULTILINE,
+)
+UNSEEN = re.compile(
+    r"^where the product listens was not checked, so the command after -- did not run: (.+); "
+    r"declare with --listens each address the product listens on, a loopback address if that "
+    r"is all$",
+    re.MULTILINE,
+)
+LISTENS = (
+    "Name each address the product listens on on purpose, separated by spaces, such as "
+    '`listens := "0.0.0.0 ::"`, or write `none`.'
+)
 
 
 class Usage(Exception):  # noqa: N818 # -- a refusal to run, said to the caller
@@ -59,14 +76,18 @@ class Boot:
     ready: str
     timeout: float
     env: tuple[str, ...] = ()
+    listens: str | None = None
 
     def argv(self, directory: Path) -> list[str]:
         pairs = [word for pair in self.env for word in ("--env", pair)]
+        declared = ["--listens", self.listens] if self.listens else []
         return [
             *gatelib.interpreter(),
             str(WITH_SERVICE),
             *("--boot", self.command, "--ready", self.ready, "--timeout", f"{self.timeout:g}"),
             *pairs,
+            "--loopback-only",
+            *declared,
             *("--", *gatelib.interpreter(), str(PROXY), str(directory)),
         ]
 
@@ -75,6 +96,7 @@ NULL = Boot(
     f"exec {shlex.join(gatelib.interpreter())} {shlex.quote(str(PROXY))} --null",
     "http://127.0.0.1:{port}/",
     30.0,
+    listens="127.0.0.1",
 )
 
 
@@ -162,7 +184,24 @@ def read_binding(root: Path) -> Binding:
         )
         env = (shown.stdout,)
     seconds = float(timeout) if re.fullmatch(r"\d+(\.\d+)?", timeout.strip()) else 30.0
-    return Binding(tuple(types), Boot(boot, ready, seconds, env))
+    listens = evaluate(root, "listens")
+    words = (NONE if listens is None else listens).split()
+    declared = None if words == [NONE] else " ".join(words)
+    if declared is not None and (said := unlisted(words)):
+        why = f"The project gives no way to start it: its justfile's `listens` {said}. {LISTENS}"
+        return Binding(tuple(types), None, why)
+    return Binding(tuple(types), Boot(boot, ready, seconds, env, declared))
+
+
+def unlisted(words: list[str]) -> str | None:
+    if not words:
+        return "is empty"
+    for word in words:
+        try:
+            ipaddress.ip_address(word)
+        except ValueError:
+            return f"names `{word}`, which is not an IP address"
+    return None
 
 
 def store(root: Path) -> Path:
@@ -250,8 +289,35 @@ def prune(place: Path, now: dt.datetime) -> None:
             empty.rmdir()
 
 
+def reachable(text: str) -> str | None:
+    wide = WIDE.search(text)
+    if wide is None and (unseen := UNSEEN.search(text)):
+        return (
+            "where it listens could not be checked, so a request might reach it around the "
+            "session's proxy and leave no line in its log, and no session starts on that: "
+            f"{unseen[1]}. Name in the justfile's `listens` each address it listens on, a "
+            'loopback address if that is all, as `listens := "127.0.0.1"`.'
+        )
+    if wide is None:
+        return None
+    where, what, cure = wide[1], wide[2], wide[3]
+    address = where.rpartition(":")[0].strip("[]")
+    return (
+        f"it listened on {where}, {what}, so a request could reach it around the session's proxy "
+        f"and leave no line in its log. To keep it on loopback, {cure}; if it listens there on "
+        f'purpose, add the address to the justfile\'s `listens`, as `listens := "{address}"`.'
+    )
+
+
+def said_by_gate(text: str) -> list[str]:
+    return re.findall(r"^with_service: .*$", text, re.MULTILINE)
+
+
 def what_it_did(log: Path) -> str:
-    lines = (gatelib.read_text(log) or "").splitlines()
+    text = gatelib.read_text(log) or ""
+    if wide := reachable(text):
+        return wide
+    lines = text.splitlines()
     why = "it never answered"
     for line in lines:
         if exited := EXITED.match(line):
@@ -332,12 +398,14 @@ def launch(root: Path, directory: Path, boot: Boot) -> int:
         end(directory)
         shutil.rmtree(directory)
         raise
+    printed = gatelib.read_text(directory / "boot.log") or ""
     if url is None:
         end(directory)
         said = what_it_did(directory / "boot.log")
-        return cannot_start(
-            directory, f"It was started with `{boot.command}` and did not answer: {said}"
-        )
+        how = ", and" if reachable(printed) else " and did not answer:"
+        return cannot_start(directory, f"It was started with `{boot.command}`{how} {said}")
+    for line in said_by_gate(printed):
+        print(line, file=sys.stderr)
     print(url)
     print(directory / "tester")
     return 0
@@ -408,7 +476,7 @@ def begin(root: Path, under: Path, *, ticket: str, binding: Binding) -> Path:
         if binding.boot is not None:
             boot = binding.boot
             facts |= {"boot": boot.command, "ready": boot.ready, "timeout": boot.timeout}
-            facts |= {"env": list(boot.env)}
+            facts |= {"env": list(boot.env), "listens": boot.listens}
         acceptance_proxy.write_json(directory / "session.json", facts)
     except gatelib.Interrupted:
         shutil.rmtree(directory)
@@ -424,6 +492,7 @@ def supervise(directory: Path) -> int:
         str(session["ready"]),
         float(str(session["timeout"])),
         tuple(str(pair) for pair in env) if isinstance(env, list) else (),
+        str(session["listens"]) if session.get("listens") else None,
     )
     process: subprocess.Popen[bytes] | None = None
     try:
@@ -650,7 +719,7 @@ def check(root: Path, slug: str, *, kept: str | None, commit: str | None) -> int
 
 def replay_one(
     check: kept_checks.Check, boot: Boot, *, root: Path, scratch: Path
-) -> kept_checks.Result:
+) -> tuple[kept_checks.Result, list[str]]:
     place = scratch / check.id
     place.mkdir()
     (place / "session.json").write_text(
@@ -664,8 +733,9 @@ def replay_one(
             url = wait_serving(lambda: process.poll() is None, place, 2 * boot.timeout + DOWN_WAIT)
             if url is None:
                 said = f"the product did not start: {what_it_did(place / 'boot.log')}"
-                return kept_checks.Result(kept_checks.Outcome.NOT_RUN, said)
-            return kept_checks.run(check, url, place)
+                return kept_checks.Result(kept_checks.Outcome.NOT_RUN, said), []
+            lines = said_by_gate(gatelib.read_text(place / "boot.log") or "")
+            return kept_checks.run(check, url, place), lines
         finally:
             stop(process)
 
@@ -718,7 +788,10 @@ def replay(root: Path, slug: str | None, checks_file: Path | None, *, control: b
     if boot is None:
         return gatelib.report("acceptance replay", [read_binding(root).why])
     with tempfile.TemporaryDirectory(prefix="ratchet-replay-") as scratch:
-        ran = [replay_one(item, boot, root=root, scratch=Path(scratch)) for item in checks]
+        booted = [replay_one(item, boot, root=root, scratch=Path(scratch)) for item in checks]
+    ran = [result for result, _ in booted]
+    for line in [] if control else next((said for _, said in booted if said), []):
+        print(line, file=sys.stderr)
     if directory is not None:
         results = [
             {
