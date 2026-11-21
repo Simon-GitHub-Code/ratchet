@@ -58,7 +58,9 @@ WAITS, PARKED, SPLIT = "waits", "parked", queue_notes.SPLIT
 STASHED = {MERGED: "merged", WAITS: "unapproved", PARKED: "blocked", SPLIT: "split"}
 INTERRUPTED = "interrupted"
 DRAIN_RUNS = frozenset(f"{word} run" for word in (*STASHED.values(), INTERRUPTED))
+OWN_RUNS = DRAIN_RUNS - {route.BLOCKED_RUN.removeprefix(": ")}
 KEPT = "ratchet-kept"
+DAMAGED = (ValueError, KeyError, TypeError, AttributeError)
 PATCH = (
     "diff-tree",
     "-r",
@@ -72,6 +74,7 @@ PATCH = (
     "--dst-prefix=b/",
 )
 APPLY = ("apply", "--binary", "--whitespace=nowarn")
+INDEX_INFO = ("update-index", "-z", "--index-info")
 UNREAD_TREE = (
     "git could not read what it holds uncommitted (a stale `index.lock`, a merge left"
     " unfinished or a damaged index): finish or commit it there, then run `clean` again"
@@ -223,8 +226,7 @@ class Exposed:
 class Aside:
     base: str
     index: str
-    tracked: str
-    untracked: str
+    worktree: str
 
 
 @dataclass(frozen=True)
@@ -312,118 +314,191 @@ def kept_line(branch: str, path: Path) -> str:
     )
 
 
-def plumb(where: Path, *args: str, index: Path | None = None, given: bytes = b"") -> bytes | None:
-    env = None if index is None else {**os.environ, "GIT_INDEX_FILE": str(index)}
+def plumb(
+    where: Path, *args: str, env: dict[str, str] | None = None, given: bytes = b""
+) -> bytes | None:
     done = subprocess.run(
         ["git", "-C", str(where), *args], input=given, capture_output=True, env=env, check=False
     )
     return done.stdout if done.returncode == 0 else None
 
 
-def written_tree(where: Path, index: Path) -> str | None:
-    tree = plumb(where, "write-tree", index=index)
-    return None if tree is None else tree.decode().strip()
+@dataclass(frozen=True)
+class Scratch:
+    where: Path
+    env: dict[str, str]
+
+    def git(self, *args: str, given: bytes = b"") -> bytes | None:
+        return plumb(self.where, *args, env=self.env, given=given)
+
+    def tree(self) -> str | None:
+        written = self.git("write-tree")
+        return None if written is None else written.decode().strip()
 
 
-def aside_of(tree: Path, index: Path) -> Aside | None:
-    shutil.copyfile(tree / (gatelib.git(tree, "rev-parse", "--git-path", "index") or ""), index)
+@contextlib.contextmanager
+def scratch_store(where: Path) -> Iterator[Scratch]:
+    objects = where / (gatelib.git(where, "rev-parse", "--git-path", "objects") or "")
+    with tempfile.TemporaryDirectory() as scratch:
+        (Path(scratch) / "objects").mkdir()
+        yield Scratch(
+            where,
+            {
+                **os.environ,
+                "GIT_INDEX_FILE": f"{scratch}/index",
+                "GIT_OBJECT_DIRECTORY": f"{scratch}/objects",
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(objects.resolve()),
+            },
+        )
+
+
+def aside_of(scratch: Scratch) -> Aside | None:
+    tree = scratch.where
+    index = tree / (gatelib.git(tree, "rev-parse", "--git-path", "index") or "")
+    shutil.copyfile(index, scratch.env["GIT_INDEX_FILE"])
     base = gatelib.git(tree, "rev-parse", "--verify", "--quiet", "HEAD")
-    staged = written_tree(tree, index)
-    updated = plumb(tree, "add", "--update", index=index)
-    tracked = written_tree(tree, index)
-    others = plumb(tree, "ls-files", "-z", "--others", "--exclude-standard", index=index) or b""
+    staged = scratch.tree()
+    updated = scratch.git("add", "--update")
+    others = scratch.git("ls-files", "-z", "--others", "--exclude-standard") or b""
     listed = b"".join(path + b"\0" for path in others.split(b"\0") if path and path[-1:] != b"/")
-    added = plumb(tree, "update-index", "--add", "-z", "--stdin", index=index, given=listed)
-    untracked = written_tree(tree, index)
-    if None in (base, staged, updated, tracked, added, untracked):
+    added = scratch.git("update-index", "--add", "-z", "--stdin", given=listed)
+    whole = scratch.tree()
+    if None in (base, staged, updated, added, whole):
         return None
-    return Aside(str(base), str(staged), str(tracked), str(untracked))
+    return Aside(str(base), str(staged), str(whole))
 
 
-def patches(root: Path, aside: Aside) -> list[bytes]:
-    steps = (
-        (aside.base, aside.index),
-        (aside.index, aside.tracked),
-        (aside.tracked, aside.untracked),
-    )
-    return [plumb(root, *PATCH, old, new) or b"" for old, new in steps]
+def patches(scratch: Scratch, aside: Aside) -> list[bytes]:
+    return [scratch.git(*PATCH, aside.base, tree) or b"" for tree in (aside.index, aside.worktree)]
 
 
-def kept_parts(body: bytes) -> tuple[dict[str, object], list[bytes]]:
+def kept_parts(body: bytes) -> tuple[Aside, list[bytes]]:
     head, _, rest = body.partition(b"\n")
     header = json.loads(head)
     sizes = [int(size) for size in header.pop("sizes")]
+    if len(sizes) != len(header) - 1 or sum(sizes) != len(rest):
+        raise ValueError(head)
     bounds = [sum(sizes[:at]) for at in range(len(sizes) + 1)]
-    return header, [rest[start:end] for start, end in itertools.pairwise(bounds)]
+    return Aside(**header), [rest[start:end] for start, end in itertools.pairwise(bounds)]
 
 
-def unproven(root: Path, path: Path, aside: Aside) -> str | None:
-    wrong = f"{path} does not give back what the work tree holds, so it is deleted"
+def read_unit(path: Path) -> tuple[Aside, list[bytes]] | str:
     try:
-        header, parts = kept_parts(path.read_bytes())
+        return kept_parts(path.read_bytes())
     except OSError as error:
-        return f"{path} could not be read back: {error.strerror}"
-    with tempfile.TemporaryDirectory() as scratch:
-        index = Path(scratch) / "index"
-        plumb(root, "read-tree", aside.base, index=index)
-        trees = [
-            written_tree(root, index)
-            if not part or plumb(root, *APPLY, "--cached", "-", index=index, given=part) is not None
-            else None
-            for part in parts
-        ]
-    wanted = [aside.index, aside.tracked, aside.untracked]
-    return None if header == asdict(aside) and trees == wanted else wrong
+        return f"{path} cannot be read: {error.strerror}"
+    except DAMAGED:
+        return f"{path} is not whole: the drain did not write it to its end"
 
 
-def keep(root: Path, branch: str, aside: Aside) -> Path | str:
-    home = kept_home(root, branch)
-    parts = patches(root, aside)
+def given_back(scratch: Scratch, read: tuple[Aside, list[bytes]]) -> Aside | None:
+    aside, parts = read
+    trees = []
+    for part in parts:
+        scratch.git("read-tree", aside.base)
+        applied = not part or scratch.git(*APPLY, "--cached", "-", given=part) is not None
+        trees.append(scratch.tree() if applied else None)
+    return None if None in trees else Aside(aside.base, *map(str, trees))
+
+
+def changes(scratch: Scratch, base: str, tree: str) -> bytes | None:
+    changed = scratch.git("diff-tree", "-r", "-z", "--no-renames", base, tree)
+    if changed is None:
+        return None
+    fields = changed.split(b"\0")[:-1]
+    pairs = zip(fields[0::2], fields[1::2], strict=True)
+    return b"".join(b"%s %s\t%s\0" % (*meta.split(b" ")[1:4:2], path) for meta, path in pairs)
+
+
+def overlaid(scratch: Scratch, held: Aside, now: Aside) -> Aside | None:
+    trees = []
+    for old, new in ((held.index, now.index), (held.worktree, now.worktree)):
+        info = changes(scratch, now.base, new)
+        scratch.git("read-tree", old)
+        done = None if info is None else scratch.git(*INDEX_INFO, given=info)
+        trees.append(None if done is None else scratch.tree())
+    return None if None in trees else Aside(held.base, *map(str, trees))
+
+
+def proven(where: Path, path: Path, aside: Aside) -> str | None:
+    read = read_unit(path)
+    if isinstance(read, str):
+        return read
+    with scratch_store(where) as scratch:
+        given = given_back(scratch, read)
+    return None if read[0] == aside == given else "its file does not give back what the tree holds"
+
+
+def keep(scratch: Scratch, path: Path, aside: Aside) -> str | None:
+    parts = patches(scratch, aside)
     header = json.dumps({**asdict(aside), "sizes": [len(part) for part in parts]})
-    body = header.encode() + b"\n" + b"".join(parts)
-    digest = hashlib.sha256(body).hexdigest()[:16]
+    partial = path.with_name(f".{path.name}.partial")
     try:
-        home.mkdir(mode=OWNER_ONLY, parents=True, exist_ok=True)
-        held = sorted(home.glob("*.kept"))
-        path = next((kept for kept in held if kept.stem.endswith(f"-{digest}")), None)
-        if path is None:
-            numbers = [kept.name.partition("-")[0] for kept in held]
-            after = max((int(number) for number in numbers if number.isdigit()), default=0)
-            path = home / f"{after + 1:04d}-{now():%Y%m%dT%H%M%S}-{digest}.kept"
-            partial = home / f".{path.name}.partial"
-            partial.write_bytes(body)
+        path.parent.mkdir(mode=OWNER_ONLY, parents=True, exist_ok=True)
+        partial.write_bytes(header.encode() + b"\n" + b"".join(parts))
+        why = proven(scratch.where, partial, aside)
+        if why is None:
             partial.replace(path)
     except OSError as error:
-        return f"it could not be set aside under {home}: {error.strerror}"
-    why = unproven(root, path, aside)
+        why = f"it could not be set aside under {path.parent}: {error.strerror}"
     if why is not None:
         with contextlib.suppress(OSError):
-            path.unlink()
-    return path if why is None else why
+            partial.unlink()
+    return why
 
 
-def set_aside(root: Path, tree: Path, branch: str) -> Path | str | None:
+def unit_token(tree: Path) -> Path:
+    return tree / (gatelib.git(tree, "rev-parse", "--git-path", KEPT) or "")
+
+
+def held_unit(home: Path, ident: str) -> Path | None:
+    return next(home.glob(f"*-{ident}.kept"), None) if ident else None
+
+
+def new_unit(home: Path, ident: str) -> Path:
+    numbers = [kept.name.partition("-")[0] for kept in home.glob("*.kept")]
+    after = max((int(number) for number in numbers if number.isdigit()), default=0)
+    return home / f"{after + 1:04d}-{now():%Y%m%dT%H%M%S}-{ident}.kept"
+
+
+def gathered(scratch: Scratch, home: Path) -> str | None:
+    now_held = aside_of(scratch)
+    if now_held is None:
+        return UNREAD_TREE
+    token = unit_token(scratch.where)
+    try:
+        ident = token.read_text(encoding="utf-8") if token.is_file() else ""
+        if not ident:
+            ident = secrets.token_hex(8)
+            token.write_text(ident, encoding="utf-8")
+    except OSError as error:
+        return f"it could not be set aside under {token.parent}: {error.strerror}"
+    path = held_unit(home, ident)
+    if path is None:
+        return keep(scratch, new_unit(home, ident), now_held)
+    read = read_unit(path)
+    if isinstance(read, str):
+        return read
+    given = given_back(scratch, read)
+    whole = None if given is None else overlaid(scratch, given, now_held)
+    if whole is None:
+        return f"{path} does not take what the work tree holds"
+    return None if whole == given else keep(scratch, path, whole)
+
+
+def set_aside(root: Path, tree: Path, branch: str) -> str | None:
     if not unsaved(tree):
         return None
-    lock = tree / (gatelib.git(tree, "rev-parse", "--git-path", "index.lock") or "")
-    try:
-        descriptor = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, OWNER_FILE)
-    except OSError:
+    if (tree / (gatelib.git(tree, "rev-parse", "--git-path", "index.lock") or "")).exists():
         return UNREAD_TREE
-    try:
-        with tempfile.TemporaryDirectory() as scratch:
-            aside = aside_of(tree, Path(scratch) / "index")
-        kept = UNREAD_TREE if aside is None else keep(root, branch, aside)
-    finally:
-        os.close(descriptor)
-        lock.unlink(missing_ok=True)
-    if isinstance(kept, str):
-        return kept
+    with scratch_store(tree) as scratch:
+        why = gathered(scratch, kept_home(root, branch))
+    if why is not None:
+        return why
     gatelib.git(tree, "reset", "--hard", "--quiet")
     gatelib.git(tree, "clean", "-d", "--force", "--quiet")
-    print(kept_line(branch, kept))
     return (
-        "what it holds uncommitted is still there after it was set aside" if unsaved(tree) else kept
+        "what it holds uncommitted is still there after it was set aside" if unsaved(tree) else None
     )
 
 
@@ -435,11 +510,16 @@ def discard(root: Path, tree: Path, branch: str) -> str | None:
         if gatelib.git(tree, "rev-parse", "--verify", "--quiet", "HEAD") is None:
             gatelib.git(tree, "switch", "--detach", "--quiet", merge_ready.default_ref(root))
         kept = set_aside(root, tree, branch)
-        if not isinstance(kept, str):
+        if kept is None:
             for pid in gatelib.end_running_from(tree.resolve()):
                 print(f"ended: process {pid}, which ran a program of {tree}")
             kept = set_aside(root, tree, branch)
-        if isinstance(kept, str):
+        token = unit_token(tree)
+        ident = token.read_text(encoding="utf-8") if token.is_file() else ""
+        unit = held_unit(kept_home(root, branch), ident)
+        if unit is not None:
+            print(kept_line(branch, unit))
+        if kept is not None:
             return kept
         gatelib.git(root, "worktree", "remove", "--force", str(tree))
         shutil.rmtree(tree, ignore_errors=True)
@@ -2058,71 +2138,84 @@ def harm(
 def restore(drain: Drain, options: argparse.Namespace) -> int:
     root, branch = drain.root, options.ref or ""
     held = sorted(kept_home(root, branch).glob("*.kept"))
+    again = f"`drain.py restore {branch}`"
     if not held:
         print(f"restore: nothing of `{branch}` is set aside")
         return 1
     if dirty(root):
         print(
             "restore: the checkout holds uncommitted work of its own: commit it or set it aside,"
-            f" then run `drain.py restore {branch}` again"
+            f" then run {again} again"
         )
         return 1
-    header, parts = kept_parts(held[-1].read_bytes())
-    base = str(header["base"])
+    unit, *rest = held
+    read = read_unit(unit)
+    if isinstance(read, str):
+        print(f"restore: {read}, so nothing is restored: once it can be read, run {again} again")
+        return 1
+    aside, parts = read
+    current = gatelib.git(root, "branch", "--show-current")
+    back = [current] if current else ["--detach", gatelib.git(root, "rev-parse", "HEAD") or ""]
     tip = gatelib.git(root, "rev-parse", "--verify", "--quiet", f"{merge.HEADS}{branch}")
-    if (gatelib.git(root, "switch", "--quiet", branch) if tip == base else None) is None:
-        gatelib.git(root, "switch", "--quiet", "--detach", base)
-    applied = gatelib.git(root, "rev-parse", "HEAD") == base and all(
-        not part or plumb(root, *APPLY, *flags, "-", given=part) is not None
-        for part, flags in zip(parts, (("--index",), (), ()), strict=True)
-    )
-    if not applied:
+    if (gatelib.git(root, "switch", "--quiet", branch) if tip == aside.base else None) is None:
+        gatelib.git(root, "switch", "--quiet", "--detach", aside.base)
+    steps = [(part, flags) for part, flags in zip(parts, (("--cached",), ()), strict=True) if part]
+    if gatelib.git(root, "rev-parse", "HEAD") != aside.base or any(
+        plumb(root, *APPLY, "--check", *flags, "-", given=part) is None for part, flags in steps
+    ):
+        gatelib.git(root, "switch", "--quiet", *back)
         print(
-            f"restore: {held[-1]} does not apply on {base} in the checkout, so it stays, and what"
-            " applied of it stays in the checkout"
+            f"restore: {unit} does not apply on {aside.base} in the checkout, so it stays and the"
+            " checkout is as it was"
         )
         return 1
-    held[-1].unlink()
-    print(f"restored: what the work tree of `{branch}` held uncommitted, from {held[-1]}")
+    for part, flags in steps:
+        plumb(root, *APPLY, *flags, "-", given=part)
+    unit.unlink()
+    print(f"restored: what the work tree of `{branch}` held uncommitted, from {unit}")
+    if rest:
+        print(
+            f"restore: {len(rest)} more of `{branch}` from other closings stay set aside, the next"
+            f" at {rest[0]}: commit or set aside this one, then run {again} again"
+        )
     return 0
 
 
-def stashed_aside(root: Path, sha: str) -> Aside:
+def stashed_aside(scratch: Scratch, sha: str) -> Aside:
     def named(at: str) -> str:
-        return gatelib.git(root, "rev-parse", "--verify", "--quiet", f"{sha}{at}") or ""
+        return gatelib.git(scratch.where, "rev-parse", "--verify", "--quiet", f"{sha}{at}") or ""
 
-    with tempfile.TemporaryDirectory() as scratch:
-        index = Path(scratch) / "index"
-        plumb(root, "read-tree", named("^{tree}"), index=index)
-        untracked = plumb(root, "ls-tree", "-r", "-z", f"{sha}^3") or b""
-        plumb(root, "update-index", "-z", "--index-info", index=index, given=untracked)
-        whole = written_tree(root, index) or ""
-    return Aside(named("^1"), named("^2^{tree}"), named("^{tree}"), whole)
+    scratch.git("read-tree", named("^{tree}"))
+    scratch.git(*INDEX_INFO, given=scratch.git("ls-tree", "-r", "-z", f"{sha}^3") or b"")
+    return Aside(named("^1"), named("^2^{tree}"), scratch.tree() or "")
 
 
 def move_stashes(root: Path) -> None:
     listing = gatelib.git(root, "stash", "list", "--format=%H%x09%gs") or ""
-    for sha, _, subject in (line.partition("\t") for line in listing.splitlines()):
+    for sha, _, subject in reversed([line.partition("\t") for line in listing.splitlines()]):
         on, _, label = subject.partition(": ")
         branch, _, run = label.partition(": ")
         if run not in DRAIN_RUNS:
             continue
-        said = f"kept: stash {sha} (`{subject}`)"
-        if on not in {f"On {branch}", "On (no branch)"} or "opened" not in queue_notes.read_note(
-            root, branch
-        ):
+        listed = (gatelib.git(root, "stash", "list", "--format=%H") or "").splitlines()
+        entry = f"stash@{{{listed.index(sha)}}}"
+        said = f"kept: stash {sha} (`{subject}`) stays"
+        mine = on in {f"On {branch}", "On (no branch)"} and run in OWN_RUNS
+        if not mine or "opened" not in queue_notes.read_note(root, branch):
             print(
-                f"{said} carries the drain's label, and no note of the drain proves it is the"
-                f" drain's, so it stays: `git stash show -p --include-untracked {sha}` shows it"
+                f"{said}: nothing the drain recorded proves the drain made it; to move it by hand,"
+                f" run `git stash pop --index {entry}` in a clean checkout of `{branch}`"
             )
             continue
-        kept = keep(root, branch, stashed_aside(root, sha))
-        if isinstance(kept, str):
-            print(f"{said} stays: {kept}")
+        home = kept_home(root, branch)
+        unit = held_unit(home, sha) or new_unit(home, sha)
+        with scratch_store(root) as scratch:
+            why = keep(scratch, unit, stashed_aside(scratch, sha))
+        if why is not None:
+            print(f"{said}: {why}")
             continue
-        listed = (gatelib.git(root, "stash", "list", "--format=%H") or "").splitlines()
-        gatelib.git(root, "stash", "drop", "--quiet", f"stash@{{{listed.index(sha)}}}")
-        print(kept_line(branch, kept))
+        gatelib.git(root, "stash", "drop", "--quiet", entry)
+        print(kept_line(branch, unit))
 
 
 def show_plan(drain: Drain, _options: argparse.Namespace) -> int:
