@@ -3,9 +3,11 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import os
+import secrets
 import signal
 import subprocess
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -13,7 +15,84 @@ import pytest
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
+pytest_plugins = ["pytester"]
+
 EXITING = 5.0
+OWNER = "RATCHET_TEST_OWNER"
+TOKEN = pytest.StashKey[str]()
+BEFORE = pytest.StashKey[frozenset[int]]()
+PROC = Path("/proc")
+STARTERS = frozenset({"spawn", "sessions_ended"})
+
+
+def living() -> dict[int, tuple[int, bytes]]:
+    found: dict[int, tuple[int, bytes]] = {}
+    for entry in PROC.iterdir():
+        with contextlib.suppress(OSError, ValueError):
+            fields = (entry / "stat").read_bytes().rpartition(b")")[2].split()
+            if fields[0] != b"Z":
+                found[int(entry.name)] = int(fields[1]), (entry / "environ").read_bytes()
+    return found
+
+
+def descendants(table: dict[int, tuple[int, bytes]]) -> set[int]:
+    found = {os.getpid()}
+    while grown := {pid for pid, (parent, _) in table.items() if parent in found} - found:
+        found |= grown
+    return found - {os.getpid()}
+
+
+def started_by(token: str, before: frozenset[int]) -> set[int]:
+    table = living()
+    mark = f"{OWNER}={token}".encode()
+    marked = {pid for pid, (_, env) in table.items() if mark in env.split(b"\0")}
+    return (marked | descendants(table)) - before - {os.getpid()}
+
+
+def command_of(pid: int) -> str:
+    try:
+        line = (PROC / str(pid) / "cmdline").read_bytes()
+    except OSError:
+        return "(exited)"
+    return line.replace(b"\0", b" ").strip().decode(errors="replace")
+
+
+def left_running(token: str, before: frozenset[int]) -> dict[int, str]:
+    deadline = time.monotonic() + EXITING
+    while (found := started_by(token, before)) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    named = {pid: command_of(pid) for pid in found}
+    for pid in found:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
+    return named
+
+
+def starts_processes(item: pytest.Item) -> bool:
+    return bool(STARTERS & set(getattr(item, "fixturenames", ())))
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_setup(item: pytest.Item) -> Iterator[None]:
+    if starts_processes(item):
+        item.stash[BEFORE] = frozenset(descendants(living()))
+        item.stash[TOKEN] = os.environ[OWNER] = f"{os.getpid()}-{secrets.token_hex(8)}"
+    return (yield)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item: pytest.Item) -> Iterator[None]:
+    if TOKEN not in item.stash:
+        return (yield)
+    try:
+        done = yield
+    finally:
+        os.environ.pop(OWNER, None)
+        left = left_running(item.stash[TOKEN], item.stash[BEFORE])
+    if left:
+        named = "".join(f"\n  {pid} {line}" for pid, line in sorted(left.items()))
+        pytest.fail(f"the test left {len(left)} running, ended now:{named}", pytrace=False)
+    return done
 
 
 def group_alive(group: int) -> bool:
