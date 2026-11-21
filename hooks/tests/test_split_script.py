@@ -420,7 +420,7 @@ LINKS = {
     ids=["a promise after a level-one heading", "a checked line in the answers", "plain answers"],
 )
 def test_the_judge_accepts_the_parts_a_passing_plan_makes_and_the_split_says_what_it_left_out(
-    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory, capsys: Out, text: str, *, said: bool
+    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory, capsys: Out, *, text: str, said: bool
 ) -> None:
     repository(tmp_path, {**BASE, SPEC: "# Thing\n\nStatus: ready-for-agent\n", TICKET: text})
     branch(tmp_path, "records-thing")
@@ -456,7 +456,9 @@ CARRIED = (
 )
 SAVE = ".scratch/thing/issues/02-save.md"
 LIST = ".scratch/thing/issues/03-list.md"
-GIVEN = f"{SAVE} gives a part the agent-ready label `ready-for-agent`, which is the owner's act when "
+GIVEN = (
+    f"{SAVE} gives a part the agent-ready label `ready-for-agent`, which is the owner's act when "
+)
 DIFFERS = "its {} is not the one " + TICKET + " has on the default branch"
 ANSWERS_DIFFER = DIFFERS.format("`## Answers` section")
 TAMPERED = {
@@ -489,10 +491,14 @@ TAMPERED = {
     ),
     "carries what the split leaves out": (
         SAID,
-        lambda b: b.replace("Blocked by:", "Parent: ../spec.md\nBlocked by:")
-        + "\n## Answers\n\n- 2026-11-01: Should it arrive switched off? Yes.\n",
-        f"it has a `Parent:` line and the split writes none from {TICKET} on the default branch,"
-        " because the copied text would change the part's promises the judge counts",
+        lambda b: (
+            b.replace("Blocked by:", "Parent: ../spec.md\nBlocked by:")
+            + "\n## Answers\n\n- 2026-11-01: Should it arrive switched off? Yes.\n"
+        ),
+        (
+            f"it has a `Parent:` line and the split writes none from {TICKET} on the default"
+            " branch, because the copied text would change the part's promises the judge counts"
+        ),
     ),
     "carries answers its ticket lacks": (
         PLAINLY.replace("\n## Answers\n\n- 2026-11-01: Should it arrive switched off? Yes.\n", ""),

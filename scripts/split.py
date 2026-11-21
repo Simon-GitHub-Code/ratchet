@@ -100,7 +100,7 @@ def inherited(text: str) -> dict[str, str]:
     link = PARENT_TO_LINE_END.search(text)
     return {
         "`Parent:` line": link.group() if link else "",
-        **{f"`{heading}` section": preflight.section(text, heading).strip() for heading in INHERITED},
+        **{f"`{name}` section": preflight.section(text, name).strip() for name in INHERITED},
         f"`{documents.ANSWERS}` section": markdown_text.section(text, documents.ANSWERS).strip(),
     }
 
