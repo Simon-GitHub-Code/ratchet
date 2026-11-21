@@ -769,10 +769,10 @@ def test_a_wide_listener_beside_the_products_own_on_the_ready_port_is_said_and_s
 
 
 CHECKED = (
-    "with_service: when the product first answered, each listener held by a process of the boot "
-    "command's group or a child of one, the ready URL's among them, was on loopback or declared; "
-    "a listener of another process, such as a daemon that left the group, or one opened later, "
-    "is not judged\n"
+    "with_service: when the product first answered, each listener of the boot command's process "
+    "group and its descendants, one on the ready URL's port among them, was on loopback or "
+    "declared; a listener of a process that is neither in that group nor a descendant of it, or "
+    "one opened later, is not judged\n"
 )
 
 

@@ -502,12 +502,113 @@ def test_loopback_only_says_what_it_looked_at_and_when(capsys: pytest.CaptureFix
 
 
 CHECKED = (
-    "with_service: when the product first answered, each listener held by a process of the boot "
-    "command's group or a child of one, the ready URL's among them, was on loopback or declared; "
-    "a listener of another process, such as a daemon that left the group, or one opened later, "
-    "is not judged\n"
+    "with_service: when the product first answered, each listener of the boot command's process "
+    "group and its descendants, one on the ready URL's port among them, was on loopback or "
+    "declared; a listener of a process that is neither in that group nor a descendant of it, or "
+    "one opened later, is not judged\n"
 )
 OVERCLAIMED = "each of its listeners was on loopback or declared"
+UNTRUE = (
+    "the ready URL's among them",
+    "such as a daemon",
+    "left the group",
+    "a child of one",
+)
+
+
+def said_only_true(out: str) -> None:
+    assert not [clause for clause in UNTRUE if clause in out], out
+
+
+IN_ITS_OWN_SESSION = (
+    "import os, socket, sys, time\n"
+    "group = os.getpgrp()\n"
+    "def hold():\n"
+    "    held = socket.create_server((sys.argv[1], 0))\n"
+    "    open(sys.argv[2], 'w').close()\n"
+    "    while True:\n"
+    "        time.sleep(0.02)\n"
+    "        try: os.killpg(group, 0)\n"
+    "        except ProcessLookupError: os._exit(0)\n"
+    "if sys.argv[3] == 'parent exits':\n"
+    "    if os.fork(): os._exit(0)\n"
+    "    hold()\n"
+    "if os.fork() == 0:\n"
+    "    os.setsid()\n"
+    "    hold()\n"
+    "time.sleep(60)\n"
+)
+
+
+def forked_beside(marker: Path, address: str, shape: str) -> str:
+    started = f"{python(IN_ITS_OWN_SESSION)} {address} {marker} {shlex.quote(shape)}"
+    waits = f"while [ ! -e {marker} ]; do sleep 0.05; done"
+    joined = ";" if shape == "parent exits" else " &"
+    return f"{started}{joined} {waits}; {listening_on('127.0.0.1')}"
+
+
+@pytest.mark.parametrize("address", ["127.0.0.1", "0.0.0.0"], ids=["loopback", "wide"])  # noqa: S104 # -- under test
+def test_a_child_in_a_session_of_its_own_is_still_a_descendant_and_judged(
+    address: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ran = tmp_path / "ran"
+    code, out = run(
+        *("--boot", forked_beside(tmp_path / "opened", address, "child"), "--ready", READY),
+        *("--loopback-only", "--", "touch", str(ran)),
+        capsys=capsys,
+    )
+    wide = address != "127.0.0.1"
+    refused = f"{WIDE_REFUSED}boot output: none, the boot command printed nothing\n"
+    refused += "with_service: red\n"
+    said = refused if wide else re.escape(CHECKED + "with_service: green\n")
+    assert code == int(wide), out
+    assert re.fullmatch(said, out), out
+    assert ran.exists() != wide
+    said_only_true(out)
+
+
+def test_a_fork_whose_parent_exits_stays_in_the_group_and_is_judged(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    boot = forked_beside(tmp_path / "opened", "0.0.0.0", "parent exits")  # noqa: S104 # -- under test
+    code, out = run("--boot", boot, "--ready", READY, capsys=capsys)
+    assert code == 0
+    assert re.fullmatch(noted("0.0.0.0", "every interface") + "with_service: green\n", out), out  # noqa: S104 # -- under test
+    said_only_true(out)
+
+
+HOLDS_THE_PORT_ON_IPV6_LOOPBACK = (
+    "import os, socket, sys, time\n"
+    "held = socket.socket(socket.AF_INET6)\n"
+    "held.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)\n"
+    "held.bind(('::1', int(os.environ['PORT'])))\n"
+    "held.listen()\n"
+    "open(sys.argv[1], 'w').close()\n"
+    "time.sleep(60)\n"
+)
+
+
+def test_the_ready_url_answered_from_outside_while_the_group_holds_its_port_is_said(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    marker, ran = tmp_path / "held", tmp_path / "ran"
+    with servers.held_outside_the_group() as asking:
+        boot = (
+            f"{python(HOLDS_THE_PORT_ON_IPV6_LOOPBACK)} {marker} & "
+            f"while [ ! -e {marker} ]; do sleep 0.05; done; {asking('0.0.0.0')}"  # noqa: S104 # -- under test
+        )
+        code, out = run(
+            *("--boot", boot, "--ready", READY, "--loopback-only", "--", "touch", str(ran)),
+            capsys=capsys,
+        )
+    outside = (
+        r"with_service: 0\.0\.0\.0:\d+, on the ready URL's port, is held by a process the gate "
+        r"did not find among the boot command's, so it is not judged as the product's\n"
+    )
+    assert code == 0, out
+    assert re.fullmatch(outside + re.escape(CHECKED) + "with_service: green\n", out), out
+    assert ran.exists()
+    said_only_true(out)
 
 
 def beside(kind: str, tmp_path: Path, asking: Callable[[str], str]) -> str:
@@ -531,6 +632,7 @@ def test_a_session_beside_a_wide_listener_no_process_of_the_group_holds_says_wha
     assert (code, out) == (0, CHECKED + "with_service: green\n"), out
     assert ran.exists()
     assert OVERCLAIMED not in out
+    said_only_true(out)
 
 
 @pytest.mark.parametrize("kind", ["daemon", "outside"])
