@@ -720,7 +720,7 @@ def test_adopt_names_the_records_skill_and_the_owner_s_steps() -> None:
 
 
 FAKE_GH = """#!{python} -S
-import json, os, sys
+import json, os, subprocess, sys
 def path_of(args):
     return " ".join(a for a in args if a.startswith("repos/"))
 args = sys.argv[1:]
@@ -743,7 +743,9 @@ elif path.endswith("/workflows/ci.yml/runs") and "branch" in fields:
 elif path.endswith("/workflows/ci.yml/runs"):
     print(json.dumps(world["ci"][fields["head_sha"]]))
 elif path.endswith("/pulls") and "base" in fields:
-    print(world["above"][fields["base"]])
+    body = world["above"][fields["base"]]
+    jq = ["jq", "-r", args[args.index("--jq") + 1]]
+    sys.exit(subprocess.run(jq, input=body, text=True).returncode)
 elif path.endswith("/pulls") and "GET" in args:
     print(json.dumps(world["pulls"][fields["head"].split(":", 1)[1]]))
 elif "/events" in path:
@@ -807,7 +809,7 @@ def forge(heads: dict[int, tuple[str, str]]) -> dict[str, Any]:
         "tier1": {"total_count": 1, "workflow_runs": [{**ON_THE_TIP, "head_repository": OURS}]},
         "ci": {sha: ci_runs(n, sha, branch) for n, (sha, branch) in heads.items()},
         "pulls": {branch: [one_pull(n, sha, branch)] for n, (sha, branch) in heads.items()},
-        "above": {branch: "" for _, branch in heads.values()},
+        "above": {branch: "[]" for _, branch in heads.values()},
         "events": {},
         "now": {str(n): f"open {sha} main" for n, (sha, _) in heads.items()},
         "comments": {},
@@ -821,6 +823,7 @@ def merge_job(tmp_path: Path, world: dict[str, Any]) -> tuple[int, str, str]:
     bash = shutil.which("bash")
     assert step
     assert bash
+    assert shutil.which("jq"), "the stand-in for the forge's client applies `--jq` with jq"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "gh").write_text(FAKE_GH.format(python=sys.executable), encoding="utf-8")
@@ -890,14 +893,21 @@ def test_the_merge_job_judges_every_green_pull_request_not_only_the_one_that_wok
     assert [line.split()[-1] for line in fetches[1:]] == ["aaaa", "bbbb", "dddd", "ffff", "gggg"]
 
 
+UNREAD = "branch feat/a stays: the forge did not say whether an open pull request targets it"
+
+
 @pytest.mark.parametrize(
     ("above", "kept"),
     [
-        ({"feat/a": "9"}, "branch feat/a stays: pull request #9 targets it"),
-        ({}, "branch feat/a stays: the forge did not say whether an open pull request targets it"),
-        ({"feat/a": ""}, None),
+        ({"feat/a": '[{"number": 9}]'}, "branch feat/a stays: pull request #9 targets it"),
+        ({}, UNREAD),
+        ({"feat/a": "[]"}, None),
+        ({"feat/a": "null"}, UNREAD),
+        ({"feat/a": ""}, UNREAD),
+        ({"feat/a": '{"message": "Not Found"}'}, UNREAD),
+        ({"feat/a": '"[]"'}, UNREAD),
     ],
-    ids=["targeted", "unread", "untargeted"],
+    ids=["targeted", "unread", "untargeted", "null", "empty", "object", "string"],
 )
 def test_the_merge_job_keeps_a_merged_branch_while_an_open_pull_request_targets_it(
     tmp_path: Path, above: dict[str, str], kept: str | None
