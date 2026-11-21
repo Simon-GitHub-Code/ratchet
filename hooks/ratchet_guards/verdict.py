@@ -25,6 +25,10 @@ EXPANDED_BODY = (
     "The command sits in a heredoc body whose delimiter `{0}` is unquoted, so bash runs it; "
     "quote the delimiter (`'{0}'`) and bash keeps the body as text."
 )
+OWNERS_HAND = (
+    "A merge the judge leaves to the owner is the owner's to make, in the forge's interface or "
+    "their own terminal: report its reasons to them."
+)
 SWITCH_ALONE = (
     "Run the branch switch in a tool call of its own and make the change in the next one: the "
     "guard reads the branch then."
@@ -94,6 +98,14 @@ RULES: dict[str, Rule] = {
     ),
     "rewrite-history": Rule(Decision.DENY, "rewrites history"),
     "merge-pr": Rule(
+        Decision.DENY,
+        "merges a pull request, which in a project on the method only the merge job or the owner "
+        "does",
+        "Leave it to the merge job: it merges a pull request by itself once its checks pass and "
+        "nothing in it needs the owner, and `just merge-ready --head <branch>` prints each reason "
+        f"one waits, one a line. {OWNERS_HAND}",
+    ),
+    "merge-pr-unadopted": Rule(
         Decision.ASK,
         "merges a pull request",
         "The merge job merges a pull request by itself once its checks pass and nothing in it "
@@ -101,6 +113,18 @@ RULES: dict[str, Rule] = {
         "you, one a line, and `just merge-ready --head <branch>` prints the same reasons here.",
     ),
     "merge-default": Rule(
+        Decision.DENY,
+        "merges another branch into the default branch, which in a project on the method only "
+        "the merge entry point, the merge job or the owner does",
+        "Leave it to what merges by itself: with no forge `just merge <branch>` merges a branch "
+        "when the merge judge and `check` pass it, and on a forge the merge job merges its pull "
+        "request. `just merge-ready --head <branch>` prints each reason one waits, one a line. "
+        f"{OWNERS_HAND} Where the default branch tracks a remote, `git pull --ff-only` brings it "
+        "up to date. To try "
+        "a merge, a cherry-pick or a read-tree, first move to a detached `HEAD` (`git switch "
+        "--detach`) or a scratch branch in a tool call of its own, and run it there.",
+    ),
+    "merge-default-unadopted": Rule(
         Decision.ASK,
         "merges another branch into the default branch",
         "The `merge` command merges a branch by itself when the checks pass and nothing in it "
@@ -142,6 +166,7 @@ RULES: dict[str, Rule] = {
 
 
 ACTING_RULES = {Kind.WORKFLOW: "workflow-write", Kind.INSTRUCTIONS: "instructions-write"}
+UNADOPTED = {"merge-pr": "merge-pr-unadopted", "merge-default": "merge-default-unadopted"}
 OWNER_ASKS = frozenset({*ACTING_RULES.values(), "agent-ready-label", "unreadable"})
 
 
