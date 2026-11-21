@@ -15,14 +15,18 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` from what the o
 1. **Read the ticket.**
    - Run `gh issue view <n> --json number,title,body,comments` in one Bash call, or read the file.
    - Read its parent spec too: the one a `Parent:` line or a `## Parent` section names, or, for a local ticket under `<feature>/issues/`, the `<feature>/spec.md` beside that directory.
+   - **A part that names no parent** (it has a `Split from:` line, and no `Parent:` line or `## Parent` section): read the ticket its `Split from:` names, and that ticket's parent spec. Read each section the part lacks from that ticket, else from that spec. Step 4 gives the part that ticket's `Parent:` line.
+   - **What states the operability:** a record states its operability when every line the `## Operability` block of step 2 asks is stated, each read from the ticket's own `## Operability`, else from its parent's.
+   - A question with its answer under `## Answers` on the ticket or its parent is never asked again.
    - **The ticket, or its parent, states a conjecture:** check that it is current. Run the digest command of [The criteria digest](#the-criteria-digest) on the body that holds the conjecture, with the heading its `- Criteria:` line names.
      - **The command prints another digest than the line names, or exits 3:** the criteria changed after the conjecture was written. Redraft it: run steps 2 to 5, each as its *redraft* case says. The case below does not apply.
      - **It prints the same digest, or the conjecture has no `- Criteria:` line:** the conjecture is current, and the case below decides.
      - **It exits any other way:** stop, report the command and its output, and redraft nothing.
    - **The ticket, or its parent, already states a current conjecture and its operability, and the ticket states no `## Size`:** it was written before sizes were. Write the size alone: estimate it by the `## Size` block of step 2, write that block as step 4 says, and hand over as step 5 says, with the two size lines in place of the conjecture. Ask nothing, and draft nothing else.
+   - **The ticket, or its parent, already states a current conjecture and not its operability:** write the missing operability lines alone, and, on a ticket that states no `## Size`, the size with them. Draft each line by the `## Operability` block of step 2. Ask `conjecture.flag` as step 3 says, when step 2 says it is asked, and no fork. Write the lines as step 4 says, and hand over as step 5 says, with the lines you wrote in place of the conjecture. Draft nothing else.
    - **The ticket, or its parent, already states a current conjecture and its operability, and the ticket states its `## Size`, or the argument is a spec:** there is nothing to write. Say so and stop.
 
-   Done when you hold the ticket, and its parent spec when it has one; when a conjecture is stated, you know from the digest whether it is current or is to be redrafted; when only the size is missing, it is written and handed over; and, when there is nothing to write, you have said so and stopped.
+   Done when you hold the ticket, and its parent spec when it has one; when a conjecture is stated, you know from the digest whether it is current or is to be redrafted; when only operability lines or the size are missing, they are written and handed over; and, when there is nothing to write, you have said so and stopped.
 
 2. **Draft from the record.** The conversation that produced the ticket (`grill-with-docs`, `to-spec`, `to-tickets`) already chose an approach and killed the alternatives, and the ADRs and the glossary hold the rest. That is how it will be built, so draft from that record, not from imagination.
    - **The ticket's siblings share a parent spec:** draft the conjecture and the operability once, for the spec. Its tickets inherit them.
@@ -74,7 +78,16 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` from what the o
    - **A spec that has not been split, whose estimate passes a ceiling:** `/mattpocock-skills:to-tickets` slices a spec by what a person can use and not by its size, so name in the reply the argument that asks it for slices under both ceilings, with both numbers in it.
 
    **The `## Operability` block.** Write one line per concern the binding's application types are asked. Take each line from the ticket and the binding's Feature flags, Telemetry and Limits sections, or write `none` and why.
-   - `- Flag:` the flag the behaviour ships behind.
+   - `- Flag:` the flag the behaviour ships behind. It takes one of three forms:
+     - **The owner chose to keep it hidden:** `` `<key>`, off until the owner switches it on ``.
+     - **The owner chose to have it appear:** `none: the owner chose to have it appear as soon as it is finished, while the project is not deployed`.
+     - **Not asked, and not answered:** the flag the behaviour ships behind, or `none` and why, or the ADR of a `changed flags off and on` row bound `none`.
+   - `conjecture.flag` is asked when all of these hold:
+     - the binding declares an application type that `application-types.toml` asks `changed flags off and on` of, so a library, or a type the catalogue lacks, is not asked;
+     - the binding's `changed flags off and on` row is not bound `none`, and a row that says `later: code:flag` is asked;
+     - the binding's `- Life events:` line does not declare `deployed`, and a binding with no `- Life events:` line counts as deployed;
+     - the conjecture adds behaviour a user could meet, so a fix, a refactoring or a change with nothing to turn off is not asked, and its line says `none` and why;
+     - no line under `## Answers` on the ticket or its parent answers it.
    - `- Signal:` the span, metric or log that shows it working.
    - `- Load:` the route or input the load gates gain.
    - `- Security:` the surface it adds: routes, inputs, who may call.
@@ -94,19 +107,30 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` from what the o
 
    - **Ask** `conjecture.fork`: "<one choice the fork test gives to the owner and nothing they said settles, asked as someone using it would put it>" The answer the spec leans to comes first with `(recommended)` and the reason.
 
+   **Whether new behaviour arrives switched off.** When step 2 says `conjecture.flag` is asked, put it in the same message as the forks, once for the spec when the ticket's siblings share one.
+   - **Ask** `conjecture.flag`: "<what this adds, as someone using it would notice it>: should it stay hidden until you switch it on, or appear as soon as it is finished?"
+   - The options are "Appear as soon as it is finished" and "Stay hidden until I switch it on". Give each its cost:
+     - Appearing costs nothing later, and once the project is deployed the behaviour has no switch to turn it off.
+     - Staying hidden costs a switch the owner turns on later by merging that change, and a date by which they do it. The first hidden behaviour in a project also brings one setup step, which the next command names.
+   - "Appear as soon as it is finished" comes first with `(recommended)`, because only the owner can reach the project yet.
+   - **The behaviour is built over more than one ticket:** "Stay hidden until I switch it on" comes first with `(recommended)` instead, because the owner would otherwise meet it half-built between them.
+
    **Write each fork.**
    - **The owner answered it:** write the answer under `## Answers` on the spec or ticket, the question and the answer in one line each. Change the criterion to follow it. Write its row with the answer quoted under *You said*, marked **built**.
    - **A fork the test gives to you** (order, wording, layout, timing, a limit, how it is built): it is written `(not asked)` and **assumed**. Take the one the record supports, name the other under Alternatives where it is a way to build it, and state what changing it later costs.
    - **A redraft:** write a reopened fork's answer below its earlier line, dated. The earlier line stays.
+   - **The owner answered `conjecture.flag`:** write the question and the answer as one line under `## Answers`, and the `Flag:` line in the form step 2 gives that answer under `## Operability`, both on the record step 4 names. Write its row with the answer quoted under *You said*, marked **built**, and the `Flag:` line under *Where*.
    - Never write that no question was needed while a row says `(left open)`.
 
-   Done when every fork the owner was asked has its line under `## Answers` and a **built** row, every other fork's row is `(not asked)` and **assumed**, and no row says `(left open)`.
+   Done when every fork the owner was asked has its line under `## Answers` and a **built** row, every other fork's row is `(not asked)` and **assumed**, and no row says `(left open)`; and, when `conjecture.flag` was asked, its answer has its line under `## Answers`, its `Flag:` line and its **built** row.
 
 4. **Write it.** Append `## Conjecture`, `## Size` and `## Operability` with the agreed text to the ticket body.
    - End the `## Conjecture` you write with its `- Criteria:` line, by [The criteria digest](#the-criteria-digest), run on the body as you will write it.
    - **A redraft:** replace each section this run drafted, where it stands, instead of appending it. `## Answers` keeps every earlier line. It lands as below, as the first write did.
    - **The ticket's siblings share a parent spec:** write the conjecture and the operability on the spec, and say that its tickets inherit them. `## Size` goes on the ticket.
    - **The argument is a spec that has not been split:** append `## Conjecture` and `## Operability` only.
+   - **`conjecture.flag` was answered, or step 1 found operability lines missing:** write the answer's line under `## Answers` and each such line under `## Operability` on the spec when the ticket has one, and on the ticket only when it has none. Add a line to the section the record already holds, or append the section when it holds none.
+   - **A part that names no parent** (step 1): when the ticket its `Split from:` names has a `Parent:` line, write that line on the part as the ticket wrote it.
    - **The tracker is on the forge:** run `gh issue edit <n> --body-file <file>` with the full body in one Bash call, one call per issue you write to. Pass no label flag: the agent-ready label is the owner's act.
    - **The tracker is local:** edit the file and land it. The preflight refuses a dirty tree, and the ticket file is a record, not work in progress.
      - **The repository has no forge:** run the `merge` entry point with `--records` (`just merge --records`) in one Bash call.
@@ -122,7 +146,7 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` from what the o
    - **This run redrafted a conjecture** (step 1): before the conjecture, say that the criteria changed since it was written, and print what changed in it. Give each part, table row, size line and operability line that the redraft changed, dropped or added, the old words under *Was* and the new under *Now*.
    - Print the conjecture with *What you asked for* whole. It is where the owner sees what each thing they said became.
    - Its **assumed** rows are the reply's **Assumed** block, each with what changing it later costs.
-   - Say how many questions the owner answered.
+   - Say how many questions the owner answered, `conjecture.flag` included.
    - **The merge job will leave the pull request to the owner** (step 4, a forge): say that it will, with a comment on the pull request saying why.
    - Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" <ticket> --root .` in one Bash call and report its verdict.
    - **Red on the label:** say that the ticket needs the agent-ready label and that applying it is the owner's keystroke.
