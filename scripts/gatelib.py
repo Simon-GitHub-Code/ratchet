@@ -127,6 +127,17 @@ def default_branches(root: Path) -> list[str]:
     return list(dict.fromkeys(candidates))
 
 
+def stacked(target: str, default: str) -> str:
+    return (
+        f"the pull request targets `{target}`, not the default branch `{default}`. Merge the pull"
+        f" request from `{target}` first, and before it merges change this one's target to"
+        f" `{default}` on the pull request's page on the forge, which keeps it open; the owner then"
+        f" merges this one. Do not delete `{target}` before this one is retargeted: the merge job"
+        " deletes the branch of each pull request it merges, and a pull request whose target"
+        " branch is gone is closed and cannot be reopened or retargeted"
+    )
+
+
 def base_commit(root: Path, base: str | None = None) -> str | None:
     head = git(root, "rev-parse", "--abbrev-ref", "HEAD")
     for branch in [base] if base else default_branches(root):

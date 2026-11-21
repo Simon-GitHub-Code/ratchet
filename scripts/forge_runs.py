@@ -188,8 +188,7 @@ def doubts(pull: Pull, forge: Forge) -> Iterator[Doubt]:
         this = next((twin for twin in twins if at(twin, "number") == pull.number), None)
         base = at(this, "base", "ref")
         if at(this, "state") == "open" and isinstance(base, str) and base != pull.base:
-            text = f"the pull request targets `{base}`, not the default branch `{pull.base}`"
-            yield Doubt("target", text, owner=True)
+            yield Doubt("target", gatelib.stacked(base, pull.base), owner=True)
         else:
             text = f"it is not open on {pull.sha} against `{pull.base}`"
             yield Doubt("moved", text, owner=False)
