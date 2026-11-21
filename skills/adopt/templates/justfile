@@ -327,7 +327,7 @@ config-refusal: _plugin
     {{booted}} --refuses "bind: the name of a setting the deliverable requires"
 
 graceful-stop: _plugin
-    {{booted}} --graceful 10 -- {{plugin_py}} "{{ratchet_plugin}}/scripts/load_smoke.py" --until-stopped --url "bind: METHOD URL STATUS BODY of a route that takes a moment, on port {port}"
+    {{booted}} --graceful 10 -- {{plugin_py}} "{{ratchet_plugin}}/scripts/load_smoke.py" --until-stopped --url "bind: METHOD URL STATUS BODY of a route that reads its whole request before it answers, on port {port}"
 
 api-check:
     @echo "bind: snapshot the public surface and diff; a change needs a version bump or changelog line"; exit 1

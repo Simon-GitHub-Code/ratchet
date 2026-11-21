@@ -292,19 +292,8 @@ def test_asking_the_gate_waits_for_its_answer(tmp_path: Path) -> None:
 
     answering = threading.Thread(target=gate)
     answering.start()
-    assert gatelib.ask(marker, 10) == answer
+    assert gatelib.ask(marker) == answer
     answering.join()
-
-
-def test_a_gate_that_does_not_answer_leaves_every_port_judged_the_older_way(
-    tmp_path: Path,
-) -> None:
-    marker = tmp_path / "stopping"
-    taken = frozenset({gatelib.Connection("127.0.0.1", 80, "127.0.0.1", 5)})
-    gatelib.write_stopping(marker, gatelib.Stopping({80: None}, "none", taken))
-    assert gatelib.ask(marker, 0.05) == gatelib.Stopping(
-        {}, "the gate did not answer within 0.05s", taken
-    )
 
 
 def test_interrupts_raise_once_then_ignore_and_restore_the_handlers() -> None:

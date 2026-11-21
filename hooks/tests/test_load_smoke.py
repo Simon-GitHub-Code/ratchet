@@ -262,6 +262,7 @@ def until_stopped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path
     marker, sending = tmp_path / "stopping", tmp_path / "sending"
     monkeypatch.setenv(gatelib.STOPPING_ENV, str(marker))
     monkeypatch.setenv(gatelib.SENDING_ENV, str(sending))
+    load_smoke.holding(sending).touch()
     return marker, sending
 
 
@@ -335,7 +336,10 @@ def test_a_failure_after_the_signal_is_closed_when_refused_and_cut_otherwise(
         "GET https://127.0.0.1/", "ConnectionResetError", 443, named=True, late=True, lost=True
     )
     fail(OSError("no address"))
-    assert load_smoke.attempt(goal, 1, marker) == (None, "GET https://127.0.0.1/: OSError")
+    assert load_smoke.attempt(goal, 1, marker) == (
+        None,
+        "GET https://127.0.0.1/: OSError: no address",
+    ), "a failing request says its error's kind and message"
 
 
 def test_a_timeout_after_the_signal_counts_even_for_a_connection_the_gate_named(
@@ -492,7 +496,8 @@ def mains_verdict(
         raced = isinstance(caught, ConnectionRefusedError) and at_failure
         if (after_signal and isinstance(caught, ConnectionError)) or raced:
             return None
-        return f"{goal.label()}: {type(caught).__name__}"
+        said = f": {caught}" if str(caught) else ""
+        return f"{goal.label()}: {type(caught).__name__}{said}"
 
 
 FAILURES: list[Exception] = [
