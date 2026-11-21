@@ -2,13 +2,16 @@ import io
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
+import adapter
 import pytest
 
-from ratchet_guards import hook
+from ratchet_guards import bash, hook
 from ratchet_guards.context import Guard
 from ratchet_guards.manifest import COMMITTED, EMPTY, MANIFEST_PATH, parse
 from ratchet_guards.paths import Checkout
@@ -329,6 +332,71 @@ def test_main_reads_stdin_and_writes_a_decision(tmp_path: Path) -> None:
     on_a_branch = io.StringIO()
     assert hook.main(root, io.StringIO(json.dumps(case)), on_a_branch) == 0
     assert on_a_branch.getvalue() == ""
+
+
+def _stalled(seconds: float) -> object:
+    judge = hook.decide
+
+    def decide(payload: object, guard: Guard) -> Verdict | None:
+        time.sleep(seconds)
+        return judge(payload, guard)
+
+    return decide
+
+
+def _answer(root: Path, command: str, *, deadline: float) -> tuple[dict[str, str], float]:
+    stdout = io.StringIO()
+    case = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(root)}
+    start = time.monotonic()
+    assert hook.main(root, io.StringIO(json.dumps(case)), stdout, deadline=deadline) == 0
+    spent = time.monotonic() - start
+    return json.loads(stdout.getvalue() or "{}").get("hookSpecificOutput", {}), spent
+
+
+def test_the_hook_asks_before_its_limit_when_the_judging_stalls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = checkout(tmp_path)
+    monkeypatch.setattr(hook, "decide", _stalled(30))
+    answer, spent = _answer(root, "ls", deadline=0.2)
+    assert answer["permissionDecision"] == "ask"
+    assert "it used the 7 s it gives itself" in answer["permissionDecisionReason"]
+    assert spent < 5
+
+
+def test_a_deny_the_guard_reached_before_its_deadline_stands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = checkout(tmp_path)
+
+    def due(*_args: object, **_kwargs: object) -> list[object]:
+        signal.raise_signal(signal.SIGALRM)
+        return []
+
+    monkeypatch.setattr(bash._Checker, "_advance", due)  # noqa: SLF001 # -- the step after a command's verdicts
+    answer = _answer(root, "git push -f; ls", deadline=60)[0]
+    assert answer["permissionDecision"] == "deny"
+    assert "force-pushes" in answer["permissionDecisionReason"]
+    assert _answer(root, "ls; git push -f", deadline=60)[0]["permissionDecision"] == "ask"
+
+
+def test_a_hook_that_finishes_in_time_answers_as_it_judged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = checkout(tmp_path)
+    monkeypatch.setattr(hook, "decide", _stalled(0.05))
+    assert _answer(root, "git push -f", deadline=5)[0]["permissionDecision"] == "deny"
+    assert _answer(root, "ls", deadline=5)[0] == {}
+    monkeypatch.delattr(signal, "setitimer")
+    assert _answer(root, "git push -f", deadline=0.01)[0]["permissionDecision"] == "deny"
+
+
+def test_the_hook_answers_well_inside_every_limit_a_harness_gives_it() -> None:
+    config = json.loads((PLUGIN_ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))
+    limits = [h["timeout"] for e in config["hooks"]["PreToolUse"] for h in e["hooks"]]
+    limits.append(adapter.TIMEOUT_SECONDS)
+    started = 2
+    assert hook.DEADLINE_SECONDS + hook.LOG_TIMEOUT_SECONDS + started <= min(limits)
 
 
 def test_local_filesystem(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

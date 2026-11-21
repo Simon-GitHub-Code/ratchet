@@ -168,3 +168,9 @@ class Verdict:
 
 def strictest(verdicts: Iterable[Verdict]) -> Verdict | None:
     return max(verdicts, key=lambda verdict: verdict.decision, default=None)
+
+
+class LateError(BaseException):
+    def __init__(self, found: Iterable[Verdict] = ()) -> None:
+        super().__init__()
+        self.found = tuple(found)

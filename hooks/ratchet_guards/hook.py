@@ -2,12 +2,14 @@ import contextlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import FrameType
 from typing import TextIO
 
 from ratchet_guards import bash, events, records, tickets
@@ -24,7 +26,7 @@ from ratchet_guards.manifest import (
 )
 from ratchet_guards.paths import Checkout, Hit, Locator
 from ratchet_guards.refs import MAIN_BRANCHES, REMOTE
-from ratchet_guards.verdict import OWNER_ASKS, Decision, Verdict, strictest
+from ratchet_guards.verdict import OWNER_ASKS, Decision, LateError, Verdict, strictest
 
 EDIT_TOOLS = {
     "Edit": "file_path",
@@ -68,6 +70,11 @@ PATCH_HEADER = re.compile(
 PATCH_DESTRUCTIVE = frozenset({"Delete File", "Move to"})
 GIT_TIMEOUT_SECONDS = 5
 LOG_TIMEOUT_SECONDS = 1.0
+DEADLINE_SECONDS = 7.0
+LATE = (
+    f"it used the {DEADLINE_SECONDS:g} s it gives itself before the harness's time limit, on a "
+    "busy machine or a command slow to read; a smaller tool call is read in time"
+)
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 STANDARD_MANIFEST = "skills/adopt/templates/guards/manifest.toml"
 
@@ -450,14 +457,40 @@ def run(text: str, make_guard: Callable[[], Guard]) -> str:
     return respond(verdict, antigravity=is_antigravity(payload))
 
 
-def _judged(text: str, make_guard: Callable[[], Guard]) -> tuple[object, Verdict | None]:
+def _judged(
+    text: str, make_guard: Callable[[], Guard], deadline: float | None = None
+) -> tuple[object, Verdict | None]:
     payload: object = None
+    verdict: Verdict | None = None
     try:
-        payload = json.loads(text)
-        verdict = decide(payload, make_guard())
+        with _deadline(deadline):
+            payload = json.loads(text)
+            verdict = decide(payload, make_guard())
+    except LateError as late:
+        found = [_unreadable(LATE), *late.found, *([verdict] if verdict else [])]
+        verdict = strictest(found)
     except Exception as error:  # noqa: BLE001 # -- fail closed: any failure must reach a human
         verdict = _unreadable(f"{type(error).__name__}: {error}")
     return payload, verdict
+
+
+def _late(_signal: int, _frame: FrameType | None) -> None:
+    raise LateError
+
+
+@contextlib.contextmanager
+def _deadline(seconds: float | None) -> Iterator[None]:
+    arm = getattr(signal, "setitimer", None)
+    if seconds is None or arm is None:
+        yield
+        return
+    previous = signal.signal(signal.SIGALRM, _late)
+    arm(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        arm(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def common_directory(root: Path) -> Path | None:
@@ -516,8 +549,10 @@ def main(
     stdout: TextIO = sys.stdout,
     *,
     project: Path | None = None,
+    deadline: float = DEADLINE_SECONDS,
 ) -> int:
-    payload, verdict = _judged(stdin.read(), lambda: local_guard(root, project=project))
+    text = stdin.read()
+    payload, verdict = _judged(text, lambda: local_guard(root, project=project), deadline)
     answer = respond(verdict, antigravity=is_antigravity(payload))
     if answer:
         stdout.write(answer + "\n")

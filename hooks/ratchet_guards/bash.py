@@ -8,7 +8,7 @@ from ratchet_guards import environment, gh, git, interpreters, tickets, writes
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.options import Options, Spec, scan
 from ratchet_guards.shell import PLACEHOLDER, Script, SimpleCommand, parse
-from ratchet_guards.verdict import Verdict
+from ratchet_guards.verdict import LateError, Verdict
 
 MAX_DEPTH = 8
 SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
@@ -407,17 +407,24 @@ class _Checker:
         *,
         judged: dict[tuple[str, Context, int, str], list[Verdict]],
         parsed: dict[str, _Read],
+        found: list[Verdict],
     ) -> None:
         self.guard = guard
         self.depth = depth
         self.line = line
         self.judged = judged
         self.parsed = parsed
+        self.found = found
         self.modelled = True
 
     def _deeper(self) -> "_Checker":
         return _Checker(
-            self.guard, self.depth + 1, self.line, judged=self.judged, parsed=self.parsed
+            self.guard,
+            self.depth + 1,
+            self.line,
+            judged=self.judged,
+            parsed=self.parsed,
+            found=self.found,
         )
 
     def script(self, text: str, context: Context, heredoc: str = "") -> list[Verdict]:
@@ -457,7 +464,9 @@ class _Checker:
             pipeline.append(command)
             position = len(pipeline)
             for place in now:
-                verdicts += self._command(pipeline, parsed.heredocs, place)
+                judged = self._command(pipeline, parsed.heredocs, place)
+                self.found += judged
+                verdicts += judged
             pipeline = pipeline if command.piped else []
             chained = command.then == _AND
             sure = trusted and chained and previous not in _UNSURE_AFTER
@@ -685,7 +694,12 @@ class _Checker:
 
 
 def check(command: str, context: Context, guard: Guard) -> list[Verdict]:
-    verdicts = _Checker(guard, 0, command, judged={}, parsed={}).script(command, context)
+    found: list[Verdict] = []
+    checker = _Checker(guard, 0, command, judged={}, parsed={}, found=found)
+    try:
+        verdicts = checker.script(command, context)
+    except LateError as late:
+        raise LateError(found) from late
     elsewhere = {verdict for verdict in verdicts if not verdict.heredoc}
     verdicts = [v for v in verdicts if not v.heredoc or replace(v, heredoc="") not in elsewhere]
     verdicts = tickets.together(verdicts)
