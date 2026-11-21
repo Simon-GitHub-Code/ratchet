@@ -266,8 +266,7 @@ def test_a_group_whose_chain_outlasts_every_gate_beside_it_is_named(
     )
     units = [("coverage", "mutation-changed"), ("lint",), ("fmt", "types"), ("perf",)]
     scheduler = parallel.Scheduler(units, [], options)
-    scheduler.pending = []
-    scheduler.alone.clear()
+    scheduler.board.pending.clear()
     scheduler.finished = [
         parallel.Finished("coverage", 106.0, 0, ""),
         parallel.Finished("mutation-changed", 206.4, 0, ""),
@@ -294,7 +293,7 @@ def test_a_run_with_no_gate_outside_every_group_names_no_group(
         root=Path(), jobs=1, fail_fast=False, report=None, alone=[], wide=[]
     )
     scheduler = parallel.Scheduler([("a", "b")], [], options)
-    scheduler.pending = []
+    scheduler.board.pending.clear()
     scheduler.finished = [parallel.Finished("a", 5.0, 0, ""), parallel.Finished("b", 5.0, 0, "")]
     assert parallel.closing(scheduler, 10.0) == []
     assert len(capsys.readouterr().out.splitlines()) == 1
@@ -565,6 +564,44 @@ def test_wide_gates_split_the_jobs_and_every_other_gate_keeps_its_environment(
     out = capsys.readouterr().out
     for said in ("suite 2", "floor 2", "first 2", "then 2", "plain unset", "timed 7"):
         assert f"\n{said}\n" in out
+
+
+def stating(root: Path, lines: str) -> Path:
+    (root / gatelib.BINDING).parent.mkdir(parents=True)
+    (root / gatelib.BINDING).write_text(f"# Binding\n\n## Speed\n\n{lines}", encoding="utf-8")
+    return root
+
+
+def blocks(out: str) -> list[str]:
+    return re.findall(r"^==> (\S+) <==$", out, re.MULTILINE)
+
+
+def test_a_flag_the_binding_s_schedule_contradicts_is_named_and_the_binding_wins(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = stating(tmp_path, "- Alone: `x`\n- Apart: `y z`\n")
+    flags = ["--runner", "echo", "--root", str(root), "--alone", "y", "--serial", "x", "y"]
+    assert run(*flags, "--", "x", "y", "z") == 0
+    out = capsys.readouterr().out
+    assert blocks(out)[-1] == "x"
+    contradicted = (("--alone", "`y`", "Alone", "`x`"), ("--serial", "`x y`", "Apart", "`y z`"))
+    for flag, passed, kind, said in contradicted:
+        assert (
+            f"parallel: the recipe passes {flag} {passed} to this run, and the binding's Speed"
+            f" section says {kind}: {said}; the binding's line wins, since the bite proof reads"
+            f" only it: give the recipe the same gates, or take {flag} out of it\n"
+        ) in out
+
+
+def test_a_flag_the_binding_s_schedule_agrees_with_or_does_not_state_is_said_nothing_of(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = stating(tmp_path, "- Alone: `x`\n- Apart: `a b` `y z`\n- Wide: none\n")
+    flags = ["--runner", "echo", "--root", str(root), "--alone", "x", "--serial", "y", "z"]
+    assert run(*flags, "--", "x", "y", "z") == 0
+    out = capsys.readouterr().out
+    assert blocks(out)[-1] == "x"
+    assert "the binding's line wins" not in out
 
 
 def test_a_wide_gate_gets_at_least_one_job(capsys: pytest.CaptureFixture[str]) -> None:
