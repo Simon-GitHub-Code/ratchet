@@ -62,7 +62,8 @@ The one approach expected to work, stated so it can be shown wrong: what would r
 ```
 
 - **Which `## Operability` lines:** in an adopted repository, a line is asked when the binding declares an application type its question is asked of (`application-types.toml`) and its row is not bound `later:`, so a library's ticket carries none. The `Flag:` line is asked of every declared type the catalogue asks it of, whatever the life events and whatever its row says (ADR 0061). A line that does not apply says `none` and why.
-- **Inheritance:** a ticket inherits `## Conjecture` and `## Operability` from its parent spec.
+- **The `Flag:` line's three forms:** a behaviour the owner chose to keep hidden names its switch, `` `<key>`, off until the owner switches it on ``. One the owner chose to have appear says `none: the owner chose to have it appear as soon as it is finished, while the project is not deployed`. A change `/ratchet:conjecture` does not ask about names the flag it ships behind, or says `none` and why, or cites the ADR of a row bound `none`.
+- **Inheritance:** a ticket inherits `## Conjecture`, `## Operability` and `## Answers` from its parent spec. Each `## Operability` line is read from the ticket's own block, else from its parent's.
 - **`## Size`:** a ticket's `## Size` is its own, since the preflight reads `## Size` only from the ticket's own body. When a ticket's siblings share a parent spec, the conjecture and the operability lines go on the spec and `## Size` on the ticket. A spec that has not been split gets no `## Size`.
 - **The agent-ready label** (`ready-for-agent` in mattpocock-skills, spelled as `docs/agents/triage-labels.md` maps it; a local ticket carries it on its `Status:` line) is the owner's agreement that the ticket, with its conjecture, is ready to build. The skill the owner typed applies it. When an agent tries to apply it, the guard asks, once for a call: one call that gives every ticket of a spec the label is one ask, which names each.
 - **Who writes the sections:** `/ratchet:conjecture <ticket>` drafts `## Conjecture` and `## Operability` from the conversation that produced the ticket, and estimates the ticket's `## Size` from the approach and the code it touches. It writes them and prints the conjecture it drafted. It asks only where the record leaves two different products open.
@@ -114,7 +115,7 @@ A conjecture carries the same account for each thing the owner said, in its *You
 
 ### The answer log
 
-The pipeline's open questions are product questions of two sorts: `direction`, where the options are different products, and `irreversible`, where a wrong guess cannot be taken back. The feature skill logs each answer as one line of `.ratchet/questions.tsv`, written by `scripts/questions.py record`. A question about one ticket carries its slug (`feature.<slug>.1`).
+The pipeline's open questions are product questions of two sorts: `direction`, where the options are different products, and `irreversible`, where a wrong guess cannot be taken back. The feature skill logs each answer as one line of `.ratchet/questions.tsv`, written by `scripts/questions.py record`. A question about one ticket carries its slug (`feature.<slug>.1`). `conjecture.flag` is not logged, and nothing offers to stop asking it.
 
 ### Standing answers
 
