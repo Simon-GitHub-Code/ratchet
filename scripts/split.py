@@ -96,6 +96,15 @@ def written(
     return "\n".join(lines) + "\n" + "\n".join(sections)
 
 
+def inherited(text: str) -> dict[str, str]:
+    link = PARENT_TO_LINE_END.search(text)
+    return {
+        "`Parent:` line": link.group() if link else "",
+        **{f"`{heading}` section": preflight.section(text, heading).strip() for heading in INHERITED},
+        f"`{documents.ANSWERS}` section": markdown_text.section(text, documents.ANSWERS).strip(),
+    }
+
+
 def readings(ref: str, text: str) -> dict[str, object]:
     ticket = preflight.local_ticket(ref, text)
     return {
@@ -337,7 +346,11 @@ def main(argv: list[str]) -> int:
         return 2
     children: list[str] = []
     if options.action == "check":
-        refused = judge(root, options.ref, plan, gh=gh)[3]
+        parent, parts, label, refused = judge(root, options.ref, plan, gh=gh)
+        if parent is not None and not refused:
+            names = [f"part {number}" for number in range(1, len(parts) + 1)]
+            for index in range(len(parts)):
+                told(parent, parts, names, index=index, label=label)
     else:
         children, refused = apply(root, options.ref, plan, gh=gh)
     for line in refused:
