@@ -7,7 +7,7 @@ import pytest
 import documents
 import feature_preflight as preflight
 import split
-from tests.repos import repository
+from tests.repos import repository, snapshot
 
 PARENT_REF = ".scratch/f/issues/01-a.md"
 PARENT = "# 01: A\n\nStatus: ready-for-agent\n\n- [ ] It saves.\n- [ ] It lists.\n"
@@ -222,6 +222,7 @@ def test_a_part_resolves_and_passes_as_its_ticket_does_when_the_ref_is_on_the_ne
         assert f"\nSplit from: {PARENT_REF}\n{lines}\nBlocked by: " in (root / child).read_text(
             encoding="utf-8"
         )
+    snapshot(root, "docs(f): the parts")
     reports = [
         preflight.preflight(ref, root, base="main", branch=None, gh=tracker(None))
         for ref in [PARENT_REF, *children]

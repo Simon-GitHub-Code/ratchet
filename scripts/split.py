@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 import feature_preflight as preflight
 import gatelib
+import markdown_text
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import splits
@@ -18,7 +19,13 @@ from ratchet_guards import splits
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-INHERITED = ("## Parent", "## Conjecture", "## Operability", "## Answers")
+INHERITED = (
+    ("## Parent", preflight.section),
+    ("## Conjecture", preflight.section),
+    ("## Operability", preflight.section),
+    ("## Answers", markdown_text.section),
+)
+PARENT_TO_LINE_END = re.compile(f"{preflight.PARENT_LINE.pattern}.*", preflight.PARENT_LINE.flags)
 SLUG = re.compile(r"[^a-z0-9]+")
 
 
@@ -63,17 +70,17 @@ def parent_now(root: Path, ref: str, gh: preflight.Runner) -> preflight.Ticket |
 
 def child_body(parent: preflight.Ticket, part: Part, *, waits: list[str], label: str) -> str:
     sections = [
-        f"{heading}\n\n{preflight.section(parent.body, heading).strip()}\n"
-        for heading in INHERITED
-        if preflight.section(parent.body, heading).strip()
+        f"{heading}\n\n{read(parent.body, heading).strip()}\n"
+        for heading, read in INHERITED
+        if read(parent.body, heading).strip()
     ]
-    link = preflight.PARENT_LINE.search(parent.body)
+    link = PARENT_TO_LINE_END.search(parent.body)
     lines = [
         f"# {part.title}",
         "",
         *([f"**Status:** `{label}`", ""] if parent.ref.endswith(".md") else []),
         f"Split from: {parent.ref}",
-        *([parent.body[link.start() :].partition("\n")[0]] if link else []),
+        *([link.group()] if link else []),
         f"Blocked by: {', '.join(waits) if waits else 'none'}",
         "",
         "## What to build",
