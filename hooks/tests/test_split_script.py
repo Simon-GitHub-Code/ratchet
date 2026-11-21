@@ -155,8 +155,8 @@ SECTIONS = f"## Conjecture\n\nIt helps.\n\n## Operability\n\nFlag: none\n\n## An
 
 def test_a_part_carries_the_answers_word_for_word_after_the_other_inherited_sections() -> None:
     part = split.parts_of(HALVES)[0]
-    answers_first = f"## Answers\n\n{ANSWERS}\n## Operability\n\nFlag: none\n\n## Conjecture\n\nA.\n"
-    parent = preflight.local_ticket(PARENT_REF, f"{PARENT}\n{answers_first}")
+    first = f"## Answers\n\n{ANSWERS}\n## Operability\n\nFlag: none\n\n## Conjecture\n\nA.\n"
+    parent = preflight.local_ticket(PARENT_REF, f"{PARENT}\n{first}")
     text = split.child_body(parent, part, waits=[], label="L")
     assert text.endswith(f"## Answers\n\n{ANSWERS}")
     assert text.index("## Conjecture") < text.index("## Operability") < text.index("## Answers")
