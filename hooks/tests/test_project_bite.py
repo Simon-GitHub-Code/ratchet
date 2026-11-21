@@ -19,8 +19,10 @@ import pytest
 import conformance
 import gatelib
 import owed
+import parallel
 import project_bite
 import runrecord
+import schedule
 from tests import repos
 from tests.repos import branch, commit, git, repository, write
 from tests.servers import gone
@@ -44,12 +46,19 @@ def row(name: str, tier: str = "0", tool: str = "a tool") -> str:
 
 
 def project(
-    root: Path, gates: dict[str, str], registry: str | None, *, rows: str | None = None
+    root: Path,
+    gates: dict[str, str],
+    registry: str | None,
+    *,
+    rows: str | None = None,
+    speed: str = "",
 ) -> Path:
     cases = "".join(f"{name})\n{body}\n;;\n" for name, body in gates.items())
     table = TABLE + (rows if rows is not None else "".join(row(name) for name in gates))
     files = {
-        "docs/process/binding.md": f"# Binding\n\n## Gates\n\n{table}\n## Speed\n\n| a | b |\n",
+        "docs/process/binding.md": (
+            f"# Binding\n\n## Gates\n\n{table}\n## Speed\n\n| a | b |\n{speed}"
+        ),
         "gate": f'#!/bin/sh\ncase "$1" in\n{cases}esac\n',
         "src/code.txt": "clean\n",
         "tests/one.t": "a test\n",
@@ -1642,6 +1651,113 @@ def test_a_lane_is_named_on_the_lines_of_its_gates(
     assert lanes == {"0", "1"}
 
 
+def logged(name: str, partner: str = "", patience: int = 40) -> str:
+    meet = (
+        f'if [ ! -e "$MARK/{name}" ]; then touch "$MARK/{name}"; n=0;'
+        f' while [ ! -e "$MARK/{partner}" ] && [ "$n" -lt {patience} ];'
+        " do sleep 0.05; n=$((n+1)); done; fi"
+    )
+    mark = meet if partner else f'touch "$MARK/{name}"'
+    return (
+        f'printf "+ {name} %s\\n" "${{RATCHET_JOBS:-unset}}" >> "$LOG"\n{mark}\n'
+        f'printf "%s\\n" "- {name}" >> "$LOG"\n{LINT}'
+    )
+
+
+def ran_with(log: Path) -> tuple[set[frozenset[str]], dict[str, set[str]]]:
+    running: set[str] = set()
+    met: set[frozenset[str]] = set()
+    told: dict[str, set[str]] = {}
+    for line in log.read_text().splitlines():
+        sign, name, *jobs = line.split()
+        if sign == "-":
+            running.discard(name)
+            continue
+        met.update(frozenset((name, other)) for other in running)
+        running.add(name)
+        told.setdefault(name, set()).update(jobs)
+    return met, told
+
+
+SCHEDULED = {
+    "timed": logged("timed", "free"),
+    "first": logged("first", "second"),
+    "second": logged("second", "first"),
+    "free": logged("free"),
+    "other": logged("other"),
+}
+SCHEDULE = "- Apart: `first second`\n- Alone: `timed`\n"
+
+
+@pytest.fixture
+def scheduled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    log, mark = tmp_path / "log", tmp_path / "mark"
+    mark.mkdir()
+    monkeypatch.setenv("LOG", str(log))
+    monkeypatch.setenv("MARK", str(mark))
+    monkeypatch.setenv("RATCHET_JOBS", "8")
+    registry = "".join(bite(name, "a planted word") for name in SCHEDULED)
+    return project(tmp_path / "repo", SCHEDULED, registry, speed=SCHEDULE), log
+
+
+def kept_apart(met: set[frozenset[str]]) -> None:
+    assert frozenset(("first", "second")) not in met, "two gates stated apart ran at once"
+    beside = sorted(other for pair in met if "timed" in pair for other in pair - {"timed"})
+    assert beside == [], f"the alone gate ran beside {beside}"
+
+
+def test_the_proof_s_lanes_keep_the_binding_s_schedule_and_each_is_told_its_share_of_the_cores(
+    scheduled: tuple[Path, Path],
+) -> None:
+    root, log = scheduled
+    assert project_bite.main(["project_bite.py", "--root", str(root), "--jobs", "4"]) == 0
+    met, told = ran_with(log)
+    kept_apart(met)
+    shares = {name: {"2"} for name in ("first", "second", "free", "other")}
+    assert told == {**shares, "timed": {"8"}}
+
+
+def test_check_keeps_the_schedule_the_proof_reads_from_the_same_binding(
+    scheduled: tuple[Path, Path],
+) -> None:
+    root, log = scheduled
+    command = ["parallel.py", "--runner", "sh gate", "--root", str(root), "--jobs", "4"]
+    assert parallel.main([*command, "--", *SCHEDULED]) == 0
+    met, _ = ran_with(log)
+    kept_apart(met)
+    statement = schedule.stated((root / gatelib.BINDING).read_text())
+    assert all(statement.beside(*pair) for pair in met)
+
+
+def test_a_red_before_its_fault_beside_another_lane_names_what_ran_beside_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    mark = tmp_path / "mark"
+    mark.mkdir()
+    monkeypatch.setenv("LOG", str(tmp_path / "log"))
+    monkeypatch.setenv("MARK", str(mark))
+    gates = {
+        "broken": f"{logged('broken', 'partner', 600)}\necho broken; exit 1",
+        "partner": logged("partner", "broken", 600),
+    }
+    registry = "".join(bite(name, "a planted word") for name in gates)
+    root = project(tmp_path / "repo", gates, registry)
+    assert project_bite.main(["project_bite.py", "--root", str(root), "--jobs", "2"]) == 1
+    out = shown(capsys)
+    assert "bite: broken: a planted word: RED BEFORE THE FAULT\n" in out
+    assert f"  {project_bite.BESIDE.format(gates='partner', gate='broken')}\n" in out
+    assert "bite: partner: a planted word: bites\n" in out
+
+
+def test_only_a_verdict_a_neighbour_could_cause_names_the_gates_beside_it() -> None:
+    (planted,) = project_bite.read_registry(bite("lint", "a planted word"))[0].bites
+    note = project_bite.BESIDE.format(gates="e2e, load", gate="lint")
+    for verdict in project_bite.Verdict:
+        lines = project_bite.Outcome(planted, verdict, "why", beside=("e2e", "load")).lines()
+        assert (note in lines) is (verdict in project_bite.CONTENDED), verdict
+    assert note not in project_bite.Outcome(planted, project_bite.Verdict.RED_BEFORE).lines()
+
+
 @pytest.mark.parametrize(
     "gate",
     [
@@ -1710,9 +1826,9 @@ def test_with_no_ceiling_at_all_a_run_is_limited_to_the_default(
     limits: set[float | None] = set()
     run = project_bite.Shell.run
 
-    def watch(*args: object) -> project_bite.Run:
+    def watch(*args: object, **kwargs: int) -> project_bite.Run:
         limits.add(args[3])  # type: ignore[arg-type]
-        return run(*args)  # type: ignore[arg-type]
+        return run(*args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(project_bite.Shell, "run", watch)
     assert prove(root) == 0
@@ -2023,8 +2139,8 @@ def test_a_fault_is_slow_only_when_it_took_more_than_the_tier0_ceiling(
     commit(root, "thresholds")
     run = project_bite.Shell.run
 
-    def timed(*args: object) -> project_bite.Run:
-        return run(*args)._replace(seconds=each)  # type: ignore[arg-type]
+    def timed(*args: object, **kwargs: int) -> project_bite.Run:
+        return run(*args, **kwargs)._replace(seconds=each)  # type: ignore[arg-type]
 
     monkeypatch.setattr(project_bite.Shell, "run", timed)
     assert prove(root) == 0

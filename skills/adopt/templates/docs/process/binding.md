@@ -312,7 +312,12 @@ What the change-size gate reads to count tests apart from product code (ADR 0045
 
 How this repository stays fast, from the first commit (the Speed section of `skills/method/tiers.md` in the `ratchet` plugin). One line per concept, each saying how this stack meets it; the conformance gate is red while a line is missing or unfilled. The `Shards` line holds a whole number and nothing else: the CI workflows read it and run each long gate as that many jobs, so adding runners is this one number.
 
-- Parallel: <how the suite uses every core on a developer's machine and in CI, what keeps the tests isolated enough for that, and which gates share state and so run one after another (the `justfile`'s `serial` variables; none until a tier's gates run red in parallel and green alone)>
+The `Apart`, `Alone` and `Wide` lines are the one statement of how the gates share the machine, and `parallel.py` and the bite proof both read them (ADR 0086). Each code span of `Apart` is a group of gates that never run at once, such as two that write one file or bind one port; `Alone` names the gates that run with nothing beside them, such as one that judges elapsed time or takes every core; `Wide` names the gates that are themselves parallel, which a tier run tells their share of its jobs in `RATCHET_JOBS`. Each proof lane is told its share of the cores in `RATCHET_JOBS`, and an `Alone` gate every core. The `justfile`'s `serial` and `alone` variables say the same; where a run's flags differ from these lines, the runner says so and these lines win.
+
+- Parallel: <how the suite uses every core on a developer's machine and in CI, what keeps the tests isolated enough for that, and how the suite takes its worker count from `RATCHET_JOBS` when a runner sets it>
+- Apart: `coverage mutation-changed`
+- Alone: `perf` `load` `mutation` `test-stability`
+- Wide: <each gate that is itself parallel, such as the suite, as a code span; leave this placeholder while none is>
 - One pipeline: <CI calls the entry points above and nothing else, so a red job is reproduced by its one command; or the pipeline engine that runs the same definition in both places>
 - Shards: 1
 - Cache: <the lockfiles and tool configs each CI cache is keyed on, the tool caches it restores, and the caches the tools keep locally>

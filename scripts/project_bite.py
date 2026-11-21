@@ -5,7 +5,6 @@ import argparse
 import contextlib
 import functools
 import os
-import queue
 import re
 import shlex
 import shutil
@@ -30,6 +29,7 @@ import owed
 import plugin_pin
 import report
 import runrecord
+import schedule
 import suites
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
@@ -51,6 +51,7 @@ REAL_TREE = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "VIRTUA
 IDENTITY = ("-c", "user.name=bite", "-c", "user.email=bite@example.invalid")
 COMMIT = (*IDENTITY, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m")
 BITING = "RATCHET_BITING"
+JOBS = "RATCHET_JOBS"
 SNAPSHOT = ".git/bite-index"
 FRESH = ".git/bite-fresh-index"
 MAX_LINK_HOPS = 40
@@ -851,7 +852,10 @@ class Shell:
         self.live: set[subprocess.Popen[bytes]] = set()
         self.stopped = False
 
-    def run(self, command: Sequence[str], cwd: Path, limit: float | None = None) -> Run:
+    def run(
+        self, command: Sequence[str], cwd: Path, limit: float | None = None, *, jobs: int = 0
+    ) -> Run:
+        share = {JOBS: str(jobs)} if jobs else {}
         with tempfile.TemporaryFile() as log:
             with self.lock:
                 if self.stopped:
@@ -860,7 +864,7 @@ class Shell:
                     process = subprocess.Popen(
                         command,
                         cwd=cwd,
-                        env=environment(),
+                        env=environment() | share,
                         stdin=subprocess.DEVNULL,
                         stdout=log,
                         stderr=subprocess.STDOUT,
@@ -926,6 +930,13 @@ class Verdict(Enum):
     TIMED_OUT = "TIMED OUT"
 
 
+CONTENDED = (Verdict.RED_BEFORE, Verdict.OTHER_REASON, Verdict.NOT_PROVEN, Verdict.TIMED_OUT)
+BESIDE = (
+    "other lanes ran {gates} while this gate ran; if `--gate {gate} --jobs 1` bites, state the"
+    " gates that cannot share the machine in the binding's Speed section, `- Apart:` or `- Alone:`"
+)
+
+
 @dataclass(frozen=True)
 class Outcome:
     bite: Bite
@@ -935,6 +946,7 @@ class Outcome:
     lane: int = 0
     red_seconds: float = 0.0
     slower: float = 0.0
+    beside: tuple[str, ...] = ()
 
     def lines(self) -> str:
         note = f"; {self.slower:.1f}x this gate's fastest green run" if self.slower > SLOW else ""
@@ -942,7 +954,10 @@ class Outcome:
             f"bite: {self.bite.gate}: {self.bite.name}: {self.verdict.value}"
             f" ({self.seconds:.1f}s, lane {self.lane}{note})"
         )
-        return "\n".join([head, *(f"  {line}" for line in self.detail.splitlines())])
+        detail = self.detail.splitlines()
+        if self.beside and self.verdict in CONTENDED:
+            detail.append(BESIDE.format(gates=", ".join(self.beside), gate=self.bite.gate))
+        return "\n".join([head, *(f"  {line}" for line in detail)])
 
     def record(self) -> dict[str, object]:
         return {
@@ -1033,18 +1048,18 @@ class Copy:
             self.tree.put(path, mode, content)
         contained(self.path, self.head)
 
-    def run(self, command: Sequence[str], limit: float) -> Run:
-        result = self.shell.run(command, self.path, limit)
+    def run(self, command: Sequence[str], limit: float, jobs: int) -> Run:
+        result = self.shell.run(command, self.path, limit, jobs=jobs)
         self.restore()
         return result
 
-    def prove(self, row: Row, bites: Sequence[Bite]) -> Iterator[Outcome]:
+    def prove(self, row: Row, bites: Sequence[Bite], *, jobs: int = 0) -> Iterator[Outcome]:
         outcomes: list[Outcome] = []
         greens: list[float] = []
         for bite in bites:
             if self.shell.stopped:
                 return
-            before = self.unfaulted(row, bite.args, outcomes, greens=greens)
+            before = self.unfaulted(row, bite.args, outcomes, greens=greens, jobs=jobs)
             green = before.output
             if before.code != 0:
                 verdict = Verdict.TIMED_OUT if before.timed_out else Verdict.RED_BEFORE
@@ -1067,7 +1082,7 @@ class Copy:
                     self.outcome(bite, Verdict.NOT_PLANTED, detail=why, seconds=before.seconds)
                 )
                 continue
-            planted = self.run([*shlex.split(row.command), *bite.args], row.limit)
+            planted = self.run([*shlex.split(row.command), *bite.args], row.limit, jobs)
             judged = judge(bite, green, planted)
             outcomes.append(
                 replace(
@@ -1078,7 +1093,7 @@ class Copy:
                 )
             )
         for args in dict.fromkeys(o.bite.args for o in outcomes if o.verdict is Verdict.BITES):
-            self.unfaulted(row, args, outcomes, greens=greens)
+            self.unfaulted(row, args, outcomes, greens=greens, jobs=jobs)
         fastest = min(greens, default=0.0)
         if not self.shell.stopped:
             yield from (
@@ -1094,9 +1109,15 @@ class Copy:
         return Outcome(bite, verdict, detail, seconds, self.lane, red)
 
     def unfaulted(
-        self, row: Row, args: tuple[str, ...], outcomes: list[Outcome], *, greens: list[float]
+        self,
+        row: Row,
+        args: tuple[str, ...],
+        outcomes: list[Outcome],
+        *,
+        greens: list[float],
+        jobs: int,
     ) -> Run:
-        result = self.run([*shlex.split(row.command), *args], row.limit)
+        result = self.run([*shlex.split(row.command), *args], row.limit, jobs)
         if result.code == 0:
             greens.append(result.seconds)
         else:
@@ -1278,25 +1299,39 @@ def recorded_slow(root: Path) -> list[str]:
     return lines
 
 
+def next_task(board: schedule.Board[int], ready: threading.Condition, shell: Shell) -> int | None:
+    with ready:
+        while (task := board.take()) is None and board.pending and not shell.stopped:
+            ready.wait(WAKE)
+        return task
+
+
 def run_lanes(
     root: Path, registry: Registry, tasks: Sequence[Task], *, lanes: int, limit: float
 ) -> list[Outcome]:
     stamp = runrecord.stamp(root)
-    pending: queue.SimpleQueue[Task] = queue.SimpleQueue()
-    for row, bites in tasks:
-        pending.put((replace(row, limit=limit), bites))
+    limited = [(replace(row, limit=limit), bites) for row, bites in tasks]
+    kept = schedule.stated(gatelib.read_text(root / gatelib.BINDING) or "")
+    board = schedule.Board(range(len(limited)), kept, lambda task: limited[task][0].gate)
+    cores = gatelib.default_jobs(root)
+    ready = threading.Condition()
     shell = Shell()
     printing = threading.Lock()
 
     def lane(number: int, path: Path, made: Copy | None) -> list[Outcome]:
         copy = made or make_copy(root, path, registry=registry, shell=shell, lane=number)
         outcomes: list[Outcome] = []
-        while not shell.stopped:
+        while not shell.stopped and (task := next_task(board, ready, shell)) is not None:
+            row, bites = limited[task]
+            share = kept.share(row.gate, cores=cores, lanes=lanes)
             try:
-                row, bites = pending.get_nowait()
-            except queue.Empty:
-                break
-            for outcome in copy.prove(row, bites):
+                proved = list(copy.prove(row, bites, jobs=share))
+            finally:
+                with ready:
+                    beside = board.done(task)
+                    ready.notify_all()
+            for found in proved:
+                outcome = replace(found, beside=beside)
                 with printing:
                     print(outcome.lines(), flush=True)
                     record = {**outcome.record(), **stamp}
