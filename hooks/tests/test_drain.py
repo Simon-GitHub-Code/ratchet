@@ -21,13 +21,14 @@ from hypothesis import strategies as st
 
 import drain
 import hooks_installed
+import merge
 import merge_ready
 import owed
 import queue_notes
 import triggers
 from tests import servers
 from tests.repos import commit, git, hook_script, repository, write
-from tests.test_merge_ready import GLOSSARY, MANIFEST
+from tests.test_merge_ready import FUZZ, GATES, GLOSSARY, MANIFEST
 
 Out = pytest.CaptureFixture[str]
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
@@ -592,6 +593,31 @@ def test_land_leaves_the_branch_to_the_owner_with_the_judges_reasons(
     assert states(root)[BRANCH_A] == "held", (
         "a ticket left to the owner is held until its text changes, not landed again"
     )
+
+
+def test_land_waits_on_an_unproven_tip_and_lands_once_merge_deep_proved_it(
+    tmp_path: Path, capsys: Out
+) -> None:
+    proved = binding(MERGE) + "| check-deep | `true` |\n" + GATES + FUZZ
+    bound = "[ceilings.deep]\nunproven = 0\n"
+    root = project(
+        tmp_path, **{"docs/process/binding.md": proved, "quality/thresholds.toml": bound}
+    )
+    run(root, "open", ALPHA)
+    change = {"src/b.py": "B = 1\n", ALPHA: ticket(1, "Alpha", status="resolved")}
+    build(root, BRANCH_A, change, record=approval("alpha"))
+    capsys.readouterr()
+    assert run(root, "land", ALPHA) == 1
+    out = capsys.readouterr().out
+    assert "merge: wait\nunproven: no finished deep run covers" in out
+    assert "the owner types" not in out
+    kept = note(root, BRANCH_A)
+    assert kept["outcome"] == "waits"
+    assert [queue_notes.code_of(reason) for reason in kept["reasons"]] == ["unproven"]
+    assert states(root)[BRANCH_A] != "held", "a wait is retried, not left to the owner"
+    assert merge.main(["merge", "--deep", "--root", str(root)]) == 0
+    assert run(root, "land", ALPHA) == 0
+    assert note(root, BRANCH_A)["outcome"] == "merged"
 
 
 def test_land_needs_the_merge_entry_point_and_no_forge(tmp_path: Path, capsys: Out) -> None:
