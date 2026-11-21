@@ -1,7 +1,9 @@
+import json
 import os
 import re
 import shutil
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -10,7 +12,7 @@ import commits
 import conformance
 import feature_preflight as preflight
 import snapshots
-from tests.repos import commit, repository, write
+from tests.repos import commit, install_hooks, repository, write
 
 SKILLS = Path(__file__).resolve().parents[2] / "skills"
 INIT = (SKILLS / "init/SKILL.md").read_text(encoding="utf-8")
@@ -585,6 +587,63 @@ def test_a_redraft_keeps_the_answers_and_shows_the_owner_what_changed() -> None:
     assert "the old words under *Was* and the new under *Now*" in step_5
     records = flat("method/records.md")
     assert "keeps every line under `## Answers`, asks only the forks the change opened" in records
+
+
+SPLIT_BINDING = (
+    "# Binding\n\n- Life events: depended-on\n\n## Gates\n\n- Application types: service\n"
+)
+SPLIT_CONJECTURE = (
+    "## Conjecture\n\nParse the ticket once in a script; the refuter is a green run on a ticket"
+    " without a label. Alternatives: an agent reads it (killed: it spawns first).\n\n"
+)
+SPLIT_SPEC = (
+    f"# Notes\n\n## Solution\n\nX.\n\n{SPLIT_CONJECTURE}## Operability\n\n"
+    "- Flag: `notes`, off until the owner switches it on\n- Signal: a span per request\n"
+    "- Load: the list route joins the load smoke\n- Security: one read route and no new input\n"
+)
+SPLIT_TICKET = "Parent: #12\n\n## What to build\n\nThe list.\n\n## Acceptance criteria\n\n- [ ] a\n"
+SPLIT_PART = (
+    "Split from: #13\nBlocked by: none\n\n## What to build\n\nThe list, part 2.\n\n"
+    f"## Acceptance criteria\n\n- [ ] b\n\n{SPLIT_CONJECTURE}"
+    "## Size\n\n- Product lines: 40\n- Product files: 2\n"
+)
+
+
+def split_forge(part: str) -> preflight.Runner:
+    bodies = {"12": SPLIT_SPEC, "13": SPLIT_TICKET, "21": part}
+
+    def gh(args: Sequence[str]) -> str | None:
+        if list(args[:2]) != ["issue", "view"] or args[2] not in bodies:
+            return None
+        return json.dumps(
+            {
+                "number": int(args[2]),
+                "title": f"Issue {args[2]}",
+                "body": bodies[args[2]],
+                "labels": [{"name": "ready-for-agent"}],
+                "state": "OPEN",
+            }
+        )
+
+    return gh
+
+
+def test_a_part_that_names_no_parent_is_given_its_tickets_parent_line_before_nothing_is_left(
+    tmp_path: Path,
+) -> None:
+    root = repository(tmp_path, {"docs/process/binding.md": SPLIT_BINDING})
+    install_hooks(root)
+    unlinked = preflight.preflight("21", root, base="main", branch=None, gh=split_forge(SPLIT_PART))
+    assert [failure.check for failure in unlinked.failures] == ["operability"]
+    linked = preflight.preflight(
+        "21", root, base="main", branch=None, gh=split_forge(f"Parent: #12\n{SPLIT_PART}")
+    )
+    assert linked.ok, linked.failures
+    step_1 = conjecture_step(1).lower()
+    after = step_1.split("there is nothing to write", 1)[1]
+    nothing_to_write = after.split("say so and stop", 1)[0]
+    assert "a part that still lacks the `parent:` line step 4 gives it" in nothing_to_write
+    assert "write that line alone as step 4 says" in nothing_to_write
 
 
 def test_the_conjecture_names_one_shared_spec_and_no_dead_clause() -> None:

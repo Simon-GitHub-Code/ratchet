@@ -156,6 +156,19 @@ def test_every_registered_question_is_a_product_question_in_plain_words() -> Non
         assert METHOD_TERMS.search(entry.text) is None, f"{entry.key}: {entry.text}"
 
 
+def test_the_conjecture_alone_asks_whether_new_behaviour_arrives_switched_off() -> None:
+    assert registry()["conjecture.flag"] == Entry(
+        key="conjecture.flag",
+        table="ask",
+        skills=("conjecture",),
+        kind="product",
+        text=(
+            "<what this adds, as someone using it would notice it>: should it stay hidden until"
+            " you switch it on, or appear as soon as it is finished?"
+        ),
+    )
+
+
 def plant(tmp_path: Path, page: str, registered: str = "") -> list[str]:
     skill = tmp_path / "skills/demo/SKILL.md"
     skill.parent.mkdir(parents=True)
