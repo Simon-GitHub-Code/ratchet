@@ -10,7 +10,7 @@ import feature_preflight as preflight
 import split
 from ratchet_guards import splits
 from tests.repos import branch, repository, snapshot
-from tests.test_merge_ready import BASE, SPEC, TICKET, change, judged
+from tests.test_merge_ready import BASE, FROZEN, SPEC, TICKET, change, judged
 
 PARENT_REF = ".scratch/f/issues/01-a.md"
 PARENT = "# 01: A\n\nStatus: ready-for-agent\n\n- [ ] It saves.\n- [ ] It lists.\n"
@@ -402,6 +402,14 @@ def test_a_part_reads_its_tickets_answers_and_parent_or_is_written_as_before_and
             )
 
 
+LINKS = {
+    "parts": [
+        {"title": "Save", "promises": ["It saves a link."]},
+        {"title": "List", "promises": ["It lists links."], "after": [0]},
+    ]
+}
+
+
 @pytest.mark.parametrize(
     ("text", "said"),
     [
@@ -412,19 +420,19 @@ def test_a_part_reads_its_tickets_answers_and_parent_or_is_written_as_before_and
     ids=["a promise after a level-one heading", "a checked line in the answers", "plain answers"],
 )
 def test_the_judge_accepts_the_parts_a_passing_plan_makes_and_the_split_says_what_it_left_out(
-    tmp_path: Path, capsys: Out, text: str, *, said: bool
+    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory, capsys: Out, *, text: str, said: bool
 ) -> None:
     repository(tmp_path, {**BASE, SPEC: "# Thing\n\nStatus: ready-for-agent\n", TICKET: text})
     branch(tmp_path, "records-thing")
-    plan = {
-        "parts": [
-            {"title": "Save", "promises": ["It saves a link."]},
-            {"title": "List", "promises": ["It lists links."], "after": [0]},
-        ]
-    }
-    children, refused = split.apply(tmp_path, TICKET, plan, gh=tracker(None))
+    plan = tmp_path_factory.mktemp("plan") / "plan.json"
+    plan.write_text(json.dumps(LINKS), encoding="utf-8")
+    argv = ["split", "check", TICKET, "--plan", str(plan), "--root", str(tmp_path), "--offline"]
+    assert split.main(argv) == 0
+    checked = capsys.readouterr().out.splitlines()[:-1]
+    children, refused = split.apply(tmp_path, TICKET, LINKS, gh=tracker(None))
     assert refused == []
     told = capsys.readouterr().out.splitlines()
+    assert checked == told, "the check says before the split what the split will leave out"
     bodies = {child: (tmp_path / child).read_text(encoding="utf-8") for child in children}
     if said:
         assert [line.partition(":")[2].partition(" does")[0] for line in told] == [
@@ -438,6 +446,102 @@ def test_the_judge_accepts_the_parts_a_passing_plan_makes_and_the_split_says_wha
         assert all(documents.answers_of(b) == documents.answers_of(text) for b in bodies.values())
     change(tmp_path, bodies, record=False)
     assert judged(tmp_path) == []
+
+
+CARRIED = (
+    "# 01: A\n\nStatus: ready-for-agent\n\nParent: ../spec.md\n\n- [ ] It saves a link.\n"
+    "- [ ] It lists links.\n\n## Conjecture\n\nIt helps people come back later.\n\n"
+    "## Operability\n\nFlag: none: it is a script.\n\n## Answers\n\n"
+    "- 2026-11-01: Should it arrive switched off? No.\n- 2026-11-02: A or B? A.\n"
+)
+SAVE = ".scratch/thing/issues/02-save.md"
+LIST = ".scratch/thing/issues/03-list.md"
+GIVEN = (
+    f"{SAVE} gives a part the agent-ready label `ready-for-agent`, which is the owner's act when "
+)
+DIFFERS = "its {} is not the one " + TICKET + " has on the default branch"
+ANSWERS_DIFFER = DIFFERS.format("`## Answers` section")
+TAMPERED = {
+    "names another spec": (
+        CARRIED,
+        lambda b: b.replace("Parent: ../spec.md", f"Parent: {OTHER}"),
+        DIFFERS.format("`Parent:` line"),
+    ),
+    "adds an answer": (CARRIED, lambda b: b + "- 2026-11-09: Off? Yes.\n", ANSWERS_DIFFER),
+    "drops an answer": (
+        CARRIED,
+        lambda b: b.replace("- 2026-11-02: A or B? A.\n", ""),
+        ANSWERS_DIFFER,
+    ),
+    "rewords an answer": (CARRIED, lambda b: b.replace("? No.", "? No, *on*."), ANSWERS_DIFFER),
+    "changes the conjecture": (
+        CARRIED,
+        lambda b: b.replace("It helps people", "It helps nobody"),
+        DIFFERS.format("`## Conjecture` section"),
+    ),
+    "changes the operability": (
+        CARRIED,
+        lambda b: b.replace("Flag: none: it is a script.", "Flag: `links`, off until switched on"),
+        DIFFERS.format("`## Operability` section"),
+    ),
+    "leaves out what the split carries": (
+        CARRIED,
+        lambda b: b.replace("Parent: ../spec.md\n", "").partition("\n## Answers")[0],
+        f"it has no `Parent:` line and {TICKET} has one on the default branch",
+    ),
+    "carries what the split leaves out": (
+        SAID,
+        lambda b: (
+            b.replace("Blocked by:", "Parent: ../spec.md\nBlocked by:")
+            + "\n## Answers\n\n- 2026-11-01: Should it arrive switched off? Yes.\n"
+        ),
+        (
+            f"it has a `Parent:` line and the split writes none from {TICKET} on the default"
+            " branch, because the copied text would change the part's promises the judge counts"
+        ),
+    ),
+    "carries answers its ticket lacks": (
+        PLAINLY.replace("\n## Answers\n\n- 2026-11-01: Should it arrive switched off? Yes.\n", ""),
+        lambda b: b + "\n## Answers\n\n- 2026-11-01: Should it arrive switched off? Yes.\n",
+        f"it has a `## Answers` section and {TICKET} has none on the default branch",
+    ),
+}
+
+
+def split_into_parts(root: Path, ticket: str) -> dict[str, str]:
+    specs = {SPEC: "# Thing\n\nStatus: ready-for-agent\n", ".scratch/other/spec.md": "# O\n"}
+    repository(root, {**BASE, **specs, TICKET: ticket})
+    branch(root, "records-thing")
+    children, refused = split.apply(root, TICKET, LINKS, gh=tracker(None))
+    assert (children, refused) == ([SAVE, LIST], [])
+    return {child: (root / child).read_text(encoding="utf-8") for child in children}
+
+
+@pytest.mark.parametrize("name", list(TAMPERED))
+def test_the_judge_gives_the_owner_a_part_whose_inherited_text_is_not_what_the_split_writes(
+    tmp_path: Path, name: str
+) -> None:
+    ticket, tamper, said = TAMPERED[name]
+    bodies = split_into_parts(tmp_path, ticket)
+    change(tmp_path, {**bodies, SAVE: tamper(bodies[SAVE])}, record=False)
+    [reason] = judged(tmp_path)
+    assert f"{GIVEN}{said}" in reason
+    assert LIST not in reason, "the untouched part keeps its label"
+
+
+def test_a_part_is_judged_against_its_ticket_on_the_default_branch_not_as_the_change_edits_it(
+    tmp_path: Path,
+) -> None:
+    bodies = split_into_parts(tmp_path, CARRIED)
+    added = "- 2026-11-09: Off? Yes.\n"
+    change(
+        tmp_path,
+        {TICKET: CARRIED + added, **{path: body + added for path, body in bodies.items()}},
+        record=False,
+    )
+    [reason] = judged(tmp_path)
+    assert f"{TICKET} {FROZEN}" in reason
+    assert f"{GIVEN}{ANSWERS_DIFFER}" in reason
 
 
 @pytest.mark.parametrize(

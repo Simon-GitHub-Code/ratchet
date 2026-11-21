@@ -210,7 +210,7 @@ By the default branch's manifest no guard group holds the first three and only `
 
 Among records alone the owner merges:
 
-- a ticket change that gives the agent-ready label (other than to a part split from a labelled ticket that keeps to its promises), takes the number of another ticket beside it, or closes a ticket
+- a ticket change that gives the agent-ready label (other than to a part split from a labelled ticket that keeps to its promises and whose `Parent:` line, `## Parent`, `## Conjecture`, `## Operability` and `## Answers` are word for word what the split writes from that ticket on the default branch), takes the number of another ticket beside it, or closes a ticket
 - any change to a labelled ticket, other than its `Parent:` and `Blocked by:` lines rewritten to name the same files
 - any change to the spec a labelled ticket inherits from
 - any change to whether a ticket a labelled ticket is blocked by is open

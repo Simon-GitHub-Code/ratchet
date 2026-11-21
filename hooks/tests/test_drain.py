@@ -2189,7 +2189,8 @@ def test_a_split_killed_between_its_parts_and_a_part_edited_lands_each_part_once
         with pytest.raises(Killed):
             run(root, "split", ALPHA, "--plan", plan)
     first = root / ISSUES / "04-save.md"
-    first.write_text(first.read_text(encoding="utf-8") + "\nThe owner's note.\n", encoding="utf-8")
+    noted = first.read_text(encoding="utf-8") + "\n## Notes\n\nThe owner's note.\n"
+    first.write_text(noted, encoding="utf-8")
     assert run(root, "split", ALPHA, "--plan", plan) == 0
     landed_parts(root, [f"{ISSUES}/04-save.md", f"{ISSUES}/05-list.md"])
     assert "The owner's note." in git(root, "show", f"main:{ISSUES}/04-save.md")
@@ -2631,7 +2632,9 @@ HOOK_ACTIONS = {
     "refuses": "exit 1",
     "stages": f"printf x > {HOOKED} && git add -- {HOOKED}",
     "writes": f"printf x > {HOOKED}",
-    "edits a part": f"for f in {ISSUES}/*-save.md; do printf 'edited\\n' >> \"$f\"; done",
+    "edits a part": (
+        f"for f in {ISSUES}/*-save.md; do printf '\\n## Notes\\n\\nedited\\n' >> \"$f\"; done"
+    ),
 }
 COMMITS = (
     '[ -n "$HOOKED" ] && exit 0\n'
@@ -2760,7 +2763,9 @@ def one_exit(
         for part in (root / ISSUES).glob("*.md"):
             name = part.relative_to(root).as_posix()
             if PART_PATH.fullmatch(name) and not raw(root, "ls-files", "--", name):
-                part.write_text(part.read_text(encoding="utf-8") + "The owner's edit.\n")
+                part.write_text(
+                    part.read_text(encoding="utf-8") + "\n## Notes\n\nThe owner's edit.\n"
+                )
     kept = hooks_made(root)
     again = run(root, "split", ALPHA, "--plan", plan)
     printed = capsys.readouterr().out
