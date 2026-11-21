@@ -27,12 +27,13 @@ _UPSTREAM = "@{upstream}"
 _REMOTE_DEFAULTS = MAIN_BRANCHES | {"HEAD"}
 
 
-def _asks(call: Invocation) -> list[Verdict]:
-    return [Verdict("merge-default", " ".join(("git", call.subcommand, *call.args)))]
+def _asks(call: Invocation, guard: Guard) -> list[Verdict]:
+    detail = " ".join(("git", call.subcommand, *call.args))
+    return [guard.merging("merge-default", detail, call.cwd)]
 
 
 def _tracks(names: Sequence[str], call: Invocation, context: Context, *, guard: Guard) -> bool:
-    if context.unread or context.unsettled:
+    if context.unread or context.unsettled or call.configs:
         return False
     defaults = guard.defaults(context, call.cwd)
     mains = sorted(guard.branches(context, call.cwd) & defaults)
@@ -49,8 +50,7 @@ def merge(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     if options.flags & _RESUMES:
         return []
     names = options.operands or (_UPSTREAM,)
-    synced = "--ff-only" in options.flags and _tracks(names, call, context, guard=guard)
-    return [] if synced else _asks(call)
+    return [] if _tracks(names, call, context, guard=guard) else _asks(call, guard)
 
 
 def pull(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
@@ -59,18 +59,18 @@ def pull(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     repository, *refspecs = scan(call.args, _PULL).operands or (REMOTE,)
     sources = [spec.removeprefix("+").partition(":")[0] for spec in refspecs]
     named = {source.removeprefix("refs/heads/") for source in sources}
-    remote = repository == REMOTE and named <= _REMOTE_DEFAULTS
+    remote = repository == REMOTE and named <= _REMOTE_DEFAULTS and not call.configs
     return (
         []
         if remote and (named or _tracks([_UPSTREAM], call, context, guard=guard))
-        else _asks(call)
+        else _asks(call, guard)
     )
 
 
 def cherry_pick(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     resumes = set(expand_long(call.args, _RESUMES)) & _RESUMES
-    return [] if resumes or not guard.on_main(context, call.cwd) else _asks(call)
+    return [] if resumes or not guard.on_main(context, call.cwd) else _asks(call, guard)
 
 
 def read_tree(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    return _asks(call) if guard.on_main(context, call.cwd) else []
+    return _asks(call, guard) if guard.on_main(context, call.cwd) else []

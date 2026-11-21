@@ -16,7 +16,7 @@ from ratchet_guards.context import Guard
 from ratchet_guards.manifest import COMMITTED, EMPTY, MANIFEST_PATH, parse
 from ratchet_guards.paths import Checkout
 from ratchet_guards.verdict import RULES, Decision, Verdict
-from tests.support import MANIFEST_TEXT, PLUGIN_ROOT, ROOT, FakeRepo, make_guard
+from tests.support import MANIFEST_TEXT, PLUGIN_ROOT, ROOT, FakeFilesystem, FakeRepo, make_guard
 
 SHIM = PLUGIN_ROOT / "hooks/guard.py"
 
@@ -114,7 +114,8 @@ def test_the_local_guard_reads_git(tmp_path: Path) -> None:
 
 
 def test_bash_takes_the_strictest_verdict() -> None:
-    verdict = hook.decide(payload("Bash", command="gh pr merge 1 && git push -f"), make_guard())
+    command = "gh issue edit 4 --add-label agent:ready && git push -f"
+    verdict = hook.decide(payload("Bash", command=command), make_guard())
     assert verdict == Verdict("force-push", "git push -f")
 
 
@@ -160,19 +161,6 @@ def test_reasons_and_output_shape() -> None:
             ),
         }
     }
-    ask = json.loads(hook.respond(Verdict("merge-pr", "gh pr merge")))["hookSpecificOutput"]
-    assert ask["permissionDecision"] == "ask"
-    assert ask["permissionDecisionReason"] == (
-        "Ratchet: an agent asks to run a tool call that merges a pull request: gh pr merge. "
-        f"{RULES['merge-pr'].way_out} Approve only if you have read them and want this change "
-        "in now."
-    )
-    merge = hook.reason(Verdict("merge-default", "git merge feat/x"))
-    assert merge == (
-        "Ratchet: an agent asks to run a tool call that merges another branch into the default "
-        f"branch: git merge feat/x. {RULES['merge-default'].way_out} Approve only if you have "
-        "read them and want this change in now."
-    )
     unreadable = hook.reason(Verdict("unreadable", "the hook input is not a JSON object"))
     assert unreadable == (
         "Ratchet: The guard could not check this tool call (the hook input is not a JSON "
@@ -184,6 +172,63 @@ def test_reasons_and_output_shape() -> None:
         "decide (0001-x.md gets the status `agent:ready`). Allow it?"
     )
     assert hook.respond(None) == ""
+
+
+def unadopted(branch: str = "feat/work") -> Guard:
+    filesystem = FakeFilesystem(manifest=EMPTY, guarded=(), unguarded=(ROOT,))
+    return make_guard(FakeRepo(branch=branch), filesystem, EMPTY)
+
+
+def answered(command: str, guard: Guard) -> dict[str, str]:
+    printed = hook.run(json.dumps(payload("Bash", command=command)), lambda: guard)
+    return json.loads(printed)["hookSpecificOutput"]
+
+
+def test_a_merge_where_nothing_is_adopted_asks_the_owner_in_the_words_it_always_did() -> None:
+    assert answered("gh pr merge 5", unadopted()) == {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "ask",
+        "permissionDecisionReason": (
+            "Ratchet: an agent asks to run a tool call that merges a pull request: gh pr merge. "
+            "The merge job merges a pull request by itself once its checks pass and nothing in "
+            "it needs you. Once they pass, it comments on the pull request with each reason it "
+            "waits for you, one a line, and `just merge-ready --head <branch>` prints the same "
+            "reasons here. Approve only if you have read them and want this change in now."
+        ),
+    }
+    assert answered("git merge --no-ff feat/x", unadopted("main")) == {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "ask",
+        "permissionDecisionReason": (
+            "Ratchet: an agent asks to run a tool call that merges another branch into the "
+            "default branch: git merge --no-ff feat/x. The `merge` command merges a branch by "
+            "itself when the checks pass and nothing in it needs you; `just merge-ready --head "
+            "<branch>` prints each reason this one would wait for you, one a line. Approve only "
+            "if you have read them and want this change in now."
+        ),
+    }
+
+
+def test_a_merge_an_agent_types_where_the_method_is_adopted_is_refused_with_the_way_out() -> None:
+    pull_request = answered("gh pr merge 5", make_guard())
+    assert pull_request == {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": (
+            "Ratchet guard denied this tool call; no part of it ran. It merges a pull request, "
+            "which in a project on the method only the merge job or the owner does: gh pr merge. "
+            f"{RULES['merge-pr'].way_out} If the call also did unrelated work, redo that in a "
+            "tool call of its own."
+        ),
+    }
+    default = answered("git merge --no-ff feat/x", make_guard(FakeRepo(branch="main")))
+    assert default["permissionDecision"] == "deny"
+    assert default["permissionDecisionReason"].startswith(
+        "Ratchet guard denied this tool call; no part of it ran. It merges another branch into "
+        "the default branch, which in a project on the method only the merge entry point, the "
+        "merge job or the owner does: git merge --no-ff feat/x. "
+    )
+    assert "`just merge-ready --head <branch>`" in default["permissionDecisionReason"]
 
 
 def test_a_deny_ends_with_the_way_out_of_its_rule() -> None:
@@ -260,7 +305,7 @@ def test_antigravity_gets_its_own_output_shape() -> None:
     verdict = Verdict("labels", "gh label create x")
     deny = json.loads(hook.respond(verdict, antigravity=True))
     assert deny == {"decision": "deny", "reason": hook.reason(verdict)}
-    merge = Verdict("merge-pr", "gh pr merge")
+    merge = Verdict("merge-pr-unadopted", "gh pr merge")
     ask = json.loads(hook.respond(merge, antigravity=True))
     assert ask == {"decision": "force_ask", "reason": hook.reason(merge)}
     assert json.loads(hook.respond(None, antigravity=True)) == {"decision": "ask"}

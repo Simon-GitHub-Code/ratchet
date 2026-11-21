@@ -86,9 +86,11 @@ jobs:
                 case "$branch" in
                   *[!A-Za-z0-9._/-]*) echo "branch $branch stays" ;;
                   *)
-                    if ! above="$(gh api -X GET "repos/$GITHUB_REPOSITORY/pulls" -f state=open -f "base=$branch" -f per_page=1 --jq '.[0].number // empty')"; then
+                    if ! above="$(gh api -X GET "repos/$GITHUB_REPOSITORY/pulls" -f state=open -f "base=$branch" -f per_page=1 \
+                      --jq 'if type != "array" then error("not a list") elif length == 0 then "none" else .[0].number end')" \
+                      || ! printf '%s\n' "$above" | grep -Eqx 'none|[0-9]+'; then
                       echo "branch $branch stays: the forge did not say whether an open pull request targets it"
-                    elif [ -n "$above" ]; then
+                    elif [ "$above" != none ]; then
                       echo "branch $branch stays: pull request #$above targets it"
                     else
                       gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch" --silent || echo "branch $branch stays"
