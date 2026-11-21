@@ -11,6 +11,7 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Literal
 
 import application_types
 import change_size
@@ -23,6 +24,7 @@ import queue_notes
 import run_time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
+from ratchet_guards import splits
 from ratchet_guards.tickets import TICKET_SUFFIX, TICKETS_DIRECTORY, TRACKER_DIRECTORY
 
 CONJECTURE = "## Conjecture"
@@ -39,6 +41,14 @@ OPERABILITY_LINES = (
     ("Security", "dynamic security scan", "the surface it adds: routes, inputs, who may call"),
 )
 FLAG_LINE = "Flag"
+FLAG_SWITCH = re.compile(
+    r"[*_\s]*`([^`\s]+)`[*_]*\W+off until the owner switches it on\W*", re.IGNORECASE
+)
+FLAG_APPEARS = re.findall(
+    r"\w+",
+    "none: the owner chose to have it appear as soon as it is finished, while the project is not"
+    " deployed",
+)
 CRITIC_EVENT = "depended-on"
 DEPLOYED_EVENT = "deployed"
 CRITERIA = "## Acceptance criteria"
@@ -179,6 +189,12 @@ class Ticket:
 
 
 @dataclass(frozen=True)
+class Flag:
+    form: Literal["hidden", "appears", "unasked"] = "unasked"
+    key: str | None = None
+
+
+@dataclass(frozen=True)
 class NamedGate:
     gate: str
     tier: str
@@ -210,6 +226,7 @@ class Report:
     critic_reason: str = ""
     parent: str | None = None
     deployed: bool = False
+    flag: Flag = field(default_factory=Flag)
     start: publish_check.Start | None = None
     named_gates: list[NamedGate] = field(default_factory=list)
 
@@ -483,10 +500,38 @@ def operability_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
             lacking.append(f"`{name}:` ({says})")
         elif cause is not None:
             templated.append(f"has `{name}:` with {cause}")
+    if lacking and parent_ref is None and (unlinked := unlinked_part(ticket, root, gh)):
+        return unlinked
     parts = ([f"lacks {', '.join(lacking)}"] if lacking else []) + unreadable + templated
     if not parts:
         return None
     return f"{ticket.ref}: `{OPERABILITY}` {'; '.join(parts)}; write each, or `none` and why"
+
+
+def unlinked_part(ticket: Ticket, root: Path, gh: Runner) -> str | None:
+    origin_ref = splits.split_from(ticket.body)
+    origin = None if origin_ref is None else read_parent(origin_ref, root, gh)
+    link = None if origin is None else PARENT_LINE.search(origin.body)
+    if link is None:
+        return None
+    return (
+        f"{ticket.ref}: the part names no parent, and the ticket it was split from, {origin_ref},"
+        f" names {link.group(1)}; add its line `Parent: {link.group(1)}` to the part, or run"
+        f" `/ratchet:conjecture {ticket.ref}`, which writes it"
+    )
+
+
+def flag_of(ticket: Ticket, root: Path, gh: Runner) -> Flag:
+    if FLAG_LINE not in dict(operability_asked(root)):
+        return Flag()
+    lines = operability_lines(ticket, None)
+    parent_ref = parent_of(ticket, root)
+    if FLAG_LINE not in lines and parent_ref is not None:
+        lines = operability_lines(ticket, read_parent(parent_ref, root, gh))
+    text = INVISIBLE.sub("", lines.get(FLAG_LINE, ""))
+    if switch := FLAG_SWITCH.fullmatch(text):
+        return Flag("hidden", switch.group(1))
+    return Flag("appears") if re.findall(r"\w+", text.lower()) == FLAG_APPEARS else Flag()
 
 
 def size_failure(ticket: Ticket, root: Path) -> str | None:
@@ -633,6 +678,7 @@ def check_ticket(report: Report, ticket: Ticket, label: str, *, root: Path, gh: 
     failure = operability_failure(ticket, root, gh)
     if failure is not None:
         report.fail("operability", failure)
+    report.flag = flag_of(ticket, root, gh)
     failure = size_failure(ticket, root)
     if failure is not None:
         report.fail("size", failure)

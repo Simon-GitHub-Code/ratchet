@@ -23,7 +23,7 @@ Pick the mode from what the owner typed:
 
 1. **Preflight, before any agent exists.**
    - Run, in one Bash call: `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" "<ticket>" --root .`.
-   - It prints JSON (`ok`, `failures`, `number`, `title`, `slug`, `branch`, `base`, `label`, `critic`, `critic_reason`, `named_gates`) and exits 1 when red.
+   - It prints JSON (`ok`, `failures`, `number`, `title`, `slug`, `branch`, `base`, `label`, `critic`, `critic_reason`, `parent`, `deployed`, `flag`, `named_gates`) and exits 1 when red.
    - **Red on `size` alone** (the ticket's own `## Size` passes a product ceiling): split it as [Too large](#too-large-the-agent-splits-it) says, then build the first part that is free.
    - **A `hooks` failure whose `produce` does not start `the owner:`** is yours to repair. Run the command it names in one Bash call, then the preflight again.
    - **A `hooks` failure whose `produce` starts `the owner:`** is a change of git config, which the guard refuses from an agent. Report it with the rest below; do not run it.
@@ -155,7 +155,7 @@ Run every command below from the repository's own checkout, on the default branc
 
       ```
       name: "ratchet:pipeline"
-      args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "root": "<worktree>", "rejudge": { "slug": "<slug>", "specPath": "<specPath>", "conflicts": [<the conflicts>], "checkRed": <true when check was red>, "dependencies": <the first result's dependencies>, "namedGates": <the first result's namedGates>, "assumptions": <the first result's assumptions>, "settled": <the first result's settled> } }
+      args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "root": "<worktree>", "rejudge": { "slug": "<slug>", "specPath": "<specPath>", "conflicts": [<the conflicts>], "checkRed": <true when check was red>, "dependencies": <the first result's dependencies>, "namedGates": <the first result's namedGates>, "assumptions": <the first result's assumptions>, "settled": <the first result's settled>, "parent": <the first result's parent>, "deployed": <the first result's deployed>, "flag": <the first result's flag> } }
       ```
 
       - One agent finishes the rebase and gets `check` green, only when there was a conflict or a red `check`.
