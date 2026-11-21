@@ -349,6 +349,12 @@ def test_the_last_full_proof_is_named_however_many_records_follow_it(work: Path)
     assert problem.endswith("; the last full proof took 1234s"), problem
 
 
+def test_the_last_full_proof_is_the_last_one_recorded(work: Path) -> None:
+    proofs = [{"key": "bite-all", "seconds": 1000}, {"key": "bite-all", "seconds": 1500.5}]
+    recorded_before_mebibytes(work, proofs, 0)
+    assert conformance.last_full_proof(work) == 1500.5
+
+
 def test_a_missing_cache_is_held_however_many_records_follow_its_tier_run(work: Path) -> None:
     missing = {"kind": runrecord.CACHE_MISSING, "path": "deps.lock"}
     recorded_before_mebibytes(work, [{"kind": runrecord.TIER}, missing], 3)
