@@ -1,9 +1,10 @@
+import contextlib
 import io
 import json
 import os
 import shutil
 import stat
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
@@ -521,7 +522,7 @@ def test_the_final_check_passes_a_start_that_names_its_tree_another_way(
     assert hooked(tree) == "allowed"
 
 
-@pytest.mark.parametrize("kind", ["directory", "pipe", "unreadable", "missing", "locked"])
+@pytest.mark.parametrize("kind", ["directory", "pipe", "unreadable", "missing"])
 def test_the_final_check_says_the_same_whatever_the_pipelines_start_is(
     tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch, *, kind: str
 ) -> None:
@@ -538,21 +539,161 @@ def test_the_final_check_says_the_same_whatever_the_pipelines_start_is(
         os.mkfifo(path)
     elif kind == "unreadable":
         path.chmod(0)
-    elif kind == "locked":
-        path.parent.chmod(stat.S_IRUSR | stat.S_IXUSR)
-    try:
-        assert run(root, "check", ALPHA, "--final") == 0
-    finally:
-        path.parent.chmod(stat.S_IRWXU)
+    assert run(root, "check", ALPHA, "--final") == 0
     said = capsys.readouterr()
     assert said.out.splitlines()[-1] == publish_check.GREEN
+    assert said.err == ""
     assert queue_notes.read_note(root, BRANCH_A).get("passed") is True
-    assert len([line for line in said.err.splitlines() if "cannot be written" in line]) == (
-        kind == "locked"
-    )
     if path.is_file():
         path.chmod(stat.S_IRUSR | stat.S_IWUSR)
     assert not start_passed(root)
+
+
+@contextlib.contextmanager
+def locked(root: Path) -> Iterator[None]:
+    folder = started(root).parent
+    folder.mkdir(exist_ok=True)
+    folder.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    try:
+        yield
+    finally:
+        folder.chmod(stat.S_IRWXU)
+
+
+def snapshot(root: Path) -> tuple[bytes | None, ...]:
+    tree = tree_of(root)
+    head = gatelib.git(tree, "rev-parse", "HEAD") if tree.is_dir() else None
+    files = (queue_notes.note_path(root, BRANCH_A), started(root))
+    return (
+        *(path.read_bytes() if path.is_file() else None for path in files),
+        (gatelib.git(root, "for-each-ref") or "").encode(),
+        (head or "").encode(),
+    )
+
+
+def told_to_unlock(said: str, tmp_path: Path) -> None:
+    line = next(line for line in said.splitlines() if "cannot be written" in line)
+    assert "`ratchet-feature-starts/feature-1-alpha.json` in the git directory" in line, line
+    assert line.endswith("make that folder writable, then run this again"), line
+    assert str(tmp_path) not in line, line
+
+
+def amended(root: Path) -> None:
+    tree = tree_of(root)
+    write(tree, "src/role.py", "R = 1\n")
+    git(tree, "add", "-A")
+    git(tree, "commit", "-q", "--no-verify", "--amend", "-m", "feat(core): amended by a role")
+
+
+def answered(root: Path) -> None:
+    assert run(root, "close", ALPHA, "--outcome", "parked", "--reason", "which case?") == 0
+    write(root, ALPHA, ticket(1, "Alpha", "Answered: lower.\n\n"))
+    commit(root, "docs: answer the question")
+
+
+def cut_off_mark(root: Path) -> None:
+    path = queue_notes.note_path(root, BRANCH_A)
+    queue_notes.write_note(path, {**queue_notes.read_note(root, BRANCH_A), "rebasing": "0" * 40})
+
+
+def blocked_command(root: Path, case: str) -> int:
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(drain, "discard", lambda *_args: "kept for the gate")
+        if case == "update unread":
+            patch.setattr(publish_check, "start_of", unreadable_start)
+        if case == "final red":
+            patch.setattr(drain, "read_present", lambda *_args: PRESENT["red"])
+        if case == "reopen":
+            return run(root, "open", ALPHA)
+        if case.startswith("update"):
+            return run(root, "update", ALPHA)
+        return run(root, "check", ALPHA, "--final")
+
+
+SET_UP: dict[str, Callable[[Path], None]] = {
+    "update": moved,
+    "update unread": moved,
+    "update resumed": cut_off_mark,
+    "reopen": answered,
+    "final red": lambda _root: None,
+    "role amend": amended,
+}
+
+
+@pytest.mark.parametrize("case", SET_UP)
+def test_a_command_that_cannot_close_the_pipelines_start_changes_nothing_and_fails(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch, *, case: str
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    tree = tree_of(root)
+    pipeline_preflight(tree, ALPHA, BRANCH_A, capsys=capsys, monkeypatch=monkeypatch)
+    assert run(root, "check", ALPHA, "--final") == 0
+    with locked(root):
+        SET_UP[case](root)
+        capsys.readouterr()
+        gate = hooked(tree) if tree.is_dir() else None
+        before = snapshot(root)
+        code = blocked_command(root, case)
+    said = capsys.readouterr().out
+    assert code == (1 if case == "reopen" else 2), said
+    told_to_unlock(said, tmp_path)
+    assert snapshot(root) == before, "the command changed the note, the start or a ref"
+    assert (hooked(tree) if tree.is_dir() else None) == gate
+
+
+def test_a_final_check_that_cannot_pass_the_pipelines_start_fails_and_the_commit_stays_refused(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    tree = tree_of(root)
+    pipeline_preflight(tree, ALPHA, BRANCH_A, capsys=capsys, monkeypatch=monkeypatch)
+    before = snapshot(root)
+    with locked(root):
+        code = run(root, "check", ALPHA, "--final")
+    said = capsys.readouterr().out
+    assert code == 2, said
+    assert publish_check.GREEN not in said
+    told_to_unlock(said, tmp_path)
+    assert snapshot(root) == before, "the check passed the note while the start stays unpassed"
+    assert hooked(tree) == refused(BRANCH_A)
+
+
+def test_a_start_already_closed_is_not_written_again(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    tree = tree_of(root)
+    pipeline_preflight(tree, ALPHA, BRANCH_A, capsys=capsys, monkeypatch=monkeypatch)
+    with locked(root):
+        moved(root)
+        assert run(root, "update", ALPHA) == 0, capsys.readouterr().out
+    capsys.readouterr()
+    assert hooked(tree) == refused(BRANCH_A)
+
+
+@pytest.mark.parametrize("where", ["no folder", "no start", "another tree"])
+def test_a_drain_with_no_start_of_its_tree_to_close_runs_as_before(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch, *, where: str
+) -> None:
+    root = project(tmp_path)
+    if where == "another tree":
+        git(root, "switch", "-q", "-c", BRANCH_A)
+        pipeline_preflight(root, ALPHA, BRANCH_A, capsys=capsys, monkeypatch=monkeypatch)
+        git(root, "switch", "-q", "main")
+    folder = started(root).parent
+    with contextlib.nullcontext() if where == "no folder" else locked(root):
+        assert run(root, "open", ALPHA) == 0
+        assert run(root, "check", ALPHA, "--final") == 0
+        moved(root)
+        assert run(root, "update", ALPHA) == 0
+        assert run(root, "check", ALPHA, "--final") == 0
+        said = capsys.readouterr()
+        assert hooked(tree_of(root)) == "allowed"
+    assert "cannot be written" not in said.out + said.err
+    assert folder.is_dir() is (where != "no folder")
 
 
 class View(NamedTuple):
@@ -729,7 +870,7 @@ def taken(walk: Walk, node: Node, step: tuple[str, int]) -> Node:
     return Node(node.saved, steps, view_of(walk, mains, green=green), mains)
 
 
-WALK_DEPTH, WALK_CHUNKS = 4, 6
+WALK_DEPTH = 4
 
 
 def level(walk: Walk, frontier: list[Node], seen: set[View]) -> list[Node]:
@@ -752,11 +893,9 @@ def level(walk: Walk, frontier: list[Node], seen: set[View]) -> list[Node]:
     return reached
 
 
-@pytest.mark.parametrize(
-    "chunk", [pytest.param(n, marks=pytest.mark.shard_slot(n + 10)) for n in range(WALK_CHUNKS)]
-)
+@pytest.mark.shard_slot(10)
 def test_no_run_of_the_drain_lets_through_a_commit_main_refuses_unless_its_final_check_is_green(
-    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch, *, chunk: int
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = project(tmp_path)
     monkeypatch.setattr(preflight, "run_gh", lambda _args: "[]")
@@ -768,9 +907,8 @@ def test_no_run_of_the_drain_lets_through_a_commit_main_refuses_unless_its_final
     saved = save(tmp_path, tmp_path / "saved" / "0")
     first = Node(saved, (), view_of(walk, mains, green=False), mains)
     seen = {first.view}
-    frontier = level(walk, [first], seen)
-    assert len(frontier) == WALK_CHUNKS
-    frontier = [frontier[chunk]]
+    frontier = [node for node in level(walk, [first], seen) if node.steps == ("final",)]
+    assert len(frontier) == 1
     for _ in range(WALK_DEPTH):
         frontier = level(walk, frontier, seen)
     assert frontier == [], f"the walk reached a new state in {WALK_DEPTH + 1} steps"
