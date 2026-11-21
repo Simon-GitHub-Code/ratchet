@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import errno
 import json
 import math
 import os
 import stat
 import subprocess
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -28,8 +31,8 @@ LOCAL_CACHES = "Local caches"
 LINE = 2**20
 FOLDER = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
 READ = os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC
-WRITE = os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY
-WRITE |= os.O_CLOEXEC
+APPEND = os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC
+TOO_LONG = "the record is too long to keep; shorten the name it carries"
 SPECIAL = "it is not a regular file; remove it"
 FULL = "no space left for it; free some space"
 NOT_WRITABLE = "permission denied; make it and its folder writable"
@@ -63,19 +66,32 @@ def stamp(root: Path, tree: str | None = None) -> dict[str, str]:
     }
 
 
+def kept(line: bytes) -> bool:
+    return len(line) < LINE
+
+
+def opened(folder: int, name: str) -> tuple[int, bool]:
+    try:
+        return os.open(name, os.O_RDWR | APPEND, 0o666, dir_fd=folder), True
+    except PermissionError:
+        return os.open(name, os.O_WRONLY | APPEND, 0o666, dir_fd=folder), False
+
+
 def written(path: Path, line: bytes) -> str | None:
+    if not kept(line):
+        return TOO_LONG
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         folder = os.open(path.parent, FOLDER)
         try:
-            handle = os.open(path.name, WRITE, 0o666, dir_fd=folder)
+            handle, readable = opened(folder, path.name)
         finally:
             os.close(folder)
         try:
             held = os.fstat(handle)
             if not stat.S_ISREG(held.st_mode):
                 return SPECIAL
-            if held.st_size and os.pread(handle, 1, held.st_size - 1) != b"\n":
+            if held.st_size and not (readable and os.pread(handle, 1, held.st_size - 1) == b"\n"):
                 line = b"\n" + line
             if os.write(handle, line) < len(line):
                 return FULL
@@ -100,11 +116,11 @@ def lines(path: Path) -> Iterator[bytes]:
             if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
                 return
             while line := handle.readline(LINE):
-                if line.endswith(b"\n") or len(line) < LINE:
+                if kept(line):
                     yield line
-                    continue
-                while (rest := handle.readline(LINE)) and not rest.endswith(b"\n"):
-                    pass
+                elif not line.endswith(b"\n"):
+                    while (rest := handle.readline(LINE)) and not rest.endswith(b"\n"):
+                        pass
     except OSError:
         return
 
@@ -131,6 +147,49 @@ def read(path: Path) -> Iterator[dict[str, object]]:
             continue
         if isinstance(record, dict) and well_formed(record):
             yield record
+
+
+@dataclass
+class Facts:
+    seconds: dict[str, float] = field(default_factory=dict)
+    missing: list[object] | None = None
+    faults: dict[tuple[object, object], tuple[float, bool]] = field(default_factory=dict)
+
+
+HELD: contextvars.ContextVar[dict[Path, Facts] | None] = contextvars.ContextVar(
+    "held", default=None
+)
+
+
+@contextlib.contextmanager
+def read_once() -> Iterator[None]:
+    token = HELD.set({})
+    try:
+        yield
+    finally:
+        HELD.reset(token)
+
+
+def facts(path: Path) -> Facts:
+    held = HELD.get()
+    if held is not None and path in held:
+        return held[path]
+    found = Facts()
+    for record in read(path):
+        kind, key, seconds = record.get("kind"), record.get("key"), record.get("seconds")
+        if isinstance(seconds, int | float):
+            if isinstance(key, str):
+                found.seconds[key] = float(seconds)
+            if kind == FAULT:
+                place = (record.get("gate"), record.get("bite"))
+                found.faults[place] = (float(seconds), record.get("narrowed") is True)
+        if kind == TIER:
+            found.missing = []
+        elif kind == CACHE_MISSING and found.missing is not None:
+            found.missing.append(record.get("path"))
+    if held is not None:
+        held[path] = found
+    return found
 
 
 def cache_paths(binding: str) -> list[str]:

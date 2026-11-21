@@ -3277,15 +3277,9 @@ def check_bite_all_ceiling(root: Path) -> Iterable[Finding]:
 
 
 def check_cache_written(root: Path) -> Iterable[Finding]:
-    after: list[dict[str, object]] | None = None
-    for record in runrecord.read(root / runrecord.TIMING):
-        if record.get("kind") == runrecord.TIER:
-            after = []
-        elif record.get("kind") == runrecord.CACHE_MISSING and after is not None:
-            after.append(record)
-    for record in after or []:
+    for path in runrecord.facts(root / runrecord.TIMING).missing or []:
         yield agent(
-            f"{BINDING_PATH}: the Local caches bullet names {record.get('path')}, which did not"
+            f"{BINDING_PATH}: the Local caches bullet names {path}, which did not"
             " exist after the last tier run",
             then=(
                 (
@@ -3307,12 +3301,7 @@ def full_proof_problem(root: Path, text: str) -> str:
 
 
 def last_full_proof(root: Path) -> float | None:
-    seconds = None
-    for record in runrecord.read(root / runrecord.TIMING):
-        if record.get("key") == budget.FULL_PROOF:
-            value = record.get("seconds")
-            seconds = float(value) if isinstance(value, int | float) else seconds
-    return seconds
+    return runrecord.facts(root / runrecord.TIMING).seconds.get(budget.FULL_PROOF)
 
 
 def check_gate_reads(root: Path) -> Iterable[Finding]:
@@ -3551,7 +3540,9 @@ def then_lines(fix: Fix) -> tuple[str, ...]:
 
 def run(root: Path) -> int:
     bites = project_bite.registry_check(root)
-    found = findings(root, bites=bites)
+    with runrecord.read_once():
+        found = findings(root, bites=bites)
+        slows = project_bite.recorded_slow(root)
     red, owing = owed_split(root, found)
     for finding in red:
         print(finding)
@@ -3561,7 +3552,7 @@ def run(root: Path) -> int:
         print(f"owed: {finding}")
     for unchecked in bites.unchecked:
         print(f"not checked: {project_bite.REGISTRY}: {unchecked}")
-    for slow in project_bite.recorded_slow(root):
+    for slow in slows:
         print(f"slow: {slow}")
     autos = sum(isinstance(finding.fix, Auto) for finding in [*red, *owing])
     fixer = f"; `upgrade.py --apply` makes {autos} of them" if autos else ""

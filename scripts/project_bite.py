@@ -1268,18 +1268,12 @@ def recorded_slow(root: Path) -> list[str]:
     ceiling = slow_ceiling(root)
     if ceiling is None:
         return []
-    last = {
-        (record.get("gate"), record.get("bite")): record
-        for record in runrecord.read(root / runrecord.TIMING)
-        if record.get("kind") == runrecord.FAULT
-    }
+    last = runrecord.facts(root / runrecord.TIMING).faults
     registry, _ = read_registry(gatelib.read_text(root / REGISTRY) or "")
     lines = []
     for bite in registry.bites:
-        record = last.get((bite.gate, bite.name), {})
-        seconds = record.get("seconds")
-        whole = record.get("narrowed") is False and not (bite.narrowed or bite.whole)
-        if whole and isinstance(seconds, int | float) and seconds > ceiling:
+        seconds, narrowed = last.get((bite.gate, bite.name), (0.0, True))
+        if not (narrowed or bite.narrowed or bite.whole) and seconds > ceiling:
             lines.append(f"{REGISTRY}: {slow_line(bite, seconds, ceiling)}")
     return lines
 
