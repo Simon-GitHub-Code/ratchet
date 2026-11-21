@@ -8,12 +8,14 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 import drain
+import gatelib
 import merge
 import merge_ready
 import unproven
@@ -179,7 +181,7 @@ def test_a_change_the_judge_leaves_to_the_owner_is_not_merged(
     assert capsys.readouterr().out == (
         "merge: owner\nguard: justfile (gate-commands)\n"
         f"next: the owner types `git switch main && git merge --no-ff {FEATURE}`, then"
-        " `just check-deep` on `main`: no gate ran on this merge, and tier 2 runs every gate\n"
+        " `just merge --deep` on `main`: no gate ran on this merge, and tier 2 runs every gate\n"
     )
     assert tips(root) == before
     assert git(root, "worktree", "list", "--porcelain").count("worktree ") == 1
@@ -753,12 +755,18 @@ def test_records_take_no_merge_lock(tmp_path: Path) -> None:
 
 MERGE_PY = Path(merge.__file__).resolve()
 DEEP_ENTRY = "python3 deep.py"
-DEEP_PY = """import os
+DEEP_PY = """import json
+import os
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+if os.environ.get("DEEP_SEEN"):
+    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    said = {name: os.environ.get(name) for name in ("VIRTUAL_ENV", "RATCHET_BITING")}
+    seen = {"cwd": os.getcwd(), "top": top.stdout.strip(), **said}
+    Path(os.environ["DEEP_SEEN"]).write_text(json.dumps(seen))
 if os.environ.get("DEEP_LOG"):
     detached = subprocess.run(["git", "symbolic-ref", "-q", "HEAD"], check=False).returncode
     with Path(os.environ["DEEP_LOG"]).open("a") as log:
@@ -869,6 +877,32 @@ def test_merge_deep_proves_the_tip_in_a_detached_tree_after_its_includes_and_set
     assert detached == "1", "the tree checks out the commit, on no branch"
     assert git(root, "worktree", "list", "--porcelain").count("worktree ") == 1
     assert not merge.lock_held(deep_lock(root))
+
+
+def test_the_proof_judges_the_copy_whatever_the_caller_s_shell_points_git_and_python_at(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = proving(tmp_path / "repo")
+    tip, index = git(root, "rev-parse", "main"), git(root, "ls-files", "--stage")
+    seen = tmp_path / "seen.json"
+    monkeypatch.setenv("DEEP_SEEN", str(seen))
+    shell = {
+        "GIT_DIR": root / ".git",
+        "GIT_WORK_TREE": root,
+        "GIT_INDEX_FILE": root / ".git/index",
+        "VIRTUAL_ENV": root / ".venv",
+    }
+    for name, value in shell.items():
+        monkeypatch.setenv(name, str(value))
+    assert prove(root) == 0
+    for name in shell:
+        monkeypatch.delenv(name)
+    said = json.loads(seen.read_text(encoding="utf-8"))
+    assert Path(said["top"]).resolve() == Path(said["cwd"]).resolve(), "git reads the copy"
+    assert said["VIRTUAL_ENV"] is None, "no interpreter of the caller's checkout"
+    assert said["RATCHET_BITING"] is None, "check-deep runs the bite, which refuses in a bite"
+    assert git(root, "ls-files", "--stage") == index, "the caller's index is as it was"
+    assert recorded(root)[-1]["commit"] == tip
 
 
 def test_a_red_check_deep_appends_a_red_line(
@@ -1118,6 +1152,42 @@ def test_a_record_of_ten_thousand_lines_is_read_and_the_merge_lands(tmp_path: Pa
     assert run(root) == 0
 
 
+HISTORY: dict[str, tuple[str, tuple[tuple[str, str], ...], int, bool]] = {
+    "no record and no bound": ("", (), 0, False),
+    "a green on the tip and a bound": (BOUND_ZERO, (("main", "green"),), 0, False),
+    "a green below an unrun tip and no bound": (
+        "",
+        (("main~1", "green"), ("main", "unrun")),
+        0,
+        False,
+    ),
+    "a red below the tip and no bound": ("", (("main~1", "red"),), 1, True),
+    "a red on the tip and a bound": (BOUND_ZERO, (("main", "red"),), 1, True),
+    "a bound and a green below the tip": (BOUND_ZERO, (("main~1", "green"),), 1, True),
+}
+
+
+@pytest.mark.parametrize("case", HISTORY)
+def test_a_merge_reads_the_default_branch_s_history_only_where_a_deep_run_could_hold_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    bound, lines, code, reads = HISTORY[case]
+    root = proving(tmp_path / "repo", bound=bound, merges=1)
+    record = "".join(proof(git(root, "rev-parse", ref), status) for ref, status in lines)
+    if record:
+        merge.record_path(root).write_text(record, encoding="utf-8")
+    read: list[str] = []
+    real = gatelib.chain
+
+    def history(where: Path, tip: str, commits: Iterable[str] = ()) -> tuple[unproven.Landed, ...]:
+        read.append(tip)
+        return real(where, tip, commits)
+
+    monkeypatch.setattr(gatelib, "chain", history)
+    assert run(root) == code
+    assert bool(read) is reads
+
+
 def test_a_merge_runs_no_check_deep_outside_an_adoption(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1127,6 +1197,22 @@ def test_a_merge_runs_no_check_deep_outside_an_adoption(
     assert run(root) == 0
     assert not log.exists()
     assert not merge.record_path(root).exists()
+
+
+def another_proof(root: Path, monkeypatch: pytest.MonkeyPatch, ends: Callable[[], None]) -> None:
+    held = deep_lock(root).open("a+b")
+    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    real = merge.locked
+
+    def the_other_proof_ends(
+        path: Path, *, create: bool = True, wait: bool = False
+    ) -> contextlib.AbstractContextManager[int | None]:
+        if wait:
+            ends()
+            held.close()
+        return real(path, create=create, wait=wait)
+
+    monkeypatch.setattr(merge, "locked", the_other_proof_ends)
 
 
 @pytest.mark.parametrize("status", ["green", "red"])
@@ -1141,19 +1227,8 @@ def test_a_caller_that_waited_on_the_lock_proves_nothing_once_the_tip_was_proved
     tip = git(root, "rev-parse", "main")
     log = tmp_path / "deep.log"
     monkeypatch.setenv("DEEP_LOG", str(log))
-    held = deep_lock(root).open("a+b")
-    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    real = merge.locked
-
-    def the_other_proof_ends(
-        path: Path, *, create: bool = True, wait: bool = False
-    ) -> contextlib.AbstractContextManager[int | None]:
-        if wait:
-            merge.record_path(root).write_text(proof(tip, status), encoding="utf-8")
-            held.close()
-        return real(path, create=create, wait=wait)
-
-    monkeypatch.setattr(merge, "locked", the_other_proof_ends)
+    record = merge.record_path(root)
+    another_proof(root, monkeypatch, lambda: record.write_text(proof(tip, status), "utf-8"))
     capsys.readouterr()
     assert prove(root) == {"green": 0, "red": 1}[status]
     assert capsys.readouterr().out == (
@@ -1171,22 +1246,65 @@ def test_a_caller_that_waited_proves_the_tip_when_the_other_proof_was_unrun(
     tip = git(root, "rev-parse", "main")
     log = tmp_path / "deep.log"
     monkeypatch.setenv("DEEP_LOG", str(log))
-    held = deep_lock(root).open("a+b")
-    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    real = merge.locked
-
-    def the_other_proof_is_unrun(
-        path: Path, *, create: bool = True, wait: bool = False
-    ) -> contextlib.AbstractContextManager[int | None]:
-        if wait:
-            merge.record_path(root).write_text(proof(tip, "unrun"), encoding="utf-8")
-            held.close()
-        return real(path, create=create, wait=wait)
-
-    monkeypatch.setattr(merge, "locked", the_other_proof_is_unrun)
+    record = merge.record_path(root)
+    another_proof(root, monkeypatch, lambda: record.write_text(proof(tip, "unrun"), "utf-8"))
     assert prove(root) == 0
     assert len(log.read_text(encoding="utf-8").splitlines()) == 1, "this caller proved the tip"
     assert [line["status"] for line in recorded(root)] == ["unrun", "green"]
+
+
+def test_a_caller_that_waited_proves_the_new_tip_when_the_tip_moved_while_it_waited(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = proving(tmp_path / "repo")
+    old = git(root, "rev-parse", "main")
+    log = tmp_path / "deep.log"
+    monkeypatch.setenv("DEEP_LOG", str(log))
+
+    def a_merge_lands_and_the_old_tip_is_proved() -> None:
+        git(root, "checkout", "-q", "main")
+        write(root, "later.txt", "landed while the other proof ran\n")
+        commit(root, "feat(core): landed while the other proof ran")
+        git(root, "checkout", "-q", FEATURE)
+        merge.record_path(root).write_text(proof(old, "green"), encoding="utf-8")
+
+    another_proof(root, monkeypatch, a_merge_lands_and_the_old_tip_is_proved)
+    capsys.readouterr()
+    assert prove(root) == 0
+    new = git(root, "rev-parse", "main")
+    assert f"deep: green on `main` at {new[:12]} in " in capsys.readouterr().out
+    assert [(line["status"], line["commit"]) for line in recorded(root)] == [
+        ("green", old),
+        ("green", new),
+    ]
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 1, "this caller proved the tip"
+
+
+def test_a_merge_while_a_proof_runs_waits_for_the_commit_the_proof_wrote_in_its_lock(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = proving(tmp_path / "repo", bound=BOUND_ZERO)
+    tip = git(root, "rev-parse", "main")
+    real = merge.judged
+    meanwhile: list[tuple[int, str]] = []
+
+    def a_merge_while_check_deep_runs(
+        where: Path, tree: Path, commit: str
+    ) -> tuple[unproven.Outcome, int | None, str, str]:
+        capsys.readouterr()
+        meanwhile.append((run(root), capsys.readouterr().out))
+        return real(where, tree, commit)
+
+    monkeypatch.setattr(merge, "judged", a_merge_while_check_deep_runs)
+    before = tips(root)
+    assert prove(root) == 0
+    [(code, said)] = meanwhile
+    assert code == 1
+    assert said.splitlines()[1].endswith(
+        f"allows 0: wait for the `merge --deep` holding ratchet-deep.lock on `{tip[:12]}`"
+    )
+    assert tips(root) == before
+    assert run(root) == 0
 
 
 def started(root: Path, *, piped: bool = False, **env: str) -> subprocess.Popen[str]:
