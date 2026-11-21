@@ -1,7 +1,7 @@
 import re
 import sys
+import time
 from collections.abc import Callable
-from itertools import pairwise
 from types import FrameType
 
 import pytest
@@ -163,7 +163,10 @@ FAMILIES: dict[str, Family] = {
         25,
         lambda n: "git " + " ".join(f"-c a.b{i}=c" for i in range(n)) + " status",
     ),
+    "many words after git": (2_000, lambda n: "echo " + " ".join(["git"] * n)),
 }
+INSIDE_ONE_CALL = frozenset({"many words after git"})
+TIMED = 3.0
 SQUARED = 4.5
 SQUARE = frozenset(
     {
@@ -195,15 +198,26 @@ def work(command: str) -> int:
     return calls[0]
 
 
-def growth(family: Family) -> list[float]:
-    base, make = family
-    work(make(base))
-    spent = [work(make(base * scale)) for scale in (1, 2, 4)]
-    return [later / earlier for earlier, later in pairwise(spent)]
+def seconds(command: str) -> float:
+    guard = make_guard()
+    spent = []
+    for _ in range(3):
+        start = time.process_time()
+        bash.check(command, Context(ROOT), guard)
+        spent.append(time.process_time() - start)
+    return min(spent)
 
 
 @pytest.mark.parametrize("name", FAMILIES)
 def test_the_guards_work_grows_no_faster_than_its_input(name: str) -> None:
-    factor = SQUARED if name in SQUARE else LINEAR
-    doublings = growth(FAMILIES[name])
-    assert max(doublings) <= factor, f"{name}: work grew {doublings} per doubling, over {factor}"
+    timed = name in INSIDE_ONE_CALL
+    factor = TIMED if timed else SQUARED if name in SQUARE else LINEAR
+    measure = seconds if timed else work
+    base, make = FAMILIES[name]
+    measure(make(base))
+    earlier = measure(make(base))
+    for scale in (2, 4):
+        later = measure(make(base * scale))
+        grew = later / earlier
+        assert grew <= factor, f"{name}: work grew {grew:.3f} at {base * scale}, over {factor}"
+        earlier = later
