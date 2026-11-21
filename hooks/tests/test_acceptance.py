@@ -14,7 +14,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -28,6 +28,7 @@ from tests import products
 from tests.servers import (
     HIDES,
     SERVE,
+    Spawn,
     beside_a_daemon,
     beside_one_opened_outside,
     gone,
@@ -37,6 +38,7 @@ from tests.servers import (
     python,
 )
 
+pytestmark = pytest.mark.usefixtures("sessions_ended")
 SLUG = "save-link"
 WIDE = "TEST_PRODUCT_ADDRESS=0.0.0.0"
 SCRIPT = Path(acceptance.__file__)
@@ -74,11 +76,8 @@ def write_record(directory: Path, record: dict[str, object]) -> None:
 
 
 @pytest.fixture
-def product(tmp_path: Path) -> Iterator[Path]:
-    root = products.make(tmp_path / "product", env=f"SLOW={tmp_path / 'slow'}")
-    yield root
-    acceptance.main(["acceptance.py", "down", "--slug", SLUG, "--root", str(root)])
-    assert products.processes_naming(str(tmp_path)) == []
+def product(tmp_path: Path) -> Path:
+    return products.make(tmp_path / "product", env=f"SLOW={tmp_path / 'slow'}")
 
 
 @pytest.fixture
@@ -93,35 +92,23 @@ def tried(product: Path, capsys: pytest.CaptureFixture[str]) -> Path:
 
 
 def test_a_process_left_running_is_seen_however_narrow_the_terminal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spawn: Spawn
 ) -> None:
     monkeypatch.setenv("COLUMNS", "80")
-    left = subprocess.Popen(  # noqa: S603 # -- this interpreter, fixed arguments
-        [sys.executable, "-c", "import time; time.sleep(30)", f"{'x' * 100}{tmp_path}"]
-    )
-    try:
-        assert [int(line.split()[0]) for line in products.processes_naming(str(tmp_path))] == [
-            left.pid
-        ]
-    finally:
-        left.kill()
-        left.wait()
+    left = spawn([sys.executable, "-c", "import time; time.sleep(30)", f"{'x' * 100}{tmp_path}"])
+    assert [int(line.split()[0]) for line in products.processes_naming(str(tmp_path))] == [left.pid]
 
 
 def test_a_supervisor_that_does_not_hold_its_lock_is_never_signalled_so_a_reused_pid_survives(
-    tmp_path: Path,
+    tmp_path: Path, spawn: Spawn
 ) -> None:
-    unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
-    try:
-        directory = tmp_path / "session"
-        directory.mkdir()
-        (directory / "live.lock").write_text(f"{unrelated.pid}\n", encoding="utf-8")
-        assert acceptance.end(directory) == []
-        with pytest.raises(subprocess.TimeoutExpired):
-            unrelated.wait(timeout=0.5)
-    finally:
-        unrelated.kill()
-        unrelated.wait()
+    unrelated = spawn([sys.executable, "-c", "import time; time.sleep(30)"])
+    directory = tmp_path / "session"
+    directory.mkdir()
+    (directory / "live.lock").write_text(f"{unrelated.pid}\n", encoding="utf-8")
+    assert acceptance.end(directory) == []
+    with pytest.raises(subprocess.TimeoutExpired):
+        unrelated.wait(timeout=0.5)
 
 
 def test_up_puts_the_proxy_before_the_head_and_down_stops_all_of_it(
@@ -300,48 +287,44 @@ def test_up_again_while_it_runs_gives_the_same_address(
 
 
 def test_up_after_an_up_killed_mid_boot_waits_for_that_boot_and_starts_no_other(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], spawn: Spawn
 ) -> None:
     root = products.make(tmp_path / "product", env=f"BOOTING={tmp_path / 'booting'} DELAY=1")
     argv = [sys.executable, str(SCRIPT), "up", "--slug", SLUG, "--ticket", "ticket.md"]
-    first = subprocess.Popen(argv, cwd=root, stdout=subprocess.DEVNULL)  # noqa: S603 # -- this interpreter and the harness
-    try:
-        products.wait_for(tmp_path / "booting")
-        first.kill()
-        first.wait()
-        directory = session(root)
-        assert acceptance.state(directory) is acceptance.State.STARTING
-        code, (_, tester) = up(root, capsys)
-        assert (code, Path(tester).parent) == (0, directory)
-        assert len(acceptance.sessions(acceptance.store(root) / SLUG, 2)) == 1
-        assert len(products.running(root)) == 1
-    finally:
-        down(root, capsys)
+    first = spawn(argv, cwd=root, stdout=subprocess.DEVNULL)
+    products.wait_for(tmp_path / "booting")
+    first.kill()
+    first.wait()
+    directory = session(root)
+    assert acceptance.state(directory) is acceptance.State.STARTING
+    code, (_, tester) = up(root, capsys)
+    assert (code, Path(tester).parent) == (0, directory)
+    assert len(acceptance.sessions(acceptance.store(root) / SLUG, 2)) == 1
+    assert len(products.running(root)) == 1
+    down(root, capsys)
     assert products.processes_naming(str(tmp_path)) == []
 
 
 @pytest.mark.parametrize("when", ["serving", "booting"])
 def test_a_session_whose_supervisor_was_killed_stops_all_it_started(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], when: str
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], *, spawn: Spawn, when: str
 ) -> None:
     root = products.make(tmp_path / "product", env=f"BOOTING={tmp_path / 'booting'} DELAY=1")
     argv = [sys.executable, str(SCRIPT), "up", "--slug", SLUG, "--ticket", "ticket.md"]
-    started = subprocess.Popen(argv, cwd=root, stdout=subprocess.DEVNULL)  # noqa: S603 # -- this interpreter and the harness
-    try:
-        products.wait_for(tmp_path / "booting")
-        booted = pid_of(tmp_path / "booting")
-        directory = session(root)
-        if when == "serving":
-            assert started.wait(timeout=120) == 0
-        os.kill(pid_of(directory / "live.lock"), signal.SIGKILL)
-        started.wait(timeout=120)
-        assert gone(booted, wait=60), "the product outlived the session's supervisor"
-        code, _ = up(root, capsys)
-        assert code == 0
-        assert len(products.running(root)) == 1
-        assert (acceptance.state(directory) is acceptance.State.ENDED) == (when == "serving")
-    finally:
-        down(root, capsys)
+    started = spawn(argv, cwd=root, stdout=subprocess.DEVNULL)
+    products.wait_for(tmp_path / "booting")
+    booted = pid_of(tmp_path / "booting")
+    directory = session(root)
+    if when == "serving":
+        assert started.wait(timeout=120) == 0
+    os.kill(pid_of(directory / "live.lock"), signal.SIGKILL)
+    started.wait(timeout=120)
+    assert gone(booted, wait=60), "the product outlived the session's supervisor"
+    code, _ = up(root, capsys)
+    assert code == 0
+    assert len(products.running(root)) == 1
+    assert (acceptance.state(directory) is acceptance.State.ENDED) == (when == "serving")
+    down(root, capsys)
     assert products.processes_naming(str(tmp_path)) == []
 
 
@@ -359,25 +342,24 @@ def test_up_on_a_changed_work_tree_stops_the_session_of_the_old_one(
     assert len(products.running(product)) == 1
 
 
-def test_two_ups_at_once_share_one_session(product: Path) -> None:
+def test_two_ups_at_once_share_one_session(product: Path, spawn: Spawn) -> None:
     argv = [sys.executable, str(SCRIPT), "up", "--slug", SLUG, "--ticket", "ticket.md"]
-    started = [
-        subprocess.Popen(argv, cwd=product, stdout=subprocess.PIPE, text=True)  # noqa: S603 # -- this interpreter and the harness
-        for _ in range(2)
-    ]
+    started = [spawn(argv, cwd=product, stdout=subprocess.PIPE, text=True) for _ in range(2)]
     said = [process.communicate(timeout=120) for process in started]
     assert [process.returncode for process in started] == [0, 0]
     assert said[0] == said[1]
     assert len(acceptance.sessions(acceptance.store(product) / SLUG, 2)) == 1
 
 
-def test_an_up_waits_while_another_up_or_down_of_the_slug_holds_the_lock(product: Path) -> None:
+def test_an_up_waits_while_another_up_or_down_of_the_slug_holds_the_lock(
+    product: Path, spawn: Spawn
+) -> None:
     place = acceptance.store(product)
     place.mkdir(parents=True, exist_ok=True)
     argv = [sys.executable, str(SCRIPT), "up", "--slug", SLUG, "--ticket", "ticket.md"]
     with (place / f"{SLUG}.lock").open("w") as held:
         fcntl.flock(held, fcntl.LOCK_EX)
-        waiting = subprocess.Popen(argv, cwd=product, stdout=subprocess.PIPE, text=True)  # noqa: S603 # -- this interpreter and the harness
+        waiting = spawn(argv, cwd=product, stdout=subprocess.PIPE, text=True)
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
             assert waiting.poll() is None, "an up ran while the slug was locked"
@@ -392,12 +374,9 @@ def test_the_flags_due_for_removal_are_on_in_the_boot(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = products.make(tmp_path / "product", extra='flags_on := "FLAG=$(echo on)"')
-    try:
-        code, (url, _) = up(root, capsys)
-        assert code == 0
-        assert products.request(url, path="/flag") == (200, b"on")
-    finally:
-        down(root, capsys)
+    code, (url, _) = up(root, capsys)
+    assert code == 0
+    assert products.request(url, path="/flag") == (200, b"on")
     assert json.loads((session(root) / "session.json").read_text(encoding="utf-8"))["env"] == [
         "FLAG=on"
     ]
@@ -513,14 +492,11 @@ def test_a_product_the_justfile_says_listens_wider_on_purpose_is_served_and_said
 ) -> None:
     extra = f'listens := "{declared}"'
     root = products.make(tmp_path / "product", env=WIDE, extra=extra)
-    try:
-        ticket = ["--ticket", str(root / "ticket.md"), "--root", str(root)]
-        code = acceptance.main(["acceptance.py", "up", "--slug", SLUG, *ticket])
-        seen = capsys.readouterr()
-        assert code == 0, seen
-        assert products.request(seen.out.splitlines()[0])[0] == 200
-    finally:
-        down(root, capsys)
+    ticket = ["--ticket", str(root / "ticket.md"), "--root", str(root)]
+    code = acceptance.main(["acceptance.py", "up", "--slug", SLUG, *ticket])
+    seen = capsys.readouterr()
+    assert code == 0, seen
+    assert products.request(seen.out.splitlines()[0])[0] == 200
     assert re.fullmatch(
         r"with_service: the product listened on 0\.0\.0\.0:\d+ when it first answered, as "
         rf"declared\n{re.escape(CHECKED)}",
@@ -815,16 +791,13 @@ def test_the_boot_line_hands_the_product_the_ready_urls_host_and_it_listens_ther
     product = tmp_path / "product"
     boot = f"TEST_PRODUCT_ADDRESS={{host}} exec {sys.executable} {product / 'app.py'}"
     root = products.make(product, boot=boot, ready="http://127.0.0.2:{port}/")
-    try:
-        code, out = up(root, capsys)
-        assert code == 0, out
-        assert products.request(out[0])[0] == 200
-        upstream = json.loads((session(root) / "proxy.json").read_text(encoding="utf-8"))
-        port = urlsplit(str(upstream["upstream"])).port
-        assert urlsplit(str(upstream["upstream"])).hostname == "127.0.0.2"
-        assert not gatelib.listening(f"http://127.0.0.1:{port}/"), "the product kept its default"
-    finally:
-        down(root, capsys)
+    code, out = up(root, capsys)
+    assert code == 0, out
+    assert products.request(out[0])[0] == 200
+    upstream = json.loads((session(root) / "proxy.json").read_text(encoding="utf-8"))
+    port = urlsplit(str(upstream["upstream"])).port
+    assert urlsplit(str(upstream["upstream"])).hostname == "127.0.0.2"
+    assert not gatelib.listening(f"http://127.0.0.1:{port}/"), "the product kept its default"
 
 
 @pytest.mark.parametrize(
@@ -1269,12 +1242,16 @@ def test_a_session_that_ended_long_ago_is_removed_by_the_next_up(
 
 
 def test_down_ends_a_session_that_will_not_stop_and_names_what_still_answers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    capsys: pytest.CaptureFixture[str],
+    spawn: Spawn,
 ) -> None:
     directory = tmp_path / "store" / SLUG / "head" / "stuck"
     directory.mkdir(parents=True)
     (directory / "session.json").write_text("{}", encoding="utf-8")
-    sleeper = subprocess.Popen(["sleep", "60"])  # noqa: S607 # -- sleep from PATH
+    sleeper = spawn(["sleep", "60"])
     stuck = directory / "live.lock"
     stuck.write_text(str(sleeper.pid), encoding="utf-8")
     starting = tmp_path / "store" / SLUG / "head" / "starting"
@@ -1282,22 +1259,16 @@ def test_down_ends_a_session_that_will_not_stop_and_names_what_still_answers(
     (starting / "session.json").write_text("{}", encoding="utf-8")
     (starting / "live.lock").write_text("", encoding="utf-8")
     port = gatelib.free_port()
-    server = subprocess.Popen(  # noqa: S603 # -- this interpreter and a fixed server
-        [sys.executable, "-c", SERVE], env={**os.environ, "PORT": str(port)}
-    )
+    spawn([sys.executable, "-c", SERVE], env={**os.environ, "PORT": str(port)})
     listening = f"http://127.0.0.1:{port}/"
     monkeypatch.setattr(acceptance, "DOWN_WAIT", 0.2)
-    try:
-        while not gatelib.listening(listening):
-            time.sleep(0.02)
-        (directory / "proxy.json").write_text(json.dumps({"url": listening}), encoding="utf-8")
-        with stuck.open("rb") as held, starting.joinpath("live.lock").open("rb") as also:
-            fcntl.flock(held, fcntl.LOCK_EX)
-            fcntl.flock(also, fcntl.LOCK_EX)
-            code = acceptance.stop_sessions(tmp_path / "store" / SLUG)
-    finally:
-        server.terminate()
-        server.wait()
+    while not gatelib.listening(listening):
+        time.sleep(0.02)
+    (directory / "proxy.json").write_text(json.dumps({"url": listening}), encoding="utf-8")
+    with stuck.open("rb") as held, starting.joinpath("live.lock").open("rb") as also:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        fcntl.flock(also, fcntl.LOCK_EX)
+        code = acceptance.stop_sessions(tmp_path / "store" / SLUG)
     out = capsys.readouterr().out.splitlines()
     assert code == 1
     assert gone(sleeper.pid)
