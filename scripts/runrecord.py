@@ -73,18 +73,16 @@ def append(path: Path, record: dict[str, object], *, who: str = "ratchet") -> No
 def tail(path: Path) -> list[bytes]:
     try:
         handle = os.open(path, READ)
+        try:
+            held = os.fstat(handle)
+            if not stat.S_ISREG(held.st_mode):
+                return []
+            start = max(0, held.st_size - WINDOW - 1)
+            lines = os.pread(handle, WINDOW + 1, start).split(b"\n")
+        finally:
+            os.close(handle)
     except OSError:
         return []
-    try:
-        held = os.fstat(handle)
-        if not stat.S_ISREG(held.st_mode):
-            return []
-        start = max(0, held.st_size - WINDOW - 1)
-        lines = os.pread(handle, WINDOW + 1, start).split(b"\n")
-    except OSError:
-        return []
-    finally:
-        os.close(handle)
     return lines[1:] if start else lines
 
 
