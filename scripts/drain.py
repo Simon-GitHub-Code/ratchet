@@ -698,6 +698,14 @@ def open_ticket(drain: Drain, ref: str) -> int:
     if theirs is not None:
         print(f"open: {theirs}: {NOT_OURS}")
         return 1
+    tip = gatelib.git(drain.root, "rev-parse", "--verify", "--quiet", f"refs/heads/{entry.branch}")
+    moves = tip != gatelib.git(drain.root, "rev-parse", drafted.base)
+    if moves and passed(drain.root, entry.branch):
+        note = queue_notes.read_note(drain.root, entry.branch)
+        queue_notes.write_note(
+            queue_notes.note_path(drain.root, entry.branch),
+            {k: v for k, v in note.items() if k != "passed"},
+        )
     added = gatelib.git(
         drain.root, "worktree", "add", "--quiet", "-B", entry.branch, str(tree), drafted.base
     )
