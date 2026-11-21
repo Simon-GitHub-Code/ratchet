@@ -932,16 +932,17 @@ def test_a_pull_request_that_targets_another_branch_is_the_owners_and_says_what_
     label, text = said[1].split(": ", 1)
     assert label == "target"
     assert f"- `target`: {text}\n" in report.read_text(encoding="utf-8")
-    steps = [
-        "the pull request targets `feature/3-base`, not the default branch `main`",
-        "Merge the pull request from `feature/3-base` first",
-        "change this one's target to `main` on the pull request's page on the forge",
+    assert text.startswith("the pull request targets `feature/3-base`, not the default branch")
+    for step in (
+        "the method judges a change against `main`",
+        "change its target to `main` on the pull request's page on the forge",
         "keeps it open",
-        "Do not delete `feature/3-base`",
-        "closed and cannot be reopened or retargeted",
-    ]
-    assert all(step in text for step in steps), text
-    assert [text.index(step) for step in steps] == sorted(text.index(step) for step in steps)
+        "the owner then merges it",
+        "If it is already closed, open a new pull request from its branch against `main`",
+    ):
+        assert step in text, (step, text)
+    assert "from `feature/3-base`" not in text
+    assert "delete" not in text
 
 
 def test_a_branch_behind_the_default_branch_ran_its_gates_on_an_older_one(root: Path) -> None:

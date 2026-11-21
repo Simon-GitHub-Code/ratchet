@@ -125,7 +125,7 @@ def test_a_retargeted_pull_request_leaves_ci_uncounted(
 ) -> None:
     events = json.dumps([{"event": "labeled"}]) + json.dumps([{"event": event}])
     code, said = ci(tmp_path, capsys, page(run()), events=events)
-    assert (code, said) == (
+    assert (code, said.split(";")[0]) == (
         1,
         "its base branch was changed, so ci may have run against the earlier one",
     )
@@ -151,7 +151,7 @@ def test_a_run_that_did_not_test_this_pull_request_does_not_count(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], other: dict[str, object]
 ) -> None:
     code, said = ci(tmp_path, capsys, page(run(**other)))
-    assert (code, said) == (1, f"no ci run on {SHA} names it against `main`")
+    assert (code, said.split(";")[0]) == (1, f"no ci run on {SHA} names it against `main`")
     assert ci(tmp_path, capsys, page()) == (code, said)
 
 
@@ -239,46 +239,32 @@ TWIN_ROW = (
     "- `twin`: #2 is a pull request from `feat/a` against `weak`, so ci on this commit may have"
     " run against that branch\n"
 )
-RETARGET_ROW = (
-    "- `retargeted`: its base branch was changed, so ci may have run against the earlier one\n"
-)
-TARGET_ROW = (
-    "- `target`: the pull request targets `weak`, not the default branch `main`. Merge the pull"
-    " request from `weak` first, and before it merges change this one's target to `main` on the"
-    " pull request's page on the forge, which keeps it open; the owner then merges this one. Do"
-    " not delete `weak` before this one is retargeted: the merge job deletes the branch of each"
-    " pull request it merges, and a pull request whose target branch is gone is closed and cannot"
-    " be reopened or retargeted\n"
-)
-UNNAMED_ROW = f"- `unnamed`: no ci run on {SHA} names it against `main`\n"
+OWNER_CASES = {
+    "twin": (page(run(pull_requests=BOTH)), TWIN, "[]"),
+    "retargeted": (page(run()), None, '[{"event": "base_ref_changed"}]'),
+    "target": (page(run()), json.dumps([pull(base="weak")]), "[]"),
+    "unnamed": (page(run(pull_requests=[])), None, "[]"),
+}
 
 
-@pytest.mark.parametrize(
-    ("row", "case"),
-    [
-        (TWIN_ROW, (page(run(pull_requests=BOTH)), TWIN, "[]")),
-        (RETARGET_ROW, (page(run()), None, '[{"event": "base_ref_changed"}]')),
-        (TARGET_ROW, (page(run()), json.dumps([pull(base="weak")]), "[]")),
-        (UNNAMED_ROW, (page(run(pull_requests=[])), None, "[]")),
-    ],
-)
+def rows_of(written: str) -> dict[str, str]:
+    body = written.split("\n\n", 1)[1]
+    return dict(line[3:].split("`: ", 1) for line in body.splitlines())
+
+
+@pytest.mark.parametrize("reason", OWNER_CASES)
 def test_a_reason_the_owner_must_act_on_is_written_as_the_judge_s_comment(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    *,
-    row: str,
-    case: tuple[str, str | None, str],
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], reason: str
 ) -> None:
-    runs, pulls, events = case
+    runs, pulls, events = OWNER_CASES[reason]
     code, said, written = comment_for(tmp_path, capsys, runs, pulls=pulls, events=events)
     judged = merge_ready.report([merge_ready.Reason("code", "text")], SHA)
     assert code == 1
-    assert said == row.split("`: ", 1)[1].strip()
     head = f"{merge_ready.MARKER}\n**{merge_ready.OWNER}** at `{SHA[:12]}`. "
     assert written is not None
     assert judged.startswith(head)
     assert written.startswith(head)
-    assert written.split("\n\n", 1)[1] == row
+    assert written.split("\n\n", 1)[1] == f"- `{reason}`: {said}\n"
     assert judged.split("\n\n", 1)[1] == "- `code`: text\n"
 
 
@@ -290,7 +276,77 @@ def test_every_reason_the_owner_must_act_on_is_in_the_one_comment(
     code, _, written = comment_for(tmp_path, capsys, runs, pulls=TWIN, events=events)
     assert code == 1
     assert written is not None
-    assert written.split("\n\n", 1)[1] == TWIN_ROW + RETARGET_ROW
+    assert list(rows_of(written)) == ["twin", "retargeted"]
+    assert f"{rows_of(written)['twin']}\n" == TWIN_ROW.split("`: ", 1)[1]
+
+
+RETARGET = [
+    "change its target to `main` on the pull request's page on the forge",
+    "keeps it open",
+    "the owner then merges it",
+    "a new commit on its branch starts one",
+    "If it is already closed, open a new pull request from its branch against `main`",
+]
+BESIDE = ["#2, from the same branch, already targets `main`", "the owner merges or closes this one"]
+STACKED = {
+    "a stack": ([pull(base="low")], ["target", "unnamed"], RETARGET),
+    "a long-lived branch": ([pull(base="release")], ["target", "unnamed"], RETARGET),
+    "two from one branch, neither on the default": (
+        [pull(base="low"), pull(2, "release")],
+        ["target", "twin", "unnamed"],
+        RETARGET,
+    ),
+    "beside a closed one on the default": (
+        [pull(base="low"), pull(2, state="closed")],
+        ["target", "unnamed"],
+        RETARGET,
+    ),
+    "beside an open one on the default": (
+        [pull(base="low"), pull(2)],
+        ["target", "unnamed"],
+        BESIDE,
+    ),
+}
+
+
+@pytest.mark.parametrize("case", STACKED)
+def test_a_pull_request_on_another_branch_is_told_only_the_steps_true_of_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], case: str
+) -> None:
+    pulls, codes, says = STACKED[case]
+    named = [{"number": forge_runs.at(p, "number"), "base": forge_runs.at(p, "base")} for p in pulls]
+    code, said, written = comment_for(
+        tmp_path, capsys, page(run(pull_requests=named)), pulls=json.dumps(pulls)
+    )
+    assert code == 1
+    assert written is not None
+    found = rows_of(written)
+    assert list(found) == codes
+    target, branch = found["target"], str(forge_runs.at(pulls[0], "base", "ref"))
+    assert said == target
+    assert target.startswith(f"the pull request targets `{branch}`, not the default branch")
+    assert "the method judges a change against `main`" in target
+    for step in says:
+        assert step in target, (step, target)
+    for step in BESIDE if says is RETARGET else RETARGET[:1]:
+        assert step not in target, (step, target)
+    assert f"from `{branch}`" not in target
+    assert "delete" not in target
+
+
+def test_after_a_change_of_target_the_note_still_says_who_merges_and_what_is_needed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    runs = page(run(pull_requests=[]))
+    _, _, written = comment_for(
+        tmp_path, capsys, runs, events='[{"event": "base_ref_changed"}]'
+    )
+    assert written is not None
+    found = rows_of(written)
+    assert "the owner merges this one" in found["retargeted"]
+    assert "a new commit on its branch starts a ci run" in found["retargeted"]
+    assert "a new commit on its branch starts one" in found["unnamed"]
+    assert "the merge job judges it again" in found["unnamed"]
 
 
 @pytest.mark.parametrize(
@@ -796,7 +852,7 @@ def test_bytes_that_are_not_utf_8_in_a_field_no_logic_reads_change_no_answer(
     assert ci_script(tmp_path, tested, locale) == (0, b"green\n", b"")
 
 
-UNNAMED = f"no ci run on {SHA} names it against `main`\n".encode()
+UNNAMED = f"no ci run on {SHA} names it against `main`".encode()
 READ = {
     "conclusion": ("red", (1, f"ci is not green on {SHA}\n".encode()), [("red", "u")]),
     "event": ("none", (1, UNNAMED), []),
@@ -827,7 +883,8 @@ def test_bytes_that_are_not_utf_8_in_a_field_the_logic_reads_are_a_value_it_cann
     spoke = run_script(tmp_path, asked, data, locale=locale)
     assert (spoke.returncode, spoke.stderr) == (0, b"")
     tested = spoilt(page(run(html_url="u")), field)
-    assert ci_script(tmp_path, tested, locale) == (code, said, b"")
+    done = ci_script(tmp_path, tested, locale)
+    assert (done[0], done[1].split(b";")[0].rstrip(b"\n"), done[2]) == (code, said.rstrip(b"\n"), b"")
 
 
 def test_speaks_refuses_a_commit_that_is_not_a_commit_name(
