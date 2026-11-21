@@ -2010,7 +2010,7 @@ def test_args_that_name_nothing_narrow_nothing(
         pytest.param('whole = "a reason"\n', 'args = ["src"]\n', True, id="a reason to args"),
     ],
 )
-def test_only_what_a_bite_runs_proves_its_gate_again(
+def test_a_change_to_whole_alone_proves_no_gate_again_and_a_swap_with_args_does(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], *, before: str, after: str, again: bool
 ) -> None:
     rest = bite("tests", WORD) + bite("slow", WORD)
