@@ -755,23 +755,32 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
                 " restores, production answers."
             ),
             f"- {conformance.NO_DOOR}",
+            (
+                "Commit this on main; to commit it on another branch, run the upgrade again there"
+                " first."
+            ),
             "Your one step is the merge.",
         ]
     )
 
 
+@pytest.mark.parametrize("ledger", [None, ""])
 def test_a_repository_that_conforms_is_told_so_and_exits_0_once_the_pin_has_moved(
+    ledger: str | None,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     root = repos.repository(tmp_path / "repo")
     shutil.copytree(pristine(), root, symlinks=True, dirs_exist_ok=True)
+    if ledger is not None:
+        repos.write(root, "quality/owed.toml", ledger)
     repos.git(root, "add", "-A")
     assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
     out = capsys.readouterr().out
     assert "Wrote 5 files:" in out
     assert "upgrade: wrote 5 edits in 5 files. 0 items are owed and 0 red" in out
-    assert not (root / "quality/owed.toml").exists(), "a project that owes nothing has no ledger"
+    assert "Commit this" not in out, "a plan that leaves no owed entry names no branch"
+    assert (root / "quality/owed.toml").exists() == (ledger is not None)
     assert upgrade.main(["upgrade.py", "--root", str(root)]) == 0
     out = capsys.readouterr().out
     assert "Would write" not in out

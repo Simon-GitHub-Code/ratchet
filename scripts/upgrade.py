@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TypeVar
 
@@ -72,6 +72,10 @@ class Plan:
     now: str
     waiting: tuple[str, ...] = ()
     approved: int = 0
+    shallow: bool = False
+    branch: str | None = None
+    head: str = ""
+    owes: bool = False
 
     @property
     def edits(self) -> int:
@@ -235,8 +239,9 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
             foreign = conformance.copied(root, sandbox)
             touched = pass_over(sandbox, [pinned_to(plugin)], done)
             first = converge(sandbox, done)
+            base = owed.next_base(root)
             touched |= first.touched | pass_over(
-                sandbox, owing(root, sandbox, first.left, plugin=plugin), done
+                sandbox, owing(root, sandbox, first.left, plugin=plugin, base=base), done
             )
             converged = converge(sandbox, done)
         except StuckError as error:
@@ -261,6 +266,7 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
         approved = sum(
             editor(sandbox, f.path) != NOT_GUARDED for f in converged.left if id(f) not in reds
         )
+        owes = bool(owed.read(sandbox).entries)
     return Plan(
         old=standing(root, plugin),
         new=plugin_pin.in_use(plugin),
@@ -280,29 +286,68 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
         now=plugin_pin.version_of(plugin) or "an unknown version",
         waiting=waiting,
         approved=approved,
+        shallow=gatelib.git(root, "rev-parse", "--is-shallow-repository") == "true"
+        and base == gatelib.git(root, "rev-parse", "--verify", "-q", "HEAD"),
+        branch=gatelib.git(root, "symbolic-ref", "--short", "-q", "HEAD"),
+        head=str(gatelib.git(root, "rev-parse", "--verify", "-q", "HEAD"))[:12],
+        owes=owes,
     )
 
 
-def owing(root: Path, sandbox: Path, left: list[Finding], *, plugin: Path) -> list[Finding]:
-    base = gatelib.base_commit(root)
+def owing(
+    root: Path, sandbox: Path, left: list[Finding], *, plugin: Path, base: str | None
+) -> list[Finding]:
     before = gatelib.show(root, base, str(gatelib.BINDING)) if base else None
     after = gatelib.read_text(sandbox / gatelib.BINDING)
     pin = owed.moved(before, after, floor=plugin_pin.version_of(plugin))
     if pin is None:
         return []
+    held = owed.parse(gatelib.show(root, base, str(owed.LEDGER)) if base else None).entries
+    brought, edits = owed.brought(
+        held, owed.read(sandbox).entries, gatelib.renamed(root, base) if base else {}
+    )
+    mine = sorted(entry for entry in brought.elements() if entry.rule not in owed.GATE_RULES)
+    undated = [
+        (entry, was.since)
+        for entry, was in edits
+        if entry.since != was.since and entry.rule not in owed.GATE_RULES
+    ]
     red, _ = conformance.owed_split(sandbox, left)
     allowed = red_at_base(root, base, plugin)
     added = []
-    for finding in red:
-        key = finding.key()
+    for key in [*(finding.key() for finding in red), *(entry.key for entry in mine)]:
         if allowed[key] > 0 and not owed.never(key):
             allowed[key] -= 1
             added.append(owed.Entry(key[1], key[0], key[2], pin.version))
-    if not added:
+    dropped = sorted((Counter(e.key for e in mine) - Counter(e.key for e in added)).elements())
+    does = []
+    if added:
+        count = len(added)
+        things = "thing" if count == 1 else "things"
+        does.append(f"write down {count} {things} owed since {pin.version}")
+    if dropped:
+        count = len(dropped)
+        does.append(
+            f"drop {count} {'entry' if count == 1 else 'entries'} this change brought, which one"
+            f" upgrade from the gate's base {str(base)[:12]} would not write: "
+            + "; ".join(f"'{problem}' for {path} ({rule})" for rule, path, problem in dropped)
+        )
+    if undated:
+        count = len(undated)
+        does.append(
+            f"set back the since of {count} {'entry' if count == 1 else 'entries'} the gate's base"
+            f" {str(base)[:12]} holds, to the since it holds there: "
+            + "; ".join(
+                f"'{e.problem}' for {e.path} ({e.rule}) from '{e.since}' to '{since}'"
+                for e, since in undated
+            )
+        )
+    if not does:
         return []
-    count = len(added)
-    does = f"write down {count} {'thing' if count == 1 else 'things'} owed since {pin.version}"
-    return [Finding(str(owed.LEDGER), "", Auto(does, owed.recorded(added)))]
+    restored = [replace(entry, since=since) for entry, since in undated]
+    gone = [*mine, *(entry for entry, _ in undated)]
+    want = owed.recorded([*added, *restored], gone)
+    return [Finding(str(owed.LEDGER), "", Auto("; ".join(does), want))]
 
 
 def red_at_base(root: Path, base: str | None, plugin: Path) -> Counter[owed.Key]:
@@ -517,9 +562,19 @@ def plain(result: Plan, *, applied: bool) -> str:
     lines = ["In plain words:", text]
     if result.waiting:
         lines.append(f"Checks that do not run until then: {', '.join(result.waiting)}.")
+    if result.shallow:
+        lines.append("The history is shallow, and the owed ledger was measured against HEAD.")
     assumed = list(dict.fromkeys(finding.fix.assumed for finding in result.owner))
     if assumed:
         lines += ["Assumed until you say otherwise:", *(f"- {line}" for line in assumed)]
+    if str(owed.LEDGER) in result.changes or (result.changes and result.owes):
+        lines.append(
+            f"Commit this on {result.branch}; to commit it on another branch, run the upgrade"
+            " again there first."
+            if result.branch
+            else f"Commit this on the detached HEAD at {result.head}; to commit it on a branch,"
+            " run the upgrade again there first."
+        )
     if result.changes:
         lines.append("Your one step is the merge.")
     return "\n".join(lines)
