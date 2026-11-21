@@ -591,6 +591,7 @@ def open_ticket(drain: Drain, ref: str) -> int:
     if entry is None or entry.ref not in drafted.start:
         print(f"open: {ref} is not started: " + "; ".join(not_started(entry, drafted)))
         return 1
+    gate_start(drain.root, entry.branch, passed=False)
     tree = Path(entry.worktree)
     for directory in (users_home(), tree.parent):
         directory.mkdir(mode=OWNER_ONLY, exist_ok=True)
@@ -616,7 +617,6 @@ def open_ticket(drain: Drain, ref: str) -> int:
     prior = queue_notes.loaded(gatelib.read_text(path))
     keep = prior.get("reported") is False and prior.get("outcome") not in {None, MERGED}
     kept = {k: v for k, v in prior.items() if k not in START_DROPPED} if keep else {}
-    gate_start(drain.root, entry.branch, passed=False)
     queue_notes.write_note(path, {**kept, **asdict(entry), "opened": opened, "start": start})
     named = [asdict(n) for n in preflight.ticket_named_gates(entry.ref, tree, drain.tracker)]
     print(
@@ -730,8 +730,14 @@ def mark_passed(root: Path, branch: str) -> None:
 def gate_start(root: Path, branch: str, *, passed: bool) -> None:
     try:
         queue_notes.gate_feature_start(root, branch, tree_of(root, branch), passed=passed)
-    except (OSError, ValueError) as error:
-        print(f"the one-ticket start of `{branch}` cannot be written: {error}", file=sys.stderr)
+    except OSError as error:
+        stays = "unpassed, so a commit in its work tree is refused" if passed else "passed"
+        message = (
+            f"`{queue_notes.feature_start_name(branch)}` in the git directory cannot be written"
+            f" ({error.strerror}): the one-ticket start of `{branch}` stays {stays}, and nothing"
+            " was changed; make that folder writable, then run this again"
+        )
+        raise RefusedError(message) from None
 
 
 def read_present(
@@ -811,6 +817,8 @@ def check(drain: Drain, ticket: preflight.Ticket, *, final: bool) -> int:
         print(line)
         close(root, ticket, outcome=WAITS, reasons=[f"{UNREADABLE_CODE}: {line}"])
         return UNREAD
+    if final and not halted:
+        gate_start(root, branch, passed=True)
     if final:
         mark_passed(root, branch)
     if halted:
@@ -819,8 +827,6 @@ def check(drain: Drain, ticket: preflight.Ticket, *, final: bool) -> int:
         why = f"conflict: the rebase onto `{base}` was left unfinished"
         close(root, ticket, outcome=WAITS, reasons=[why])
         return UNREAD
-    if final:
-        gate_start(root, branch, passed=True)
     print(publish_check.GREEN)
     return 0
 

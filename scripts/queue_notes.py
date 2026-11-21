@@ -79,11 +79,15 @@ def note_path(root: Path, branch: str) -> Path:
     return gatelib.state_dir(root) / QUEUE / "tickets" / f"{branch.replace('/', '-')}.json"
 
 
+def feature_start_name(branch: str) -> str:
+    return f"{FEATURE_STARTS}/{branch.replace('/', '-')}.json"
+
+
 def feature_start_path(root: Path, branch: str) -> Path | None:
     common = gatelib.git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
     if not common:
         return None
-    return Path(common) / FEATURE_STARTS / f"{branch.replace('/', '-')}.json"
+    return Path(common) / feature_start_name(branch)
 
 
 def record_feature_start(root: Path, branch: str, start: dict[str, object]) -> None:
