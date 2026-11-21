@@ -429,7 +429,8 @@ def test_the_writer_makes_the_state_folder_and_the_record(tmp_path: Path) -> Non
 
 
 def outputs(capsys: pytest.CaptureFixture[str]) -> list[str]:
-    return [re.sub(r"\d+\.\d+s", "Ns", line) for line in capsys.readouterr().out.splitlines()]
+    said = re.sub(r"; slowest: .*", "", capsys.readouterr().out)
+    return [re.sub(r"\d+\.\d+s", "Ns", line) for line in said.splitlines()]
 
 
 def stuck(path: Path) -> str:
