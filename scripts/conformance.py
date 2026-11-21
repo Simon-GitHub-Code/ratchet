@@ -2124,12 +2124,15 @@ def forge_workflow(
             continue
         problem = f"nothing {meaning} ('{marker}' absent)"
         path = str(WORKFLOWS / name)
+        template = ADOPT_TEMPLATES / WORKFLOWS / name
         if name == MERGE_WORKFLOW and marker == TIER1_FLAG:
             does = "read the default branch's tier 1 and pass it to the judge, as the template does"
             yield Finding(path, problem, Edit(does, with_tier1(name), Agent()))
         elif name == MERGE_WORKFLOW and marker == KEPT_BRANCH:
             does = "keep a merged branch an open pull request targets, as the template does"
-            yield Finding(path, problem, Edit(does, with_kept_branch(name), Agent()))
+            step = f"replace the step that deletes the merged branch with the one in {template}"
+            fix = Edit(does, with_kept_branch(name), Agent())
+            yield Finding(path, f"{problem}; {step}", fix, identity=problem)
         else:
             yield agent(f"{path}: {problem}")
 
