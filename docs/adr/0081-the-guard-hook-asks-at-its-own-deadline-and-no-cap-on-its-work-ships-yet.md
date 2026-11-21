@@ -3,13 +3,13 @@ status: accepted
 ---
 # The guard hook asks at its own deadline, and no cap on its work ships yet
 
-Read with ADR 0033, whose known limits name the hook that times out. Amends nothing.
+Read with ADR 0033, whose known limits name the hook that times out. Adds one case to the rule of ADR 0024 for a relative write after a `cd` the guard cannot follow.
 
 The harness gives the guard hook a time limit: 10 s in `hooks/hooks.json`, and 10 s in the adapter for the other harnesses. A hook that passes it is cancelled, and on `PreToolUse` a cancelled hook does not block the call. So the call runs unjudged. A command built to be slow to read was a way past the guard, and so was an ordinary large command on a busy machine.
 
 ## What was measured
 
-`hooks/tests/test_guard_work.py` builds 58 families of commands at sizes n, 2n and 4n. It counts the Python calls the guard makes while it judges each one, and asserts the growth per doubling. A count is the same on every run of one interpreter, and seconds are not. Seconds appear here only beside the load they were taken at. Linear work doubles per doubling, and work that grows with the square of the input quadruples.
+`hooks/tests/test_guard_work.py` builds 59 families of commands at sizes n, 2n and 4n. It counts the Python calls the guard makes while it judges each one, and asserts the growth per doubling, one doubling at a time, so a family that explodes fails at its first doubling. A count is the same on every run of one interpreter, and seconds are not. Seconds appear here only beside the load they were taken at. Linear work doubles per doubling, and work that grows with the square of the input quadruples.
 
 | Family | n | `main`: work at n and 4n | per doubling | now: work at n and 4n | per doubling |
 | --- | ---: | ---: | --- | ---: | --- |
@@ -31,7 +31,7 @@ Every other family grows at most 2.09 per doubling, before and after. The test a
 Three costs grew faster than the command, each from one cause:
 
 - **Many assignments.** Each command copied every name assigned so far into the next context and compared them all. The guard reads nine names from the environment it carries: the repository variables, the homes, `PATH` and `CDPATH`. A context now keeps only those.
-- **A directory spelled from variables.** `cd $x0$x1…` read every combination of the values each variable might hold. That is 3 to the power of the variables, though the guard keeps 64 directories and asks past them. With 24 variables the guard on `main` did not finish in minutes. The guard now stops reading once it has reached more than 64 directories, which asks as before. It also stops after 256 combinations, and past those it treats the directory as one it cannot read. Below both caps it reads the same directories in the same order.
+- **A directory spelled from variables.** `cd $x0$x1…` read every combination of the values each variable might hold. That is 3 to the power of the variables, though the guard keeps 64 directories and asks past them. With 24 variables the guard on `main` did not finish in minutes. The guard now stops reading once it has reached more than 64 directories, which asks as before. It also stops after 256 combinations. Past those it has not read every directory the `cd` may reach. It asks, as for a line that moves between too many directories, and any relative write after the `cd` is denied (`unresolved-directory`), whatever path the write names: a redirect's, a removal's, an interpreter's or a git command's. Below both caps it reads the same directories in the same order.
 - **Wrappers that change directory.** `sudo -D d sudo -D d …` judged the command once per option, not once per directory. The directories are now kept once each.
 
 Two more costs changed by a constant factor and keep their growth:
@@ -39,7 +39,7 @@ Two more costs changed by a constant factor and keep their growth:
 - **An unclosed substitution.** Its text ended in the newline the reader adds after a command. Reading that text again added another newline, so the same script was a new text at every depth and was read again. The newline is no longer part of the text, and the work fell about 3.3 times. Its growth with depth is unchanged.
 - **Finding a path's group.** The path was normalised again for every pattern of every group. It is now normalised once.
 
-One cost was invisible to the count because it ran inside the regular-expression engine. The pattern that finds a branch switch hidden after a `git` word scanned the rest of the text from each `git`. So `echo git git …` cost the square of its length: 0.075, 0.274 and 0.983 s of CPU for 1,000, 2,000 and 4,000 words. The guard now finds the first `git` and looks for a switch after it, which takes 0.019, 0.039 and 0.073 s. The hook also read the current branch from git at every use, and now reads it once per directory per tool call.
+One cost was invisible to the count because it ran inside the regular-expression engine. The pattern that finds a branch switch hidden after a `git` word scanned the rest of the text from each `git`. So `echo git git …` cost the square of its length: 0.075, 0.274 and 0.983 s of CPU for 1,000, 2,000 and 4,000 words. The guard now finds the first `git` and looks for a switch after it, which takes 0.019, 0.039 and 0.073 s. The test times this one family instead of counting it, in CPU seconds at 2,000, 4,000 and 8,000 words with the least of three runs, and allows 3 per doubling. The old pattern grew 4.1 and 4.5 there. The hook also read the current branch from git at every use, and now reads it once per directory per tool call.
 
 ## The bound on work is not shipped
 
@@ -51,9 +51,9 @@ So no cap on work ships, and the figures go to the owner for a ruling. A cap tha
 
 ## Decision: the hook asks at its own deadline
 
-**The hook gives itself 7 s of the harness's 10.** `hook.main` arms a timer before it reads the call and disarms it when it has a verdict. When the timer fires, the hook stops judging and answers `ask`. The reason says that the guard used the 7 s it gives itself before the harness's time limit, on a busy machine or a command slow to read, and that a smaller tool call is read in time. A deny the guard reached for an earlier command of the line stands. The hook then writes its log line as for any answer, which takes at most 1 s. That leaves 2 s for the interpreter to start. A test reads `hooks/hooks.json` and the adapter's limit, and holds that sum under each.
+**The hook gives itself 7 s of the harness's 10.** `hook.main` arms a timer before it reads the call and disarms it when it has a verdict. Every verdict the guard finds is kept the moment it is found, in each directory a wrapper or a `cd` leads to, so a deny found before the timer fires stands. When the timer fires, the hook stops judging and answers the strictest of what it has kept and an `ask`. The reason of that ask says that the guard used the 7 s it gives itself before the harness's time limit, on a busy machine or a command slow to read, and that a smaller tool call is read in time. Once the hook has its verdict, a late timer changes nothing. The hook then writes its log line as for any answer, which takes at most 1 s. Of the 10 s, 7 s go to judging and 1 s to the log line, which leaves 2 s for the interpreter to start and exit. A test reads `hooks/hooks.json` and the adapter's limit, and holds that sum under each.
 
-With judging held for 12 s, the hook on `main` answered after 12.07 s with no output, which the harness reads as allow, so the harness would have cancelled it unjudged at 10 s. The hook here answered `ask` after 7.21 s.
+With judging held for 12 s, the hook on `main` answered after 12.07 s with no output, which the harness reads as allow, so the harness would have cancelled it unjudged at 10 s. The hook here answered `ask` after 7.21 s. An independent review ran the hook as a process ten times with judging held for 12 s, at a load of 16.6 to 30.8 on 16 cores: it answered `ask` after at most 7.61 s and exited after at most 7.84 s, 2.16 s inside the limit. The same review measured a hook with nothing to judge at up to 1.02 s from start to exit.
 
 **It answers ask, not allow and not deny.** The guard could not judge the call, so the owner decides, as for every other call the guard cannot read. A deny would refuse ordinary large commands on a busy machine, and an agent would have no way through.
 
@@ -74,7 +74,7 @@ In each case the harness cancels the hook and the call runs unjudged, as before.
 
 On a busy machine, a command the guard cannot judge in 7 s is asked about. Before, it ran unjudged. That includes ordinary commands that took the guard close to 10 s, such as the generated script measured above. A command split into smaller tool calls is judged in time.
 
-When the guard judges in time, its verdict is the verdict `main` reaches. That holds on 21,937 commands from the repository's corpora, the families above and the reviews of the last guard change, with one exception. A directory spelled from variables whose combinations number more than 256, while their directories number 64 or fewer, is now a directory the guard cannot follow. A later relative write to a guard path is denied there, as after any `cd` the guard cannot follow. On `main` the guard read every combination and allowed the write.
+When the guard judges in time, its verdict is never looser than the verdict `main` reaches. Where it differs, it is stricter, in two cases. A `cd` spelled from variables whose combinations number more than 256, while their directories number 64 or fewer, asks, and any relative write after it is denied (`unresolved-directory`), whatever path it names. On `main` the guard read every combination, so it allowed a write that was no guard path in any directory, and asked about a workflow or instruction file. After a `cd` the guard cannot read at all, the rule of ADR 0024 is unchanged: a relative write is denied when it would be a guard path of a repository rooted at that directory, and any other relative write passes. That rule now also reads the paths an interpreter's program or a git command writes, as it read a redirect's or a removal's.
 
 A verdict that `main` reached in 7 to 10 s is now `ask`, unless a deny came before the deadline. When `main` took longer than 10 s, the harness cancelled it and the call ran unjudged.
 
