@@ -66,6 +66,7 @@ edit = "deny"
 paths = [
     ".git/hooks/**",
     ".git/config",
+    ".git/ratchet-deep.jsonl",
 ]
 
 [[group]]

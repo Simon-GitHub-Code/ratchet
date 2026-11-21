@@ -1332,7 +1332,8 @@ def landed(
         print(f"land: `{command}` stopped (exit {done.returncode}); run land again to finish it")
         return 2
     lines = done.stdout.splitlines()
-    at = lines.index(merge_ready.OWNER) if merge_ready.OWNER in lines else len(lines)
+    said = {merge_ready.OWNER, merge_ready.WAIT}
+    at = next((at for at, line in enumerate(lines) if line in said), len(lines))
     reasons = [line for line in lines[at + 1 :] if line.strip() and not line.startswith(merge.NEXT)]
     with exclusive(drain.root):
         close(drain.root, ticket, outcome=WAITS if done.returncode else MERGED, reasons=reasons)
