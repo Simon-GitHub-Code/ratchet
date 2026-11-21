@@ -13,6 +13,7 @@ import gatelib
 from tests import products
 from tests.servers import Popen, Spawn, gone, pid_of
 
+pytestmark = pytest.mark.usefixtures("sessions_ended")
 SLUG = "save-link"
 SCRIPT = Path(acceptance.__file__)
 

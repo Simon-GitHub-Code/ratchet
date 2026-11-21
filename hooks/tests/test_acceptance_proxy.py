@@ -312,17 +312,18 @@ def test_a_session_goes_on_only_while_its_directory_is_there_and_something_holds
 
 
 def test_a_proxy_whose_starter_is_gone_when_it_first_looks_serves_nothing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, spawn: Spawn
 ) -> None:
-    directory = tmp_path / "session"
-    directory.mkdir()
-    (directory / "session.json").write_text(json.dumps({"session": SESSION}), encoding="utf-8")
+    directory = session_directory(tmp_path)
     (directory / "live.lock").write_text(str(os.getpid()), encoding="utf-8")
-    monkeypatch.setenv(gatelib.READY_ENV, f"http://127.0.0.1:{gatelib.free_port()}/")
-    assert acceptance_proxy.main(["acceptance_proxy.py", str(directory)]) == 1
+    nothing = f"http://127.0.0.1:{gatelib.free_port()}/"
+    process = run_proxy(
+        spawn, tmp_path, str(directory), env={gatelib.READY_ENV: nothing}, stderr=subprocess.PIPE
+    )
+    assert process.wait(timeout=30) == 1
     assert not (directory / "proxy.json").exists()
-    assert capsys.readouterr().err == (
-        "acceptance_proxy: whoever started the session is gone; nothing was served\n"
+    assert process.stderr.read() == (  # type: ignore[union-attr]
+        b"acceptance_proxy: whoever started the session is gone; nothing was served\n"
     )
 
 
@@ -362,8 +363,15 @@ def holding(directory: Path) -> Iterator[None]:
         yield
 
 
-def run_proxy(spawn: Spawn, tmp_path: Path, *args: str, env: dict[str, str]) -> Popen:
-    return spawn([sys.executable, str(PROXY), *args], env={**os.environ, **env}, cwd=tmp_path)
+def run_proxy(
+    spawn: Spawn, tmp_path: Path, *args: str, env: dict[str, str], stderr: int | None = None
+) -> Popen:
+    return spawn(
+        [sys.executable, str(PROXY), *args],
+        env={**os.environ, **env},
+        cwd=tmp_path,
+        stderr=stderr,
+    )
 
 
 @pytest.mark.parametrize("signum", gatelib.INTERRUPTS)
