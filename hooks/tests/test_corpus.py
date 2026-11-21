@@ -919,8 +919,7 @@ DENIED: list[tuple[str, list[str]]] = [
     ("python3 -c \"open('.git/refs/heads/main','w').write('x')\"", [W]),
 ]
 
-MERGED: list[tuple[str, list[str]]] = [
-    ("gh pr merge 5", ["merge-pr"]),
+ASKED: list[tuple[str, list[str]]] = [
     ("gh pr merge 12 --squash", ["merge-pr"]),
     ("gh pr merge --auto --squash", ["merge-pr"]),
     ("gh -R o/r pr merge 3", ["merge-pr"]),
@@ -935,10 +934,6 @@ MERGED: list[tuple[str, list[str]]] = [
         "gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {}) { a } }'",
         ["merge-pr"],
     ),
-]
-DENIED += MERGED
-
-ASKED: list[tuple[str, list[str]]] = [
     ("gh issue edit 4 --add-label agent:ready", ["agent-ready-label"]),
     ("gh issue edit 4 --add-label needs-info,agent:ready", ["agent-ready-label"]),
     ("gh issue edit 4 --add-label=agent:ready --body x", ["agent-ready-label"]),
@@ -954,6 +949,8 @@ ASKED: list[tuple[str, list[str]]] = [
     ("cat <<E\n${x:-'$(git push -f)'}\nE", ["force-push", "unreadable"]),
     ("echo \"${x:-'`git push -f`'}\"", ["force-push", "unreadable"]),
 ]
+
+MERGED = [("gh pr merge 5", ["merge-pr"]), *(row for row in ASKED if row[1] == ["merge-pr"])]
 
 UNRESOLVED = U
 LOST = "sed -i s/a/b/ .github/workflows/ci.yml"
