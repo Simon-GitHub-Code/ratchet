@@ -4,7 +4,7 @@ import pytest
 
 from ratchet_guards.context import Guard
 from ratchet_guards.manifest import EMPTY
-from tests.support import NAMES, ROOT, WORKTREE, FakeRepo, make_guard, rules
+from tests.support import NAMES, ROOT, WORKTREE, FakeFilesystem, FakeRepo, make_guard, rules
 from tests.test_units import Heads
 
 W = "guard-path-write"
@@ -919,7 +919,8 @@ DENIED: list[tuple[str, list[str]]] = [
     ("python3 -c \"open('.git/refs/heads/main','w').write('x')\"", [W]),
 ]
 
-ASKED: list[tuple[str, list[str]]] = [
+MERGED: list[tuple[str, list[str]]] = [
+    ("gh pr merge 5", ["merge-pr"]),
     ("gh pr merge 12 --squash", ["merge-pr"]),
     ("gh pr merge --auto --squash", ["merge-pr"]),
     ("gh -R o/r pr merge 3", ["merge-pr"]),
@@ -934,6 +935,10 @@ ASKED: list[tuple[str, list[str]]] = [
         "gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {}) { a } }'",
         ["merge-pr"],
     ),
+]
+DENIED += MERGED
+
+ASKED: list[tuple[str, list[str]]] = [
     ("gh issue edit 4 --add-label agent:ready", ["agent-ready-label"]),
     ("gh issue edit 4 --add-label needs-info,agent:ready", ["agent-ready-label"]),
     ("gh issue edit 4 --add-label=agent:ready --body x", ["agent-ready-label"]),
@@ -1501,6 +1506,20 @@ def test_rules_fire(command: str, expected: list[str]) -> None:
     assert rules(command) == on_a_branch(expected)
 
 
+def unadopted(repo: FakeRepo | None = None) -> Guard:
+    filesystem = FakeFilesystem(manifest=EMPTY, guarded=(), unguarded=(ROOT,))
+    return make_guard(repo, filesystem, EMPTY)
+
+
+@pytest.mark.parametrize(("command", "expected"), MERGED)
+def test_a_merge_where_nothing_is_adopted_still_asks_the_owner(
+    command: str, expected: list[str]
+) -> None:
+    assert expected == ["merge-pr"]
+    assert rules(command, unadopted()) == ["merge-pr-unadopted"]
+    assert rules(command, unadopted(FakeRepo(branch="main"))) == ["merge-pr-unadopted"]
+
+
 @pytest.mark.parametrize(
     "command", [command for command, expected in DENIED + ASKED if P in expected]
 )
@@ -1638,6 +1657,17 @@ ON_MAIN: list[tuple[str, list[str]]] = [
     ("git pull --rebase origin HEAD", []),
     ("git pull origin +refs/heads/master", []),
     ("git merge --ff-only @{upstream}", []),
+    ("git merge origin/main", []),
+    ("git merge --no-edit origin/main", []),
+    ("git merge -q --no-edit origin/main", []),
+    ("git merge --no-ff refs/remotes/origin/main", []),
+    ("git merge @{u}", []),
+    ("git merge --no-edit @{upstream}", []),
+    ("git merge --ff origin/main", []),
+    ("git merge", []),
+    ("git fetch origin && git merge --no-edit origin/main", []),
+    ("git switch -c scratch/try && git merge --no-ff feature/4-x", []),
+    ("git switch --detach", []),
     ("git fetch origin && git merge --ff-only origin/main", []),
     ("git fetch --prune origin main && git pull", []),
     ("git switch main && git pull", []),
@@ -1671,6 +1701,7 @@ ON_MAIN: list[tuple[str, list[str]]] = [
     ("git cherry-pick --abort", []),
     ("git cherry-pick --cont", []),
     ("just merge feature/4-x", []),
+    ("just merge-ready --head feature/4-x", []),
     ("python3 /plugin/scripts/merge.py feature/4-x", []),
     ("python3 /plugin/scripts/merge_ready.py --base main", []),
     ("git merge feature/4-x", [M]),
@@ -1678,11 +1709,24 @@ ON_MAIN: list[tuple[str, list[str]]] = [
     ("git merge --no-ff -m 'Merge it' feature/4-x", [M]),
     ("git merge --ff-only feature/4-x", [M]),
     ("git merge --ff-only origin/main feature/4-x", [M]),
-    ("git merge --ff origin/main", [M]),
+    ("git merge --no-edit origin/main feature/4-x", [M]),
+    ("git merge origin/main origin/feature/4-x", [M]),
+    ("git merge FETCH_HEAD", [M]),
+    ("git merge --ff-only FETCH_HEAD", [M]),
+    ("git merge other/main", [M]),
+    ("git merge refs/remotes/other/main", [M]),
+    ("git merge origin/main~1", [M]),
+    ("git merge origin", [M]),
+    ("git merge --no-ff release/0.13.4", [M]),
+    ("git merge -q --ff-only origin/fix/x", [M]),
+    ("git -c branch.main.merge=refs/heads/feature/x merge --ff-only", [M]),
+    ("git -c branch.main.merge=refs/heads/feature/x merge", [M]),
+    ("git -c branch.main.merge=refs/heads/feature/x pull", [M]),
+    ("git -c branch.main.remote=../other pull --ff-only", [M]),
+    ("git -c merge.defaultToUpstream=true merge origin/main", [M]),
     ("git merge --squash feature/4-x", [M]),
     ("git merge origin/feature/4-x", [M]),
     ("git merge -s ours --ff-only feature/4-x", [M]),
-    ("git merge", [M]),
     ("git -C sub merge feature/4-x", [M]),
     ("git switch main && git merge feature/4-x", [M]),
     ("sh -c 'git merge feature/4-x'", [M]),
@@ -1717,6 +1761,17 @@ ON_MAIN: list[tuple[str, list[str]]] = [
 @pytest.mark.parametrize(("command", "expected"), ON_MAIN)
 def test_rules_on_main(command: str, expected: list[str]) -> None:
     assert rules(command, make_guard(FakeRepo(branch="main"))) == expected
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [(command, expected) for command, expected in ON_MAIN if expected in ([], [M])],
+)
+def test_a_merge_on_main_where_nothing_is_adopted_asks_the_owner_and_a_sync_passes(
+    command: str, expected: list[str]
+) -> None:
+    asked = ["merge-default-unadopted"] if expected else []
+    assert rules(command, unadopted(FakeRepo(branch="main"))) == asked
 
 
 @pytest.mark.parametrize("command", ["git push", "git reset --hard x", "git push origin HEAD"])

@@ -82,11 +82,21 @@ def test_a_deny_writes_one_line_with_the_fields(adopted: Path) -> None:
     assert re.fullmatch(STAMP, str(line["at"]))
 
 
-def test_an_ask_writes_one_line(adopted: Path) -> None:
+def test_a_denied_merge_writes_one_line(adopted: Path) -> None:
     printed = answer(adopted, bash(adopted, "gh pr merge 7"))
-    assert decision(printed) == "ask"
+    assert decision(printed) == "deny"
     [line] = lines(log_of(adopted))
-    assert (line["decision"], line["tool"], line["rule"]) == ("ask", "Bash", "merge-pr")
+    assert (line["decision"], line["tool"], line["rule"]) == ("deny", "Bash", "merge-pr")
+    assert line["detail"] == "gh pr merge"
+    assert line["branch"] == "main"
+
+
+def test_an_ask_writes_one_line(tmp_path: Path) -> None:
+    root = repository(tmp_path / "unadopted")
+    printed = answer(root, bash(root, "gh pr merge 7"))
+    assert decision(printed) == "ask"
+    [line] = lines(log_of(root))
+    assert (line["decision"], line["tool"], line["rule"]) == ("ask", "Bash", "merge-pr-unadopted")
     assert line["detail"] == "gh pr merge"
 
 
