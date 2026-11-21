@@ -1,10 +1,14 @@
+import io
+import json
 from pathlib import Path
 
 import pytest
 
+from justfile_text import definition
+from ratchet_guards import hook
 from ratchet_guards.manifest import MANIFEST_PATH
 from tests.repos import commit, git, repository, write
-from tests.support import MANIFEST_TEXT
+from tests.support import JUSTFILE, MANIFEST_TEXT
 from tests.test_default_ref import decision, run
 
 UPSTREAM = [
@@ -59,10 +63,18 @@ ATTACKS = [
 ANSWER = {False: "ask", True: "deny"}
 
 
-def cloned(tmp_path: Path, *, adopted: bool = False) -> Path:
+def without(*names: str) -> str:
+    text = JUSTFILE
+    for name in names:
+        text = text.replace("\n".join(definition(text, name)) + "\n", "")
+    return text
+
+
+def cloned(tmp_path: Path, *, adopted: bool = False, justfile: str | None = JUSTFILE) -> Path:
     source = tmp_path / "source"
-    source.mkdir()
-    repository(source, {MANIFEST_PATH: MANIFEST_TEXT} if adopted else None)
+    source.mkdir(parents=True)
+    recipes = {} if justfile is None else {"justfile": justfile}
+    repository(source, {MANIFEST_PATH: MANIFEST_TEXT, **recipes} if adopted else None)
     git(source, "switch", "-q", "-c", "feature/x")
     write(source, "work.txt", "work\n")
     commit(source, "feat(core): work nobody judged")
@@ -135,6 +147,61 @@ def test_a_merge_tried_on_a_detached_head_after_its_own_switch_passes(
     assert decision(root, "Bash", {"command": "git switch --detach"}) == ""
     run(root, "git switch -q --detach")
     assert decision(root, "Bash", {"command": command}) == ""
+
+
+def answer(root: Path, command: str) -> object:
+    payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(root)}
+    stdout = io.StringIO()
+    assert hook.main(root, io.StringIO(json.dumps(payload)), stdout) == 0
+    return json.loads(stdout.getvalue())["hookSpecificOutput"]
+
+
+MERGES = ["gh pr merge 5", "git merge --no-ff feature/x", "git cherry-pick feature/x"]
+
+
+@pytest.mark.parametrize("command", MERGES)
+@pytest.mark.parametrize(
+    "justfile",
+    [None, without("merge-ready"), without("merge"), without("merge-ready", "merge")],
+    ids=["no justfile", "no merge-ready", "no merge", "neither"],
+)
+def test_a_merge_where_the_default_branch_lacks_the_way_out_is_asked_as_before_adoption(
+    tmp_path: Path, command: str, justfile: str | None
+) -> None:
+    unadopted = answer(cloned(tmp_path / "unadopted"), command)
+    lacking = answer(cloned(tmp_path / "lacking", adopted=True, justfile=justfile), command)
+    assert lacking == unadopted
+    assert answer(cloned(tmp_path / "whole", adopted=True), command) != unadopted
+
+
+@pytest.mark.parametrize("command", MERGES)
+def test_a_way_out_removed_outside_the_default_branch_still_refuses_the_merge(
+    tmp_path: Path, command: str
+) -> None:
+    root = cloned(tmp_path, adopted=True)
+    write(root, "justfile", without("merge-ready", "merge"))
+    assert decision(root, "Bash", {"command": command}) == "deny"
+    git(root, "config", "user.email", "t@example.invalid")
+    git(root, "config", "user.name", "t")
+    git(root, "switch", "-q", "-c", "strip")
+    commit(root, "chore(core): drop the merge recipes on a branch")
+    git(root, "switch", "-q", "main")
+    assert decision(root, "Bash", {"command": command}) == "deny"
+    git(root, "switch", "-q", "strip")
+    assert decision(root, "Bash", {"command": "gh pr merge 5"}) == "deny"
+
+
+@pytest.mark.parametrize("adopted", [False, True])
+@pytest.mark.parametrize(
+    "command",
+    ["git -c core.abbrev=12 pull origin main", "git -c core.abbrev=12 pull --ff-only origin main"],
+)
+def test_a_setting_on_a_pull_that_names_the_remote_and_branch_makes_it_a_merge(
+    tmp_path: Path, *, command: str, adopted: bool
+) -> None:
+    root = cloned(tmp_path, adopted=adopted)
+    assert decision(root, "Bash", {"command": command.replace("-c core.abbrev=12 ", "")}) == ""
+    assert decision(root, "Bash", {"command": command}) == ANSWER[adopted]
 
 
 @pytest.mark.parametrize(("tamper", "sync"), CASES)
