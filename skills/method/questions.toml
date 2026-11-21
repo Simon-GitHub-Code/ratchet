@@ -71,6 +71,12 @@ kind = "product"
 text = "<one choice the fork test gives to the owner and nothing they said settles, asked as someone using it would put it>"
 
 [[ask]]
+key = "conjecture.flag"
+skills = ["conjecture"]
+kind = "product"
+text = "<what this adds, as someone using it would notice it>: should it stay hidden until you switch it on, or appear as soon as it is finished?"
+
+[[ask]]
 key = "feature.open-question"
 skills = ["feature"]
 kind = "product"
