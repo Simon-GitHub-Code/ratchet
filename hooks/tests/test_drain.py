@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1751,8 +1752,10 @@ RESTORING = {
 }
 LINK = "src/link"
 HARMED = re.compile(
-    r"records: the commit hooks (deleted|changed|restored) `([^`]+)`(?:.* object ([0-9a-f]+): )?"
+    r"records: a commit hook or another process (deleted|changed|restored) `([^`]+)` as the parts"
+    r" were committed(?:; the bytes it had are object ([0-9a-f]+)(, which the split wrote)?)?"
 )
+WRITTEN = {"src/partial.py", "src/intent.py"}
 
 
 def stage_everything(root: Path) -> None:
@@ -1801,8 +1804,12 @@ def test_a_commit_hook_that_destroys_the_owners_work_names_each_file_and_the_obj
         assert what == ("restored" if path not in before else happened), path
         if path in before and path != LINK:
             assert raw(root, "cat-file", "blob", held) == before[path], f"{path} is in {held}"
+            assert bool(match[4]) == (path in WRITTEN), f"{path}: {match[0]}"
     if LINK in hurt:
-        assert f"records: the commit hooks deleted `{LINK}`; it was a link to `added.py`" in printed
+        assert (
+            f"records: a commit hook or another process deleted `{LINK}` as the parts were"
+            " committed; it was a link to `added.py`"
+        ) in printed
     again = f"once the cause above is gone, run `drain.py split {ALPHA} --plan {plan}` again"
     hooked.unlink()
     if hook == "stash":
@@ -1823,9 +1830,16 @@ def test_a_commit_hook_that_destroys_the_owners_work_names_each_file_and_the_obj
         assert git(root, "rev-parse", LANDING) == held, "the rerun keeps the empty commit"
         return
     assert (
-        "not landed: the commit hooks changed the checkout as the lines above say, so nothing is"
-        f" merged: `{LANDING}` holds the parts, and they stay uncommitted in the checkout; {again}"
+        "not landed: what the owner staged changed in the checkout as the parts were committed,"
+        f" as the lines above say, so nothing is merged: `{LANDING}` holds the parts, and they"
+        f" stay uncommitted in the checkout; {again}"
     ) in printed
+    assert {
+        f"{match[0]} and no ref holds, so git's collection removes it once its grace period is"
+        f" over: `git cat-file blob {match[3]}` prints them"
+        for path, match in named.items()
+        if path in WRITTEN
+    } & set(printed), printed
     assert run(root, "split", ALPHA, "--plan", plan) == 0, "the rerun commits the parts again"
     children = note(root, BRANCH_A)["children"]
     assert isinstance(children, list)
@@ -1853,11 +1867,14 @@ def subcommand(args: list[str]) -> str:
     return next(arg for arg in rest if not arg.startswith("-"))
 
 
-def test_a_split_over_a_clean_checkout_lists_what_the_hooks_could_reach_in_one_git_call(
+def test_a_split_with_nothing_staged_lists_the_index_in_one_git_call_and_reads_no_other_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = project(tmp_path, **WHOLE)
     run(root, "open", ALPHA)
+    (root / "data").mkdir()
+    (root / "data/big.bin").write_bytes(os.urandom(4 << 20))
+    big = git(root, "hash-object", "data/big.bin")
     calls: list[str] = []
     real_commit, real_run = drain.commit_parts, subprocess.run
 
@@ -1878,7 +1895,7 @@ def test_a_split_over_a_clean_checkout_lists_what_the_hooks_could_reach_in_one_g
         "rev-parse",
         "read-tree",
         "add",
-        "status",
+        "diff-index",
         "commit",
         "worktree",
         "worktree",
@@ -1887,28 +1904,95 @@ def test_a_split_over_a_clean_checkout_lists_what_the_hooks_could_reach_in_one_g
         "rev-list",
         "diff",
         "diff",
-    ], "the split lists what the hooks could reach, and hashes nothing when that is nothing"
+    ], "the split lists the owner's index once, and reads and writes nothing more for it"
+    assert raw(root, "cat-file", "-t", big) == "", "an untracked file is not written as an object"
 
 
-def test_a_file_the_split_cannot_read_keeps_the_commit_hooks_from_running(
-    tmp_path: Path, capsys: Out
+def test_a_split_lands_over_files_it_cannot_read_or_name_and_a_log_another_process_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
 ) -> None:
     root = project(tmp_path, **WHOLE)
     run(root, "open", ALPHA)
+    write(root, "src/secret.key", "K = 1\n")
+    write(root, "src/a.py", "A = 2\n")
+    write(root, "src/a\nb.py", "N = 1\n")
+    write(root, "src/gone.py", "G = 1\n")
     write(root, "src/locked.py", "L = 1\n")
-    git(root, "add", "--", "src/locked.py")
+    git(root, "add", "--", "src/gone.py", "src/locked.py")
+    write(root, "src/locked.py", "L = 2\n")
+    for name in ("src/secret.key", "src/a.py", "src/locked.py"):
+        (root / name).chmod(0)
+    (root / "logs").mkdir()
+    stop = threading.Event()
+
+    def server() -> None:
+        with (root / "logs/app.log").open("a", encoding="utf-8") as log:
+            while not stop.is_set():
+                log.write("a line a running server wrote\n")
+                log.flush()
+
+    calls: list[object] = []
+    real_run = subprocess.run
+
+    def gone_once_listed(args: object, *rest: object, **kwargs: object) -> object:
+        done = real_run(args, *rest, **kwargs)  # type: ignore[call-overload]
+        if calls and isinstance(calls[-1], list) and "--pathspec-from-file=-" in calls[-1]:
+            (root / "src/gone.py").unlink()
+        calls.append(args)
+        return done
+
+    writer = threading.Thread(target=server)
+    capsys.readouterr()
+    writer.start()
+    try:
+        with monkeypatch.context() as cut:
+            cut.setattr(subprocess, "run", gone_once_listed)
+            code = run(root, "split", ALPHA, "--plan", str(plan_file(tmp_path, HALVES)))
+    finally:
+        stop.set()
+        writer.join()
+    printed = capsys.readouterr().out.splitlines()
+    assert code == 0, printed
+    assert "records: not saved: src/locked.py: Permission denied" in printed
+    children = json.loads(printed[-1])["children"]
+    assert git(root, "ls-tree", "--name-only", "main", "--", *children).splitlines() == children
+
+
+def test_a_staged_file_another_process_changes_as_the_parts_are_committed_is_named(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+) -> None:
+    root = project(tmp_path, **WHOLE, **{"logs/kept.log": "start\n"})
+    run(root, "open", ALPHA)
+    write(root, "logs/kept.log", "start\nstaged\n")
+    write(root, "src/locked.py", "L = 1\n")
+    git(root, "add", "--", "logs/kept.log", "src/locked.py")
     (root / "src/locked.py").chmod(0)
-    ran = tmp_path / "ran"
-    hook_script(root / ".git/hooks", "pre-commit", f"touch {ran}")
+    held = git(root, "rev-parse", ":logs/kept.log")
+    real_run = subprocess.run
+
+    def writing(args: object, *rest: object, **kwargs: object) -> object:
+        if isinstance(args, list) and "commit" in args:
+            with (root / "logs/kept.log").open("a", encoding="utf-8") as log:
+                log.write("a line a running server wrote\n")
+            (root / "src/locked.py").unlink(missing_ok=True)
+        return real_run(args, *rest, **kwargs)  # type: ignore[call-overload]
+
+    monkeypatch.setattr(subprocess, "run", writing)
     capsys.readouterr()
     assert run(root, "split", ALPHA, "--plan", str(plan_file(tmp_path, HALVES))) == drain.NOT_LANDED
     printed = capsys.readouterr().out.splitlines()
-    assert any(
-        line.startswith("records: the parts were not committed: ") and "src/locked.py" in line
-        for line in printed
-    ), printed
-    assert not ran.exists(), "no hook runs over a file the split could not keep a copy of"
-    assert git(root, "branch", "--list", "records/*") == ""
+    by = "records: a commit hook or another process"
+    assert printed[1:4] == [
+        "records: not saved: src/locked.py: Permission denied",
+        (
+            f"{by} changed `logs/kept.log` as the parts were committed; the bytes it had are"
+            f" object {held}: `git cat-file blob {held}` prints them"
+        ),
+        (
+            f"{by} deleted `src/locked.py` as the parts were committed; the split could not read"
+            " it, so it was not saved"
+        ),
+    ], printed
 
 
 def test_a_split_on_a_detached_head_says_so_and_what_to_do(tmp_path: Path, capsys: Out) -> None:
@@ -1950,11 +2034,13 @@ def test_a_split_that_meets_a_held_index_lock_names_it_and_lands_once_it_is_gone
     plan = str(plan_file(tmp_path, HALVES))
     capsys.readouterr()
     assert run(root, "split", ALPHA, "--plan", plan) == drain.NOT_LANDED
+    printed = capsys.readouterr().out.splitlines()
     assert (
         f"not landed: the parts are on `{LANDING}`, and `{lock}` locks the checkout's index, so the"
         " merge could not move it: once no git command runs in this repository, delete that file;"
         f" once the cause above is gone, run `drain.py split {ALPHA} --plan {plan}` again"
-    ) in capsys.readouterr().out.splitlines()
+    ) in printed
+    assert not [line for line in printed if "moved meanwhile" in line], "the lock is the cause"
     lock.unlink()
     assert run(root, "split", ALPHA, "--plan", plan) == 0
 
