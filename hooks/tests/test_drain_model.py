@@ -805,6 +805,12 @@ def test_a_ticket_waiting_on_a_split_ticket_waits_for_its_parts_then_starts(
     landed = [*path, PARK_C, *built_and_landed(Name.D), *built_and_landed(Name.E)]
     assert broken_by(landed) == set()
     play = replay(tmp_path, path)
+    root = play.world.root
+    assert git(root, "status", "--porcelain") == "", "the split commits its parts"
+    on_main = git(
+        root, "ls-tree", "--name-only", "main", "--", *(REF[p] for p in model.PARTS[Name.A])
+    )
+    assert on_main.splitlines() == [REF[part] for part in model.PARTS[Name.A]], "on the default tip"
     parts = tuple(drain.key(REF[part]) for part in model.PARTS[Name.A])
     beta = plan_of(play)[BRANCH[Name.B]]
     assert (beta.state, beta.waits_on) == ("waiting", parts), "b waits on the parts, not on a"

@@ -7,12 +7,16 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import feature_preflight as preflight
 import gatelib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import splits
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 INHERITED = ("## Parent", "## Conjecture", "## Operability")
 SLUG = re.compile(r"[^a-z0-9]+")
@@ -109,23 +113,84 @@ def next_number(folder: Path) -> int:
     return max(numbers, default=0) + 1
 
 
-def file_locally(
-    root: Path, parent: preflight.Ticket, parts: list[Part], *, label: str
+def body_of(
+    parent: preflight.Ticket, parts: list[Part], names: list[str], *, index: int, label: str
+) -> str:
+    waits = [names[i] for i in parts[index].after if 0 <= i < index]
+    if index == 0:
+        waits = [*parent.blockers, *waits]
+    return child_body(parent, parts[index], waits=waits, label=label)
+
+
+def number_of(name: str) -> str:
+    return re.sub(r"\D.*", "", name, flags=re.DOTALL).lstrip("0")
+
+
+def free(folder: Path, name: str) -> bool:
+    return (folder / name).is_file() or all(
+        number_of(p.name) != number_of(name) for p in folder.glob("*.md")
+    )
+
+
+def untouched(
+    folder: Path, parent: preflight.Ticket, parts: list[Part], *, filed: list[str], label: str
+) -> list[str]:
+    names: list[str] = []
+    for index in range(len(parts)):
+        body = body_of(parent, parts, names, index=index, label=label)
+        recorded = Path(filed[index]).name if len(filed) == len(parts) else None
+        if recorded is None or gatelib.read_text(folder / recorded) != body:
+            return []
+        names.append(recorded)
+    return names
+
+
+def file_locally(  # noqa: PLR0913 -- the parts, where they were filed, and who records them
+    root: Path,
+    parent: preflight.Ticket,
+    parts: list[Part],
+    *,
+    label: str,
+    filed: list[str] | None = None,
+    noting: Callable[[list[str]], None] = lambda _paths: None,
 ) -> list[str]:
     folder = (root / parent.ref).parent
-    number = next_number(folder)
-    slugs = [
-        SLUG.sub("-", part.title.lower()).strip("-")[:40].strip("-") or "part" for part in parts
-    ]
-    names = [f"{number + i:02d}-{slug}.md" for i, slug in enumerate(slugs)]
-    for index, part in enumerate(parts):
-        waits = [names[i] for i in part.after if 0 <= i < index]
-        if index == 0:
-            waits = [*parent.blockers, *waits]
-        (folder / names[index]).write_text(
-            child_body(parent, part, waits=waits, label=label), encoding="utf-8"
+    filed = filed or []
+    mine = untouched(folder, parent, parts, filed=filed, label=label)
+    numbers = {number_of(name) for name in mine}
+    known = [f":(literal){(folder / name).relative_to(root).as_posix()}" for name in mine]
+    if (
+        any(
+            number_of(path.name) in numbers for path in folder.glob("*.md") if path.name not in mine
         )
-    return [(folder / name).relative_to(root).as_posix() for name in names]
+        and gatelib.git(root, "ls-files", "--", *known) == ""
+    ):
+        for name in mine:
+            (folder / name).unlink()
+        filed = []
+    names: list[str] = []
+    texts: list[str] = []
+    for index, part in enumerate(parts):
+        body = body_of(parent, parts, names, index=index, label=label)
+        recorded = Path(filed[index]).name if len(filed) == len(parts) else None
+        if (
+            recorded is not None
+            and free(folder, recorded)
+            and all(number_of(n) != number_of(recorded) for n in names)
+        ):
+            name = recorded
+        else:
+            slug = SLUG.sub("-", part.title.lower()).strip("-")[:40].strip("-") or "part"
+            number = max([next_number(folder), *(int(number_of(n) or 0) + 1 for n in names)])
+            name = f"{number:02d}-{slug}.md"
+        names.append(name)
+        texts.append(body)
+    paths = [(folder / name).relative_to(root).as_posix() for name in names]
+    noting(paths)
+    for name, body in zip(names, texts, strict=True):
+        if not (folder / name).is_file():
+            (folder / name).write_text(body, encoding="utf-8")
+    return paths
 
 
 def file_on_tracker(
@@ -133,12 +198,9 @@ def file_on_tracker(
 ) -> list[str]:
     made: list[str] = []
     for index, part in enumerate(parts):
-        waits = [made[i] for i in part.after if 0 <= i < index]
-        if index == 0:
-            waits = [*parent.blockers, *waits]
         scratch = root / gatelib.STATE / "split-body.md"
         scratch.parent.mkdir(parents=True, exist_ok=True)
-        scratch.write_text(child_body(parent, part, waits=waits, label=label), encoding="utf-8")
+        scratch.write_text(body_of(parent, parts, made, index=index, label=label), encoding="utf-8")
         out = preflight.run_gh(
             [
                 "issue",
@@ -169,14 +231,33 @@ def judge(
     return parent, parts, label, problems(parent, parts, label, holds=holds)
 
 
-def apply(
-    root: Path, ref: str, plan: object, *, gh: preflight.Runner
+def bodies(
+    root: Path, ref: str, plan: object, *, filed: list[str], gh: preflight.Runner
+) -> dict[str, str]:
+    parent, parts, label, refused = judge(root, ref, plan, gh=gh)
+    if refused or parent is None:
+        return {}
+    names = [Path(path).name for path in filed]
+    return {
+        path: body_of(parent, parts, names, index=index, label=label)
+        for index, path in enumerate(filed[: len(parts)])
+    }
+
+
+def apply(  # noqa: PLR0913 -- the plan, where it was filed, and who records it
+    root: Path,
+    ref: str,
+    plan: object,
+    *,
+    gh: preflight.Runner,
+    filed: list[str] | None = None,
+    noting: Callable[[list[str]], None] = lambda _paths: None,
 ) -> tuple[list[str], list[str]]:
     parent, parts, label, refused = judge(root, ref, plan, gh=gh)
     if refused or parent is None:
         return [], refused
     if ref.endswith(".md"):
-        return file_locally(root, parent, parts, label=label), []
+        return file_locally(root, parent, parts, label=label, filed=filed, noting=noting), []
     return file_on_tracker(parent, parts, label=label, root=root), []
 
 
