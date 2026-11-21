@@ -378,11 +378,8 @@ class World:
         plan.write_text(json.dumps({"parts": HALVES}), encoding="utf-8")
         if self.command("split", REF[name], "--plan", str(plan)) != 0:
             return
-        printed = self.printed
         for part in model.PARTS[name]:
             self.texts[REF[part]] = (self.root / REF[part]).read_text(encoding="utf-8")
-        snapshot(self.root, f"docs(tracker): the parts of {REF[name]}")
-        self.printed = printed
 
     def by_hand(self, kind: Kind, name: Name) -> None:
         ref, tree = REF[name], self.tree(name)
