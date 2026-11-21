@@ -158,9 +158,12 @@ def _reads_config(options: Options) -> bool:
 def _paths(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     operands = scan(call.args, _PATHS).operands
     hits = guard.locator.words(operands, call.cwd, destructive=True)
-    return guard.writes(
-        context, hits, lambda hit: f"git {call.subcommand} {hit.path} ({hit.group.name})"
-    ) + guard.acting(guard.locator.paths(operands, call.cwd))
+    by = f"git {call.subcommand}"
+    return (
+        guard.writes(context, hits, lambda hit: f"{by} {hit.path} ({hit.group.name})")
+        + guard.acting(guard.locator.paths(operands, call.cwd))
+        + guard.unfollowed(context, operands, destructive=True, by=by)
+    )
 
 
 def _names_output(option: str, subcommand: str) -> bool:
@@ -186,9 +189,12 @@ def _outputs(call: Invocation) -> list[str]:
 def _written(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     outputs = _outputs(call)
     hits = guard.locator.words(outputs, call.cwd, destructive=False)
-    return guard.writes(
-        context, hits, lambda hit: f"git {call.subcommand} writes {hit.path} ({hit.group.name})"
-    ) + guard.acting(guard.locator.paths(outputs, call.cwd))
+    by = f"git {call.subcommand}"
+    return (
+        guard.writes(context, hits, lambda hit: f"{by} writes {hit.path} ({hit.group.name})")
+        + guard.acting(guard.locator.paths(outputs, call.cwd))
+        + guard.unfollowed(context, outputs, destructive=False, by=by)
+    )
 
 
 def _is_option(word: str) -> bool:
