@@ -706,7 +706,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert first.startswith(f"upgrade: {root} from 0.8.2 at {adopted.RELEASES['0.8.2'][:12]} (CI")
     assert f"to {plugin_pin.in_use(PLUGIN_ROOT)}." in first
     assert "Would write 13 files (run with --apply):" in out
-    assert "  quality/owed.toml\n    - write down 105 things owed since " in out
+    assert "  quality/owed.toml\n    - write down 106 things owed since" in out
     assert "  .claude/settings.json\n    - regenerate the permission rules" in out
     assert f"    - pinned: {plugin_pin.line_for(PLUGIN_ROOT)}" in out
     assert out.index("\n  docs/process/binding.md\n") > out.index("\n  justfile\n")
@@ -718,8 +718,8 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert "        settled by the owner's answer to: Which of these has already happened" in out
     assert "        seen: no file in the tree is a sign of a life event" in out
     assert "        then: `deployed` owes the Gates rows " in out
-    assert verdict(out).startswith("upgrade: would write 81 edits in 13 files. 105 items are owed")
-    assert "and 0 red; 4 of them hold an assumption" in verdict(out)
+    assert verdict(out).startswith("upgrade: would write 81 edits in 13 files. 106 items are owed")
+    assert "and 0 red; 5 of them hold an assumption" in verdict(out)
     assert "The change touches guard paths" in verdict(out)
     assert plain(out) == "\n".join(
         [
@@ -727,7 +727,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
             (
                 "This project would move from Ratchet 0.8.2 to"
                 f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 81 changes in 13"
-                " files. The project owes 105 things since the upgrade. None of them turns a check"
+                " files. The project owes 106 things since the upgrade. None of them turns a check"
                 " red or stops a merge, and between upgrades the list only gets shorter. Nothing"
                 " fixes them by itself: ask an agent to. Each is in a guard path: an agent can"
                 " make all the fixes in one change on a branch, and you decide at that one merge."
@@ -754,6 +754,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
                 " you say it is one: active security scan, load, telemetry arrives, backup"
                 " restores, production answers."
             ),
+            f"- {conformance.OPEN_RECORD}",
             f"- {conformance.NO_DOOR}",
             (
                 "Commit this on main; to commit it on another branch, run the upgrade again there"

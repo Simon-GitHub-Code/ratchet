@@ -50,7 +50,7 @@ from tests.route_model import (
     World,
 )
 from tests.support import PLUGIN_ROOT
-from tests.test_drain import approval
+from tests.test_drain import MERGE, approval
 
 HOOKS_DIRECTORY = Path(__file__).resolve().parents[1]
 CHARTS = PLUGIN_ROOT / "docs/model/route.md"
@@ -1638,7 +1638,9 @@ BRANCHES = {
         (ActionName.SOMEONE_EDITS_CODE, ActionName.AGENT_COMMITS_ON_A_BRANCH),
     ),
 }
-TIER_2_NEXT = "next: true on `main`: tier 2 runs after every merge, and a red one comes first"
+TIER_2_NEXT = (
+    f"next: `{MERGE} --deep` on `main`: tier 2 runs after every merge, and a red one comes first"
+)
 
 
 def typed(repo: real.Repo, command: str) -> subprocess.CompletedProcess[str]:
