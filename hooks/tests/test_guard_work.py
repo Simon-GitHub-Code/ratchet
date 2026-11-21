@@ -129,6 +129,15 @@ FAMILIES: dict[str, Family] = {
             + " && echo hi > f"
         ),
     ),
+    "a directory spelled many ways": (
+        8,
+        lambda n: (
+            "; ".join(f"x{i}=/. || x{i}=/./" for i in range(n))
+            + "; cd a"
+            + "".join(f"$x{i}" for i in range(n))
+            + " && echo hi > f"
+        ),
+    ),
     "many commits": (25, lambda n: "; ".join(f"git commit -m m{i}" for i in range(n))),
     "many distinct substitutions": (50, lambda n: "echo " + " ".join(f"$(a{i})" for i in range(n))),
     "many equal substitutions": (50, lambda n: "echo " + " ".join("$(a)" for _ in range(n))),
