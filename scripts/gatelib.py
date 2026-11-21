@@ -695,12 +695,9 @@ def asking(path: Path) -> Path:
     return path.with_name(f"{path.name}.asked")
 
 
-def ask(path: Path, within: float) -> Stopping:
+def ask(path: Path) -> Stopping:
     asking(path).touch()
-    deadline = time.monotonic() + within
     while not (told := read_stopping(path)).answered:
-        if time.monotonic() >= deadline:
-            return Stopping({}, f"the gate did not answer within {within:g}s", told.taken)
         time.sleep(ANSWER_POLL)
     return told
 
@@ -756,7 +753,7 @@ def http_status(
     url: str,
     *,
     body: bytes | None = None,
-    timeout: float = 5.0,
+    timeout: float | None = 5.0,
     connecting: Callable[[Connection], None] | None = None,
 ) -> int:
     parts = urlsplit(url)

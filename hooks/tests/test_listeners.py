@@ -245,7 +245,7 @@ def test_a_process_that_hides_after_the_signal_stops_the_gate_taking(tmp_path: P
         waiting = socket.create_connection(("127.0.0.1", running.port))
         with taking(held, marker):
             assert running.tell("hide") == "done"
-            stopping = gatelib.ask(marker, 10)
+            stopping = gatelib.ask(marker)
         waiting.settimeout(0.2)
         with pytest.raises(TimeoutError):
             waiting.recv(1)
@@ -336,7 +336,7 @@ def test_a_listener_shut_down_is_said_to_be_so_while_the_service_still_holds_it(
         second = int(running.tell("second"))
         with taking(held, marker):
             assert running.tell("shut") == "done"
-            told = gatelib.ask(marker, 10)
+            told = gatelib.ask(marker)
     assert told.ports == {
         running.port: (
             "the service shut its listener down instead of closing it, which reset the "
@@ -368,6 +368,25 @@ def test_the_gate_says_why_it_holds_nothing(monkeypatch: pytest.MonkeyPatch) -> 
     assert listeners.grab(os.getpid()) == (
         "the gate can copy a service's listener only on Linux 5.6 or later"
     )
+
+
+def test_where_the_gate_holds_no_listener_the_smoke_judges_every_port_the_older_way() -> None:
+    told = listeners.told("the host is not Linux")
+    assert told == gatelib.Stopping({}, "the host is not Linux", frozenset())
+    assert told.inexact(8000) == "the host is not Linux"
+
+
+def test_a_connection_is_seen_queued_then_accepted_by_whoever_holds_it_or_nowhere() -> None:
+    nobody = listeners.Service(-1, set())
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        client = socket.create_connection(listener.getsockname())
+        with client:
+            at, me = listeners.end(client.getpeername()), listeners.end(client.getsockname())
+            assert listeners.accepted(nobody, at, me) is listeners.Seat.QUEUED
+            connection, _ = listener.accept()
+            with connection:
+                assert listeners.accepted(nobody, at, me) is listeners.Seat.ELSEWHERE
+            assert listeners.accepted(nobody, at, (me[0], 1)) is listeners.Seat.ABSENT
 
 
 @pytest.mark.parametrize(

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import collections
 import http.client
+import json
 import os
 import re
 import sys
@@ -19,6 +20,7 @@ METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 SPEC = re.compile(rf"(?:({'|'.join(METHODS)}) )?(\S+)(?: (\d{{3}})(?: (.+))?)?", re.DOTALL)
 FAILED = 400
 LISTED = 5
+HELD_POLL = 0.01
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,38 @@ def target(text: str) -> Target:
     return Target(
         method or "GET", url, int(status) if status else None, body.encode() if body else None
     )
+
+
+def holding(sending: Path) -> Path:
+    return sending.with_name(f"{sending.name}.held")
+
+
+def announce(sending: Path, targets: list[Target]) -> None:
+    data = [
+        [goal.method, goal.url, goal.status, None if goal.body is None else goal.body.decode()]
+        for goal in targets
+    ]
+    pending = sending.with_name(f"{sending.name}.pending")
+    pending.write_text(json.dumps(data), encoding="utf-8")
+    pending.replace(sending)
+
+
+def announced(sending: Path) -> Target | None:
+    try:
+        method, url, status, body = json.loads(sending.read_text(encoding="utf-8"))[0]
+        return Target(method, url, status, body and body.encode())
+    except (OSError, ValueError, LookupError, TypeError, AttributeError):
+        return None
+
+
+def wait_for(path: Path) -> None:
+    while not path.exists():
+        time.sleep(HELD_POLL)
+
+
+def described(error: BaseException) -> str:
+    said = str(error)
+    return f"{type(error).__name__}: {said}" if said else type(error).__name__
 
 
 def same_place(url: str, ready: str) -> bool:
@@ -102,7 +136,7 @@ class Cutoff(Exception):  # noqa: N818 # -- carries a failure to judge, not a fa
 
 
 def attempt(
-    goal: Target, timeout: float, stopping: Path | None = None
+    goal: Target, timeout: float | None, stopping: Path | None = None
 ) -> tuple[float | None, str | None]:
     clients: list[gatelib.Connection] = []
     late = stopping is not None and stopping.exists()
@@ -115,16 +149,17 @@ def attempt(
             timeout=timeout,
             connecting=clients.append,
         )
-    except TimeoutError:
-        return None, f"{goal.label()}: timed out after {timeout:g}s"
+    except TimeoutError as error:
+        said = f"timed out after {timeout:g}s" if timeout else described(error)
+        return None, f"{goal.label()}: {said}"
     except (OSError, http.client.HTTPException) as error:
         if stopping is None or not stopping.exists() or not clients:
-            return None, f"{goal.label()}: {type(error).__name__}"
+            return None, f"{goal.label()}: {described(error)}"
         if isinstance(error, ConnectionRefusedError):
             raise Closed from error
         named = clients[-1] in gatelib.read_stopping(stopping).taken
         lost = isinstance(error, ConnectionError)
-        cut = Cut(goal.label(), type(error).__name__, clients[-1].port, named, late, lost)
+        cut = Cut(goal.label(), described(error), clients[-1].port, named, late, lost)
         raise Cutoff(cut) from error
     wrong = None if goal.accepts(status) else f"{goal.label()}: HTTP {status}"
     return time.perf_counter() - started, wrong
@@ -138,7 +173,12 @@ class Worked:
 
 
 def work(
-    targets: list[Target], first: int, deadline: float, *, timeout: float, stopping: Path | None
+    targets: list[Target],
+    first: int,
+    deadline: float,
+    *,
+    timeout: float | None,
+    stopping: Path | None,
 ) -> Worked:
     worked = Worked()
     turn = first
@@ -203,7 +243,7 @@ def hammer(
     concurrency: int,
     seconds: float,
     *,
-    timeout: float,
+    timeout: float | None,
     stopping: Path | None = None,
 ) -> Worked:
     deadline = time.monotonic() + seconds
@@ -255,14 +295,14 @@ def main(argv: list[str]) -> int:
     if isinstance(targets, str):
         return gatelib.report("load-smoke", [targets])
     if options.until_stopped and sending:
-        Path(sending).touch()
+        announce(Path(sending), targets)
+        wait_for(holding(Path(sending)))
     marker = Path(stopping) if options.until_stopped and stopping else None
-    worked = hammer(
-        targets, options.concurrency, options.seconds, timeout=options.timeout, stopping=marker
-    )
+    timeout = None if marker else options.timeout
+    worked = hammer(targets, options.concurrency, options.seconds, timeout=timeout, stopping=marker)
     latencies, errors = worked.latencies, worked.errors
     if marker and marker.exists():
-        told = gatelib.ask(marker, options.timeout)
+        told = gatelib.ask(marker)
         cut, notes = judge(worked.cuts, told, [goal.port() for goal in targets])
         errors.update(cut)
         for note in notes:
@@ -276,7 +316,7 @@ def main(argv: list[str]) -> int:
     problems = [f"{count} x {what}" for what, count in errors.most_common(LISTED)]
     if len(errors) > LISTED:
         problems.append(f"and {len(errors) - LISTED} more kinds of error")
-    if len(latencies) < options.min_requests:
+    if len(latencies) < options.min_requests and not marker:
         problems.append(
             f"{len(latencies)} requests answered, under the floor of {options.min_requests}: "
             "the service hangs or is too slow for this window"
