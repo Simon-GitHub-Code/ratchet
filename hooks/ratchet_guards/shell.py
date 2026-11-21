@@ -274,16 +274,19 @@ class _Lexer:
             while end < len(self.text) and self.text[end] != "`":
                 end += 2 if self.text[end] == "\\" else 1
             end = min(end, len(self.text))
-            self.shared.closed &= end < len(self.text)
-            self.shared.nested.append(_BACKTICK_ESCAPE.sub(r"\1", self.text[self.at + 1 : end]))
+            closed = end < len(self.text)
+            self._nests(_BACKTICK_ESCAPE.sub(r"\1", self.text[self.at + 1 : end]), closed=closed)
             self.at = end + 1
         else:
             child = _Lexer(self.text, self.at + 2, self.shared, closer=")")
             child.run()
-            self.shared.closed &= child.closed
-            self.shared.nested.append(self.text[self.at + 2 : child.at - child.closed])
+            self._nests(self.text[self.at + 2 : child.at - child.closed], closed=child.closed)
             self.at = child.at
         self.word.append(PLACEHOLDER)
+
+    def _nests(self, script: str, *, closed: bool) -> None:
+        self.shared.closed &= closed
+        self.shared.nested.append(script if closed else script.removesuffix("\n"))
 
     def _skip_comment(self) -> None:
         self.at = self._find("\n", self.at)

@@ -5,7 +5,7 @@ from enum import Enum
 from pathlib import Path, PurePosixPath
 
 from ratchet_guards.events import FEATURE_STARTS, LOG_NAME, PLUGIN_RECORD
-from ratchet_guards.globs import matches
+from ratchet_guards.globs import matches, normalised, regex
 
 MANIFEST_PATH = "guards/manifest.toml"
 COMMITTED = "Guard paths come from guards/manifest.toml as committed on the default branch."
@@ -143,8 +143,9 @@ class Manifest:
 
     def group_of(self, path: str, *, scope: Scope = Scope.REPOSITORY) -> Group | None:
         candidate = PurePosixPath(path)
+        normal = normalised(path)
         for group, pattern in self._patterns(scope):
-            if matches(path, pattern) and not group.excludes(candidate):
+            if regex(pattern).fullmatch(normal) and not group.excludes(candidate):
                 return group
         return None
 
