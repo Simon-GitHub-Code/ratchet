@@ -55,7 +55,7 @@ from tests.test_drain import approval
 HOOKS_DIRECTORY = Path(__file__).resolve().parents[1]
 CHARTS = PLUGIN_ROOT / "docs/model/route.md"
 HOOKS_EVERY = 7
-SWEEP_CHUNKS = 64
+SWEEP_CHUNKS = 128
 
 STEPS = settings(
     max_examples=4,
