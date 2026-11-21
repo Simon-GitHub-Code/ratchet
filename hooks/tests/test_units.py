@@ -131,6 +131,20 @@ def test_the_rule_catalogue_is_pinned() -> None:
             ),
         ),
         "merge-default-unadopted": ("ASK", "merges another branch into the default branch"),
+        "merge-pr-no-job": (
+            "DENY",
+            (
+                "merges a pull request, which in a project on the method with no merge job only "
+                "the owner does"
+            ),
+        ),
+        "merge-default-no-job": (
+            "DENY",
+            (
+                "merges another branch into the default branch, which in a project on the method "
+                "with no merge job only the merge entry point or the owner does"
+            ),
+        ),
         "branch-protection": ("DENY", "reads or changes branch protection or rulesets"),
         "repo-settings": ("DENY", "changes repository, secret, variable or workflow settings"),
         "labels": ("DENY", "manages labels"),
@@ -173,6 +187,8 @@ def test_only_a_rule_with_a_way_out_of_its_own_points_somewhere_other_than_a_dis
         "merge-pr-unadopted",
         "merge-default",
         "merge-default-unadopted",
+        "merge-pr-no-job",
+        "merge-default-no-job",
         "unreadable",
         *allow,
         *rewriting,
@@ -194,6 +210,20 @@ def test_a_merge_deny_names_what_merges_by_itself_and_what_prints_why_it_waits()
     assert "`git pull --ff-only`" in default
     assert "`git switch --detach`" in default
     assert "scratch branch" in default
+
+
+def test_a_merge_deny_where_no_merge_job_is_committed_names_only_ways_out_that_exist() -> None:
+    pull_request = RULES["merge-pr-no-job"].way_out
+    default = RULES["merge-default-no-job"].way_out
+    for words in (pull_request, default):
+        assert "merge job merges" not in words
+        assert "Leave it to" not in words
+        assert "holds no merge job" in words
+        assert "`just merge-ready --head <branch>`" in words
+        assert "owner" in words
+    assert "`just merge <branch>`" not in pull_request
+    for named in ("`just merge <branch>`", "`git pull --ff-only`", "`git switch --detach`"):
+        assert named in default
 
 
 def test_deny_outranks_ask_and_the_first_of_equals_wins() -> None:

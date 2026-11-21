@@ -16,7 +16,15 @@ from ratchet_guards.context import Guard
 from ratchet_guards.manifest import COMMITTED, EMPTY, MANIFEST_PATH, parse
 from ratchet_guards.paths import Checkout
 from ratchet_guards.verdict import RULES, Decision, Verdict
-from tests.support import MANIFEST_TEXT, PLUGIN_ROOT, ROOT, FakeFilesystem, FakeRepo, make_guard
+from tests.support import (
+    JUSTFILE,
+    MANIFEST_TEXT,
+    PLUGIN_ROOT,
+    ROOT,
+    FakeFilesystem,
+    FakeRepo,
+    make_guard,
+)
 
 SHIM = PLUGIN_ROOT / "hooks/guard.py"
 
@@ -229,6 +237,29 @@ def test_a_merge_an_agent_types_where_the_method_is_adopted_is_refused_with_the_
         "merge job or the owner does: git merge --no-ff feat/x. "
     )
     assert "`just merge-ready --head <branch>`" in default["permissionDecisionReason"]
+
+
+def test_a_merge_refused_where_no_merge_job_is_committed_names_the_judge_and_the_owner() -> None:
+    jobless = {"justfile": JUSTFILE}
+    pull_request = answered("gh pr merge 5", make_guard(FakeRepo(default_files=jobless)))
+    assert pull_request == {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": (
+            "Ratchet guard denied this tool call; no part of it ran. It merges a pull request, "
+            "which in a project on the method with no merge job only the owner does: gh pr "
+            "merge. The default branch holds no merge job, so nothing merges a pull request by "
+            "itself: the owner merges it, in the forge's interface or their own terminal. `just "
+            "merge-ready --head <branch>` prints each reason the merge judge gives, one a line: "
+            "report them to the owner. If the call also did unrelated work, redo that in a tool "
+            "call of its own."
+        ),
+    }
+    on_main = make_guard(FakeRepo(branch="main", default_files=jobless))
+    default = answered("git merge --no-ff feat/x", on_main)
+    assert default["permissionDecision"] == "deny"
+    assert "merge job merges" not in default["permissionDecisionReason"]
+    assert "`just merge <branch>`" in default["permissionDecisionReason"]
 
 
 def test_a_deny_ends_with_the_way_out_of_its_rule() -> None:
@@ -1049,12 +1080,15 @@ def test_the_manifest_of_a_checkout_is_read_from_git_once(
 def test_git_repo_state_reads_a_file_from_the_default_branch_not_the_work_tree(
     tmp_path: Path,
 ) -> None:
-    state = hook.GitRepoState()
-    assert state.default_file(tmp_path, "t.md") is None, "no repository, no default branch"
+    assert hook.GitRepoState().default_file(tmp_path, "t.md") is None, "no default branch"
     _git(tmp_path, "init", "-q", "-b", "main")
     (tmp_path / "t.md").write_text("held\n", encoding="utf-8")
     _git(tmp_path, "add", "t.md")
     _git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x")
     (tmp_path / "t.md").write_text("edited\n", encoding="utf-8")
+    state = hook.GitRepoState()
     assert state.default_file(tmp_path, "t.md") == "held\n"
     assert state.default_file(tmp_path, "gone.md") is None
+    _git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "y")
+    assert state.default_file(tmp_path, "t.md") == "held\n", "one tool call reads it once"
+    assert hook.GitRepoState().default_file(tmp_path, "t.md") == "edited\n"

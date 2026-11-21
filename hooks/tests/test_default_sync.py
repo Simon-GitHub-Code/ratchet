@@ -8,7 +8,7 @@ from justfile_text import definition
 from ratchet_guards import hook
 from ratchet_guards.manifest import MANIFEST_PATH
 from tests.repos import commit, git, repository, write
-from tests.support import JUSTFILE, MANIFEST_TEXT
+from tests.support import JUSTFILE, MANIFEST_TEXT, MERGE_JOB, MERGE_WORKFLOW
 from tests.test_default_ref import decision, run
 
 UPSTREAM = [
@@ -70,10 +70,13 @@ def without(*names: str) -> str:
     return text
 
 
-def cloned(tmp_path: Path, *, adopted: bool = False, justfile: str | None = JUSTFILE) -> Path:
+def cloned(
+    tmp_path: Path, *, adopted: bool = False, justfile: str | None = JUSTFILE, job: bool = False
+) -> Path:
     source = tmp_path / "source"
     source.mkdir(parents=True)
     recipes = {} if justfile is None else {"justfile": justfile}
+    recipes |= {MERGE_JOB: MERGE_WORKFLOW} if job else {}
     repository(source, {MANIFEST_PATH: MANIFEST_TEXT, **recipes} if adopted else None)
     git(source, "switch", "-q", "-c", "feature/x")
     write(source, "work.txt", "work\n")
@@ -175,6 +178,21 @@ def test_a_merge_where_the_default_branch_lacks_the_way_out_is_asked_as_before_a
 
 
 @pytest.mark.parametrize("command", MERGES)
+def test_a_refusal_names_the_merge_job_only_where_the_default_branch_holds_one(
+    tmp_path: Path, command: str
+) -> None:
+    jobbed = answer(cloned(tmp_path / "jobbed", adopted=True, job=True), command)
+    root = cloned(tmp_path / "jobless", adopted=True)
+    write(root, MERGE_JOB, MERGE_WORKFLOW)
+    jobless = answer(root, command)
+    assert jobbed["permissionDecision"] == jobless["permissionDecision"] == "deny"
+    assert "Leave it to" in jobbed["permissionDecisionReason"]
+    assert "Leave it to" not in jobless["permissionDecisionReason"]
+    assert "merge job merges" not in jobless["permissionDecisionReason"]
+    assert "holds no merge job" in jobless["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize("command", MERGES)
 def test_a_way_out_removed_outside_the_default_branch_still_refuses_the_merge(
     tmp_path: Path, command: str
 ) -> None:
@@ -202,6 +220,48 @@ def test_a_setting_on_a_pull_that_names_the_remote_and_branch_makes_it_a_merge(
     root = cloned(tmp_path, adopted=adopted)
     assert decision(root, "Bash", {"command": command.replace("-c core.abbrev=12 ", "")}) == ""
     assert decision(root, "Bash", {"command": command}) == ANSWER[adopted]
+
+
+UNREAD_PULLS = [
+    "GIT_DIR=.git git pull -q origin main",
+    "git --git-dir=.git pull -q --ff-only origin main",
+    "export GIT_WORK_TREE=.; git pull -q origin main",
+    "echo hi && git pull -q origin main",
+]
+
+
+@pytest.mark.parametrize("adopted", [False, True])
+@pytest.mark.parametrize("command", UNREAD_PULLS)
+def test_a_pull_that_names_the_remote_and_branch_on_a_line_the_guard_cannot_read_is_a_merge(
+    tmp_path: Path, *, command: str, adopted: bool
+) -> None:
+    root = cloned(tmp_path, adopted=adopted)
+    assert decision(root, "Bash", {"command": "git pull -q origin main"}) == ""
+    assert decision(root, "Bash", {"command": command}) == ANSWER[adopted]
+
+
+INERT = [
+    "git -c color.ui=always pull -q",
+    "git -c color.ui=false -c advice.detachedHead=false pull -q --ff-only origin main",
+    "git -c color.ui merge -q --ff-only origin/main",
+    "X=never git --config-env=color.ui=X merge -q @{u}",
+]
+
+
+@pytest.mark.parametrize("adopted", [False, True])
+@pytest.mark.parametrize("command", INERT)
+def test_a_setting_that_only_changes_what_git_prints_leaves_a_sync_a_sync(
+    tmp_path: Path, *, command: str, adopted: bool
+) -> None:
+    root = cloned(tmp_path, adopted=adopted)
+    assert decision(root, "Bash", {"command": command}) == ""
+    source = tmp_path / "source"
+    write(source, "forged.txt", "merged by the forge\n")
+    commit(source, "feat(core): merged by the forge")
+    git(root, "fetch", "-q")
+    run(root, command)
+    assert git(root, "rev-parse", "main") == git(source, "rev-parse", "main")
+    assert not moved(root)
 
 
 @pytest.mark.parametrize(("tamper", "sync"), CASES)

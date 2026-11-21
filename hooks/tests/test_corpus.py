@@ -4,7 +4,18 @@ import pytest
 
 from ratchet_guards.context import Guard
 from ratchet_guards.manifest import EMPTY
-from tests.support import NAMES, ROOT, WORKTREE, FakeFilesystem, FakeRepo, make_guard, rules
+from ratchet_guards.verdict import Decision
+from tests.support import (
+    JUSTFILE,
+    NAMES,
+    ROOT,
+    WORKTREE,
+    FakeFilesystem,
+    FakeRepo,
+    make_guard,
+    rules,
+    verdicts,
+)
 from tests.test_units import Heads
 
 W = "guard-path-write"
@@ -950,7 +961,19 @@ ASKED: list[tuple[str, list[str]]] = [
     ("echo \"${x:-'`git push -f`'}\"", ["force-push", "unreadable"]),
 ]
 
-MERGED = [("gh pr merge 5", ["merge-pr"]), *(row for row in ASKED if row[1] == ["merge-pr"])]
+QUERIES_FROM_A_FILE = [
+    "gh api graphql --input q.json",
+    "gh api graphql --input=q.json",
+    "gh api graphql -F query=@q.graphql",
+    "gh api graphql -Fquery=@q.graphql",
+    "gh api graphql --field query=@q.graphql",
+    "gh api graphql --field=query=@q.graphql",
+]
+MERGED = [
+    ("gh pr merge 5", ["merge-pr"]),
+    *(row for row in ASKED if row[1] == ["merge-pr"]),
+    *((command, ["merge-pr"]) for command in QUERIES_FROM_A_FILE),
+]
 
 UNRESOLVED = U
 LOST = "sed -i s/a/b/ .github/workflows/ci.yml"
@@ -1194,6 +1217,11 @@ ALLOWED: list[str] = [
     "gh api repos/o/r/pulls/3",
     "gh api repos/o/r/pulls/3/merge",
     "gh api repos/o/r/merges",
+    "gh api graphql -f query='query { viewer { login } }'",
+    "gh api graphql -F n=3 -f query='query { viewer { login } }'",
+    "gh api graphql -f query=@literal -f q='{ viewer { login } }'",
+    "gh api repos/o/r/issues/3/comments -F body=@notes.md",
+    "gh api repos/o/r/pulls/3 --input body.json",
     "gh api repos/o/r/git/refs/heads/main",
     "gh api repos/o/r/git/refs -f ref=refs/heads/feature/x -f sha=abc",
     "gh api -X DELETE repos/o/r/git/refs/heads/feature/main",
@@ -1517,6 +1545,25 @@ def test_a_merge_where_nothing_is_adopted_still_asks_the_owner(
     assert rules(command, unadopted(FakeRepo(branch="main"))) == ["merge-pr-unadopted"]
 
 
+@pytest.mark.parametrize("command", QUERIES_FROM_A_FILE)
+def test_a_forge_query_read_from_a_file_is_judged_as_the_merge_it_may_hold(command: str) -> None:
+    assert rules(command) == ["merge-pr"]
+
+
+@pytest.mark.parametrize(("command", "expected"), MERGED)
+def test_a_merge_where_no_merge_job_is_committed_is_refused_without_naming_one(
+    command: str, expected: list[str]
+) -> None:
+    assert expected == ["merge-pr"]
+    jobless = make_guard(FakeRepo(default_files={"justfile": JUSTFILE}))
+    (verdict,) = verdicts(command, jobless)
+    assert verdict.decision is Decision.DENY
+    assert "merge job merges" not in verdict.way_out
+    assert "Leave it to the merge job" not in verdict.way_out
+    (jobbed,) = verdicts(command)
+    assert "Leave it to the merge job" in jobbed.way_out
+
+
 @pytest.mark.parametrize(
     "command", [command for command, expected in DENIED + ASKED if P in expected]
 )
@@ -1693,8 +1740,24 @@ ON_MAIN: list[tuple[str, list[str]]] = [
     ("sudo git fetch && git pull", [M]),
     ("git --git-dir=/r/.git pull", [M]),
     ("GIT_DIR=/r/.git git merge --ff-only origin/main", [M]),
-    ("git --git-dir=/r/.git pull origin main", []),
-    ("echo hi && git pull origin main", []),
+    ("git --git-dir=/r/.git pull origin main", [M]),
+    ("GIT_DIR=/r/.git git pull origin main", [M]),
+    ("export GIT_WORK_TREE=/r; git pull --ff-only origin main", [M]),
+    ("echo hi && git pull origin main", [M]),
+    ("git fetch origin && git pull origin main", []),
+    ("cd sub && git pull origin main", []),
+    ("git -c color.ui=false pull", []),
+    ("git -ccolor.ui=never pull --ff-only origin main", []),
+    ("git -c Color.Branch.Current=red merge --ff-only origin/main", []),
+    ("git -c advice.detachedHead=false -c color.ui=always merge @{u}", []),
+    ("git --config-env=color.ui=HOME pull", []),
+    ("git --config-env color.ui=HOME pull origin main", []),
+    ("git -c color.ui pull", []),
+    ("git -c color.ui=false -c branch.main.merge=refs/heads/feature/x pull", [M]),
+    ("git -c color.ui=false merge feature/4-x", [M]),
+    ("git -c colors.ui=false pull", [M]),
+    ("git -c core.pager=cat pull", [M]),
+    ("git -c user.name=x pull origin main", [M]),
     ("git cherry-pick --abort", []),
     ("git cherry-pick --cont", []),
     ("just merge feature/4-x", []),

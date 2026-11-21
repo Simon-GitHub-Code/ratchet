@@ -139,6 +139,15 @@ FAMILIES: dict[str, Family] = {
         ),
     ),
     "many commits": (25, lambda n: "; ".join(f"git commit -m m{i}" for i in range(n))),
+    "many pull request merges": (25, lambda n: "; ".join(f"gh pr merge {i}" for i in range(n))),
+    "many merges onto the default branch": (
+        25,
+        lambda n: "git switch main && " + " && ".join(["git merge feat/x"] * n),
+    ),
+    "many cherry-picks onto the default branch": (
+        25,
+        lambda n: "git switch main && " + "; ".join(["git cherry-pick feat/x"] * n),
+    ),
     "many distinct substitutions": (50, lambda n: "echo " + " ".join(f"$(a{i})" for i in range(n))),
     "many equal substitutions": (50, lambda n: "echo " + " ".join("$(a)" for _ in range(n))),
     "many function substitutions": (50, lambda n: "echo " + " ".join("${ :; }" for _ in range(n))),
