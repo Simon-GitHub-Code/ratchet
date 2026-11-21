@@ -11,10 +11,18 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 State = Literal["green", "red", "running"]
+Outcome = Literal["green", "red", "unrun"]
 GREEN: Final = "green"
 RED: Final = "red"
 RUNNING: Final = "running"
+UNRUN: Final = "unrun"
 STATES = (GREEN, RED, RUNNING)
+OUTCOMES = (GREEN, RED, UNRUN)
+RECORD: Final = "ratchet-deep.jsonl"
+LOCK: Final = "ratchet-deep.lock"
+SCHEMA = 1
+SHA = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
+PROVING = f"the `merge --deep` holding {LOCK}"
 TIER2: Final = "tier2"
 UNPROVEN: Final = "unproven"
 FIELDS = ("commit", "state", "at", "name")
@@ -187,3 +195,64 @@ def read(path: Path) -> Deep:
     except OSError:
         data = None
     return answer(data)
+
+
+@dataclass(frozen=True)
+class Proof:
+    commit: str
+    tree: str
+    status: Outcome
+    exit: int | None
+    seconds: float
+    at: datetime
+    entry: str
+    speaks_for: tuple[str, ...]
+    why: str
+
+
+class Line(NamedTuple):
+    status: Outcome
+    commit: str
+    at: datetime
+
+
+def proof_line(proof: Proof) -> str:
+    return json.dumps({"schema": SCHEMA, **asdict(proof)}, default=datetime.isoformat) + "\n"
+
+
+def line_of(text: str) -> Line | None:
+    try:
+        item: object = json.loads(text)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(item, dict) or item.get("schema") != SCHEMA:
+        return None
+    status, commit, when = item.get("status"), item.get("commit"), instant(item.get("at"))
+    if status not in OUTCOMES or not isinstance(commit, str) or not SHA.fullmatch(commit):
+        return None
+    return None if when is None else Line(cast("Outcome", status), commit, when)
+
+
+def lines_of(data: bytes) -> list[Line] | None:
+    try:
+        found = [line_of(text) for text in data.decode().splitlines()]
+    except UnicodeDecodeError:
+        return None
+    kept = [line for line in found if line is not None]
+    return kept if len(kept) == len(found) else None
+
+
+def recorded(
+    data: bytes | None, *, start: str, holding: tuple[str, datetime] | None = None
+) -> Deep:
+    found = None if data is None else lines_of(data)
+    if found is None:
+        return Deep(None, start)
+    runs = [
+        DeepRun(line.commit, cast("State", line.status), line.at, f"line {number} of {RECORD}")
+        for number, line in enumerate(found, 1)
+        if line.status != UNRUN
+    ]
+    if holding is not None and SHA.fullmatch(holding[0]):
+        runs.append(DeepRun(holding[0], RUNNING, holding[1], PROVING))
+    return Deep(tuple(runs), start)

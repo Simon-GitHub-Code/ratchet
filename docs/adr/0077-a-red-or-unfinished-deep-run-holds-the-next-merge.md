@@ -20,7 +20,7 @@ This record is built in three pull requests (For the builders). The first, the j
 
 ### The data shape
 
-**A deep run is four fields to the judge.** The forge adapter, and the no-forge record once pull request 3 builds it, each produce the same values, so the judge names no forge.
+**A deep run is four fields to the judge.** The forge adapter, and the no-forge record that pull request 3 builds, each produce the same values, so the judge names no forge.
 
 ```python
 @dataclass(frozen=True)
@@ -156,29 +156,29 @@ With no bound declared, a deep run's end will matter when it clears a red: the p
 
 ### With no forge
 
-Pull request 3 builds this section. Until it does, `merge.py` judges with no tier 2 answer, as today.
+Pull request 3 builds this section. Before it, `merge.py` judged with no tier 2 answer.
 
-**The merge will read the record and never run the deep check.** `merge.py` will read the record below into a `Deep` and ask `held` before it judges the branch. With no bound declared it will refuse only on a recorded red that no later green covers. A refusal names the command that proves the tip. A deep run inside `merge.py`, inside `drain.py land`, would outlive the 600-second limit on an agent's foreground command and be killed before it wrote its line. The `check-deep` ADR 0031 has `merge.py` run on an adoption's merge result stays, unrecorded.
+**The merge reads the record and never runs the deep check.** `merge.py` reads the record below into a `Deep` and asks `held` before it judges the branch. With no bound declared it refuses only on a recorded red that no later green covers. A refusal names the command that proves the tip. A deep run inside `merge.py`, inside `drain.py land`, would outlive the 600-second limit on an agent's foreground command and be killed before it wrote its line. The `check-deep` ADR 0031 has `merge.py` run on an adoption's merge result stays, unrecorded.
 
-**The proving command will be `merge.py --deep`.** It extends the `merge` entry point as `--records` does, so `just merge --deep` needs no new recipe or binding row. It belongs there because the record lives in the state `merge.py` already keeps, beside its locks, and `merge` is the entry point `/ratchet:next` already lets an agent run. It will prove the default branch's tip:
+**The proving command is `merge.py --deep`.** It extends the `merge` entry point as `--records` does, so `just merge --deep` needs no new recipe or binding row. It belongs there because the record lives in the state `merge.py` already keeps, beside its locks, and `merge` is the entry point `/ratchet:next` already lets an agent run. It proves the default branch's tip:
 
 1. It takes the repository's one deep lock, `ratchet-deep.lock` in the common git directory, and writes into it the commit it proves. A second caller waits on the lock, then proves nothing when a line for the tip was appended after it started. So two callers never prove one commit twice.
 2. It makes a detached work tree of the commit, copies in the bite registry's `include` paths, which name the ignored folders a gate needs, and runs the registry's `setup` commands, as `project_bite.make_copy` does.
 3. It runs the binding's `check-deep` there and appends one line to the record.
 
-An agent will run it in the background and wait on its exit, not on a timer. The `next:` line after every merge will name it in place of `check-deep`.
+An agent runs it in the background and waits on its exit, not on a timer. The `next:` line after every merge names it in place of `check-deep`.
 
-**A proof will have three outcomes.** Green is `check-deep` exiting 0. Red is any other exit of `check-deep`. Unrun is everything that stops `check-deep` judging the tree: the work tree cannot be made, an `include` path cannot be copied, a `setup` command fails, the binding names no `check-deep`, or a signal stops the run. An unrun line says why, covers nothing, and is not red. A red is the owner's, as on a forge.
+**A proof has three outcomes.** Green is `check-deep` exiting 0. Red is any other exit of `check-deep`. Unrun is everything that stops `check-deep` judging the tree: the work tree cannot be made, an `include` path cannot be copied, a `setup` command fails, the binding names no `check-deep`, or a signal stops the run. An unrun line says why, covers nothing, and is not red. A red is the owner's, as on a forge.
 
-**The record will be** `ratchet-deep.jsonl` in the repository's common git directory, where `merge.py` keeps its landing state, so every work tree reads one file. Each line is one JSON object.
+**The record is** `ratchet-deep.jsonl` in the repository's common git directory, where `merge.py` keeps its landing state, so every work tree reads one file. Each line is one JSON object.
 
 ```json
 {"schema": 1, "commit": "<sha>", "tree": "<the commit's tree>", "status": "green", "exit": 0, "seconds": 812.4, "at": "2026-11-20T09:00:00Z", "entry": "<the check-deep command>", "speaks_for": ["<sha>"], "why": ""}
 ```
 
-`status` is `green`, `red` or `unrun`. The reader will drop an unrun line, and read a held deep lock as a running run on the commit it names. A line that does not parse makes `runs` `None`, which is `tier2`, since skipping it could skip a red. That reason names the escape: the owner removes the file, and the next `merge --deep` proves the tip again.
+`status` is `green`, `red` or `unrun`. The reader drops an unrun line, and reads a held deep lock as a running run on the commit it names. A line that does not parse makes `runs` `None`, which is `tier2`, since skipping it could skip a red. That reason names the escape: the owner removes the file, and the next `merge --deep` proves the tip again.
 
-**Why an agent will not forge a green more easily than today.** Only `merge.py --deep` appends, right after it ran `check-deep` in a work tree whose tracked files are the commit's. The record sits beside the refs the path guards protect (ADR 0016), and the adopt template's `local-git` group will deny agents edits to it as it denies `.git/refs/**`. An agent that writes it past the hook could as well move the default branch past the hook, which already lands anything, so a forged line buys nothing new.
+**Why an agent does not forge a green more easily than before.** Only `merge.py --deep` appends, right after it ran `check-deep` in a work tree whose tracked files are the commit's. The record sits beside the refs the path guards protect (ADR 0016), and the adopt template's `local-git` group denies agents edits to it as it denies `.git/refs/**`. An agent that writes it past the hook could as well move the default branch past the hook, which already lands anything, so a forged line buys nothing new.
 
 ### When the hold arrives
 
@@ -205,7 +205,7 @@ Pull request 2 builds the wait on a forge, and pull request 3 the wait with no f
 
 **On a forge**, when the judge's comment says `merge: wait` and an `unproven` reason names a deep run, the drain will wait for that run and the merge run that follows, then read the pull request's state. It will ask the forge for the run's status once a minute, one call each time, in a background command it waits on, and never use `gh run watch` or a tighter poll: every session on the machine shares the forge's request budget, and a 40-minute run costs about 40 of its 5,000 calls an hour. The step's waits for `ci` and the merge run take the same poll. The deep workflow's `timeout-minutes` and the forge's own limits end a run, so the drain sets no deadline. When `merge: wait` names no run, the drain closes the ticket `waits`. `unproven` is mechanical, so a later drain retries it, and after `RETRIES` tries the ticket is held for the owner.
 
-**With no forge**, when the merge's reason names `merge --deep`, the drain will run it in the background, wait on its exit, and land the ticket again once.
+**With no forge**, when the merge's reason names `merge --deep`, the drain runs it in the background, waits on its exit, and lands the ticket again once.
 
 ### What ends each hold
 
@@ -283,7 +283,7 @@ The repository records no change-size ceiling of its own. Each pull request stay
 - Readers of the verdict line, since a forge is where `merge: wait` is first reached: `scripts/drain.py` (`landed` reads the reasons after `merge: wait` as after `merge: owner`), `skills/next/SKILL.md` (`merge: wait` is the merge's answer, not a failure to rerun), `skills/feature/SKILL.md` (the one-ticket hand-over names the verdicts), `skills/method/pipeline.md` (step 7 and the parking rule), and `skills/conjecture/SKILL.md` (its hand-over relays the verdict line).
 - Red first: `hooks/tests/test_templates.py`: with a declared bound and a run in flight two merges back, the merge job comments `merge: wait` naming that run; a red's comment names every merge since the last green; a failed dispatch still judges every pull request and the reason says why; a completed `deep` run of any conclusion passes the job's `if:`. `hooks/tests/test_conformance.py`: a project on the 0.13.3 templates yields the three `Edit`s, which give the new template's text. `hooks/tests/test_upgrade_writes.py`: upgrading such a project rewrites all three, writes no `[ceilings.deep]`, and leaves conformance green; a hand-edited `merge.yml` is owed. `hooks/tests/test_drain.py` and `hooks/tests/test_drain_model.py`: a pull request held by `unproven` alone reads `merge: wait`, with no owner's command, and its ticket is retried, not held.
 
-**3. The no-forge record.** To be built. The proving command, the record and its guard, and the merge that reads it.
+**3. The no-forge record.** Built. The proving command, the record and its guard, and the merge that reads it.
 
 - Writes `scripts/unproven.py` (the record's reader and writer), `scripts/merge.py` (`--deep`; the merge reads the record and refuses; the `next:` line names `merge --deep`; it reads the verdict line, so on `merge: wait` its `next:` line names what the wait needs, not the owner's hand merge), `skills/adopt/templates/guards/manifest.toml` (the record under `local-git`), `scripts/conformance.py` (the owner finding when the manifest lacks it), `skills/next/SKILL.md` and `skills/feature/SKILL.md` (run `merge --deep` in the background and wait on its exit), `skills/method/guards.md` and `skills/method/tiers.md` (the paragraph with no forge), and `docs/gates.md` (`merge.py`'s row).
 - Red first: `hooks/tests/test_merge.py`: `merge --deep` proves the tip in a detached work tree holding the registry's `include` paths after its `setup`, and appends a green line with `speaks_for`; a red `check-deep` appends a red line; a failing `setup` appends an unrun line a merge does not read as red; a second caller that waited on the lock proves nothing; a recorded red refuses with `tier2` and moves nothing; a declared bound exceeded refuses with `merge: wait` naming `merge --deep`; no bound and no record merges; a line that does not parse refuses and names the file; no merge runs `check-deep` outside an adoption; a branch held by `unproven` alone reads `merge: wait`, with no owner's command. `hooks/tests/test_conformance.py` for the owner finding.
