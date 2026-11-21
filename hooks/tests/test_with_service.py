@@ -1047,7 +1047,10 @@ ANNOUNCES = (
     "pending = os.environ['RATCHET_SENDING'] + '.pending'\n"
     "open(pending, 'w').write(json.dumps([['POST', sys.argv[1], 200, '{}']]))\n"
     "os.replace(pending, os.environ['RATCHET_SENDING'])\n"
-    "while sys.argv[2:] and not os.path.exists(os.environ['RATCHET_STOPPING']): time.sleep(0.01)\n"
+    "deadline = time.monotonic() + 60\n"
+    "while sys.argv[2:] and not os.path.exists(os.environ['RATCHET_STOPPING']):\n"
+    "    assert time.monotonic() < deadline, 'the gate never signalled'\n"
+    "    time.sleep(0.01)\n"
 )
 BETWEEN_TWO_REQUESTS = (
     f"import sys, urllib.request as u\nassert u.urlopen(sys.argv[1]).status == 200\n{ANNOUNCES}"
