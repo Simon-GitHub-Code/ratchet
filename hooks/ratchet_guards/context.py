@@ -1,9 +1,10 @@
 import sys
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Protocol
 
+from ratchet_guards.environment import TRACKED
 from ratchet_guards.paths import Hit, Locator
 from ratchet_guards.refs import MAIN_BRANCHES
 from ratchet_guards.verdict import ACTING_RULES, UNADOPTED, Verdict
@@ -41,15 +42,24 @@ class Context:
     unread: bool = False
     unsettled: bool = False
     lost: bool = False
+    unspelled: bool = False
     hidden_switch: bool = False
 
     def moved_to(self, cwd: Path, *, anchored: bool = True) -> "Context":
         return replace(
-            self, cwd=cwd, branch=None, maybe=self._claims(), lost=self.lost and not anchored
+            self,
+            cwd=cwd,
+            branch=None,
+            maybe=self._claims(),
+            lost=self.lost and not anchored,
+            unspelled=self.unspelled and not anchored,
         )
 
     def adrift(self) -> "Context":
         return replace(self, lost=True)
+
+    def unspelling(self) -> "Context":
+        return replace(self, lost=True, unspelled=True)
 
     def switched_to(self, branch: str) -> "Context":
         return replace(self, branch=branch, maybe=frozenset())
@@ -58,7 +68,7 @@ class Context:
         return replace(self, maybe=self.maybe | frozenset(branches))
 
     def exporting(self, names: Iterable[str]) -> "Context":
-        return replace(self, exported=self.exported | frozenset(names))
+        return replace(self, exported=self.exported | (TRACKED & frozenset(names)))
 
     def unsettling(self) -> "Context":
         return replace(self, unsettled=True)
@@ -77,6 +87,11 @@ class Context:
 class Guard:
     locator: Locator
     repo: RepoState
+    found: list[Verdict] = field(default_factory=list, compare=False)
+
+    def noted(self, verdicts: list[Verdict]) -> list[Verdict]:
+        self.found.extend(verdicts)
+        return verdicts
 
     def branches(self, context: Context, cwd: Path) -> frozenset[str]:
         if context.unread:
@@ -130,3 +145,15 @@ class Guard:
     def acting(self, paths: Iterable[Path]) -> list[Verdict]:
         found = (self.locator.acting(path) for path in paths)
         return [Verdict(ACTING_RULES[file.kind], file.path) for file in found if file is not None]
+
+    def unfollowed(
+        self, context: Context, words: Iterable[str], *, destructive: bool, by: str
+    ) -> list[Verdict]:
+        if not context.lost:
+            return []
+        if context.unspelled:
+            words = self.locator.relative(words)
+        else:
+            words = self.locator.could_hit(words, destructive=destructive)
+        verb = "removed" if destructive else "changed"
+        return [Verdict("unresolved-directory", f"{word}, {verb} by {by}") for word in words]

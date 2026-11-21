@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -86,6 +87,69 @@ def reply(handler: http.server.BaseHTTPRequestHandler, status: int, body: bytes 
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
+
+
+HOLDS_FOR_OTHERS = (
+    "import contextlib, socket, sys, threading\n"
+    "def answer(listener):\n"
+    "    while True:\n"
+    "        try:\n"
+    "            connection, _ = listener.accept()\n"
+    "        except OSError:\n"
+    "            return\n"
+    "        connection.recv(65536)\n"
+    "        connection.sendall(b'HTTP/1.0 200 OK\\r\\nContent-Length: 0\\r\\n\\r\\n')\n"
+    "        connection.close()\n"
+    "def hold(client):\n"
+    "    address, port = client.recv(64).decode().split()\n"
+    "    family = socket.AF_INET6 if ':' in address else socket.AF_INET\n"
+    "    listener = socket.create_server((address, int(port)), family=family)\n"
+    "    threading.Thread(target=answer, args=(listener,), daemon=True).start()\n"
+    "    client.sendall(b'up')\n"
+    "    client.recv(64)\n"
+    "    listener.shutdown(socket.SHUT_RDWR)\n"
+    "    listener.close()\n"
+    "    with contextlib.suppress(OSError):\n"
+    "        client.sendall(b'down')\n"
+    "hub = socket.socket(socket.AF_UNIX)\n"
+    "hub.bind('\\0' + sys.argv[1])\n"
+    "hub.listen()\n"
+    "print('up', flush=True)\n"
+    "while True:\n"
+    "    threading.Thread(target=hold, args=(hub.accept()[0],), daemon=True).start()\n"
+)
+
+ASKS_ANOTHER_TO_LISTEN = (
+    "import os, signal, socket, sys\n"
+    "hub = socket.socket(socket.AF_UNIX)\n"
+    "hub.connect('\\0' + sys.argv[1])\n"
+    "hub.sendall(f\"{sys.argv[2]} {os.environ['PORT']}\".encode())\n"
+    "hub.recv(2)\n"
+    "if sys.argv[3:]: open(sys.argv[3], 'w').close()\n"
+    "def stop(*_):\n"
+    "    hub.sendall(b'close')\n"
+    "    hub.recv(4)\n"
+    "    os._exit(0)\n"
+    "signal.signal(signal.SIGTERM, stop)\n"
+    "while True:\n"
+    "    signal.pause()\n"
+)
+
+
+@contextmanager
+def held_outside_the_group() -> Iterator[Callable[[str], str]]:
+    name = f"ratchet-test-{uuid.uuid4().hex}"
+    with subprocess.Popen(  # noqa: S603 # -- this interpreter and a fixed script
+        [sys.executable, "-S", "-c", HOLDS_FOR_OTHERS, name],
+        stdout=subprocess.PIPE,
+        start_new_session=True,
+    ) as holder:
+        try:
+            assert holder.stdout is not None
+            assert holder.stdout.readline() == b"up\n", "the holder did not start"
+            yield lambda address: f"exec {python(ASKS_ANOTHER_TO_LISTEN)} {name} {address}"
+        finally:
+            holder.kill()
 
 
 def sleeper(tree: Path) -> subprocess.Popen[bytes]:
@@ -170,6 +234,82 @@ FORGE = (
     "    connection.close()\n"
     "os._exit(0)\n"
 )
+
+LISTENS = (
+    "import os, socket, sys\n"
+    "def listen(address, port):\n"
+    "    v6 = ':' in address\n"
+    "    s = socket.socket(socket.AF_INET6 if v6 else socket.AF_INET)\n"
+    "    if v6: s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)\n"
+    "    s.bind((address, port))\n"
+    "    s.listen()\n"
+    "    return s\n"
+    "served = listen(sys.argv[1], int(os.environ['PORT']))\n"
+    "others = [listen(address, 0) for address in sys.argv[2:]]\n"
+    "while True:\n"
+    "    connection, _ = served.accept()\n"
+    "    connection.recv(65536)\n"
+    "    connection.sendall(b'HTTP/1.0 200 OK\\r\\nContent-Length: 0\\r\\n\\r\\n')\n"
+    "    connection.close()\n"
+)
+
+NAMES_ITSELF = (
+    "import os, socket\n"
+    "served = socket.create_server(('127.0.0.1', int(os.environ['PORT'])))\n"
+    "name = os.environ.get('HOST', 'localhost')\n"
+    "while True:\n"
+    "    connection, _ = served.accept()\n"
+    "    lines = connection.recv(65536).decode().split('\\r\\n')\n"
+    "    asked = [line[5:].strip() for line in lines if line.lower().startswith('host:')]\n"
+    "    status = b'200 OK' if asked[0].rpartition(':')[0] == name else b'400 Bad Request'\n"
+    "    connection.sendall(b'HTTP/1.0 ' + status + b'\\r\\nContent-Length: 0\\r\\n\\r\\n')\n"
+    "    connection.close()\n"
+)
+
+HIDES = (
+    "import ctypes, socket, sys, time\n"
+    "held = socket.create_server(('127.0.0.1', 0))\n"
+    "ctypes.CDLL(None).prctl(4, 0, 0, 0, 0)\n"
+    "open(sys.argv[1], 'w').close()\n"
+    "time.sleep(60)\n"
+)
+
+HELPS = (
+    "import socket, sys, time\n"
+    "held = socket.create_server(('127.0.0.1', 0))\n"
+    "open(sys.argv[1], 'w').close()\n"
+    "time.sleep(60)\n"
+)
+
+
+def helped_by(marker: Path, boot: str) -> str:
+    return f"{python(HELPS)} {marker} & while [ ! -e {marker} ]; do sleep 0.05; done; {boot}"
+
+
+LEAVES_THE_GROUP = (
+    "import os, socket, sys, time\n"
+    "group = os.getpgrp()\n"
+    "if os.fork(): os._exit(0)\n"
+    "os.setsid()\n"
+    "if os.fork(): os._exit(0)\n"
+    "held = socket.create_server(('0.0.0.0', 0))\n"
+    "open(sys.argv[1], 'w').close()\n"
+    "while True:\n"
+    "    time.sleep(0.02)\n"
+    "    try: os.killpg(group, 0)\n"
+    "    except ProcessLookupError: os._exit(0)\n"
+)
+
+
+def beside_a_daemon(marker: Path, boot: str) -> str:
+    started = f"{python(LEAVES_THE_GROUP)} {marker}"
+    return f"{started}; while [ ! -e {marker} ]; do sleep 0.05; done; {boot}"
+
+
+def beside_one_opened_outside(marker: Path, asking: Callable[[str], str], boot: str) -> str:
+    opener = f"PORT=0 {asking('0.0.0.0')} {marker} &"  # noqa: S104 # -- the wide listener under test
+    return f"{opener} while [ ! -e {marker} ]; do sleep 0.05; done; {boot}"
+
 
 NEEDS = (
     "import os, sys, time\n"

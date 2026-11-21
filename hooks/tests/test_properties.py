@@ -4,6 +4,7 @@ import shlex
 import subprocess
 import sys
 from collections.abc import Callable
+from itertools import product
 from pathlib import Path
 from unittest.mock import patch
 
@@ -544,3 +545,92 @@ def test_a_long_heredoc_body_costs_no_more_than_the_same_text_in_double_quotes(t
 @given(text=st.text(alphabet=st.sampled_from(list("ab $()`'\\;&|<>\n#{}-=~*:")), max_size=80))
 def test_a_heredoc_body_costs_no_more_than_the_same_text_in_double_quotes(text: str) -> None:
     _body_costs_no_more_than_a_double_quoted_word(text)
+
+
+LEADS = ("./.github", "./guards", "./quality", "./.claude")
+SPELLED_WRITES = (
+    "echo hi > ci.yml",
+    "rm -f ci.yml",
+    "cp a ci.yml",
+    "sed -i s/a/b/ ci.yml",
+    "echo hi > AGENTS.md",
+    "echo hi > manifest.toml",
+    "rm -rf .",
+    "mv a thresholds.toml",
+    "tee settings.json < a",
+    "git rm -q manifest.toml",
+    "python3 -c \"open('ci.yml', 'w')\"",
+    "echo hi > /tmp/out",
+)
+SPELLINGS: dict[str, tuple[tuple[str, ...], tuple[int, ...], tuple[str, ...]]] = {
+    "two spellings of one directory": (("/.", "/./"), (8, 9, 10), (" && ", "; ")),
+    "eight spellings of one directory": (
+        ("/.", "/./", "//", "/.//", "/././", "///", "/./.", "//."),
+        (3, 4),
+        (" && ",),
+    ),
+    "two directories each": (("/a/..", "/b/.."), (6, 7), (" && ",)),
+    "more spellings than main reads in time": (("/.", "/./"), (24,), (" && ",)),
+}
+MAIN_SPELLED: dict[tuple[str, int, str], str] = {
+    ("two spellings of one directory", 8, "./.github"): "111111111111121111111100",
+    ("two spellings of one directory", 8, "./guards"): "222222222222222222222200",
+    ("two spellings of one directory", 8, "./quality"): "000000001100220000000000",
+    ("two spellings of one directory", 8, "./.claude"): "222222222222222222222200",
+    ("two spellings of one directory", 9, "./.github"): "111111111111121111111100",
+    ("two spellings of one directory", 9, "./guards"): "222222222222222222222200",
+    ("two spellings of one directory", 9, "./quality"): "000000001100220000000000",
+    ("two spellings of one directory", 9, "./.claude"): "222222222222222222222200",
+    ("two spellings of one directory", 10, "./.github"): "111111111111121111111100",
+    ("two spellings of one directory", 10, "./guards"): "222222222222222222222200",
+    ("two spellings of one directory", 10, "./quality"): "000000001100220000000000",
+    ("two spellings of one directory", 10, "./.claude"): "222222222222222222222200",
+    ("eight spellings of one directory", 3, "./.github"): "111111111110",
+    ("eight spellings of one directory", 3, "./guards"): "222222222220",
+    ("eight spellings of one directory", 3, "./quality"): "000010200000",
+    ("eight spellings of one directory", 3, "./.claude"): "222222222220",
+    ("eight spellings of one directory", 4, "./.github"): "111111111110",
+    ("eight spellings of one directory", 4, "./guards"): "222222222220",
+    ("eight spellings of one directory", 4, "./quality"): "000010200000",
+    ("eight spellings of one directory", 4, "./.claude"): "222222222220",
+    ("two directories each", 6, "./.github"): "111111111111",
+    ("two directories each", 6, "./guards"): "222222222221",
+    ("two directories each", 6, "./quality"): "111111211111",
+    ("two directories each", 6, "./.claude"): "222222222221",
+    ("two directories each", 7, "./.github"): "111111111111",
+    ("two directories each", 7, "./guards"): "111111211111",
+    ("two directories each", 7, "./quality"): "111111211111",
+    ("two directories each", 7, "./.claude"): "111111211111",
+    ("more spellings than main reads in time", 24, "./.github"): "------------",
+    ("more spellings than main reads in time", 24, "./guards"): "------------",
+    ("more spellings than main reads in time", 24, "./quality"): "------------",
+    ("more spellings than main reads in time", 24, "./.claude"): "------------",
+}
+
+
+def spelled(shape: str) -> list[tuple[int, str, int, str]]:
+    values, counts, joiners = SPELLINGS[shape]
+    cases: list[tuple[int, str, int, str]] = []
+    for count in counts:
+        for lead in LEADS:
+            parts = [f"x0=. || x0={lead}"]
+            parts += [" || ".join(f"x{i}={value}" for value in values) for i in range(1, count)]
+            tail = "/workflows" if lead == "./.github" else ""
+            cd = "; ".join(parts) + "; cd " + "".join(f"$x{i}" for i in range(count)) + tail
+            then = enumerate(product(SPELLED_WRITES, joiners))
+            cases += [(count, lead, i, cd + joiner + write) for i, (write, joiner) in then]
+    return cases
+
+
+@pytest.mark.parametrize("shape", SPELLINGS)
+def test_a_directory_spelled_from_variables_is_never_judged_more_loosely_than_on_main(
+    shape: str,
+) -> None:
+    looser = []
+    for count, lead, index, command in spelled(shape):
+        pinned = MAIN_SPELLED[shape, count, lead][index]
+        top = strictest(bash.check(command, Context(ROOT), make_guard()))
+        now = 0 if top is None else int(top.decision)
+        if now < (1 if pinned == "-" else int(pinned)):
+            looser.append((count, lead, command.partition("; cd ")[2], pinned, now))
+    assert looser == []
