@@ -1901,6 +1901,18 @@ def test_thresholds_nested_too_deep_to_parse_name_nothing_slow(tmp_path: Path) -
     assert project_bite.recorded_slow(root) == []
 
 
+def test_a_slow_fault_is_named_however_many_records_follow_it(tmp_path: Path) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "whole"))
+    write(root, "quality/thresholds.toml", ceilings(tier0=0.5))
+    fault = {"kind": "fault", "gate": "lint", "bite": "whole", "seconds": 9.0, "narrowed": False}
+    later = (json.dumps({**fault, "bite": "later", "seconds": 0.2}) + "\n").encode()
+    timing = root / runrecord.TIMING
+    timing.parent.mkdir()
+    timing.write_bytes((json.dumps(fault) + "\n").encode() + later * (3 * 2**20 // len(later)))
+    [line] = project_bite.recorded_slow(root)
+    assert line.startswith(f"{REGISTRY}: lint: whole: 9.0s with no args"), line
+
+
 def test_a_bite_left_whole_on_purpose_is_named_with_its_reason_by_the_proof_alone(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -2109,7 +2121,7 @@ def test_a_proof_that_cannot_record_says_so_once_and_is_otherwise_the_same_run(
     run = apart("project_bite.py", "--root", str(root), "--jobs", "1")
     said = [line for line in run.stdout.splitlines() if line.startswith("bite: not recorded: ")]
     assert len(said) == 1, run.stdout
-    assert said[0].startswith(f"bite: not recorded: {root / runrecord.TIMING}: "), said
+    assert said[0].startswith("bite: not recorded: .ratchet/timing.jsonl: "), said
     assert (run.returncode, recorded_run.returncode) == (0, 0), run.stdout + run.stderr
     assert settled(run.stdout.replace(said[0] + "\n", "")) == settled(recorded_run.stdout)
     outside = [*tmp_path.glob("outside.jsonl"), *tmp_path.glob("outside/*")]
