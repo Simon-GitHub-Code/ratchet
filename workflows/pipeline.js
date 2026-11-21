@@ -59,16 +59,23 @@ const REF_NAME_RULES = [
   [/\.lock(\/|$)/, 'has a part that ends with ".lock"'],
   [/\.$/, 'ends with "."'],
 ]
+const BRANCH_RULES = [
+  ...REF_NAME_RULES,
+  [/^HEAD$/, 'is "HEAD", which git refuses as a branch name (git check-ref-format --branch), so a role on a detached checkout would not switch'],
+]
+const ROOT_RULES = [[/^(?!\/)/, 'is not an absolute path, so `cd` could find it through CDPATH'], A_CONTROL]
 const REF_NAME_PRODUCE = 'a name git accepts as a ref name (git check-ref-format) that does not start with "-": a branch, a remote-tracking branch or an object id'
+const BRANCH_PRODUCE = 'a name git accepts as a branch name (git check-ref-format --branch), with no "@{" and not "@" alone'
 const PATH_PRODUCE = 'a value that does not start with "-" (a relative path can start with ./) and holds no control character'
+const ROOT_PRODUCE = 'the absolute path of the work tree, with no control character'
 
 function unfitArgument() {
   const slots = [
     ['ticket', REF, PATH_RULES, PATH_PRODUCE],
-    ['root', ROOT, PATH_RULES, PATH_PRODUCE],
+    ['root', ROOT, ROOT_RULES, ROOT_PRODUCE],
     ['preflight', PREFLIGHT_SCRIPT, PATH_RULES, PATH_PRODUCE],
     ['base', BASE, REF_NAME_RULES, REF_NAME_PRODUCE],
-    ['branch', BRANCH, REF_NAME_RULES, REF_NAME_PRODUCE],
+    ['branch', BRANCH, BRANCH_RULES, BRANCH_PRODUCE],
     ...CONFLICTS.map(path => ['conflict', path, [A_CONTROL], 'a conflicted path with no control character']),
   ]
   for (const [slot, value, rules, produce] of slots) {
@@ -870,7 +877,7 @@ function ticketHint() {
   return `the file \`${REF}\` as \`${BASE}\` holds it, not the copy in the working tree, which an
   agent of this run may have changed. Read it, from ${ROOT_HINT}, with
 
-      git show --end-of-options ${shellWord(`${BASE}:${REF}`)}
+      git show --end-of-options ${shellWord(`${BASE}:${REF}`)} --
 `
 }
 
@@ -920,7 +927,7 @@ with the safe answer.
 Read these two and nothing else (no code, no tests, no other record), and edit nothing:
 - The ticket, with its comments and its \`## Answers\` section: what the owner asked for and
   agreed. It is ${ticketHint()}
-- The spec: \`${spec.specPath}\` under ${ROOT_HINT}.${enterRoot('    ').trimEnd()}
+- The spec: \`${spec.specPath}\` under ${ROOT_HINT}.${enterRoot('      ').trimEnd()}
 
 1. ${PROMISE_READINGS}
 2. ${INPUT_READINGS}
@@ -1251,7 +1258,7 @@ function stagingLines(conflicts) {
   return `The rebase stopped on these paths when it was tried. Once you have resolved one, its line
 stages it:
 
-${conflicts.map(path => `      git add -- ${shellWord(path)}`).join('\n')}
+${conflicts.map(path => `      git --literal-pathspecs add -- ${shellWord(path)}`).join('\n')}
 `
 }
 
@@ -1280,7 +1287,8 @@ Do this, in order:
    At each stop, resolve every conflicted file so that both changes hold: both flags stay in the
    registry, both terms in the glossary, both routes in the application. Where the two cannot
    both hold, \`${BASE}\` stands as it is and this feature's code adapts to it. Then
-   \`git add --\` each file you resolved, its path one quoted word, and \`git rebase --continue\`.
+   \`git --literal-pathspecs add --\` each file you resolved, its path one quoted word, and
+   \`git rebase --continue\`.
    Never \`--skip\` a commit and never take one side of a whole file.
 2. Run \`check\`. A red gate is answered by changing this feature's code, never the other
    change's and never a gate. A number the other change took first (a decision record, a
