@@ -59,7 +59,7 @@ def pull(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     repository, *refspecs = scan(call.args, _PULL).operands or (REMOTE,)
     sources = [spec.removeprefix("+").partition(":")[0] for spec in refspecs]
     named = {source.removeprefix("refs/heads/") for source in sources}
-    remote = repository == REMOTE and named <= _REMOTE_DEFAULTS
+    remote = repository == REMOTE and named <= _REMOTE_DEFAULTS and not call.configs
     return (
         []
         if remote and (named or _tracks([_UPSTREAM], call, context, guard=guard))

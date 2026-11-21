@@ -119,7 +119,8 @@ RULES: dict[str, Rule] = {
         "Leave it to what merges by itself: with no forge `just merge <branch>` merges a branch "
         "when the merge judge and `check` pass it, and on a forge the merge job merges its pull "
         "request. `just merge-ready --head <branch>` prints each reason one waits, one a line. "
-        f"{OWNERS_HAND} To bring the default branch up to date, run `git pull --ff-only`. To try "
+        f"{OWNERS_HAND} Where the default branch tracks a remote, `git pull --ff-only` brings it "
+        "up to date. To try "
         "a merge, a cherry-pick or a read-tree, first move to a detached `HEAD` (`git switch "
         "--detach`) or a scratch branch in a tool call of its own, and run it there.",
     ),

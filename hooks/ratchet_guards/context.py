@@ -1,3 +1,4 @@
+import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -7,7 +8,12 @@ from ratchet_guards.paths import Hit, Locator
 from ratchet_guards.refs import MAIN_BRANCHES
 from ratchet_guards.verdict import ACTING_RULES, UNADOPTED, Verdict
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+import justfile_text
+
 DETACHED = "HEAD"
+RECIPES = "justfile"
+MERGES_BY_ITSELF = ("merge-ready", "merge")
 
 
 class RepoState(Protocol):
@@ -114,8 +120,12 @@ class Guard:
 
     def merging(self, rule: str, detail: str, cwd: Path) -> Verdict:
         filesystem = self.locator.filesystem
-        adopted = filesystem.guarded_checkout(filesystem.canonical(cwd)) is not None
-        return Verdict(rule if adopted else UNADOPTED[rule], detail)
+        checkout = filesystem.guarded_checkout(filesystem.canonical(cwd))
+        recipes = None if checkout is None else self.repo.default_file(checkout.root, RECIPES)
+        refused = recipes is not None and all(
+            justfile_text.defines_recipe(recipes, name) for name in MERGES_BY_ITSELF
+        )
+        return Verdict(rule if refused else UNADOPTED[rule], detail)
 
     def acting(self, paths: Iterable[Path]) -> list[Verdict]:
         found = (self.locator.acting(path) for path in paths)
