@@ -770,7 +770,7 @@ def merge_job(tmp_path: Path, world: dict[str, Any]) -> tuple[int, str, str]:
     scripts = tmp_path / "plugin/scripts"
     scripts.mkdir(parents=True)
     (scripts / "merge_ready.py").write_text(FAKE_JUDGE, encoding="utf-8")
-    for name in ("forge_runs.py", "gatelib.py"):
+    for name in ("forge_runs.py", "gatelib.py", "unproven.py"):
         shutil.copy(TEMPLATES.parents[2] / "scripts" / name, scripts / name)
     (tmp_path / "world.json").write_text(json.dumps(world), encoding="utf-8")
     calls = tmp_path / "calls"
