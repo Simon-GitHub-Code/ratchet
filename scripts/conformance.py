@@ -107,6 +107,7 @@ MERGE_WORKFLOW = "merge.yml"
 TIER1_FLAG = "--tier1"
 TIER1_ARGUMENT = '--tier1 "$tier1"'
 TIER2_FLAG = '--tier2 "$tier2"'
+KEPT_BRANCH = "base=$branch"
 RUN_VARIABLE = "RATCHET_RUN"
 RUN_UNEXPORTED = re.compile(rf"{RUN_VARIABLE}[ \t]*:=")
 MERGE_SHAPE = (
@@ -117,6 +118,7 @@ MERGE_SHAPE = (
         "--tier1",
         "leaves every merge to the owner while `ci` is red on the default branch (ADR 0069)",
     ),
+    (KEPT_BRANCH, "keeps a merged branch while an open pull request targets it (ADR 0083)"),
     ("issues: write", "may close the issues a merged change says it closes"),
     ("closingIssuesReferences", "closes the issues a merged change says it closes"),
     ("contents: write", "may merge what the judge passes"),
@@ -2142,9 +2144,15 @@ def forge_workflow(
             continue
         problem = f"nothing {meaning} ('{marker}' absent)"
         path = str(WORKFLOWS / name)
+        template = ADOPT_TEMPLATES / WORKFLOWS / name
         if name == MERGE_WORKFLOW and marker == TIER1_FLAG:
             does = "read the default branch's tier 1 and pass it to the judge, as the template does"
             yield Finding(path, problem, Edit(does, with_tier1(name), Agent()))
+        elif name == MERGE_WORKFLOW and marker == KEPT_BRANCH:
+            does = "keep a merged branch an open pull request targets, as the template does"
+            step = f"replace the step that deletes the merged branch with the one in {template}"
+            fix = Edit(does, with_kept_branch(name), Agent())
+            yield Finding(path, f"{problem}; {step}", fix, identity=problem)
         else:
             yield agent(f"{path}: {problem}")
 
@@ -2165,6 +2173,25 @@ def with_tier1(name: str) -> gatelib.Want:
         lines[call] = lines[call].replace(TIER2_FLAG, f"{TIER1_ARGUMENT} {TIER2_FLAG}", 1)
         anchor = lines[at]
         lines[at:at] = [anchor[: len(anchor) - len(anchor.lstrip())] + read_line.lstrip()]
+        return "\n".join(lines)
+
+    return want
+
+
+def with_kept_branch(name: str) -> gatelib.Want:
+    template = template_file(f".github/workflows/{name}").splitlines()
+    start = next(i for i, line in enumerate(template) if KEPT_BRANCH in line) - 1
+    stop = next(i for i in range(start, len(template)) if template[i].strip() == "fi ;;") + 1
+    block = template[start:stop]
+    deleted = next(line.strip() for line in block if "-X DELETE" in line)
+    indent = len(block[0]) - len(block[0].lstrip())
+
+    def want(current: str | None) -> str:
+        lines = (current or "").split("\n")
+        at = next((i for i, line in enumerate(lines) if line.strip() == f"*) {deleted} ;;"), None)
+        if at is not None:
+            lead = lines[at][: len(lines[at]) - len(lines[at].lstrip())]
+            lines[at : at + 1] = [lead + line[indent:] for line in block]
         return "\n".join(lines)
 
     return want

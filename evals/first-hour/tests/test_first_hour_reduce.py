@@ -379,7 +379,7 @@ def test_a_call_the_harness_refused_counts_and_a_prompt_takes_its_origin_from_it
 
 def test_the_guards_own_asks_count_as_the_guards() -> None:
     owner_ask = hook.reason(Verdict("agent-ready-label", "0001-x.md gets the status `agent:ready`"))
-    agent_ask = hook.reason(Verdict("merge-default", "git merge feat/x"))
+    agent_ask = hook.reason(Verdict("merge-default-unadopted", "git merge feat/x"))
     run = [
         {"s": 1, "kind": "prompt", "tool": tool, "decision": "allow", "reason": reason}
         for tool, reason in (("Write", owner_ask), ("Bash", agent_ask), ("Bash", "no rule"))

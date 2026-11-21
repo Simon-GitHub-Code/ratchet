@@ -612,6 +612,13 @@ def test_only_what_git_sees_is_copied_and_a_link_stays_a_link(tmp_path: Path) ->
 ABSENT = re.compile(r"\('(.+?)' absent\)")
 BEFORE_ISSUES_CLOSE = "d2b36ab^"
 BEFORE_TIER_1_READ = "903d902"
+BEFORE_KEPT_BRANCH = "2e9dbe4"
+KEPT = "base=$branch"
+KEPT_PROBLEM = (
+    "nothing keeps a merged branch while an open pull request targets it (ADR 0083)"
+    f" ('{KEPT}' absent)"
+)
+TAKE_THE_STEP = "replace the step that deletes the merged branch with the one in"
 MERGE = ".github/workflows/merge.yml"
 
 
@@ -646,11 +653,13 @@ def test_a_merge_workflow_from_before_it_closed_issues_is_owed_every_marker_sinc
     assert commit
     (root / MERGE).write_text(old.replace("<ratchet-sha>", commit.group(1)) + "\n")
     found = [f.problem for f in conformance.findings(root) if f.path == MERGE]
-    assert found == [
+    wanted = [
         f"nothing {meaning} ('{marker}' absent)"
         for marker, meaning in conformance.MERGE_SHAPE
-        if marker in {"--tier1", "issues: write", "closingIssuesReferences"}
+        if marker in {"--tier1", "issues: write", "closingIssuesReferences", KEPT}
     ]
+    assert len(found) == len(wanted)
+    assert all(problem.startswith(want) for problem, want in zip(found, wanted, strict=True))
 
 
 def test_a_merge_workflow_from_before_it_read_tier_1_on_the_default_branch_is_owed_that_read(
@@ -664,8 +673,49 @@ def test_a_merge_workflow_from_before_it_read_tier_1_on_the_default_branch_is_ow
     assert commit
     (root / MERGE).write_text(old.replace("<ratchet-sha>", commit.group(1)) + "\n")
     found = [f.problem for f in conformance.findings(root) if f.path == MERGE]
-    [problem] = found
-    assert problem == f"nothing {dict(conformance.MERGE_SHAPE)['--tier1']} ('--tier1' absent)"
+    assert f"nothing {dict(conformance.MERGE_SHAPE)['--tier1']} ('--tier1' absent)" in found
+
+
+def test_a_merge_workflow_from_before_it_kept_a_targeted_branch_is_given_the_template_s_step(
+    tmp_path: Path,
+) -> None:
+    root = fixture("0.9.2", tmp_path)
+    upgrade.apply(root, planned(root).changes)
+    commit = re.search(r"ref: \"([0-9a-f]{40})\"", (root / MERGE).read_text(encoding="utf-8"))
+    assert commit
+    old = adopted.history("show", f"{BEFORE_KEPT_BRANCH}:skills/adopt/templates/{MERGE}")
+    (root / MERGE).write_text(old.replace("<ratchet-sha>", commit.group(1)) + "\n")
+    found = [f.problem for f in conformance.findings(root) if f.path == MERGE]
+    assert found == [f"{KEPT_PROBLEM}; {TAKE_THE_STEP} {conformance.ADOPT_TEMPLATES / MERGE}"]
+    upgrade.apply(root, planned(root).changes)
+    done = (root / MERGE).read_text(encoding="utf-8")
+    template = conformance.template_file(MERGE).replace("<ratchet-sha>", commit.group(1))
+    assert done.rstrip("\n") == template.rstrip("\n")
+    assert not [f for f in conformance.findings(root) if f.path == MERGE]
+    assert not [e for e in owed.read(root).entries if e.path == MERGE]
+
+
+def test_a_merge_workflow_that_deletes_a_branch_its_own_way_owes_the_template_s_step(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = fixture("0.9.2", tmp_path)
+    old = adopted.history("show", f"{BEFORE_KEPT_BRANCH}:skills/adopt/templates/{MERGE}")
+    own = old.replace(" --silent || echo", " || echo")
+    (root / MERGE).write_text(own + "\n")
+    repos.git(root, "add", MERGE)
+    repos.git(root, "commit", "-q", "-m", "ci: the project's own merge job")
+    step = f"{TAKE_THE_STEP} {conformance.ADOPT_TEMPLATES / MERGE}"
+    assert conformance.main(["conformance.py", str(root)]) == 1
+    assert f"{MERGE}: {KEPT_PROBLEM}; {step}" in capsys.readouterr().out.splitlines()
+    repos.branch(root, "upgrade")
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    done = (root / MERGE).read_text(encoding="utf-8")
+    assert KEPT not in done
+    assert ' --silent || echo "branch $branch stays" ;;' not in done
+    assert [e.problem for e in owed.read(root).entries if e.path == MERGE] == [KEPT_PROBLEM]
+    capsys.readouterr()
+    assert conformance.main(["conformance.py", str(root)]) == 0, "owed, not red"
+    assert f"owed: {MERGE}: {KEPT_PROBLEM}; {step}" in capsys.readouterr().out.splitlines()
 
 
 def test_an_upgrade_owes_the_bite_all_ceiling_a_project_adopted_before_it_lacks(

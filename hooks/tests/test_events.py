@@ -17,7 +17,7 @@ import pytest
 from ratchet_guards import events, hook
 from ratchet_guards.manifest import MANIFEST_PATH
 from tests.repos import branch, git, repository
-from tests.support import MANIFEST_TEXT, PLUGIN_ROOT, make_guard
+from tests.support import JUSTFILE, MANIFEST_TEXT, PLUGIN_ROOT, make_guard
 
 SHIM = PLUGIN_ROOT / "hooks/guard.py"
 STAMP = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"
@@ -27,7 +27,7 @@ STAMP = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"
 def adopted(tmp_path: Path) -> Path:
     root = tmp_path / "adopted"
     root.mkdir()
-    return repository(root, {MANIFEST_PATH: MANIFEST_TEXT})
+    return repository(root, {MANIFEST_PATH: MANIFEST_TEXT, "justfile": JUSTFILE})
 
 
 def log_of(root: Path) -> Path:
@@ -82,11 +82,21 @@ def test_a_deny_writes_one_line_with_the_fields(adopted: Path) -> None:
     assert re.fullmatch(STAMP, str(line["at"]))
 
 
-def test_an_ask_writes_one_line(adopted: Path) -> None:
+def test_a_denied_merge_writes_one_line(adopted: Path) -> None:
     printed = answer(adopted, bash(adopted, "gh pr merge 7"))
-    assert decision(printed) == "ask"
+    assert decision(printed) == "deny"
     [line] = lines(log_of(adopted))
-    assert (line["decision"], line["tool"], line["rule"]) == ("ask", "Bash", "merge-pr")
+    assert (line["decision"], line["tool"], line["rule"]) == ("deny", "Bash", "merge-pr")
+    assert line["detail"] == "gh pr merge"
+    assert line["branch"] == "main"
+
+
+def test_an_ask_writes_one_line(tmp_path: Path) -> None:
+    root = repository(tmp_path / "unadopted")
+    printed = answer(root, bash(root, "gh pr merge 7"))
+    assert decision(printed) == "ask"
+    [line] = lines(log_of(root))
+    assert (line["decision"], line["tool"], line["rule"]) == ("ask", "Bash", "merge-pr-unadopted")
     assert line["detail"] == "gh pr merge"
 
 
