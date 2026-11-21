@@ -100,9 +100,17 @@ HOOKS_CHANGED = (
     " checkout, and `{}` holds them as they were filed"
 )
 HOOKS_HURT = (
-    "not landed: the commit hooks changed the checkout as the lines above say, so nothing is"
-    " merged: `{}` holds the parts, and they stay uncommitted in the checkout"
+    "not landed: what the owner staged changed in the checkout as the parts were committed, as"
+    " the lines above say, so nothing is merged: `{}` holds the parts, and they stay uncommitted"
+    " in the checkout"
 )
+CHANGED_BY = "a commit hook or another process {} `{}` as the parts were committed"
+WROTE = (
+    ", which the split wrote and no ref holds, so git's collection removes it once its grace"
+    " period is over"
+)
+NOT_READ = (0, "")
+SHA256_HEX = 64
 HOOKS_EMPTIED = (
     "not landed: the commit hooks took the parts out of the commit, so `{}` holds a commit that"
     " adds nothing, and it stays as it is: delete it"
@@ -186,7 +194,9 @@ class Seen:
 @dataclass(frozen=True)
 class Exposed:
     files: dict[str, tuple[int, str] | None]
+    written: frozenset[str]
     stash: str | None
+    algorithm: str
 
 
 @dataclass(frozen=True)
@@ -1720,10 +1730,10 @@ def land_parts(root: Path, branch: str, *, landing: str, made: list[str]) -> str
     queue_notes.write_note(path, {**queue_notes.read_note(root, branch), "committed": commit})
     for part in made:
         (root / part).unlink()
-    if merge.merge_records(root, landing) == 0:
-        return None
     lock = root / (gatelib.git(root, "rev-parse", "--git-path", "index.lock") or "index.lock")
-    return INDEX_LOCKED.format(landing, lock) if lock.is_file() else ON_LANDING.format(landing)
+    if lock.is_file():
+        return INDEX_LOCKED.format(landing, lock)
+    return None if merge.merge_records(root, landing) == 0 else ON_LANDING.format(landing)
 
 
 def unlandable(root: Path, default: str, *, landing: str, made: list[str]) -> str | None:
@@ -1808,64 +1818,71 @@ def commit_aside(
     )
     if staged.returncode:
         return staged, None
-    files, hashed = snapshot(root, reachable(root, aside, made), keep=True)
-    if hashed.returncode:
-        return hashed, None
+    exposed = kept(root, protected(root, base), shown[1] if len(shown) > 1 else None)
     message = f"{merge.SUBJECT}\n\nThe parts of a split, landed by `drain.py split`:\n\n" + "".join(
         f"- {part}\n" for part in made
     )
     done = merge.porcelain(root, *aside, "commit", "-q", "--file=-", given=message)
-    return done, Exposed(files, shown[1] if len(shown) > 1 else None)
+    return done, exposed
 
 
-def reachable(root: Path, aside: tuple[str, str], made: list[str]) -> list[str]:
-    listed = merge.porcelain(
-        root, *aside, "status", "--porcelain=v2", "-z", "--untracked-files=all", "--no-renames"
-    ).stdout
-    rows = [row for row in listed.split("\0") if row[:2] in {"1 ", "? "}]
-    paths = [row[2:] if row[0] == "?" else row.split(" ", 8)[8] for row in rows]
-    return [path for path in paths if path not in made]
+def protected(root: Path, base: str) -> dict[str, tuple[str, ...]]:
+    listing = ["diff-index", "--cached", "-z", "--no-renames", "--no-abbrev", base]
+    listed = subprocess.run(
+        ["git", "-C", str(root), *listing],
+        capture_output=True,
+        text=True,
+        errors="surrogateescape",
+        check=False,
+    ).stdout.split("\0")
+    return {listed[at + 1]: tuple(listed[at].split()[2:4]) for at in range(0, len(listed) - 1, 2)}
 
 
-def mode_of(path: Path) -> int | None:
+def kept(root: Path, listed: dict[str, tuple[str, ...]], stash: str | None) -> Exposed:
+    wide = any(len(known[0]) == SHA256_HEX for known in listed.values())
+    algorithm = "sha256" if wide else "sha1"
+    files: dict[str, tuple[int, str] | None] = {}
+    written: set[str] = set()
+    for path, known in listed.items():
+        try:
+            files[path], body = look(root / path, algorithm)
+        except OSError as error:
+            print(f"records: not saved: {path}: {error.strerror}")
+            files[path] = NOT_READ
+            continue
+        held = files[path]
+        if held is not None and stat.S_ISREG(held[0]) and held[1] not in known:
+            subprocess.run(
+                ["git", "-C", str(root), "hash-object", "-w", "--stdin"],
+                input=body,
+                capture_output=True,
+                check=False,
+            )
+            written.add(held[1])
+    return Exposed(files, frozenset(written), stash, algorithm)
+
+
+def look(path: Path, algorithm: str) -> tuple[tuple[int, str] | None, bytes]:
     try:
-        return path.lstat().st_mode
-    except OSError:
-        return None
-
-
-def snapshot(
-    root: Path, paths: list[str], *, keep: bool
-) -> tuple[dict[str, tuple[int, str] | None], subprocess.CompletedProcess[str]]:
-    modes = {path: mode_of(root / path) for path in paths}
-    plain = [path for path, mode in modes.items() if mode is not None and stat.S_ISREG(mode)]
-    hashed = (
-        merge.porcelain(
-            root,
-            "hash-object",
-            *(["-w"] if keep else []),
-            "--no-filters",
-            "--stdin-paths",
-            given="".join(f"{path}\n" for path in plain),
-        )
-        if plain
-        else subprocess.CompletedProcess([], 0, "", "")
-    )
-    blobs = dict(zip(plain, hashed.stdout.split(), strict=False))
-    files = {
-        path: None if mode is None else (mode, kept_as(root / path, mode, blobs.get(path, "")))
-        for path, mode in modes.items()
-    }
-    return files, hashed
-
-
-def kept_as(path: Path, mode: int, blob: str) -> str:
-    return str(path.readlink()) if stat.S_ISLNK(mode) else blob
+        mode = path.lstat().st_mode
+        body = path.read_bytes() if stat.S_ISREG(mode) else b""
+        target = str(path.readlink()) if stat.S_ISLNK(mode) else ""
+    except FileNotFoundError:
+        return None, b""
+    if not stat.S_ISREG(mode):
+        return (mode, target), body
+    return (mode, hashlib.new(algorithm, b"blob %d\0" % len(body) + body).hexdigest()), body
 
 
 def harmed(root: Path, exposed: Exposed, stash: str | None) -> list[str]:
-    now, _ = snapshot(root, list(exposed.files), keep=False)
-    lines = [harm(path, was, now[path]) for path, was in exposed.files.items() if now[path] != was]
+    lines = []
+    for path, was in exposed.files.items():
+        try:
+            now, _ = look(root / path, exposed.algorithm)
+        except OSError:
+            now = NOT_READ
+        if now != was:
+            lines.append(harm(path, was, now, written=exposed.written))
     if stash != exposed.stash:
         top = stash or exposed.stash
         holds = gatelib.git(root, "diff", "--name-only", f"{top}^1", f"{top}") or ""
@@ -1877,18 +1894,22 @@ def harmed(root: Path, exposed: Exposed, stash: str | None) -> list[str]:
     return lines
 
 
-def harm(path: str, was: tuple[int, str] | None, now: tuple[int, str] | None) -> str:
+def harm(
+    path: str, was: tuple[int, str] | None, now: tuple[int, str] | None, *, written: frozenset[str]
+) -> str:
     if was is None:
-        return f"the commit hooks restored `{path}`, which the checkout did not have"
+        return f"{CHANGED_BY.format('restored', path)}; the checkout did not have it"
     mode, held = was
-    what = "deleted" if now is None else "changed"
+    said = CHANGED_BY.format("deleted" if now is None else "changed", path)
     if stat.S_ISREG(mode):
+        wrote = WROTE if held in written else ""
         return (
-            f"the commit hooks {what} `{path}`; the bytes it had are object {held}:"
-            f" `git cat-file blob {held}` prints them"
+            f"{said}; the bytes it had are object {held}{wrote}: `git cat-file blob {held}` prints"
+            " them"
         )
-    shape = f"a link to `{held}`" if held else "a folder"
-    return f"the commit hooks {what} `{path}`; it was {shape}"
+    if was == NOT_READ:
+        return f"{said}; the split could not read it, so it was not saved"
+    return f"{said}; it was {f'a link to `{held}`' if stat.S_ISLNK(mode) else 'a folder'}"
 
 
 def show_plan(drain: Drain, _options: argparse.Namespace) -> int:
