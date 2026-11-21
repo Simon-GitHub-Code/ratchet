@@ -1,9 +1,57 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
+import signal
+import subprocess
+import time
+from typing import TYPE_CHECKING, Any
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
+
+EXITING = 5.0
+
+
+def group_alive(group: int) -> bool:
+    try:
+        os.killpg(group, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def end_group(process: subprocess.Popen[Any]) -> None:
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGTERM)
+    deadline = time.monotonic() + EXITING
+    while process.poll() is None or group_alive(process.pid):
+        if time.monotonic() > deadline:
+            break
+        time.sleep(0.02)
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGKILL)
+    process.wait()
+    for stream in (process.stdin, process.stdout, process.stderr):
+        if stream is not None:
+            stream.close()
+
+
+@pytest.fixture
+def spawn() -> Iterator[Callable[..., subprocess.Popen[Any]]]:
+    begun: list[subprocess.Popen[Any]] = []
+
+    def start(argv: list[str], **options: Any) -> subprocess.Popen[Any]:  # noqa: ANN401 # -- Popen's own options
+        process = subprocess.Popen(argv, start_new_session=True, **options)  # noqa: S603 # -- the test's own argv
+        begun.append(process)
+        return process
+
+    yield start
+    for process in reversed(begun):
+        end_group(process)
 
 
 def shard_of(nodeid: str, shards: int) -> int:
