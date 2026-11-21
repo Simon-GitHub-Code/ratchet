@@ -1,9 +1,8 @@
 import random
 from collections import deque
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Protocol
-
-import pytest
 
 import schedule
 
@@ -126,17 +125,6 @@ def test_an_alone_gate_waits_for_the_lanes_to_empty_and_runs_after_the_rest() ->
     assert plan.take() is None
 
 
-@pytest.mark.parametrize(
-    "case", [("plain", 16, 4, 4), ("plain", 7, 2, 3), ("plain", 2, 4, 1), ("timed", 16, 4, 16)]
-)
-def test_a_lane_is_told_its_share_of_the_cores_and_an_alone_gate_all_of_them(
-    case: tuple[str, int, int, int],
-) -> None:
-    gate, cores, lanes, told = case
-    statement = schedule.Schedule({schedule.ALONE: (("timed",),)})
-    assert statement.share(gate, cores=cores, lanes=lanes) == told
-
-
 SPEED = (
     "# Binding\n\n## Speed\n\n- Parallel: every core\n"
     "- Apart: `e2e a11y` `coverage mutation-changed`\n"
@@ -164,9 +152,111 @@ def test_a_kind_left_out_or_left_as_its_placeholder_is_not_stated() -> None:
     assert schedule.stated("# Binding\n").groups == {}
 
 
-def test_a_run_keeps_the_gates_it_runs_and_the_stated_kinds_win_over_the_given() -> None:
-    read = schedule.stated(SPEED.format(wide=""))
-    run = read.among(["a11y", "e2e", "load", "lint"])
-    assert run.groups == {"Apart": (("e2e", "a11y"),), "Alone": (("load",),)}
-    given = schedule.Schedule({"Alone": (("lint",),), "Wide": (("lint",),)})
-    assert run.over(given).groups == {**run.groups, "Wide": (("lint",),)}
+def test_a_run_keeps_the_gates_it_runs_and_every_restriction_either_statement_makes() -> None:
+    read = schedule.stated(SPEED.format(wide="- Wide: none\n"))
+    run = read.among(["a11y", "e2e", "load", "lint", "perf", "fmt"])
+    assert run.groups == {"Apart": (("e2e", "a11y"),), "Alone": (("perf",), ("load",)), "Wide": ()}
+    given = schedule.Schedule(
+        {"Apart": (("a11y", "e2e"), ("lint", "fmt")), "Alone": (("lint",),), "Wide": (("fmt",),)}
+    )
+    kept = given.joined(run)
+    assert kept.groups == {
+        "Apart": (("a11y", "e2e"), ("lint", "fmt")),
+        "Alone": (("lint",), ("perf",), ("load",)),
+        "Wide": (("fmt",),),
+    }
+    none = schedule.stated("## Speed\n\n- Apart: none\n- Alone: none\n")
+    assert not given.joined(none).beside("lint", "fmt")
+    assert not none.joined(given).beside("a11y", "e2e")
+
+
+def test_what_the_flags_keep_that_the_binding_does_not_is_what_it_leaves_unstated() -> None:
+    read = schedule.stated(SPEED.format(wide="- Wide: `test`\n"))
+    given = schedule.Schedule(
+        {
+            "Apart": (("a11y", "e2e"), ("perf", "lint"), ("fmt", "lint"), ("solo",)),
+            "Alone": (("load",), ("bench",)),
+            "Wide": (("test",), ("floor",)),
+        }
+    )
+    assert read.unstated(given).groups == {
+        "Apart": (("fmt", "lint"),),
+        "Alone": (("bench",),),
+        "Wide": (("floor",),),
+    }
+    assert read.unstated(read.among(["e2e", "a11y", "perf", "test"])).groups == {
+        "Apart": (),
+        "Alone": (),
+        "Wide": (),
+    }
+
+
+RECIPES = """\
+runner := "python3 x/scripts/parallel.py --runner just"
+jobs := env_var_or_default("RATCHET_JOBS", "4")  # every core
+alone := "--alone perf load"
+serial := '--serial e2e a11y'
+run := runner + " --jobs " + jobs + " " + alone + ' --report "a b"'
+tagged := "--serial" + " " + "tag one"
+loop := loop
+escaped := "--alone a\\tb"
+quoted := "--alone \\"x\\""
+
+check: install
+    {{run}} {{serial}} -- lint e2e a11y perf load
+
+# a comment line
+fast *args:
+    @{{run}} --fail-fast {{args}} -- lint
+
+odd:
+    {{run}} --alone {{ if os() == "linux" { "x" } else { "y" } }} -- x
+
+split:
+    {{runner}} --wide test --serial=c d \\
+        --serial f g --root . --jobs=3 -- f g; echo --serial c no
+
+other:
+    echo not the runner --serial no
+    {{runner}} 'unbalanced
+
+looped:
+    {{runner}} {{loop}} -- x
+    {{runner}} {{tagged}} > out -- tag one
+
+escapes:
+    {{runner}} {{escaped}} -- x
+    {{runner}} {{quoted}} -- x
+
+install:
+    true
+    python3 -m pytest tests/test_parallel.py --serial not a gate -- x
+"""
+
+
+def test_the_recipes_flags_are_read_through_their_variables_as_the_runner_gets_them() -> None:
+    kept, unread = schedule.recipes(RECIPES)
+    assert kept.groups == {
+        "Apart": (("e2e", "a11y"), ("c", "d"), ("f", "g"), ("tag", "one")),
+        "Alone": (("perf",), ("load",)),
+        "Wide": (("test",),),
+    }
+    assert unread == ["fast", "odd", "other", "looped", "escapes"]
+
+
+def test_a_recipe_whose_every_flag_is_text_is_read_whole_and_one_that_is_not_is_named() -> None:
+    plain = "run := 'python3 parallel.py --jobs ' + num_cpus()\n\ncheck:\n    {{run}} -- a\n"
+    empty = schedule.Schedule({"Apart": (), "Alone": (), "Wide": ()})
+    assert schedule.recipes(plain) == (empty, [])
+    assert schedule.recipes("check:\n    {{cmd}} --alone x -- x\n") == (schedule.Schedule(), [])
+    named = "check:\n    python3 parallel.py {{ cmd }} -- x\n"
+    assert schedule.recipes(named)[1] == ["check"]
+
+
+def test_the_justfile_is_read_with_what_it_imports(tmp_path: Path) -> None:
+    assert schedule.justfile(tmp_path) == ""
+    (tmp_path / "justfile").write_text("import 'more.just'\nimport? 'gone.just'\na := '1'\n")
+    (tmp_path / "more.just").write_text("import 'justfile'\nb := '2'\n")
+    read = schedule.justfile(tmp_path)
+    assert read.count("a := '1'") == 1
+    assert read.count("b := '2'") == 1

@@ -935,6 +935,11 @@ BESIDE = (
     "other lanes ran {gates} while this gate ran; if `--gate {gate} --jobs 1` bites, state the"
     " gates that cannot share the machine in the binding's Speed section, `- Apart:` or `- Alone:`"
 )
+UNREAD = (
+    "bite: the {recipe} recipe passes parallel.py a schedule flag the proof cannot read as text,"
+    " so its lanes do not keep it; state it in the binding's Speed section, `- Apart:` or"
+    " `- Alone:`"
+)
 
 
 @dataclass(frozen=True)
@@ -1306,14 +1311,28 @@ def next_task(board: schedule.Board[int], ready: threading.Condition, shell: She
         return task
 
 
+def schedule_of(root: Path) -> schedule.Schedule:
+    passed, unread = schedule.recipes(schedule.justfile(root))
+    for recipe in unread:
+        print(UNREAD.format(recipe=recipe), flush=True)
+    return schedule.stated(gatelib.read_text(root / gatelib.BINDING) or "").joined(passed)
+
+
+def cores_told(root: Path, lanes: int) -> tuple[int, int, int]:
+    cores, cap = os.cpu_count() or 1, gatelib.default_jobs(root)
+    if cap < cores:
+        lanes = max(1, min(lanes, cores // cap))
+    return lanes, max(1, min(cap, cores // lanes)), cap
+
+
 def run_lanes(
     root: Path, registry: Registry, tasks: Sequence[Task], *, lanes: int, limit: float
 ) -> list[Outcome]:
     stamp = runrecord.stamp(root)
     limited = [(replace(row, limit=limit), bites) for row, bites in tasks]
-    kept = schedule.stated(gatelib.read_text(root / gatelib.BINDING) or "")
+    kept = schedule_of(root)
     board = schedule.Board(range(len(limited)), kept, lambda task: limited[task][0].gate)
-    cores = gatelib.default_jobs(root)
+    lanes, told, cap = cores_told(root, lanes)
     ready = threading.Condition()
     shell = Shell()
     printing = threading.Lock()
@@ -1323,7 +1342,7 @@ def run_lanes(
         outcomes: list[Outcome] = []
         while not shell.stopped and (task := next_task(board, ready, shell)) is not None:
             row, bites = limited[task]
-            share = kept.share(row.gate, cores=cores, lanes=lanes)
+            share = cap if row.gate in kept.alone else told
             try:
                 proved = list(copy.prove(row, bites, jobs=share))
             finally:

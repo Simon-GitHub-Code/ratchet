@@ -1,6 +1,11 @@
+import contextlib
+import io
+import itertools
 import json
 import os
+import random
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -13,9 +18,11 @@ import pytest
 
 import change_size
 import conformance
+import justfile_text
 import parallel
 import pins
 import plugin_pin
+import schedule
 import suites as suites_module
 import with_service
 from tests import repos
@@ -581,6 +588,110 @@ def test_the_weekly_entry_point_runs_its_gates_one_after_another() -> None:
     said = dry_run("weekly")
     assert PIN_CALL.search(said)
     assert said.endswith(f"--serial {' '.join(gates)} -- {' '.join(gates)}")
+
+
+class Clock:
+    def __init__(self, seed: int) -> None:
+        self.rng = random.Random(seed)  # noqa: S311 # -- a seeded order of finishes, not a secret
+        self.now = 0.0
+        self.live: dict[str, Any] = {}
+        self.events: list[tuple[str, str]] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, _seconds: float) -> None:
+        self.now += 1
+        running = sorted(name for name, gate in self.live.items() if gate.returncode is None)
+        if running:
+            name = self.rng.choice(running)
+            self.live[name].returncode = 0
+            self.events.append(("-", name))
+
+
+class Done:
+    def __init__(self) -> None:
+        self.returncode: int | None = None
+        self.pid = 0
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+
+def runner_argv(name: str) -> list[str]:
+    return shlex.split("--runner" + dry_run(name).partition(RUNNER)[2])
+
+
+def ran_beside(
+    monkeypatch: pytest.MonkeyPatch, root: Path, argv: list[str], *, seed: int
+) -> tuple[list[tuple[str, str]], str]:
+    clock = Clock(seed)
+
+    def launch(_scheduler: parallel.Scheduler, gate: str) -> parallel.Live:
+        clock.events.append(("+", gate))
+        clock.live[gate] = Done()
+        return parallel.Live(gate, clock.live[gate], None, clock.now, tool=False)  # type: ignore[arg-type]
+
+    def collect(gate: parallel.Live, code: int) -> parallel.Finished:
+        return parallel.Finished(gate.name, 1.0, code, "")
+
+    monkeypatch.setattr(parallel.Scheduler, "launch", launch)
+    monkeypatch.setattr(parallel, "collect", collect)
+    monkeypatch.setattr(parallel, "time", clock)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert parallel.main(["parallel.py", "--root", str(root), *argv]) == 0
+    return clock.events, out.getvalue()
+
+
+def at_once(events: list[tuple[str, str]]) -> set[frozenset[str]]:
+    running: set[str] = set()
+    met: set[frozenset[str]] = set()
+    for sign, name in events:
+        if sign == "-":
+            running.discard(name)
+            continue
+        met.update(frozenset((name, other)) for other in running)
+        running.add(name)
+    return met
+
+
+def kept_apart(argv: list[str]) -> set[frozenset[str]]:
+    flags = parallel.build_parser().parse_args(argv[: argv.index("--")])
+    gates = argv[argv.index("--") + 1 :]
+    apart = {frozenset(pair) for group in flags.serial for pair in itertools.combinations(group, 2)}
+    alone = {frozenset((one, other)) for one in flags.alone for other in gates if other != one}
+    return apart | alone
+
+
+def test_every_runner_keeps_what_each_template_recipe_passes_and_nothing_is_said_of_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    needs_just()
+    monkeypatch.setenv("RATCHET_JOBS", "4")
+    stated, bare = tmp_path / "stated", tmp_path / "bare"
+    repos.write(stated, "docs/process/binding.md", BINDING)
+    bare.mkdir()
+    lines = JUSTFILE.split("\n")
+    names = [
+        block.name
+        for block in justfile_text.blocks(lines)
+        if "{{parallel}}" in "\n".join(lines[block.head + 1 : block.end])
+    ]
+    assert {"check", "check-deep", "tier1", "weekly"} <= set(names)
+    passed, unread = schedule.recipes(JUSTFILE)
+    proof = schedule.stated(BINDING).joined(passed)
+    assert unread == []
+    for name in names:
+        argv = runner_argv(name)
+        apart = kept_apart(argv)
+        assert apart or name in {"tier0", "tier0-tree"}, name
+        assert not [pair for pair in apart if proof.beside(*pair)], name
+        for seed in range(3):
+            events, said = ran_beside(monkeypatch, stated, argv, seed=seed)
+            assert events == ran_beside(monkeypatch, bare, argv, seed=seed)[0], (name, seed)
+            assert not at_once(events) & apart, (name, seed)
+            assert "binding" not in said, said
 
 
 FAKE_ISSUES = """#!{python}

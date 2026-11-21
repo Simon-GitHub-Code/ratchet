@@ -52,12 +52,14 @@ Usage::
   Repeat the option for more groups. A gate is in at most one group. When a group's gates took
   longer one after another than the slowest gate outside every group and ``--alone``, the group
   set the run's wall clock, and one line after the closing summary says so. It is never red.
-* The binding at ``--root`` states the schedule once for this runner and the bite proof, in the
-  ``- Apart:``, ``- Alone:`` and ``- Wide:`` lines of its ``## Speed`` section (ADR 0086): each
-  code span of ``Apart`` is a group, names split by spaces. Each kind it states replaces
-  ``--serial``, ``--alone`` or ``--wide``, kept to this run's gates. A flag of a stated kind
-  that names other gates is said in one line before the gates start, which says the binding
-  wins; it is never red. A kind the binding does not state keeps its flag.
+* The ``- Apart:``, ``- Alone:`` and ``- Wide:`` lines of the ``## Speed`` section of the
+  binding at ``--root`` add to the flags (ADR 0086): each code span of ``Apart`` is a group,
+  names split by spaces, that never runs at once, like a ``--serial`` group; ``Alone`` adds to
+  ``--alone`` and ``Wide`` to ``--wide``, kept to this run's gates. A run keeps everything the
+  flags and the lines say, and no line or flag takes away what another says. Groups that share a
+  gate, and a gate both alone and in a group, are kept as written. When the binding states any
+  of these lines and a flag says something they do not, one line before the gates start names
+  it and the line that would state it for good; it is never red.
 * ``--report PATH`` appends one JSON line per finished gate, in the record ``budget.py``
   writes (``key``, ``seconds``, ``ceiling``, ``status``, ``exit``, and ``at``, ``run`` and
   ``tree`` from ``runrecord.py``), so one reader serves both. The ceiling is null: a parallel
@@ -131,7 +133,6 @@ if TYPE_CHECKING:
 
 POLL = 0.05
 RECENT = 5
-FLAGS = {schedule.APART: "--serial", schedule.ALONE: "--alone", schedule.WIDE: "--wide"}
 WINDOW = 2**20
 UNREADABLE = (ValueError, TypeError, KeyError, OverflowError, RecursionError)
 NO_RECORD: Mapping[str, float] = MappingProxyType({})
@@ -281,17 +282,18 @@ def shares(
 
 class Scheduler:
     def __init__(
-        self, units: list[tuple[str, ...]], runner: list[str], options: argparse.Namespace
+        self,
+        units: list[tuple[str, ...]],
+        runner: list[str],
+        options: argparse.Namespace,
+        *,
+        kept: schedule.Schedule,
     ) -> None:
-        self.groups = [unit for unit in units if len(unit) > 1]
-        self.measured_alone = frozenset(options.alone)
-        kept = schedule.Schedule(
-            {
-                schedule.APART: tuple(self.groups),
-                schedule.ALONE: tuple((name,) for name in options.alone),
-            }
-        )
-        order = [*(name for unit in units for name in unit), *options.alone]
+        grouped = [unit for unit in units if len(unit) > 1]
+        self.groups = [*grouped, *(group for group in kept.apart if group not in units)]
+        self.measured_alone = kept.alone
+        placed = [name for unit in units for name in unit]
+        order = [*placed, *(name for name in options.alone if name not in placed)]
         self.board = schedule.Board(order, kept, str)
         self.runner = runner
         self.root: Path = options.root
@@ -495,18 +497,16 @@ def verdict(scheduler: Scheduler, problems: list[str]) -> str:
     return f"parallel: green ({', '.join([f'{counts[Standing.GREEN]} ran', *waits])})"
 
 
-def spans(groups: schedule.Groups) -> str:
-    return " ".join(f"`{' '.join(group)}`" for group in groups) or "none"
-
-
-def contradicted(stated: schedule.Schedule, given: schedule.Schedule) -> list[str]:
+def unstated(stated: schedule.Schedule, given: schedule.Schedule) -> list[str]:
+    if not stated.groups:
+        return []
     return [
-        f"parallel: the recipe passes {FLAGS[kind]} {spans(given.groups[kind])} to this run, and"
-        f" the binding's Speed section says {kind}: {spans(groups)}; the binding's line wins,"
-        " since the bite proof reads only it: give the recipe the same gates, or take"
-        f" {FLAGS[kind]} out of it"
-        for kind, groups in stated.groups.items()
-        if given.groups[kind] and frozenset(given.groups[kind]) != frozenset(groups)
+        f"parallel: the recipe passes {schedule.FLAGS[kind]} {schedule.spans(groups)} to this run"
+        " and the binding's Speed section does not say it; this run keeps both, and the line"
+        f" - {kind}: {schedule.spans((*stated.groups.get(kind, ()), *groups))} there would state"
+        " it for good"
+        for kind, groups in stated.unstated(given).groups.items()
+        if groups
     ]
 
 
@@ -536,19 +536,16 @@ def main(argv: list[str]) -> int:
         options.report = options.root / options.report
     if options.jobs < 1:
         parser.error("--jobs is at least 1")
+    options.alone = [name for name in gates if name in options.alone]
     given = schedule.Schedule(
         {
             schedule.APART: tuple(map(tuple, options.serial)),
-            schedule.ALONE: tuple((name,) for name in options.alone if name in gates),
-            schedule.WIDE: tuple((name,) for name in options.wide if name in gates),
+            schedule.ALONE: tuple((name,) for name in options.alone),
+            schedule.WIDE: tuple((name,) for name in gates if name in options.wide),
         }
     )
-    binding = gatelib.read_text(options.root / gatelib.BINDING) or ""
-    stated = schedule.stated(binding).among(gates)
-    chosen = stated.over(given)
-    options.serial = [list(group) for group in chosen.apart]
-    options.alone = [name for name in gates if name in chosen.alone]
-    options.wide = [name for name in gates if name in chosen.wide]
+    stated = schedule.stated(gatelib.read_text(options.root / gatelib.BINDING) or "")
+    kept = given.joined(stated.among(gates))
     timings: Path | None = None if options.fail_fast else options.report
     seconds = NO_RECORD if timings is None else expected_seconds(timings)
     try:
@@ -556,9 +553,11 @@ def main(argv: list[str]) -> int:
         units = plan(gates, options.serial, frozenset(options.alone), seconds=seconds)
     except ValueError as error:
         parser.error(str(error))
-    for line in contradicted(stated, given):
+    options.alone = [name for name in gates if name in kept.alone]
+    options.wide = [name for name in gates if name in kept.wide]
+    for line in unstated(stated, given):
         say(line)
-    scheduler = Scheduler(units, runner, options)
+    scheduler = Scheduler(units, runner, options, kept=kept)
     started = time.monotonic()
     try:
         with gatelib.interrupts_raise():

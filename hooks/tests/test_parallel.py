@@ -20,6 +20,7 @@ import budget
 import gatelib
 import parallel
 import runrecord
+import schedule
 from tests.repos import git
 from tests.servers import gone
 
@@ -246,7 +247,7 @@ def test_the_closing_lines_name_the_slowest_gate(capsys: pytest.CaptureFixture[s
     options = argparse.Namespace(
         root=Path(), jobs=1, fail_fast=False, report=None, alone=[], wide=[]
     )
-    scheduler = parallel.Scheduler([], [], options)
+    scheduler = parallel.Scheduler([], [], options, kept=schedule.Schedule())
     scheduler.finished = [
         parallel.Finished("fast", 0.2, 0, ""),
         parallel.Finished("slow gate", 9.5, 0, ""),
@@ -265,7 +266,8 @@ def test_a_group_whose_chain_outlasts_every_gate_beside_it_is_named(
         root=Path(), jobs=4, fail_fast=False, report=None, alone=["perf"], wide=[]
     )
     units = [("coverage", "mutation-changed"), ("lint",), ("fmt", "types"), ("perf",)]
-    scheduler = parallel.Scheduler(units, [], options)
+    kept = schedule.Schedule({"Apart": (units[0], units[2]), "Alone": (("perf",),)})
+    scheduler = parallel.Scheduler(units, [], options, kept=kept)
     scheduler.board.pending.clear()
     scheduler.finished = [
         parallel.Finished("coverage", 106.0, 0, ""),
@@ -292,7 +294,7 @@ def test_a_run_with_no_gate_outside_every_group_names_no_group(
     options = argparse.Namespace(
         root=Path(), jobs=1, fail_fast=False, report=None, alone=[], wide=[]
     )
-    scheduler = parallel.Scheduler([("a", "b")], [], options)
+    scheduler = parallel.Scheduler([("a", "b")], [], options, kept=schedule.Schedule())
     scheduler.board.pending.clear()
     scheduler.finished = [parallel.Finished("a", 5.0, 0, ""), parallel.Finished("b", 5.0, 0, "")]
     assert parallel.closing(scheduler, 10.0) == []
@@ -572,36 +574,115 @@ def stating(root: Path, lines: str) -> Path:
     return root
 
 
-def blocks(out: str) -> list[str]:
-    return re.findall(r"^==> (\S+) <==$", out, re.MULTILINE)
+def ran_at_once(log: Path) -> set[frozenset[str]]:
+    running: set[str] = set()
+    met: set[frozenset[str]] = set()
+    for line in log.read_text().splitlines():
+        sign, name = line[0], line[1:]
+        if sign == "-":
+            running.discard(name)
+            continue
+        met.update(frozenset((name, other)) for other in running)
+        running.add(name)
+    return met
 
 
-def test_a_flag_the_binding_s_schedule_contradicts_is_named_and_the_binding_wins(
+PAIRED = (
+    "import os, pathlib, sys, time\n"
+    "log, name = sys.argv[-2:]\n"
+    "marks = pathlib.Path(log).with_suffix('.marks')\n"
+    "marks.mkdir(exist_ok=True)\n"
+    "partner = {'a': 'b', 'b': 'a', 'e': 'f', 'f': 'e'}.get(name, 'nobody')\n"
+    "os.write(os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT), f'+{name}\\n'.encode())\n"
+    "(marks / name).touch()\n"
+    "deadline = time.monotonic() + 1\n"
+    "while not (marks / partner).exists() and time.monotonic() < deadline:\n"
+    "    time.sleep(0.01)\n"
+    "os.write(os.open(log, os.O_WRONLY | os.O_APPEND), f'-{name}\\n'.encode())\n"
+)
+
+
+def logged(tmp_path: Path, lines: str, *flags: str) -> set[frozenset[str]]:
+    root, log = stating(tmp_path / "root", lines), tmp_path / "log"
+    runner = shlex.join([sys.executable, "-c", PAIRED, str(log)])
+    gates = ["a", "b", "c", "d", "e", "f"]
+    assert run("--runner", runner, "--root", str(root), "--jobs", "6", *flags, "--", *gates) == 0
+    return ran_at_once(log)
+
+
+def never_beside(met: set[frozenset[str]], apart: list[str], alone: str) -> None:
+    assert frozenset("ef") in met, "the log shows two gates that ran at once"
+    for pair in apart:
+        assert frozenset(pair) not in met, f"{pair} ran at once"
+    assert not [pair for pair in met if alone in pair], f"{alone} ran beside another gate"
+
+
+@pytest.mark.parametrize(
+    "lines", ["", "- Apart: none\n- Alone: none\n", "- Apart: `c d`\n- Alone: `d`\n"]
+)
+def test_no_line_of_the_binding_takes_away_what_the_run_s_flags_keep(
+    tmp_path: Path, lines: str
+) -> None:
+    met = logged(tmp_path, lines, "--serial", "a", "b", "--alone", "c")
+    never_beside(met, ["ab", "cd"] if "`c d`" in lines else ["ab"], "c")
+
+
+@pytest.mark.parametrize(
+    ("lines", "flags", "apart", "alone"),
+    [
+        ("- Apart: `a b` `b c`\n", [], ["ab", "bc"], "none"),
+        ("- Apart: `a b`\n- Alone: `c` `a`\n", [], ["ab"], "a"),
+        ("- Apart: `a b`\n", ["--alone", "a"], ["ab"], "a"),
+    ],
+)
+def test_groups_that_share_a_gate_and_a_gate_alone_and_in_a_group_are_kept_and_not_refused(
+    tmp_path: Path, *, lines: str, flags: list[str], apart: list[str], alone: str
+) -> None:
+    never_beside(logged(tmp_path, lines, *flags), apart, alone)
+
+
+def test_a_flag_the_binding_does_not_state_is_named_with_the_line_that_would(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    root = stating(tmp_path, "- Alone: `x`\n- Apart: `y z`\n")
-    flags = ["--runner", "echo", "--root", str(root), "--alone", "y", "--serial", "x", "y"]
-    assert run(*flags, "--", "x", "y", "z") == 0
-    out = capsys.readouterr().out
-    assert blocks(out)[-1] == "x"
-    contradicted = (("--alone", "`y`", "Alone", "`x`"), ("--serial", "`x y`", "Apart", "`y z`"))
-    for flag, passed, kind, said in contradicted:
-        assert (
-            f"parallel: the recipe passes {flag} {passed} to this run, and the binding's Speed"
-            f" section says {kind}: {said}; the binding's line wins, since the bite proof reads"
-            f" only it: give the recipe the same gates, or take {flag} out of it\n"
-        ) in out
+    root = stating(tmp_path, "- Apart: `a b`\n- Alone: `x`\n- Wide: none\n")
+    flags = ["--runner", "echo", "--root", str(root), "--serial", "b", "a", "--serial", "c", "d"]
+    assert run(*flags, "--alone", "x", "e", "--wide", "c", "--", *"abcdex") == 0
+    said = [line for line in capsys.readouterr().out.splitlines() if "does not say it" in line]
+    assert said == [
+        f"parallel: the recipe passes {flag} {passed} to this run and the binding's Speed section"
+        f" does not say it; this run keeps both, and the line - {line} there would state it for"
+        " good"
+        for flag, passed, line in (
+            ("--serial", "`c d`", "Apart: `a b` `c d`"),
+            ("--alone", "`e`", "Alone: `x` `e`"),
+            ("--wide", "`c`", "Wide: `c`"),
+        )
+    ]
 
 
-def test_a_flag_the_binding_s_schedule_agrees_with_or_does_not_state_is_said_nothing_of(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize("lines", ["", "- Apart: `b a`\n- Alone: `e`\n- Wide: <none yet>\n"])
+def test_flags_the_binding_agrees_with_or_a_binding_that_states_nothing_are_said_nothing_of(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], lines: str
 ) -> None:
-    root = stating(tmp_path, "- Alone: `x`\n- Apart: `a b` `y z`\n- Wide: none\n")
-    flags = ["--runner", "echo", "--root", str(root), "--alone", "x", "--serial", "y", "z"]
-    assert run(*flags, "--", "x", "y", "z") == 0
+    root = stating(tmp_path, lines)
+    flags = ["--runner", "echo", "--root", str(root), "--serial", "a", "b", "--alone", "e"]
+    assert run(*flags, "--serial", "c", "d", "--wide", "c", "--", *"abcde") == 0
     out = capsys.readouterr().out
-    assert blocks(out)[-1] == "x"
-    assert "the binding's line wins" not in out
+    assert ("does not say it" in out) is bool(lines)
+    assert "--serial `a b`" not in out
+    assert "--alone" not in out
+
+
+def test_a_gate_the_binding_states_wide_is_told_its_share_of_the_jobs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("RATCHET_JOBS", raising=False)
+    root = stating(tmp_path, "- Wide: `a b`\n")
+    runner = shlex.join([sys.executable, "-c", JOBS])
+    assert run("--runner", runner, "--root", str(root), "--jobs", "6", "--", "a", "b", "c") == 0
+    out = capsys.readouterr().out
+    for said in ("a 3", "b 3", "c unset"):
+        assert f"\n{said}\n" in out
 
 
 def test_a_wide_gate_gets_at_least_one_job(capsys: pytest.CaptureFixture[str]) -> None:
