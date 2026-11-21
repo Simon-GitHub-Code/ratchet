@@ -479,6 +479,73 @@ def test_a_ticket_opened_again_without_a_preflight_lets_no_commit_through_a_note
     assert hooked(tree) == refused(BRANCH_A)
 
 
+def test_a_plain_check_after_the_final_check_keeps_the_commit_it_let_through(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    tree = tree_of(root)
+    pipeline_preflight(tree, ALPHA, BRANCH_A, capsys=capsys, monkeypatch=monkeypatch)
+    assert run(root, "check", ALPHA, "--final") == 0
+    assert run(root, "check", ALPHA) == 0
+    capsys.readouterr()
+    assert start_passed(root)
+    assert hooked(tree) == "allowed"
+
+
+def closed_after_its_final_check(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, Path]:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    tree = tree_of(root)
+    pipeline_preflight(tree, ALPHA, BRANCH_A, capsys=capsys, monkeypatch=monkeypatch)
+    assert run(root, "check", ALPHA, "--final") == 0
+    assert run(root, "close", ALPHA, "--outcome", "waits", "--reason", "behind: x") == 0
+    return root, tree
+
+
+def opened_unreadable(root: Path) -> int:
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(publish_check, "start_of", unreadable_start)
+        return run(root, "open", ALPHA)
+
+
+def unremovable_trees(root: Path) -> None:
+    script = root / ".git" / "hooks" / "post-checkout"
+    script.parent.mkdir(exist_ok=True)
+    script.write_text("#!/bin/sh\necho x > unreadable.txt\nchmod 000 unreadable.txt\nexit 0\n")
+    script.chmod(stat.S_IRWXU)
+
+
+@pytest.mark.parametrize("left", ["by a failed removal", "by hand", "by hand after an update"])
+def test_an_open_that_moves_the_branch_and_then_fails_lets_no_commit_through_the_tree_left(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch, *, left: str
+) -> None:
+    root, tree = closed_after_its_final_check(tmp_path, capsys, monkeypatch)
+    moved(root)
+    if left == "by a failed removal":
+        unremovable_trees(root)
+    assert opened_unreadable(root) == 1
+    if left == "by hand after an update":
+        assert run(root, "update", ALPHA) == 1
+    if left != "by a failed removal":
+        git(root, "worktree", "add", "-q", str(tree), BRANCH_A)
+    capsys.readouterr()
+    assert gatelib.git(tree, "rev-parse", "HEAD") == gatelib.git(root, "rev-parse", "main")
+    assert hooked(tree) == refused(BRANCH_A), "no final check ran on the base the open moved to"
+
+
+def test_an_open_that_fails_without_moving_the_branch_keeps_the_commit_its_final_check_let_through(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, tree = closed_after_its_final_check(tmp_path, capsys, monkeypatch)
+    assert opened_unreadable(root) == 1
+    git(root, "worktree", "add", "-q", str(tree), BRANCH_A)
+    capsys.readouterr()
+    assert hooked(tree) == "allowed"
+
+
 @pytest.mark.parametrize("variant", ["check", "red", "halted", "unread"])
 def test_only_a_green_final_check_passes_the_pipelines_start(
     tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch, *, variant: str
@@ -1034,7 +1101,7 @@ def subcommands() -> tuple[str, ...]:
     shown = io.StringIO()
     with contextlib.redirect_stdout(shown), pytest.raises(SystemExit):
         drain.main(["drain", "--help"])
-    (listed,) = re.findall(r"positional arguments:\n\s+\{([^}]*)\}", shown.getvalue())
+    (listed,) = re.findall(r"positional arguments:\S*\n\s+\S*?\{([^}]*)\}", shown.getvalue())
     return tuple(listed.split(","))
 
 
