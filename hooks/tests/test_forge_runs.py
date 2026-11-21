@@ -1,13 +1,21 @@
 import io
 import json
+import os
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 import forge_runs
+import gatelib
 import merge_ready
+import unproven
 from tests.repos import commit, git, repository
+from tests.test_gatelib import STEPS, grown, undecodable
 
 REPO = "owner/repo"
 SHA = "a" * 40
@@ -73,7 +81,7 @@ def test_a_green_run_that_tested_this_pull_request_against_the_default_branch_co
 def test_the_runs_arrive_on_standard_input(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(sys, "stdin", io.StringIO(page(run())))
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(page(run()).encode())))
     (tmp_path / "pulls.json").write_text(json.dumps([pull()]))
     (tmp_path / "events.json").write_text("[]")
     argv = [
@@ -86,6 +94,10 @@ def test_the_runs_arrive_on_standard_input(
     argv += ["--number", "1", "--sha", SHA, "--branch", BRANCH, "--base", "main"]
     assert forge_runs.main([*argv, "--repository", REPO]) == 0
     assert capsys.readouterr().out == "green\n"
+    unread = io.TextIOWrapper(io.BytesIO(page(run()).encode() + b"\xff"), encoding="utf-8")
+    monkeypatch.setattr(sys, "stdin", unread)
+    assert forge_runs.main([*argv, "--repository", REPO]) == 1
+    assert capsys.readouterr().out == f"{forge_runs.UNREADABLE}\n"
 
 
 @pytest.mark.parametrize("state", ["open", "closed"])
@@ -450,3 +462,449 @@ def test_help_prints_the_whole_description(capsys: pytest.CaptureFixture[str]) -
         forge_runs.main(["--help"])
     shown = capsys.readouterr().out
     assert "prints ``green``" in shown
+
+
+def answered(
+    root: Path, capsys: pytest.CaptureFixture[str], runs: str
+) -> tuple[unproven.Deep, str]:
+    target = root / "answer.json"
+    argv = ["deep", "--tip", "main", "--repository", REPO, "--root", str(root), "--answer"]
+    assert forge_runs.main([*argv, str(target)], runs) == 0
+    return unproven.read(target), capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"status": "queued"},
+        {"status": "pending"},
+        {"status": "requested"},
+        {"status": "waiting"},
+        {"status": "in_progress"},
+        {"status": "a word the forge adds later"},
+        {"status": None},
+    ],
+)
+def test_an_answer_reads_every_status_but_completed_as_running(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], over: dict[str, object]
+) -> None:
+    at = history(tmp_path)
+    going = tier2(at["tip"], None, html_url="https://forge.example/runs/7", **over)
+    read, out = answered(tmp_path, capsys, page(going, tier2(at["second"], id=2)))
+    assert read.runs is not None
+    assert [(run.commit, run.state, run.name) for run in read.runs] == [
+        (at["tip"], "running", "https://forge.example/runs/7"),
+        (at["second"], "green", "run 2"),
+    ]
+    assert out == ""
+    assert deep(tmp_path, capsys, page(going, tier2(at["second"], id=2))) == "green"
+
+
+@pytest.mark.parametrize(
+    ("conclusion", "state"),
+    [
+        ("success", ["green"]),
+        ("failure", ["red"]),
+        ("timed_out", ["red"]),
+        (None, ["red"]),
+        ("cancelled", []),
+        ("skipped", []),
+    ],
+)
+def test_an_answer_keeps_each_finished_run_but_a_cancelled_or_skipped_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], *, conclusion: str | None, state: list[str]
+) -> None:
+    at = history(tmp_path)
+    read, _ = answered(tmp_path, capsys, page(tier2(at["tip"], conclusion)))
+    assert [run.state for run in read.runs or ()] == state
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        {"head_sha": "--help"},
+        {"head_sha": None},
+        {"event": "pull_request"},
+        {"head_repository": {"full_name": "fork/repo"}},
+    ],
+)
+def test_an_answer_drops_a_run_that_is_not_tier_2_of_this_repository(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], other: dict[str, object]
+) -> None:
+    at = history(tmp_path)
+    read, _ = answered(tmp_path, capsys, page(tier2(at["tip"], **other)))
+    assert read.runs == ()
+
+
+def test_the_answer_asks_for_a_start_when_nothing_proves_the_tip(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    at = history(tmp_path)
+    read, out = answered(tmp_path, capsys, page(tier2(at["second"])))
+    assert out == "start\n"
+    assert read.start
+    assert answered(tmp_path, capsys, page())[1] == "start\n"
+    assert answered(tmp_path, capsys, page(tier2(at["tip"])))[1] == ""
+    going = tier2(at["tip"], None, status="in_progress", id=2)
+    assert answered(tmp_path, capsys, page(going, tier2(at["second"])))[1] == ""
+
+
+@pytest.mark.parametrize(
+    ("runs", "known"),
+    [
+        ("", False),
+        ('{"total_count": 3, "workflow_runs": []}', False),
+        ("A", False),
+        ("B", True),
+        ("C", True),
+    ],
+)
+def test_an_answer_the_forge_cut_short_is_known_only_with_a_finished_run_on_the_chain(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    runs: str,
+    known: bool,
+) -> None:
+    at = history(tmp_path)
+    going = tier2(at["tip"], None, status="queued")
+    pages = {
+        "A": [going, tier2(at["side"])],
+        "B": [going, tier2(at["second"], "failure")],
+        "C": [tier2(at["tip"])],
+    }
+    if runs in pages:
+        runs = json.dumps({"total_count": 250, "workflow_runs": pages[runs]})
+    read, out = answered(tmp_path, capsys, runs)
+    assert (read.runs is not None) == known
+    assert out == ""
+
+
+def spoken(
+    root: Path, capsys: pytest.CaptureFixture[str], runs: str, *, sha: str, state: str
+) -> list[str]:
+    argv = ["speaks", "--tip", "main", "--repository", REPO, "--root", str(root)]
+    assert forge_runs.main([*argv, "--commit", sha, "--state", state], runs) == 0
+    return capsys.readouterr().out.splitlines()
+
+
+def test_a_deep_run_says_which_merges_it_speaks_for(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    at = history(tmp_path)
+    first, second, tip = (at[name][:12] for name in ("first", "second", "tip"))
+    itself = tier2(at["tip"], None, status="in_progress", id=3)
+    red = page(itself, tier2(at["second"], "failure", id=2), tier2(at["first"]))
+    assert spoken(tmp_path, capsys, red, sha=at["tip"], state="red") == [
+        f"deep: red at `{tip}`. The merges of the default branch it speaks for:",
+        f"- `{tip}` feat(core): third",
+        f"- `{second}` feat(core): second",
+    ]
+    green = page(itself, tier2(at["second"], id=2))
+    assert spoken(tmp_path, capsys, green, sha=at["tip"], state="green") == [
+        f"deep: green at `{tip}`. The merges of the default branch it speaks for:",
+        f"- `{tip}` feat(core): third",
+    ]
+    assert spoken(tmp_path, capsys, page(), sha=at["first"], state="red") == [
+        f"deep: red at `{first}`. The merges of the default branch it speaks for:",
+        f"- `{first}` feat(core): the clean state",
+    ]
+    assert spoken(tmp_path, capsys, page(), sha=at["side"], state="red") == [
+        f"deep: red at `{at['side'][:12]}`. The merges of the default branch it speaks for:",
+    ]
+    assert spoken(tmp_path, capsys, "", sha=at["tip"], state="red") == [
+        (
+            f"deep: red at `{tip}`. The forge's answer could not be read, so which merges of the"
+            " default branch it speaks for is not known."
+        ),
+    ]
+
+
+NESTED = "[" * 200_000 + "]" * 200_000
+
+
+def test_runs_nested_past_the_interpreters_limit_are_an_answer_that_could_not_be_read(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    history(tmp_path)
+    assert deep(tmp_path, capsys, NESTED) == "red"
+    assert tier1(tmp_path, capsys, NESTED) == "red"
+    assert ci(tmp_path, capsys, NESTED) == (1, forge_runs.UNREADABLE)
+    assert ci(tmp_path, capsys, page(run()), pulls=NESTED) == (1, forge_runs.UNREADABLE)
+    read, out = answered(tmp_path, capsys, NESTED)
+    assert (read.runs, out) == (None, "")
+
+
+@pytest.mark.parametrize(
+    ("over", "states", "named"),
+    [
+        ({"html_url": ["https://forge.example/runs/7"]}, ["green"], "run 1"),
+        ({"event": ["push"]}, [], None),
+        ({"conclusion": ["success"]}, ["red"], "run 1"),
+        ({"id": [1]}, ["green"], "run ?"),
+        ({"html_url": "https://forge.example/runs/7\ud800"}, ["green"], "run 1"),
+        ({"html_url": "https://forge.example/runs/7\nbehind: a line"}, ["green"], "run 1"),
+        ({"html_url": None, "id": "7\nbehind: a line"}, ["green"], "run ?"),
+        ({"html_url": None, "id": "7"}, ["green"], "run 7"),
+    ],
+)
+def test_an_answer_reads_a_field_of_the_wrong_type_without_trusting_it(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    over: dict[str, object],
+    states: list[str],
+    named: str | None,
+) -> None:
+    at = history(tmp_path)
+    read, _ = answered(tmp_path, capsys, page(tier2(at["tip"], **over)))
+    assert [run.state for run in read.runs or ()] == states
+    assert [run.name for run in read.runs or ()] == ([named] if named else [])
+
+
+@pytest.mark.parametrize(
+    "created",
+    [
+        ["2026-11-12T10:00:00Z"],
+        None,
+        "yesterday",
+        "2026-11-12T10:00:00",
+        "2026-W46-4T10:00:00Z",
+        "20261112T100000Z",
+        "2026-11-12 10:00:00Z",
+        "2026-11-12T10:00Z",
+    ],
+)
+def test_an_answer_with_a_time_that_is_not_an_instant_is_not_known(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], created: object
+) -> None:
+    at = history(tmp_path)
+    read, _ = answered(tmp_path, capsys, page(tier2(at["tip"], created_at=created)))
+    assert read.runs is None
+
+
+@pytest.mark.parametrize("field", ["conclusion", "event"])
+@pytest.mark.parametrize("command", ["deep", "tier1"])
+def test_a_field_that_is_a_list_or_an_object_is_a_page_that_could_not_be_read(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], *, field: str, command: str
+) -> None:
+    at = history(tmp_path)
+    reader = deep if command == "deep" else tier1
+    for odd in ([1], {"a": 1}):
+        odd_run = tier2(at["tip"], **{field: odd})
+        assert reader(tmp_path, capsys, page(odd_run, tier2(at["second"]))) == "red"
+
+
+STRICT = {"PYTHONIOENCODING": "utf-8:strict", "LC_ALL": "C.UTF-8"}
+C_LOCALE = {"LC_ALL": "C"}
+
+
+def run_script(
+    root: Path, argv: list[str], data: bytes, *, locale: dict[str, str]
+) -> subprocess.CompletedProcess[bytes]:
+    kept = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("PYTHON", "LC_", "LANG"))
+    }
+    script = Path(forge_runs.__file__)
+    return subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
+        [sys.executable, str(script), *argv],
+        input=data,
+        capture_output=True,
+        check=False,
+        cwd=root,
+        env=kept | locale,
+    )
+
+
+def hostile(at: dict[str, str]) -> dict[str, bytes]:
+    lone = page(tier2(at["tip"], html_url="https://forge.example/runs/\ud800"))
+    return {
+        "after the page": page(tier2(at["tip"])).encode() + b"\xff",
+        "inside a string": page(tier2(at["tip"], html_url="u")).encode().replace(b'"u"', b'"\xff"'),
+        "a lone surrogate": lone.encode(),
+        "latin-1": page(tier2(at["tip"], html_url="u")).encode().replace(b'"u"', b'"caf\xe9"'),
+    }
+
+
+@pytest.mark.parametrize("locale", [STRICT, C_LOCALE], ids=["strict", "C"])
+def test_bytes_that_are_not_utf_8_on_standard_input_are_read_as_the_c_locale_reads_them(
+    tmp_path: Path, locale: dict[str, str]
+) -> None:
+    at = history(tmp_path)
+    tip = undecodable(tmp_path, at["tip"], b"feat(core): caf\xe9")
+    where = ["--tip", tip, "--repository", REPO, "--root", str(tmp_path)]
+    target = tmp_path / "answer.json"
+    for kind, data in hostile(at).items():
+        answered = run_script(
+            tmp_path, ["deep", *where, "--answer", str(target)], data, locale=locale
+        )
+        assert (answered.returncode, answered.stderr) == (0, b""), kind
+        read = unproven.read(target)
+        if kind == "after the page":
+            assert read.runs is None, kind
+        else:
+            assert [run.name for run in read.runs or ()] == ["run 1"], kind
+        spoke = run_script(
+            tmp_path, ["speaks", *where, "--commit", tip, "--state", "red"], data, locale=locale
+        )
+        assert (spoke.returncode, spoke.stderr) == (0, b""), kind
+        assert spoke.stdout.decode().startswith(f"deep: red at `{tip[:12]}`."), kind
+        said = b"red\n" if kind == "after the page" else b"green\n"
+        for word in ("deep", "tier1"):
+            legacy = run_script(tmp_path, [word, *where], data, locale=locale)
+            assert (legacy.returncode, legacy.stderr, legacy.stdout) == (0, b"", said), (kind, word)
+
+
+LOCALES = {"C": C_LOCALE, "C.UTF-8": {"LC_ALL": "C.UTF-8"}, "POSIX": {"LC_ALL": "POSIX"}}
+
+
+def spoilt(document: str, field: str) -> bytes:
+    marker = f'"{field}": "'.encode()
+    assert marker in document.encode()
+    return document.encode().replace(marker, marker + b"\xe9")
+
+
+def ci_script(root: Path, data: bytes, locale: dict[str, str]) -> tuple[int, bytes, bytes]:
+    (root / "pulls.json").write_text(json.dumps([pull()]))
+    (root / "events.json").write_text("[]")
+    argv = ["ci", "--pulls", str(root / "pulls.json"), "--events", str(root / "events.json")]
+    argv += ["--number", "1", "--sha", SHA, "--branch", BRANCH, "--base", "main"]
+    done = run_script(root, [*argv, "--repository", REPO], data, locale=locale)
+    return done.returncode, done.stdout, done.stderr
+
+
+@pytest.mark.parametrize("locale", [*LOCALES.values(), STRICT], ids=[*LOCALES, "strict"])
+def test_bytes_that_are_not_utf_8_in_a_field_no_logic_reads_change_no_answer(
+    tmp_path: Path, locale: dict[str, str]
+) -> None:
+    at = history(tmp_path)
+    where = ["--tip", at["tip"], "--repository", REPO, "--root", str(tmp_path)]
+    data = spoilt(page(tier2(at["tip"], display_title="cafe")), "display_title")
+    for word in ("deep", "tier1"):
+        done = run_script(tmp_path, [word, *where], data, locale=locale)
+        assert (done.returncode, done.stdout, done.stderr) == (0, b"green\n", b""), word
+    tested = spoilt(page(run(display_title="cafe")), "display_title")
+    assert ci_script(tmp_path, tested, locale) == (0, b"green\n", b"")
+
+
+UNNAMED = f"no ci run on {SHA} names it against `main`\n".encode()
+READ = {
+    "conclusion": ("red", (1, f"ci is not green on {SHA}\n".encode()), [("red", "u")]),
+    "event": ("none", (1, UNNAMED), []),
+    "head_sha": ("none", (1, UNNAMED), []),
+    "created_at": ("green", (0, b"green\n"), None),
+    "html_url": ("green", (0, b"green\n"), [("green", "run 1")]),
+}
+
+
+@pytest.mark.parametrize("locale", [C_LOCALE, STRICT], ids=["C", "strict"])
+@pytest.mark.parametrize("field", READ)
+def test_bytes_that_are_not_utf_8_in_a_field_the_logic_reads_are_a_value_it_cannot_trust(
+    tmp_path: Path, field: str, locale: dict[str, str]
+) -> None:
+    word, (code, said), kept = READ[field]
+    at = history(tmp_path)
+    where = ["--tip", at["tip"], "--repository", REPO, "--root", str(tmp_path)]
+    data = spoilt(page(tier2(at["tip"], html_url="u")), field)
+    for legacy in ("deep", "tier1"):
+        done = run_script(tmp_path, [legacy, *where], data, locale=locale)
+        assert (done.returncode, done.stdout, done.stderr) == (0, f"{word}\n".encode(), b"")
+    target = tmp_path / "answer.json"
+    done = run_script(tmp_path, ["deep", *where, "--answer", str(target)], data, locale=locale)
+    assert (done.returncode, done.stderr) == (0, b"")
+    runs = unproven.read(target).runs
+    assert kept == (None if runs is None else [(run.state, run.name) for run in runs])
+    asked = ["speaks", *where, "--commit", at["tip"], "--state", "red"]
+    spoke = run_script(tmp_path, asked, data, locale=locale)
+    assert (spoke.returncode, spoke.stderr) == (0, b"")
+    tested = spoilt(page(run(html_url="u")), field)
+    assert ci_script(tmp_path, tested, locale) == (code, said, b"")
+
+
+def test_speaks_refuses_a_commit_that_is_not_a_commit_name(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    history(tmp_path)
+    argv = ["speaks", "--tip", "main", "--repository", REPO, "--root", str(tmp_path)]
+    for odd in ("main", "\udcff" * 40, "A" * 40, "a" * 40 + "\n"):
+        with pytest.raises(SystemExit) as stopped:
+            forge_runs.main([*argv, "--commit", odd, "--state", "red"], page())
+        assert stopped.value.code == 2
+        assert "--commit" in capsys.readouterr().err
+
+
+def pull_merged(root: Path) -> dict[str, str]:
+    repository(root)
+    shas = {"base": git(root, "rev-parse", "HEAD")}
+    git(root, "switch", "-q", "-c", "earlier")
+    shas["remote"] = commit(root, "feat(core): the default branch's tip then")
+    git(root, "switch", "-q", "main")
+    shas["local"] = commit(root, "feat(core): committed on a main that moved")
+    git(root, "merge", "-q", "--no-ff", "-m", "Merge the default branch", "earlier")
+    shas["pulled"] = git(root, "rev-parse", "HEAD")
+    return shas
+
+
+def test_a_red_a_pull_merge_left_off_the_line_holds_and_speaks_from_that_merge(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    shas = pull_merged(tmp_path)
+    red = page(tier2(shas["remote"], "failure", id=2), tier2(shas["base"]))
+    assert deep(tmp_path, capsys, red) == "red"
+    read, _ = answered(tmp_path, capsys, red)
+    line = gatelib.chain(tmp_path, "main", [run.commit for run in read.runs or ()])
+    hold = unproven.held(line, read, gated=False, bound=None)
+    assert hold is not None
+    assert hold.code == "tier2"
+    pulled, local = shas["pulled"][:12], shas["local"][:12]
+    assert spoken(tmp_path, capsys, red, sha=shas["remote"], state="red") == [
+        f"deep: red at `{shas['remote'][:12]}`. The merges of the default branch it speaks for:",
+        f"- `{pulled}` Merge the default branch",
+        f"- `{local}` feat(core): committed on a main that moved",
+    ]
+
+
+RUNS = st.lists(
+    st.tuples(
+        st.integers(0, 30),
+        st.sampled_from(["completed", "completed", "in_progress"]),
+        st.sampled_from(["success", "failure", "cancelled", None]),
+        st.integers(0, 3),
+    ),
+    max_size=6,
+)
+
+
+@settings(max_examples=60)
+@given(STEPS, RUNS, st.booleans())
+def test_a_red_that_todays_deep_reader_sees_on_any_history_holds(
+    steps: list[tuple[str, int, int]],
+    runs: list[tuple[int, str, str | None, int]],
+    cut: bool,  # noqa: FBT001
+) -> None:
+    with tempfile.TemporaryDirectory() as scratch:
+        root = Path(scratch) / "repo"
+        repository(root)
+        shas = grown(root, steps)
+        listed = [
+            tier2(
+                shas[index % len(shas)] if index < 2 * len(shas) else "f" * 40,
+                conclusion,
+                status=status,
+                created_at=f"2026-11-20T09:{minute * 20:02d}:00Z",
+                id=number,
+            )
+            for number, (index, status, conclusion, minute) in enumerate(runs)
+        ]
+        text = json.dumps({"total_count": len(listed) + cut, "workflow_runs": listed})
+        tip, events = shas[-1], forge_runs.DEEP_EVENTS
+        today = forge_runs.on_the_tip(text, root=root, tip=tip, repository=REPO, events=events)
+        target = Path(scratch) / "answer.json"
+        argv = ["deep", "--tip", tip, "--repository", REPO, "--root", str(root)]
+        assert forge_runs.main([*argv, "--answer", str(target)], text) == 0
+        read = unproven.read(target)
+        line = gatelib.chain(root, tip, [run.commit for run in read.runs or ()])
+        if today == "red":
+            assert unproven.held(line, read, gated=False, bound=None) is not None, text
