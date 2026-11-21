@@ -14,6 +14,7 @@ import drain
 import merge_ready
 import publish_check
 import quotes
+from tests import support
 from tests.repos import branch, commit, git, repository, write
 from tests.support import PLUGIN_ROOT
 
@@ -331,7 +332,7 @@ def test_a_conflict_or_a_red_check_brings_the_reconcile_agent_first() -> None:
     answers = {"reconcile": reconciled, "review-again": REVIEW}
     ran = _again({"conflicts": ["flags.toml", ""]}, **answers)
     assert ran["labels"] == ["reconcile", "review-again"]
-    staged = "stages it:\n\n      git add -- 'flags.toml'\n\nDo this"
+    staged = "stages it:\n\n      git --literal-pathspecs add -- 'flags.toml'\n\nDo this"
     assert staged in ran["prompts"]["reconcile"], "one line per path, the empty one dropped"
     assert "git rebase --continue" in ran["prompts"]["reconcile"]
     result = ran["result"]
@@ -1009,7 +1010,7 @@ def test_every_role_that_reads_a_local_ticket_reads_it_as_the_base_holds_it() ->
     ran = _run({"ref": TICKET_FILE}, preflight=based, spec=SPECIFIED, **answers)
     shown = (
         "Read it, from the repository root (the directory holding AGENTS.md), with\n\n"
-        f"      git show --end-of-options 'main:{TICKET_FILE}'\n"
+        f"      git show --end-of-options 'main:{TICKET_FILE}' --\n"
     )
     for role in ("spec", "ticket-check", "review"):
         assert shown in ran["prompts"][role], role
@@ -1900,7 +1901,8 @@ def test_every_command_a_role_is_told_to_run_is_a_line_of_its_own_with_no_backti
 
 
 SLOTS = ("base", "branch", "ticket", "preflight", "root", "conflict", "spec")
-SENTINELS = {slot: f"V{slot}0" for slot in SLOTS}
+MARKS = {slot: f"V{slot}0" for slot in SLOTS}
+SENTINELS = {**MARKS, "root": "/Vroot0"}
 GROUPS = {
     "paths": ("ticket", "preflight", "root", "conflict", "spec"),
     "base": ("base",),
@@ -1916,7 +1918,8 @@ OPTION_SHAPED = [
     "-",
     "--",
 ]
-GIT_OR_GH = re.compile(r"\b(git [a-z-]+|gh [a-z]+ [a-z]+)", re.IGNORECASE)
+GIT_OR_GH = re.compile(r"\b(?:(git) (?:--[a-z-]+ )*([a-z-]+)|(gh [a-z]+ [a-z]+))", re.IGNORECASE)
+LIST_ITEM = re.compile(r" *(?:[-*+]|\d+[.)]) +")
 CODE_SPAN = re.compile(r"`([^`\n]+)`")
 PUBLISHING = re.compile(r"\b(?:git (?:commit|push)|gh pr)\b")
 FAILING_KEPT = {
@@ -1960,20 +1963,40 @@ def _every_prompt() -> dict[str, str]:
     return _shown(_runs(SENTINELS), (), "")
 
 
-def _blocks(prompt: str) -> list[str]:
-    found, fenced, previous = [], False, ""
+def _read(prompt: str) -> tuple[list[str], list[str]]:
+    found, prose, fenced, previous, items = [], [], False, "", []
     for line in prompt.splitlines():
+        indent = len(line) - len(line.lstrip(" "))
+        apart = not previous.strip()
         if line.lstrip().startswith("```"):
             fenced = not fenced
-        elif fenced or (re.match(r" {4,}\S", line) and (not previous.strip() or previous in found)):
+        elif fenced:
             found.append(line)
+        elif line.strip():
+            while items and indent < items[-1] and (apart or LIST_ITEM.match(line)):
+                items.pop()
+            inside = items[-1] if items else 0
+            if indent >= inside + 4 and (apart or previous in found):
+                found.append(line)
+            elif item := LIST_ITEM.match(line):
+                items.append(item.end())
+            elif indent >= 4 and apart:
+                prose.append(line)
         previous = line
-    return found
+    return found, prose
+
+
+def _blocks(prompt: str) -> list[str]:
+    return _read(prompt)[0]
 
 
 def _role_commands(prompt: str) -> frozenset[str]:
     places = [*_blocks(prompt), *CODE_SPAN.findall(prompt)]
-    found = {command.lower() for place in places for command in GIT_OR_GH.findall(place)}
+    found = {
+        f"{git} {sub}".lower() if git else gh.lower()
+        for place in places
+        for git, sub, gh in GIT_OR_GH.findall(place)
+    }
     return frozenset(found | set(PUBLISHING.findall(prompt)))
 
 
@@ -2066,12 +2089,13 @@ def test_a_value_reaches_each_command_line_as_one_word_unchanged_or_is_refused(
     value = hostile.format(marker=marker)
     slots = GROUPS[group]
     plain = _every_prompt()
-    shown = _shown(_runs({**SENTINELS, **dict.fromkeys(slots, value)}), slots, value)
+    placed = {slot: SENTINELS[slot].replace(MARKS[slot], value) for slot in slots}
+    shown = _shown(_runs({**SENTINELS, **placed}), slots, value)
     for label, prompt in shown.items():
         for template, line in zip(_blocks(plain[label]), _blocks(prompt), strict=True):
             expected, _ = _shell_words(template, tmp_path)
             for slot in slots:
-                expected = [word.replace(SENTINELS[slot], value) for word in expected]
+                expected = [word.replace(MARKS[slot], value) for word in expected]
             assert _shell_words(line, tmp_path) == (expected, 0), f"{label}: {line}"
     assert not marker.exists(), "the shell ran a command out of a command line"
 
@@ -2148,31 +2172,69 @@ REF_NAMES = [
 ]
 
 
+GIT_FORMS = {"base": "--allow-onelevel", "branch": "--branch"}
+
+
+@pytest.mark.parametrize("field", GIT_FORMS)
 @pytest.mark.parametrize("name", REF_NAMES)
-def test_a_base_or_a_branch_is_refused_exactly_when_git_refuses_it_as_a_ref_name(
-    name: str, tmp_path: Path
+def test_a_base_or_a_branch_is_refused_exactly_when_git_refuses_it_in_that_place(
+    name: str, field: str, tmp_path: Path
 ) -> None:
-    accepted = not name.startswith("-") and (
-        _git(tmp_path, ["check-ref-format", "--allow-onelevel", name]).returncode == 0
+    form = GIT_FORMS[field]
+    accepted = (
+        name != "@"
+        and not name.startswith("-")
+        and _git(tmp_path, ["check-ref-format", form, name]).returncode == 0
     )
-    ran = _run({"ref": "4", "base": name, "branch": name}, preflight=STOPPED)
-    assert (ran["labels"] == ["preflight"]) is accepted, ran.get("result")
+    ran = _run({"ref": "4", "base": "main", "branch": "feature/x", field: name}, preflight=STOPPED)
+    assert (ran["labels"] == ["preflight"]) is accepted, (form, ran.get("result"))
     if not accepted:
         [failure] = ran["result"]["preflight"]["failures"]
-        assert (ran["result"]["verdict"], failure["check"]) == ("blocked", "base")
-        assert failure["detail"].startswith(f"the base {json.dumps(name, ensure_ascii=False)} ")
+        assert (ran["result"]["verdict"], failure["check"]) == ("blocked", field)
+        assert failure["detail"].startswith(f"the {field} {json.dumps(name, ensure_ascii=False)} ")
 
 
-@pytest.mark.parametrize("field", ["base", "branch"])
-def test_a_base_or_a_branch_the_preflight_returns_is_held_to_the_same_rule(field: str) -> None:
-    ran = _run({"ref": "4"}, preflight={**PREFLIGHT, field: "--output=pwned"}, spec=SPECIFIED)
+HEAD_REFUSED = (
+    'the branch "HEAD" is "HEAD", which git refuses as a branch name'
+    " (git check-ref-format --branch), so a role on a detached checkout would not switch"
+)
+
+
+AN_OPTION = (
+    '"--output=pwned" starts with "-", so the command it goes into would read it as an option'
+)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "detail"),
+    [
+        ("base", "--output=pwned", f"the base {AN_OPTION}"),
+        ("branch", "--output=pwned", f"the branch {AN_OPTION}"),
+        ("branch", "HEAD", HEAD_REFUSED),
+    ],
+)
+def test_a_base_or_a_branch_the_preflight_returns_is_held_to_the_same_rule(
+    field: str, value: str, detail: str
+) -> None:
+    ran = _run({"ref": "4"}, preflight={**PREFLIGHT, field: value}, spec=SPECIFIED)
     assert ran["labels"] == ["preflight"], "no role saw the value"
     [failure] = ran["result"]["preflight"]["failures"]
     assert (ran["result"]["verdict"], failure["check"]) == ("blocked", field)
-    assert failure["detail"] == (
-        f'the {field} "--output=pwned" starts with "-", so the command it goes into would read'
-        " it as an option"
-    )
+    assert failure["detail"] == detail
+
+
+def test_the_branch_head_is_refused_where_the_run_reads_it_with_the_rule_named() -> None:
+    args = {"ref": "docs/t.md", "base": "main", "branch": "HEAD", "root": "/work/r"}
+    ran = _run(args, preflight=PREFLIGHT, spec=SPECIFIED, **DEPTH, critique=CRITIQUED)
+    assert ran["labels"] == [], "no role saw the value"
+    [failure] = ran["result"]["preflight"]["failures"]
+    assert (ran["result"]["verdict"], failure["check"]) == ("blocked", "branch")
+    assert failure["detail"] == HEAD_REFUSED
+    assert "git check-ref-format --branch" in failure["produce"]
+    again = {**args, "base": "HEAD", "branch": "feature/x"}
+    assert _run(again, preflight=PREFLIGHT, spec=SPECIFIED, **DEPTH, critique=CRITIQUED)[
+        "labels"
+    ], "the base may be HEAD"
 
 
 def test_each_git_line_means_with_its_end_of_options_marker_what_it_means_without(
@@ -2190,7 +2252,7 @@ def test_each_git_line_means_with_its_end_of_options_marker_what_it_means_withou
     }
     prompts = _shown(_runs(ordinary), (), "")
     lines = sorted({line.strip() for p in prompts.values() for line in _blocks(p)})
-    markers = {"--end-of-options", "--"}
+    markers = {"--end-of-options", "--", "--literal-pathspecs"}
     marked = [line for line in lines if line.startswith("git ") and markers & {*shlex.split(line)}]
     assert len(marked) == 9, marked
     for n, line in enumerate(marked):
@@ -2224,6 +2286,129 @@ def test_git_reads_each_quoted_range_as_the_branch_against_its_base(tmp_path: Pa
             assert (ran.returncode, ran.stdout) == (0, direct.stdout), f"{label}: {line}"
     assert not (root / "landed").exists()
     assert not (root / "also").exists()
+
+
+def test_no_command_line_is_paragraph_text_under_a_list_item() -> None:
+    prose = [
+        f"{label}: {line}" for label, prompt in _every_prompt().items() for line in _read(prompt)[1]
+    ]
+    assert not prose, (
+        "a line indented after a blank line inside a list item is paragraph text, not a code"
+        " block, unless it stands four columns past the item's text:\n" + "\n".join(prose)
+    )
+
+
+PATHSPEC_SHAPED = ["a*.py", "a?.py", "[a]b.py", ":(top)a.py", ":!a.py", ":/a.py"]
+
+
+@pytest.mark.parametrize("path", PATHSPEC_SHAPED)
+def test_a_conflicted_path_stages_only_the_file_of_that_exact_name(
+    path: str, tmp_path: Path
+) -> None:
+    names = [path, "a.py", "ab.py", "b.py"]
+    root = repository(tmp_path / "repo", dict.fromkeys(names, "v1\n"))
+    for name in names:
+        write(root, name, "v2\n")
+    prompt = _again({"conflicts": [path]}, reconcile=IMPLEMENTED, **{"review-again": REVIEW})
+    [line] = [line for line in _blocks(prompt["prompts"]["reconcile"]) if " add " in line]
+    ran = _bash(line, root)
+    assert ran.returncode == 0, ran.stderr
+    staged = _git(root, ["diff", "--cached", "--name-only", "-z"]).stdout.split("\0")[:-1]
+    assert staged == [path], f"{line} staged {staged}"
+
+
+@pytest.mark.parametrize("ticket", ["t*.md", "t?.md", ":(top)t.md", ":!t.md", ":/t.md"])
+def test_the_show_line_reads_the_ticket_file_of_that_exact_name(
+    ticket: str, tmp_path: Path
+) -> None:
+    args = {"ref": ticket, "base": "main", "branch": "feature/x"}
+    ran = _run(args, preflight=PREFLIGHT, spec=SPECIFIED, **DEPTH, critique=CRITIQUED)
+    [line] = {line for line in _blocks(ran["prompts"]["spec"]) if " show " in line}
+    exact = repository(tmp_path / "exact", {"t.md": "decoy\n", "tx.md": "decoy\n", ticket: "it\n"})
+    decoys = repository(tmp_path / "decoys", {"t.md": "decoy\n", "tx.md": "decoy\n"})
+    shown, missing = _bash(line, exact), _bash(line, decoys)
+    assert (shown.returncode, shown.stdout) == (0, "it\n"), line
+    assert missing.returncode != 0, line
+    assert missing.stdout == "", line
+
+
+@pytest.mark.parametrize("root", ["repo", "./repo", "~/repo", "work/r*"])
+def test_a_root_that_is_not_an_absolute_path_is_refused(root: str) -> None:
+    ran = _run({"ref": "4", "root": root}, preflight=STOPPED)
+    assert ran["labels"] == [], "no role saw the value"
+    [failure] = ran["result"]["preflight"]["failures"]
+    assert (ran["result"]["verdict"], failure["check"]) == ("blocked", "root")
+    assert failure["detail"] == (
+        f"the root {json.dumps(root)} is not an absolute path, so `cd` could find it through CDPATH"
+    )
+
+
+def test_each_root_line_enters_that_exact_directory_whatever_cdpath_holds(tmp_path: Path) -> None:
+    root = tmp_path / "r*"
+    root.mkdir()
+    (tmp_path / "rx").mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / str(root).lstrip("/")).mkdir(parents=True)
+    args = {"ref": "docs/t.md", "base": "main", "branch": "feature/x", "root": str(root)}
+    ran = _run(args, preflight=PREFLIGHT, spec=SPECIFIED, **DEPTH, critique=CRITIQUED)
+    lines = [line for p in ran["prompts"].values() for line in _blocks(p) if "cd " in line]
+    assert len(lines) == len(ran["prompts"]), "every role is told the line that enters the root"
+    shell = shutil.which("bash")
+    assert shell, "bash reads a command line as the agent's shell does"
+    for line in {line.strip() for line in lines}:
+        entered = subprocess.run(  # noqa: S603 # -- the line under test is the shell's input
+            [shell, "-c", f"{line} && pwd -P"],
+            cwd=tmp_path,
+            env={"CDPATH": str(elsewhere), "PATH": "/usr/bin:/bin"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert (entered.returncode, entered.stdout) == (0, f"{root.resolve()}\n"), line
+
+
+GUARD_VALUES = {
+    "harmless": {"base": "main", "branch": "feature/x", "conflict": "src/a.py"},
+    "denied": {"base": "main", "branch": "main", "conflict": "justfile"},
+}
+THEN = ["", " && echo x > justfile", " && git push"]
+MARKERS = ("--end-of-options", "--literal-pathspecs")
+
+
+def test_the_guard_judges_each_marked_line_as_it_judges_the_line_without_its_markers() -> None:
+    table: dict[tuple[str, str, str, str], list[tuple[str, str]]] = {}
+    for case, picked in GUARD_VALUES.items():
+        values = {
+            "ticket": "t.md",
+            "preflight": "/opt/p",
+            "root": str(support.ROOT),
+            "spec": "docs/features/x/spec.md",
+            **picked,
+        }
+        prompts = _shown(_runs(values), (), "")
+        lines = {line.strip() for p in prompts.values() for line in _blocks(p)}
+        marked = [text for text in lines if {*MARKERS} & {*text.split()}]
+        for line in marked:
+            bare = " ".join(word for word in line.split(" ") if word not in MARKERS)
+            for on in ("feat/work", "main"):
+                guard = support.make_guard(support.FakeRepo(branch=on))
+                for then in THEN:
+                    judged = [
+                        sorted((v.rule, v.decision.name) for v in support.verdicts(text, guard))
+                        for text in (line + then, bare + then)
+                    ]
+                    assert judged[0] == judged[1], (line + then, on, judged)
+                    table[case, line, on, then] = judged[0]
+    assert len(table) == 2 * 9 * 2 * len(THEN), sorted({key[1] for key in table})
+    write_after_switch = ("denied", "git switch --end-of-options 'main'", "feat/work", THEN[1])
+    assert table[write_after_switch] == [("guard-path-default", "DENY")]
+    assert table["denied", "git rebase --end-of-options 'main'", "main", ""] == [
+        ("default-ref", "DENY")
+    ]
+    staged_then_pushed = ("denied", "git --literal-pathspecs add -- 'justfile'", "main", THEN[2])
+    assert table[staged_then_pushed] == [("push-main", "DENY")]
+    assert table["harmless", "git switch --end-of-options 'feature/x'", "feat/work", ""] == []
+    assert table["harmless", "git --literal-pathspecs add -- 'src/a.py'", "main", ""] == []
 
 
 def test_no_skill_runs_a_plugin_script_with_a_bare_python3() -> None:
