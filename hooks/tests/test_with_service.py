@@ -583,9 +583,12 @@ def test_a_listener_on_the_ready_port_held_by_another_process_is_said_and_never_
         other.close()
     other_line = (
         f"with_service: [::]:{port}, on the ready URL's port, is held by a process the gate did "
-        "not find among the boot command's, so it is not judged as the product's"
+        "not find among the boot command's, so it is not judged as the product's\n"
+        "with_service: when the product first answered, each of its listeners was on loopback or "
+        "declared; one opened later is not seen\n"
+        "with_service: green\n"
     )
-    assert (code, out.splitlines()[0]) == (0, other_line), out
+    assert (code, out) == (0, other_line), out
     assert ran.exists(), "another process's listener refused the session"
 
 
@@ -790,6 +793,65 @@ def test_a_gate_whose_listener_another_process_holds_keeps_its_colour(
         code, out = run("--boot", asking(address), "--ready", READY, capsys=capsys)
     unseen = f"with_service: where the product listens was not checked: {ELSEWHERE}\n"
     assert re.fullmatch(f"{said}{unseen}with_service: green\n", out), out
+    assert code == 0
+
+
+WIDE_REFUSED = (
+    r"the product listened on 0\.0\.0\.0:\d+, every interface, when it first answered, so the "
+    rf"network could reach it around the command after --; {re.escape(CURE)}, or declare the "
+    r"address with --listens\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("flags", "code", "said"),
+    [
+        (
+            [],
+            1,
+            WIDE_REFUSED + "where the product listens was not checked, so the command after -- "
+            rf"did not run: {ELSEWHERE}; {re.escape(LISTENS_CURE)}\n",
+        ),
+        (["--listens", "127.0.0.1"], 1, WIDE_REFUSED),
+        (
+            ["--listens", "0.0.0.0"],  # noqa: S104 # -- under test
+            0,
+            DECLARED.format(where=EVERY)
+            + rf"{NOT_CHECKED_HERE}{EVERY} \({ELSEWHERE}\)\nwith_service: green\n$",
+        ),
+    ],
+    ids=["none", "loopback declared", "wide declared"],
+)
+def test_a_session_judges_the_ready_ports_listener_when_the_group_holds_only_another_port(
+    flags: list[str],
+    *,
+    code: int,
+    said: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    ran = tmp_path / "ran"
+    with servers.held_outside_the_group() as asking:
+        boot = servers.helped_by(tmp_path / "helper", asking("0.0.0.0"))  # noqa: S104 # -- under test
+        exited, out = run(
+            *("--boot", boot, "--ready", READY, "--loopback-only", *flags),
+            *("--", "touch", str(ran)),
+            capsys=capsys,
+        )
+    assert re.match(said, out), out
+    assert (exited, ran.exists()) == (code, not code), out
+    assert "was on loopback or declared" not in out, out
+
+
+def test_a_gate_whose_group_holds_only_another_port_notes_the_wide_ready_listener(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with servers.held_outside_the_group() as asking:
+        boot = servers.helped_by(tmp_path / "helper", asking("0.0.0.0"))  # noqa: S104 # -- under test
+        code, out = run("--boot", boot, "--ready", READY, capsys=capsys)
+    unseen = f"with_service: where the product listens was not checked: {ELSEWHERE}\n"
+    wide = noted("0.0.0.0", "every interface")  # noqa: S104 # -- under test
+    assert re.fullmatch(f"{wide}{unseen}with_service: green\n", out), out
     assert code == 0
 
 

@@ -273,6 +273,18 @@ HIDES = (
     "time.sleep(60)\n"
 )
 
+HELPS = (
+    "import socket, sys, time\n"
+    "held = socket.create_server(('127.0.0.1', 0))\n"
+    "open(sys.argv[1], 'w').close()\n"
+    "time.sleep(60)\n"
+)
+
+
+def helped_by(marker: Path, boot: str) -> str:
+    return f"{python(HELPS)} {marker} & while [ ! -e {marker} ]; do sleep 0.05; done; {boot}"
+
+
 NEEDS = (
     "import os, sys, time\n"
     "MODE = os.environ['MODE']\n"

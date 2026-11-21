@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -24,7 +25,15 @@ import acceptance
 import gatelib
 import listeners
 from tests import products
-from tests.servers import HIDES, SERVE, gone, held_outside_the_group, pid_of, python
+from tests.servers import (
+    HIDES,
+    SERVE,
+    gone,
+    held_outside_the_group,
+    helped_by,
+    pid_of,
+    python,
+)
 
 SLUG = "save-link"
 WIDE = "TEST_PRODUCT_ADDRESS=0.0.0.0"
@@ -689,6 +698,75 @@ def test_a_listener_another_process_holds_on_the_ready_port_is_judged_as_the_pro
         root = products.make(tmp_path / "product", boot=asking(address), extra=extra)
         judged = judged_by(harness, root, capsys)
         holds(harness, asking(address), expected=expected, judged=judged)
+
+
+WIDE_READY_PORT = (
+    r"it listened on 0\.0\.0\.0:\d+, every interface, so a request could reach it around the "
+    r"session's proxy and leave no line in its log\. To keep it on loopback, "
+    + re.escape(
+        "pass {host}, which stands for the ready URL's host, in the boot line where the product "
+        "takes its address; if it listens there on purpose, add the address to the justfile's "
+        '`listens`, as `listens := "0.0.0.0"`.'
+    )
+)
+
+
+@pytest.mark.parametrize("harness", ["up", "replay"])
+@pytest.mark.parametrize(
+    "case",
+    [
+        ("", (1, WIDE_READY_PORT)),
+        ('listens := "127.0.0.1"', (1, WIDE_READY_PORT)),
+        (
+            'listens := "0.0.0.0"',
+            (
+                0,
+                (
+                    r"with_service: the product listened on 0\.0\.0\.0:\d+ when it first "
+                    rf"answered, as declared\n{DECLARED_HERE}0\.0\.0\.0 \({NONE_HELD}\)\n"
+                ),
+            ),
+        ),
+    ],
+    ids=["none", "loopback declared", "wide declared"],
+)
+def test_the_ready_ports_listener_is_judged_when_the_group_holds_only_another_port(
+    case: tuple[str, Expected],
+    *,
+    harness: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    extra, expected = case
+    with held_outside_the_group() as asking:
+        boot = helped_by(tmp_path / "helper", asking("0.0.0.0"))  # noqa: S104 # -- under test
+        root = products.make(tmp_path / "product", boot=boot, extra=extra)
+        holds(harness, boot, expected=expected, judged=judged_by(harness, root, capsys))
+    assert products.processes_naming(str(tmp_path)) == []
+
+
+@pytest.mark.parametrize("harness", ["up", "replay"])
+def test_a_wide_listener_beside_the_products_own_on_the_ready_port_is_said_and_starts(
+    harness: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    other = socket.socket(socket.AF_INET6)
+    try:
+        other.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        other.bind(("::", 0))
+        other.listen()
+        port = other.getsockname()[1]
+        ready = f"http://127.0.0.1:{port}/"
+        root = products.make(tmp_path / "product", env=f"PORT={port}", ready=ready)
+        judged = judged_by(harness, root, capsys)
+    finally:
+        other.close()
+    said = (
+        f"with_service: [::]:{port}, on the ready URL's port, is held by a process the gate did "
+        "not find among the boot command's, so it is not judged as the product's\n"
+        "with_service: when the product first answered, each of its listeners was on loopback or "
+        "declared; one opened later is not seen\n"
+    )
+    holds(harness, "", expected=(0, re.escape(said)), judged=judged)
 
 
 @pytest.mark.parametrize("harness", ["up", "replay"])
