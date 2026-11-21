@@ -1598,15 +1598,9 @@ def act_on(drain: Drain, ticket: preflight.Ticket, options: argparse.Namespace) 
 
 def closing(drain: Drain, ticket: preflight.Ticket, options: argparse.Namespace) -> int:
     root, branch = drain.root, route.own_branch(ticket)
-    tip = gatelib.git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")
     was_passed = gate_start(root, branch, passed=False)
     code = acted(drain, ticket, options)
-    if (
-        not was_passed
-        or options.action == "check"
-        or not passed(root, branch)
-        or gatelib.git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}") != tip
-    ):
+    if not was_passed or options.action == "check" or not passed(root, branch):
         return code
     try:
         gate_start(root, branch, passed=True, done=f"`{options.action}` ran")
