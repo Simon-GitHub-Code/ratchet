@@ -1390,6 +1390,16 @@ def test_the_marker_is_written_before_the_signal_so_a_failure_after_it_is_judged
     assert code == 0
 
 
+def test_a_route_the_gate_cannot_reach_could_not_be_judged_and_says_why(
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    load = [str(LOAD), "--url", "http://127.0.0.1:1/work", *BUSY]
+    code, out = exits_on_signal("drain", [sys.executable, *load], capsys=capfd)
+    assert "the gate could not send GET http://127.0.0.1:1/work to hold it across the " in out
+    assert "ConnectionRefusedError: [Errno 111] Connection refused; bind a route the " in out
+    assert (code, out.endswith(NOT_JUDGED)) == (3, True)
+
+
 def test_a_command_that_never_starts_sending_could_not_be_judged_and_is_not_signalled(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
