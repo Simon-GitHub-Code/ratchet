@@ -145,6 +145,78 @@ def test_main_checks_then_applies_a_plan_and_refuses_one_it_cannot_read(
     ]
 
 
+ANSWERS = (
+    "- conjecture.flag: A saved link list: should it stay hidden until you switch it on, or"
+    " appear as soon as it is finished? Stay hidden until I switch it on.\n"
+    "- A or B? A, *as written*.\n"
+)
+SECTIONS = f"## Conjecture\n\nIt helps.\n\n## Operability\n\nFlag: none\n\n## Answers\n\n{ANSWERS}"
+
+
+def test_a_part_carries_the_answers_word_for_word_after_the_other_inherited_sections() -> None:
+    part = split.parts_of(HALVES)[0]
+    answers_first = f"## Answers\n\n{ANSWERS}\n## Operability\n\nFlag: none\n\n## Conjecture\n\nA.\n"
+    parent = preflight.local_ticket(PARENT_REF, f"{PARENT}\n{answers_first}")
+    text = split.child_body(parent, part, waits=[], label="L")
+    assert text.endswith(f"## Answers\n\n{ANSWERS}")
+    assert text.index("## Conjecture") < text.index("## Operability") < text.index("## Answers")
+    assert text.count("## Answers") == 1
+    for empty in ("## Answers\n\n", "### Answers\n\n- A or B? A.\n"):
+        bare = preflight.local_ticket(PARENT_REF, f"{PARENT}\n{empty}")
+        assert "Answers" not in split.child_body(bare, part, waits=[], label="L")
+
+
+@pytest.mark.parametrize(
+    ("lines", "written"),
+    [
+        (["Parent: ../plan.md"], "Parent: ../plan.md"),
+        (["**Parent:** `../plan.md`  "], "**Parent:** `../plan.md`  "),
+        (["Parent: notes.md", "Parent: ../other.md"], "Parent: notes.md"),
+        (["```", "Parent: ../plan.md", "```"], "Parent: ../plan.md"),
+    ],
+    ids=["relative", "markup and trailing spaces", "the first of two", "fenced"],
+)
+def test_a_part_carries_the_parent_line_as_its_ticket_wrote_it_under_its_split_from_line(
+    tmp_path: Path, lines: list[str], written: str
+) -> None:
+    ticket = PARENT.replace("\n\n- [ ]", "\n\n" + "\n".join(lines) + "\n\n- [ ]", 1)
+    root = repository(
+        tmp_path,
+        {
+            PARENT_REF: ticket + SECTIONS,
+            ".scratch/f/plan.md": "# Plan\n",
+            ".scratch/f/issues/notes.md": "# Notes\n",
+        },
+    )
+    children, refused = split.apply(root, PARENT_REF, HALVES, gh=tracker(None))
+    assert refused == []
+    for child in children:
+        text = (root / child).read_text(encoding="utf-8")
+        assert f"\nSplit from: {PARENT_REF}\n{written}\nBlocked by: " in text
+        assert text.count(written) == 1
+    reach = {
+        ref: preflight.preflight(ref, root, base="main", branch=None, gh=tracker(None)).parent
+        for ref in [PARENT_REF, *children]
+    }
+    assert set(reach.values()) == {preflight.local_ticket(PARENT_REF, ticket).parent}
+    assert None not in reach.values()
+
+
+def test_a_part_of_a_ticket_with_no_parent_line_and_no_answers_is_written_as_before() -> None:
+    parent = preflight.local_ticket(PARENT_REF, f"{PARENT}\n## Conjecture\n\nIt helps.\n")
+    first, second = split.parts_of(HALVES)
+    assert split.child_body(parent, first, waits=["#3"], label="ready-for-agent") == (
+        "# Save\n\n**Status:** `ready-for-agent`\n\nSplit from: .scratch/f/issues/01-a.md\n"
+        "Blocked by: #3\n\n## What to build\n\nSave\n\n## Acceptance criteria\n\n- [ ] It saves.\n"
+        "\n## Conjecture\n\nIt helps.\n"
+    )
+    tracked = preflight.Ticket("7", 7, "A", PARENT, ("ready-for-agent",), is_open=True)
+    assert split.child_body(tracked, second, waits=[], label="ready-for-agent") == (
+        "# List\n\nSplit from: 7\nBlocked by: none\n\n## What to build\n\nList\n\n"
+        "## Acceptance criteria\n\n- [ ] It lists.\n\n"
+    )
+
+
 def test_a_part_does_not_carry_the_size_its_parent_was_too_large_for(tmp_path: Path) -> None:
     (tmp_path / "quality").mkdir()
     (tmp_path / "quality" / "thresholds.toml").write_text(
