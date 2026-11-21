@@ -742,6 +742,8 @@ elif path.endswith("/workflows/ci.yml/runs") and "branch" in fields:
     print(json.dumps(world["tier1"]))
 elif path.endswith("/workflows/ci.yml/runs"):
     print(json.dumps(world["ci"][fields["head_sha"]]))
+elif path.endswith("/pulls") and "base" in fields:
+    print(world["above"][fields["base"]])
 elif path.endswith("/pulls") and "GET" in args:
     print(json.dumps(world["pulls"][fields["head"].split(":", 1)[1]]))
 elif "/events" in path:
@@ -805,6 +807,7 @@ def forge(heads: dict[int, tuple[str, str]]) -> dict[str, Any]:
         "tier1": {"total_count": 1, "workflow_runs": [{**ON_THE_TIP, "head_repository": OURS}]},
         "ci": {sha: ci_runs(n, sha, branch) for n, (sha, branch) in heads.items()},
         "pulls": {branch: [one_pull(n, sha, branch)] for n, (sha, branch) in heads.items()},
+        "above": {branch: "" for _, branch in heads.values()},
         "events": {},
         "now": {str(n): f"open {sha} main" for n, (sha, _) in heads.items()},
         "comments": {},
@@ -885,6 +888,29 @@ def test_the_merge_job_judges_every_green_pull_request_not_only_the_one_that_wok
     fetches = [line for line in log.splitlines() if line.startswith("git fetch")]
     assert fetches[0].endswith("+refs/heads/main:refs/remotes/origin/main")
     assert [line.split()[-1] for line in fetches[1:]] == ["aaaa", "bbbb", "dddd", "ffff", "gggg"]
+
+
+@pytest.mark.parametrize(
+    ("above", "kept"),
+    [
+        ({"feat/a": "9"}, "branch feat/a stays: pull request #9 targets it"),
+        ({}, "branch feat/a stays: the forge did not say whether an open pull request targets it"),
+        ({"feat/a": ""}, None),
+    ],
+    ids=["targeted", "unread", "untargeted"],
+)
+def test_the_merge_job_keeps_a_merged_branch_while_an_open_pull_request_targets_it(
+    tmp_path: Path, above: dict[str, str], kept: str | None
+) -> None:
+    world = forge({1: ("aaaa", "feat/a")})
+    world["above"] = above
+    code, out, log = merge_job(tmp_path, world)
+    assert code == 0
+    assert log.count("-X PUT") == 1, "the pull request below still merges"
+    deleted = log.count("-X DELETE repos/owner/repo/git/refs/heads/feat/a")
+    assert (deleted, kept is None or kept in out.splitlines()) == (int(kept is None), True)
+    [asked] = [line for line in log.splitlines() if "base=feat/a" in line]
+    assert "state=open" in asked.split()
 
 
 def test_the_merge_job_counts_nothing_the_forge_did_not_answer(tmp_path: Path) -> None:

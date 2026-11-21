@@ -127,6 +127,24 @@ def default_branches(root: Path) -> list[str]:
     return list(dict.fromkeys(candidates))
 
 
+def stacked(target: str, default: str, beside: object = None) -> str:
+    wrong = (
+        f"the pull request targets `{target}`, not the default branch `{default}`, and the method"
+        f" judges a change against `{default}`"
+    )
+    if beside is not None:
+        return (
+            f"{wrong}. #{beside}, from the same branch, already targets `{default}`, so the owner"
+            " merges or closes this one"
+        )
+    return (
+        f"{wrong}. Change its target to `{default}` on the pull request's page on the forge, which"
+        " keeps it open; the owner then merges it. The change of target starts no ci run; once it"
+        f" targets `{default}`, a new commit on its branch starts one. If it is already closed,"
+        f" open a new pull request from its branch against `{default}`"
+    )
+
+
 def base_commit(root: Path, base: str | None = None) -> str | None:
     head = git(root, "rev-parse", "--abbrev-ref", "HEAD")
     for branch in [base] if base else default_branches(root):
