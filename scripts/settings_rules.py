@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 import plugin_pin
+import unproven
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import events
@@ -97,6 +98,7 @@ TAMPER = (
     ".git/objects/info",
     ".git/objects/info/**",
     f".git/{events.LOG_NAME}",
+    f".git/{unproven.RECORD}",
     "~/.claude/settings.json",
     "~/.claude/settings.local.json",
     "~/.claude/plugins/**",

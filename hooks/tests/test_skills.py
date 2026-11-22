@@ -124,6 +124,15 @@ def test_the_drain_reads_a_refusal_with_exit_2_as_no_conflict() -> None:
     )
 
 
+def test_the_drain_stops_on_a_start_that_cannot_be_written_whichever_command_says_so() -> None:
+    opening = FEATURE.split("3. **Start the pipelines.**", 1)[1].split("4. **Settle", 1)[0]
+    refused = FEATURE.split("**Exit 2 from `update`, `close` or `split`", 1)[1].split("\n", 1)[0]
+    checked = FEATURE.split("### The publish check", 1)[1].split("## ", 1)[0]
+    stop = "report that line to the owner word for word"
+    assert all(stop in part.lower() for part in (opening, refused, checked))
+    assert all("`cannot be written`" in part for part in (opening, refused, checked))
+
+
 def test_the_drain_does_not_close_a_ticket_that_update_says_has_merged() -> None:
     step = FEATURE.split("3. **Bring it up to date.**", 1)[1].split("4. **Judge it again.**", 1)[0]
     assert (

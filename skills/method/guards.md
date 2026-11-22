@@ -210,7 +210,7 @@ By the default branch's manifest no guard group holds the first three and only `
 
 Among records alone the owner merges:
 
-- a ticket change that gives the agent-ready label (other than to a part split from a labelled ticket that keeps to its promises), takes the number of another ticket beside it, or closes a ticket
+- a ticket change that gives the agent-ready label (other than to a part split from a labelled ticket that keeps to its promises and whose `Parent:` line, `## Parent`, `## Conjecture`, `## Operability` and `## Answers` are word for word what the split writes from that ticket on the default branch, and whose spec, as the preflight resolves it where the part is filed, is the one the split's part reads beside that ticket), takes the number of another ticket beside it, or closes a ticket
 - any change to a labelled ticket, other than its `Parent:` and `Blocked by:` lines rewritten to name the same files
 - any change to the spec a labelled ticket inherits from
 - any change to whether a ticket a labelled ticket is blocked by is open
@@ -241,6 +241,8 @@ Its manifest must instead guard at least what the template's does: every templat
 - The workflow is triggered by `workflow_run`, which takes the workflow file, the judge and the manifest from the default branch, so a pull request cannot change what judges it. The job reads the pull request's commits without checking them out or running them.
 
 **With no forge** the `merge` entry point (`scripts/merge.py <branch>`) merges the branch in a scratch work tree, asks the judge, runs `check` on the merge result, and moves the default branch only when both pass. For the adoption it runs `check-deep` there instead. `merge.py --records` lands the records a skill left uncommitted on the default branch: it commits them on a branch of their own, `records/<time>`, and merges that branch the same way, so nothing is committed on the default branch itself.
+
+Tier 2 with no forge is what `merge.py --deep` records. It proves the default branch's tip with `check-deep` in a detached work tree that holds the bite registry's `include` paths after its `setup`, under one lock, `ratchet-deep.lock`, and appends one line to `ratchet-deep.jsonl` in the common git directory: green, red, or unrun when nothing judged the tree. The merge reads that record and never runs the deep check itself. A red that no later green covers holds every merge with `tier2`, a record that does not parse holds them until the owner removes the file, and a declared bound holds them with `unproven` (`merge: wait`) until `merge --deep` proves the tip. The `local-git` group denies agents edits to the record.
 
 ### What the judge cannot know
 
