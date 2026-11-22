@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import contextvars
+import errno
 import functools
+import hashlib
 import io
 import json
 import os
@@ -49,25 +52,26 @@ KINDS = ("write", "patch", "remove", "replace")
 GATE_GROUPS = ("tool-config", "gate-commands", "fitness", "gate-tools", "formal")
 GATE_PATHS = (str(REGISTRY), f"{PATCHES}**", str(gatelib.BINDING))
 PULL_REQUEST_TIERS = ("0", "1")
-REAL_TREE = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "VIRTUAL_ENV")
+REAL_TREE = (*gatelib.REPOSITORY_VARIABLES, "VIRTUAL_ENV")
 IDENTITY = ("-c", "user.name=bite", "-c", "user.email=bite@example.invalid")
 COMMIT = (*IDENTITY, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m")
 BITING = "RATCHET_BITING"
 JOBS = "RATCHET_JOBS"
 SNAPSHOT = ".git/bite-index"
-FRESH = ".git/bite-fresh-index"
 MAX_LINK_HOPS = 40
 EXCLUDE = ".git/info/exclude"
 INDEX = ".git/index"
 RULES = (".gitignore", ".gitattributes")
 CHECK = ".git/bite-check-index"
 FILE_MODES = {"100644": 0o644, "100755": 0o755}
+PROC_FD = Path("/proc/self/fd")
 NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 DIRECTORY = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | NOFOLLOW
 DESCRIPTORS = (
     bool(NOFOLLOW)
     and DIRECTORY != os.O_RDONLY | NOFOLLOW
-    and {os.open, os.mkdir, os.rmdir, os.stat, os.symlink, os.unlink} <= os.supports_dir_fd
+    and {os.open, os.mkdir, os.rmdir, os.stat, os.symlink, os.unlink, os.readlink}
+    <= os.supports_dir_fd
     and os.listdir in os.supports_fd
     and shutil.rmtree.avoids_symlink_attacks
 )
@@ -151,31 +155,67 @@ def split_gates(binding: str) -> tuple[tuple[Row, ...], str]:
     return tuple(rows), before + marker + "".join(kept) + divider + after
 
 
+def git_target(root: Path | Tree) -> tuple[Path, RepoPin | None]:
+    if isinstance(root, Tree):
+        return root.path, root.repo
+    pinned = PINNED.get()
+    if pinned is not None and pinned[0] == root:
+        return root, pinned[1]
+    return root, None
+
+
 def run_git(
-    root: Path,
+    root: Path | Tree,
     *args: str,
     index: Path | None = None,
     stdin: str | bytes | None = None,
     store: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
+    path, pin = git_target(root)
+    env = environment() | (store or {})
+    if pin is not None and PROC_FD.is_dir():
+        git_dir = f"{PROC_FD}/{pin.git_fd}"
+        work_dir = f"{PROC_FD}/{pin.work_fd}"
+        env |= {"GIT_DIR": git_dir, "GIT_WORK_TREE": work_dir}
+        if index is not None:
+            env["GIT_INDEX_FILE"] = f"{git_dir}/{index.name}"
+        command = ["git", "-C", work_dir, *args]
+        pass_fds: tuple[int, ...] = (pin.git_fd, pin.work_fd)
+    else:
+        if index is not None:
+            env["GIT_INDEX_FILE"] = str(index)
+        command = ["git", "-C", str(path), *args]
+        pass_fds = ()
     return subprocess.run(
-        ["git", "-C", str(root), *args],
+        command,
         capture_output=True,
         check=False,
         input=stdin.encode() if isinstance(stdin, str) else stdin,
-        env=environment() | ({"GIT_INDEX_FILE": str(index)} if index else {}) | (store or {}),
+        env=env,
+        pass_fds=pass_fds,
     )
 
 
-def git_bytes(root: Path, *args: str, index: Path | None = None, stdin: str | None = None) -> bytes:
+def git_bytes(
+    root: Path | Tree,
+    *args: str,
+    index: Path | None = None,
+    stdin: str | bytes | None = None,
+) -> bytes:
+    where = root.path if isinstance(root, Tree) else root
     result = run_git(root, *args, index=index, stdin=stdin)
     if result.returncode != 0:
-        message = f"git {' '.join(args)} failed in {root}: {result.stderr.decode().strip()}"
+        message = f"git {' '.join(args)} failed in {where}: {result.stderr.decode().strip()}"
         raise Unprovable(message)
     return result.stdout
 
 
-def git_in(root: Path, *args: str, index: Path | None = None, stdin: str | None = None) -> str:
+def git_in(
+    root: Path | Tree,
+    *args: str,
+    index: Path | None = None,
+    stdin: str | bytes | None = None,
+) -> str:
     return git_bytes(root, *args, index=index, stdin=stdin).decode().strip()
 
 
@@ -192,7 +232,7 @@ class Write:
     def plant(self, copy: Tree) -> None:
         owned(copy.path, self.path)
         copy.write(self.path, self.content.encode(), create=creatable(self.path))
-        git_in(copy.path, "add", "--intent-to-add", "--", self.path)
+        git_in(copy, "add", "--intent-to-add", "--", self.path)
 
 
 @dataclass(frozen=True)
@@ -202,10 +242,10 @@ class Patch:
     def plant(self, copy: Tree) -> None:
         check = copy.path / CHECK
         copy.write(CHECK, copy.read(SNAPSHOT) or b"")
-        git_in(copy.path, "update-index", "-q", "--refresh", index=check)
-        git_in(copy.path, "apply", "--check", "--index", self.path, index=check)
-        git_in(copy.path, "apply", "--cached", "--whitespace=nowarn", self.path, index=check)
-        before, after = staged(copy.path, copy.path / SNAPSHOT), staged(copy.path, check)
+        git_in(copy, "update-index", "-q", "--refresh", index=check)
+        git_in(copy, "apply", "--check", "--index", self.path, index=check)
+        git_in(copy, "apply", "--cached", "--whitespace=nowarn", self.path, index=check)
+        before, after = staged(copy, copy.path / SNAPSHOT), staged(copy, check)
         changed = sorted(
             path for path in before.keys() | after.keys() if before.get(path) != after.get(path)
         )
@@ -220,11 +260,11 @@ class Patch:
                     f"{path} would be a symbolic link or a submodule, and a fault writes a file"
                 )
                 raise Unprovable(message)
-            content = git_bytes(copy.path, "cat-file", "--filters", f"--path={path}", blob)
+            content = git_bytes(copy, "cat-file", "--filters", f"--path={path}", blob)
             copy.write(path, content, mode=FILE_MODES[mode], create=creatable(path))
         added = [path for path in changed if path not in before]
         if added:
-            git_in(copy.path, "add", "--intent-to-add", "--", *added)
+            git_in(copy, "add", "--intent-to-add", "--", *added)
 
 
 @dataclass(frozen=True)
@@ -232,7 +272,7 @@ class Remove:
     patterns: tuple[str, ...]
 
     def plant(self, copy: Tree) -> None:
-        found = [p for p in visible(copy.path) if gatelib.matches(p, list(self.patterns))]
+        found = [p for p in visible(copy) if gatelib.matches(p, list(self.patterns))]
         files = [p for p in found if (copy.path / p).is_file()]
         if not files:
             message = (
@@ -323,7 +363,7 @@ def above(path: str) -> list[str]:
     return ["/".join(parts[:depth]) for depth in range(1, len(parts))]
 
 
-def staged(copy: Path, index: Path) -> dict[str, tuple[str, str]]:
+def staged(copy: Path | Tree, index: Path) -> dict[str, tuple[str, str]]:
     listed = git_in(copy, "ls-files", "-z", "--stage", index=index).split("\0")
     entries = [line.partition("\t") for line in listed if line]
     return {path: (entry.split()[0], entry.split()[1]) for entry, _, path in entries}
@@ -338,17 +378,61 @@ def linked(path: str) -> str:
 
 
 @dataclass(frozen=True)
+class RepoPin:
+    work_fd: int
+    git_fd: int
+
+    def close(self) -> None:
+        for fd in (self.git_fd, self.work_fd):
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+
+PINNED: contextvars.ContextVar[tuple[Path, RepoPin | None] | None] = contextvars.ContextVar(
+    "pinned", default=None
+)
+
+
+@dataclass(frozen=True)
 class Tree:
     path: Path
     made: tuple[int, int]
+    repo: RepoPin | None = None
 
     @classmethod
     def pin(cls, path: Path) -> Tree:
         found = path.lstat()
         return cls(path, (found.st_dev, found.st_ino))
 
+    @classmethod
+    def pin_repo(cls, path: Path) -> Tree:
+        if not DESCRIPTORS:
+            raise Unprovable(UNSUPPORTED)
+        work_fd = os.open(path, DIRECTORY)
+        try:
+            found = os.fstat(work_fd)
+            git_fd = os.open(".git", DIRECTORY, dir_fd=work_fd)
+        except BaseException:
+            os.close(work_fd)
+            raise
+        return cls(path, (found.st_dev, found.st_ino), RepoPin(work_fd, git_fd))
+
+    def close(self) -> None:
+        if self.repo is not None:
+            self.repo.close()
+
     @contextmanager
-    def at(self, path: str, *, make: bool = False) -> Iterator[tuple[int, str]]:
+    def use(self) -> Iterator[None]:
+        token = PINNED.set((self.path, self.repo))
+        try:
+            yield
+        finally:
+            PINNED.reset(token)
+
+    @contextmanager
+    def at(
+        self, path: str, *, make: bool = False, restoring: bool = False
+    ) -> Iterator[tuple[int, str]]:
         if not DESCRIPTORS:
             raise Unprovable(UNSUPPORTED)
         *way, name = PurePosixPath(path).parts
@@ -366,12 +450,23 @@ class Tree:
                     below = os.open(part, DIRECTORY, dir_fd=here)
                 except OSError as error:
                     where = "/".join(way[:depth])
-                    raise refusal(error, path, at=(here, part), where=where) from error
+                    raise refusal(
+                        error, path, at=(here, part), where=where, restoring=restoring
+                    ) from error
                 os.close(here)
                 here = below
             yield here, name
         finally:
             os.close(here)
+
+    def matches(self, path: str, mode: str, digest: bytes) -> bool:
+        try:
+            with self.at(path, restoring=True) as (here, name):
+                if mode == "120000":
+                    return link_matches(here, name, digest)
+                return file_matches(here, name, mode=mode, digest=digest)
+        except FileNotFoundError:
+            return False
 
     def read(self, path: str) -> bytes | None:
         with self.at(path) as (here, name):
@@ -420,7 +515,7 @@ class Tree:
             self.empty(here, name)
 
     def put(self, path: str, mode: str, content: bytes) -> None:
-        with self.at(path, make=True) as (here, name):
+        with self.at(path, make=True, restoring=True) as (here, name):
             self.empty(here, name)
             if mode == "120000":
                 os.symlink(content, name, dir_fd=here)
@@ -455,6 +550,33 @@ class Tree:
                 os.rmdir(name, dir_fd=here)
 
 
+def link_matches(here: int, name: str, digest: bytes) -> bool:
+    try:
+        target = os.readlink(name, dir_fd=here)
+    except OSError:
+        return False
+    return hashlib.sha256(os.fsencode(target)).digest() == digest
+
+
+def file_matches(here: int, name: str, *, mode: str, digest: bytes) -> bool:
+    try:
+        opened = os.open(name, os.O_RDONLY | os.O_NONBLOCK | NOFOLLOW, dir_fd=here)
+    except OSError:
+        return False
+    try:
+        info = os.fstat(opened)
+        if not stat.S_ISREG(info.st_mode) or bool(info.st_mode & stat.S_IXUSR) != (
+            mode == "100755"
+        ):
+            return False
+        measured = hashlib.sha256()
+        while chunk := os.read(opened, 65536):
+            measured.update(chunk)
+        return measured.digest() == digest
+    finally:
+        os.close(opened)
+
+
 def entry(here: int, name: str) -> os.stat_result | None:
     try:
         return os.stat(name, dir_fd=here, follow_symlinks=False)
@@ -462,10 +584,21 @@ def entry(here: int, name: str) -> os.stat_result | None:
         return None
 
 
-def refusal(error: OSError, path: str, *, at: tuple[int, str], where: str) -> Exception:
+def refusal(
+    error: OSError, path: str, *, at: tuple[int, str], where: str, restoring: bool = False
+) -> Exception:
     found = entry(*at)
     if found is not None and stat.S_ISLNK(found.st_mode):
-        return Unprovable(linked(path))
+        message = (
+            f"cannot restore {path}: {where} is a symbolic link standing where a directory is"
+            f" needed ({path} is reached through a symbolic link)"
+            if restoring
+            else linked(path)
+        )
+        return Unprovable(message)
+    if restoring and error.errno == errno.ENOTDIR:
+        message = f"cannot restore {path}: {where} is a file standing where a directory is needed"
+        return Unprovable(message)
     return OSError(error.errno, error.strerror, where)
 
 
@@ -485,10 +618,11 @@ class Bite:
         return any(arg.strip() for arg in self.args)
 
     def plant(self, copy: Tree) -> None:
-        self.fault.plant(copy)
-        if self.commit:
-            git_in(copy.path, "add", "-A")
-            git_in(copy.path, *COMMIT, f"test(bite): {self.name}")
+        with copy.use():
+            self.fault.plant(copy)
+            if self.commit:
+                git_in(copy, "add", "-A")
+                git_in(copy, *COMMIT, f"test(bite): {self.name}")
 
 
 @dataclass(frozen=True)
@@ -910,7 +1044,7 @@ class Shell:
             gatelib.stop_group(process)
 
 
-def visible(root: Path) -> list[str]:
+def visible(root: Path | Tree) -> list[str]:
     listed = git_in(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
     return [path for path in listed.split("\0") if path]
 
@@ -1056,7 +1190,7 @@ class Copy:
     tree: Tree
     shell: Shell
     head: str
-    snapshot_tree: str
+    expected: tuple[tuple[str, str, str, bytes], ...]
     staged: bytes
     exclude: bytes
     lane: int = 0
@@ -1065,29 +1199,28 @@ class Copy:
     def path(self) -> Path:
         return self.tree.path
 
+    def close(self) -> None:
+        self.tree.close()
+
     def restore(self) -> None:
-        snapshot = self.path / SNAPSHOT
-        git_in(self.path, "reset", "-q", "--soft", self.head)
-        self.tree.write(INDEX, self.staged)
-        self.tree.write(EXCLUDE, self.exclude)
-        fresh = self.path / FRESH
-        git_in(self.path, "read-tree", self.snapshot_tree, index=fresh)
-        run_git(self.path, "update-index", "-q", "--refresh", index=fresh)
-        listed = ("ls-files", "-z", "--others", "--directory", "--exclude-standard")
-        for path in git_in(self.path, *listed, index=snapshot).split("\0"):
-            if path:
-                self.tree.clear(path)
-        held = staged(self.path, snapshot)
-        listed = ("diff-files", "-z", "--raw", "--no-renames", "--ignore-submodules=all")
-        fields = git_in(self.path, *listed, index=fresh).split("\0")
-        for path in sorted(fields[1::2]):
-            mode, blob = held[path]
-            if mode in FILE_MODES:
-                content = git_bytes(self.path, "cat-file", "--filters", f"--path={path}", blob)
-            else:
-                content = git_bytes(self.path, "cat-file", "blob", blob)
-            self.tree.put(path, mode, content)
-        contained(self.path, self.head)
+        with self.tree.use():
+            snapshot_index = self.path / SNAPSHOT
+            git_in(self.tree, "reset", "-q", "--soft", self.head)
+            self.tree.write(INDEX, self.staged)
+            self.tree.write(EXCLUDE, self.exclude)
+            listed = ("ls-files", "-z", "--others", "--directory", "--exclude-standard")
+            for path in git_in(self.tree, *listed, index=snapshot_index).split("\0"):
+                if path:
+                    self.tree.clear(path)
+            for path, mode, blob, digest in self.expected:
+                if not self.tree.matches(path, mode, digest):
+                    args = (
+                        ("--filters", f"--path={path}", blob)
+                        if mode in FILE_MODES
+                        else ("blob", blob)
+                    )
+                    self.tree.put(path, mode, git_bytes(self.tree, "cat-file", *args))
+            contained(self.path, self.head)
 
     def run(self, command: Sequence[str], limit: float, jobs: int) -> Run:
         result = self.shell.run(command, self.path, limit, jobs=jobs)
@@ -1219,17 +1352,63 @@ def git_path(root: Path, name: str) -> Path:
     return Path(git_in(root, "rev-parse", "--path-format=absolute", "--git-path", name))
 
 
+def batched_digests(
+    tree: Tree, items: Sequence[tuple[str, str, str]], *, filters: bool
+) -> dict[str, bytes]:
+    if not items:
+        return {}
+    stdin = b"".join(
+        (f"{blob} {path}\0" if filters else f"{blob}\0").encode() for path, _, blob in items
+    )
+    args = ("cat-file", "--batch", "--filters", "-Z") if filters else ("cat-file", "--batch", "-Z")
+    out = git_bytes(tree, *args, stdin=stdin)
+    digests: dict[str, bytes] = {}
+    pos = 0
+    for path, _, _ in items:
+        nul = out.index(b"\0", pos)
+        size = int(out[pos:nul].decode().rsplit(" ", 1)[1])
+        start = nul + 1
+        digests[path] = hashlib.sha256(out[start : start + size]).digest()
+        pos = start + size + 1
+    return digests
+
+
+def expected_entries(tree: Tree) -> tuple[tuple[str, str, str, bytes], ...]:
+    held = staged(tree, tree.path / SNAPSHOT)
+    items = sorted(
+        (path, mode, blob)
+        for path, (mode, blob) in held.items()
+        if mode in FILE_MODES or mode == "120000"
+    )
+    files = [item for item in items if item[1] in FILE_MODES]
+    links = [item for item in items if item[1] == "120000"]
+    digests = batched_digests(tree, files, filters=True) | batched_digests(
+        tree, links, filters=False
+    )
+    return tuple((path, mode, blob, digests[path]) for path, mode, blob in items)
+
+
 def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell, lane: int = 0) -> Copy:
     git_in(root, "init", "-q", str(copy))
-    tree = Tree.pin(copy)
+    tree = Tree.pin_repo(copy)
+    try:
+        with tree.use():
+            return build_copy(root, tree, registry=registry, shell=shell, lane=lane)
+    except BaseException:
+        tree.close()
+        raise
+
+
+def build_copy(root: Path, tree: Tree, *, registry: Registry, shell: Shell, lane: int = 0) -> Copy:
+    copy = tree.path
     alternates = f"{git_path(root, 'objects')}\n"
     (copy / ".git/objects/info/alternates").write_text(alternates, encoding="utf-8")
-    git_in(copy, "fetch", "-q", "--update-head-ok", str(root), "+refs/*:refs/*")
+    git_in(tree, "fetch", "-q", "--update-head-ok", str(root), "+refs/*:refs/*")
     head = git_in(root, "rev-parse", "HEAD")
-    git_in(copy, "update-ref", "--no-deref", "HEAD", head)
+    git_in(tree, "update-ref", "--no-deref", "HEAD", head)
     remote_head = gatelib.git(root, "symbolic-ref", "-q", "refs/remotes/origin/HEAD")
     if remote_head:
-        git_in(copy, "symbolic-ref", "refs/remotes/origin/HEAD", remote_head)
+        git_in(tree, "symbolic-ref", "refs/remotes/origin/HEAD", remote_head)
     for name in ("index", "info/exclude"):
         carry(git_path(root, name), copy / ".git" / name)
     for path in visible(root):
@@ -1238,20 +1417,20 @@ def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell, lane:
         carry_included(root, copy, path)
     for name in gatelib.default_branches(copy):
         ref = f"refs/remotes/{name}" if name.startswith("origin/") else f"refs/heads/{name}"
-        if gatelib.git(copy, "rev-parse", "-q", "--verify", ref) is not None:
-            git_in(copy, "update-ref", ref, head)
+        if run_git(tree, "rev-parse", "-q", "--verify", ref).returncode == 0:
+            git_in(tree, "update-ref", ref, head)
     for command in registry.setup:
         result = shell.run(shlex.split(command), copy, GATE_LIMIT)
         if result.code != 0:
             how = "timed out" if result.timed_out else f"exited {result.code}"
             message = f"setup `{command}` {how} in the scratch copy\n{tail(result.output)}"
             raise Unprovable(message)
-    snapshot(copy)
+    snapshot(tree)
     made = Copy(
         tree,
         shell,
-        git_in(copy, "rev-parse", "HEAD"),
-        git_in(copy, "write-tree", index=copy / SNAPSHOT),
+        git_in(tree, "rev-parse", "HEAD"),
+        expected_entries(tree),
         tree.read(INDEX) or b"",
         tree.read(EXCLUDE) or b"",
         lane,
@@ -1260,10 +1439,10 @@ def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell, lane:
     return made
 
 
-def snapshot(copy: Path) -> None:
-    git_in(copy, "add", "--all", index=copy / SNAPSHOT)
+def snapshot(copy: Tree) -> None:
+    git_in(copy, "add", "--all", index=copy.path / SNAPSHOT)
     listed = git_in(copy, "ls-files", "-z", "--cached", "--ignored", "--exclude-standard")
-    tracked = [path for path in listed.split("\0") if path and os.path.lexists(copy / path)]
+    tracked = [path for path in listed.split("\0") if path and os.path.lexists(copy.path / path)]
     if tracked:
         git_in(
             copy,
@@ -1272,10 +1451,10 @@ def snapshot(copy: Path) -> None:
             "--force",
             "--pathspec-from-file=-",
             "--pathspec-file-nul",
-            index=copy / SNAPSHOT,
+            index=copy.path / SNAPSHOT,
             stdin="\0".join(tracked),
         )
-    contained(copy, git_in(copy, "rev-parse", "HEAD"))
+    contained(copy.path, git_in(copy, "rev-parse", "HEAD"))
 
 
 def under(absolute: str, bases: tuple[str, ...]) -> list[str] | None:
@@ -1409,58 +1588,95 @@ def schedule_of(root: Path, gates: Sequence[str]) -> schedule.Schedule:
     return stated.joined(passed).joined(strictest)
 
 
-def run_lanes(
-    root: Path, registry: Registry, tasks: Sequence[Task], *, lanes: int, limit: float
-) -> list[Outcome]:
-    stamp = runrecord.stamp(root)
-    limited = [(replace(row, limit=limit), bites) for row, bites in tasks]
-    kept = schedule_of(root, [row.gate for row, _ in limited])
-    board = schedule.Board(range(len(limited)), kept, lambda task: limited[task][0].gate)
-    cap = gatelib.default_jobs(root)
-    told = max(1, min(cap, (os.cpu_count() or 1) // lanes))
-    ready = threading.Condition()
-    shell = Shell()
-    printing = threading.Lock()
+@dataclass(frozen=True)
+class LaneConfig:
+    root: Path
+    registry: Registry
+    tasks: Sequence[Task]
+    board: schedule.Board[int]
+    kept: schedule.Schedule
+    ready: threading.Condition
+    shell: Shell
+    printing: threading.Lock
+    stamp: dict[str, str]
+    cap: int
+    told: int
 
-    def lane(number: int, path: Path, made: Copy | None) -> list[Outcome]:
-        copy = made or make_copy(root, path, registry=registry, shell=shell, lane=number)
+
+def run_lane(config: LaneConfig, path: Path, made: Copy | None, *, number: int) -> list[Outcome]:
+    copy = made or make_copy(
+        config.root, path, registry=config.registry, shell=config.shell, lane=number
+    )
+    try:
         outcomes: list[Outcome] = []
-        while not shell.stopped and (task := next_task(board, ready, shell)) is not None:
-            row, bites = limited[task]
-            share = cap if row.gate in kept.alone else told
+        while (
+            not config.shell.stopped
+            and (task := next_task(config.board, config.ready, config.shell)) is not None
+        ):
+            row, bites = config.tasks[task]
+            share = config.cap if row.gate in config.kept.alone else config.told
             try:
                 proved = list(copy.prove(row, bites, jobs=share))
             finally:
-                with ready:
-                    beside = board.done(task)
-                    ready.notify_all()
+                with config.ready:
+                    beside = config.board.done(task)
+                    config.ready.notify_all()
             for found in proved:
                 outcome = replace(found, beside=beside)
-                with printing:
+                with config.printing:
                     print(outcome.lines(), flush=True)
                     if outcome.fault:
-                        record = {**outcome.record(), **stamp}
-                        runrecord.append(root / runrecord.TIMING, record, root=root, who="bite")
+                        record = {**outcome.record(), **config.stamp}
+                        runrecord.append(
+                            config.root / runrecord.TIMING, record, root=config.root, who="bite"
+                        )
                 outcomes.append(outcome)
         return outcomes
+    finally:
+        if made is None and isinstance(copy, Copy):
+            copy.close()
 
+
+def run_lanes(
+    root: Path, registry: Registry, tasks: Sequence[Task], *, lanes: int, limit: float
+) -> list[Outcome]:
+    limited = [(replace(row, limit=limit), bites) for row, bites in tasks]
+    kept = schedule_of(root, [row.gate for row, _ in limited])
+    cap = gatelib.default_jobs(root)
+    config = LaneConfig(
+        root=root,
+        registry=registry,
+        tasks=limited,
+        board=schedule.Board(range(len(limited)), kept, lambda task: limited[task][0].gate),
+        kept=kept,
+        ready=threading.Condition(),
+        shell=Shell(),
+        printing=threading.Lock(),
+        stamp=runrecord.stamp(root),
+        cap=cap,
+        told=max(1, min(cap, (os.cpu_count() or 1) // lanes)),
+    )
     with (
         tempfile.TemporaryDirectory(prefix="ratchet-bite-", ignore_cleanup_errors=True) as scratch,
         ThreadPoolExecutor(max_workers=lanes, thread_name_prefix="bite-lane") as pool,
     ):
         paths = [Path(scratch) / f"copy-{n}" for n in range(lanes)]
+        first = make_copy(root, paths[0], registry=registry, shell=config.shell)
         try:
-            first = make_copy(root, paths[0], registry=registry, shell=shell)
             with gatelib.signals_held():
                 futures = [
-                    pool.submit(lane, n, path, None if n else first) for n, path in enumerate(paths)
+                    pool.submit(run_lane, config, path, None if n else first, number=n)
+                    for n, path in enumerate(paths)
                 ]
             while wait(futures, timeout=WAKE).not_done:
                 pass
             return [outcome for future in futures for outcome in future.result()]
         except BaseException:
-            shell.stop()
+            config.shell.stop()
             raise
+        finally:
+            if isinstance(first, Copy):
+                first.close()
 
 
 def load() -> str:
