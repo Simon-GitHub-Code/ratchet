@@ -20,6 +20,7 @@ import tempfile
 import threading
 import time
 import tomllib
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -91,6 +92,7 @@ CURE = (
 )
 SLOW = 2.0
 SLOW_FLOOR = 1.0
+SLOWEST_COUNT = 3
 WAKE = 0.1
 GLOB_SPECIAL = re.compile(r"[\\*?\[]")
 SHIPPED = re.compile(r"`ratchet` plugin `[^`]+`(?: and `[^`]+`)*")
@@ -613,6 +615,7 @@ class Bite:
     commit: bool = False
     proof: str = ""
     whole: str = field(default="", compare=False)
+    alone: bool = False
 
     @property
     def narrowed(self) -> bool:
@@ -707,16 +710,22 @@ def read_fault(table: dict[str, object]) -> Fault:
     )
 
 
+def flag_bool(table: dict[str, object], key: str) -> bool:
+    value = table.get(key, False)
+    if not isinstance(value, bool):
+        message = f"'{key}' is true or false"
+        raise ValueError(message)  # noqa: TRY004 # -- one kind for all that is wrong in a bite
+    return value
+
+
 def read_bite(table: dict[str, object]) -> Bite:
-    keys = {"gate", "name", "expect", "args", "commit", "proof", "whole", *KINDS}
+    keys = {"gate", "name", "expect", "args", "commit", "proof", "whole", "alone", *KINDS}
     unknown = sorted(set(table) - keys)
     if unknown:
         message = f"unknown key '{unknown[0]}'"
         raise ValueError(message)
-    commit = table.get("commit", False)
-    if not isinstance(commit, bool):
-        message = "'commit' is true or false"
-        raise ValueError(message)  # noqa: TRY004 # -- one kind for all that is wrong in a bite
+    commit = flag_bool(table, "commit")
+    alone = flag_bool(table, "alone")
     bite = Bite(
         gate=text(table, "gate"),
         name=text(table, "name"),
@@ -726,6 +735,7 @@ def read_bite(table: dict[str, object]) -> Bite:
         commit=commit,
         proof=text(table, "proof") if "proof" in table else "",
         whole=text(table, "whole") if "whole" in table else "",
+        alone=alone,
     )
     if bite.narrowed and bite.whole:
         message = "a bite narrows its gate with 'args' or says in 'whole' why it cannot, not both"
@@ -1630,6 +1640,10 @@ class LaneConfig:
     told: int
 
 
+def task_alone(task: Task) -> bool:
+    return any(bite.alone for bite in task[1])
+
+
 def run_lane(config: LaneConfig, path: Path, made: Copy | None, *, number: int) -> list[Outcome]:
     copy = made or make_copy(
         config.root, path, registry=config.registry, shell=config.shell, lane=number
@@ -1641,7 +1655,11 @@ def run_lane(config: LaneConfig, path: Path, made: Copy | None, *, number: int) 
             and (task := next_task(config.board, config.ready, config.shell)) is not None
         ):
             row, bites = config.tasks[task]
-            share = config.cap if row.gate in config.kept.alone else config.told
+            share = (
+                config.cap
+                if row.gate in config.kept.alone or task_alone((row, bites))
+                else config.told
+            )
             try:
                 proved = list(copy.prove(row, bites, jobs=share))
             finally:
@@ -1676,7 +1694,12 @@ def execute_lanes(plan: Proof, *, limit: float) -> list[Outcome]:
         root=plan.root,
         registry=plan.registry,
         tasks=limited,
-        board=schedule.Board(range(len(limited)), kept, lambda task: limited[task][0].gate),
+        board=schedule.Board(
+            range(len(limited)),
+            kept,
+            lambda task: limited[task][0].gate,
+            alone=lambda task: task_alone(limited[task]),
+        ),
         kept=kept,
         ready=threading.Condition(),
         shell=Shell(),
@@ -1721,6 +1744,22 @@ def load() -> str:
     return f"{average()[0]:.1f} on {os.cpu_count()} cores"
 
 
+def slowest_line(faults: Sequence[Outcome], *, top: int = SLOWEST_COUNT) -> str | None:
+    total = sum(outcome.seconds for outcome in faults)
+    if not faults or total <= 0:
+        return None
+    ranked = sorted(
+        faults,
+        key=lambda outcome: (-outcome.seconds, outcome.bite.gate, outcome.bite.name),
+    )[:top]
+    parts = [
+        f"{outcome.bite.gate}/{outcome.bite.name} {outcome.seconds:.1f}s"
+        f" ({round(100 * outcome.seconds / total)}%)"
+        for outcome in ranked
+    ]
+    return "bite: slowest: " + ", ".join(parts)
+
+
 def run_proof(plan: Proof) -> int:
     started = time.monotonic()
     load_before = load()
@@ -1734,12 +1773,14 @@ def run_proof(plan: Proof) -> int:
     except gatelib.Interrupted as stop:
         print(f"bite: red: {stop}")
         return 128 + stop.signum
+    faults = [outcome for outcome in outcomes if outcome.fault]
+    if (slowest := slowest_line(faults)) is not None:
+        print(slowest)
     ceiling = slow_ceiling(plan.root)
     if ceiling is not None:
         for outcome in outcomes:
             if outcome.fault and not outcome.bite.narrowed and outcome.seconds > ceiling:
                 print(f"bite: slow: {slow_line(outcome.bite, outcome.seconds, ceiling)}")
-    faults = [outcome for outcome in outcomes if outcome.fault]
     bit = sum(1 for outcome in faults if outcome.verdict is Verdict.BITES)
     unseen = [outcome for outcome in outcomes if outcome.verdict not in PASSING]
     gates = len({row.gate for row, _ in plan.tasks})
@@ -2126,7 +2167,71 @@ def fault_tasks(selected: Sequence[Task], only: Sequence[str]) -> list[Task]:
     return tasks
 
 
-def main(argv: list[str]) -> int:
+@dataclass(frozen=True)
+class Shard:
+    index: int
+    total: int
+
+
+def parse_shard(spec: str) -> Shard:
+    left, sep, right = spec.partition("/")
+    if not (sep and left.isascii() and left.isdigit() and right.isascii() and right.isdigit()):
+        message = f"invalid shard '{spec}': expected K/N with 1 <= K <= N"
+        raise argparse.ArgumentTypeError(message)
+    index, total = int(left), int(right)
+    if index < 1 or index > total:
+        message = f"invalid shard '{spec}': expected 1 <= K <= N"
+        raise argparse.ArgumentTypeError(message)
+    return Shard(index, total)
+
+
+def parse_shard_count(raw: str) -> int:
+    if not (raw.isascii() and raw.isdigit()) or int(raw) < 1:
+        message = f"invalid shard count '{raw}': expected >= 1"
+        raise argparse.ArgumentTypeError(message)
+    return int(raw)
+
+
+def shard_of_fault(gate: str, name: str, shards: int) -> int:
+    key = f"{gate}:{name}"
+    return int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], "big") % shards + 1
+
+
+def slice_tasks(tasks: Sequence[Task], shard: Shard) -> list[Task]:
+    return [
+        task
+        for task in tasks
+        if shard_of_fault(task[0].gate, task[1][0].name, shard.total) == shard.index
+    ]
+
+
+def task_id(task: Task) -> tuple[str, str]:
+    row, bites = task
+    return (row.gate, bites[0].name)
+
+
+def check_shards(tasks: Sequence[Task], shards: int) -> int:
+    expected = [task_id(task) for task in tasks]
+    counts = Counter(
+        task_id(task)
+        for index in range(1, shards + 1)
+        for task in slice_tasks(tasks, Shard(index, shards))
+    )
+    if counts != Counter(expected):
+        missing = sorted(f"{gate}/{name}" for gate, name in set(expected) - counts.keys())
+        duplicated = sorted(f"{gate}/{name}" for (gate, name), count in counts.items() if count > 1)
+        extra = sorted(f"{gate}/{name}" for gate, name in counts.keys() - set(expected))
+        problems = [
+            *(f"omitted fault: {name}" for name in missing),
+            *(f"duplicated fault: {name}" for name in duplicated),
+            *(f"unexpected fault: {name}" for name in extra),
+        ]
+        return gatelib.report("bite", problems)
+    print(f"bite: shard-check: green: {len(expected)} faults partitioned across {shards} slices")
+    return 0
+
+
+def parse_options(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="project_bite.py")
     parser.add_argument("--root", type=Path, default=Path())
     parser.add_argument("--changed", action="store_true", help="only the gates a change affects")
@@ -2138,9 +2243,51 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--gate", action="append", default=[], help="only this gate's bites")
     parser.add_argument("--jobs", type=int, default=min(MAX_LANES, gatelib.default_jobs()))
     parser.add_argument("--limit", type=float, help="seconds a run may take, for every gate")
+    parser.add_argument("--shard", type=parse_shard, help="run only slice K/N of the faults")
+    parser.add_argument(
+        "--shard-check",
+        type=parse_shard_count,
+        metavar="N",
+        help="verify slices 1..N partition every fault once",
+    )
     options = parser.parse_args(argv[1:])
     if options.changed and options.pull_request_gates:
         parser.error("--changed and --pull-request-gates are two ways to choose the gates")
+    if options.shard is not None and options.shard_check is not None:
+        parser.error("--shard and --shard-check cannot be used together")
+    return options
+
+
+def run_selected(
+    root: Path,
+    registry: Registry,
+    tasks: Sequence[Task],
+    *,
+    options: argparse.Namespace,
+    forced_by: Forced | None,
+) -> int:
+    if options.shard_check is not None:
+        return check_shards(tasks, options.shard_check)
+    if options.shard is not None:
+        tasks = slice_tasks(tasks, options.shard)
+        if not tasks:
+            print(
+                f"bite: green: slice {options.shard.index}/{options.shard.total}"
+                " has no faults to prove"
+            )
+            return 0
+    lanes = max(1, min(options.jobs, len(tasks)))
+    return (
+        run_proof(
+            Proof(root, registry, tasks, lanes=lanes, limit=options.limit, forced_by=forced_by)
+        )
+        if forced_by is not None
+        else proof(root, registry, tasks, lanes=lanes, limit=options.limit)
+    )
+
+
+def main(argv: list[str]) -> int:
+    options = parse_options(argv)
     if os.environ.get(BITING):
         return gatelib.report("bite", ["a bite cannot plant a fault for the gate that runs it"])
     root = options.root.resolve()
@@ -2169,14 +2316,7 @@ def main(argv: list[str]) -> int:
         return 0
     if not tasks:
         return gatelib.report("bite", ["no bite to run: a gate with nothing to run is red"])
-    lanes = max(1, min(options.jobs, len(tasks)))
-    return (
-        run_proof(
-            Proof(root, registry, tasks, lanes=lanes, limit=options.limit, forced_by=forced_by)
-        )
-        if forced_by is not None
-        else proof(root, registry, tasks, lanes=lanes, limit=options.limit)
-    )
+    return run_selected(root, registry, tasks, options=options, forced_by=forced_by)
 
 
 if __name__ == "__main__":
