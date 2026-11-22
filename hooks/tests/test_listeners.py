@@ -246,7 +246,7 @@ def test_a_process_that_hides_after_the_signal_stops_the_gate_taking(tmp_path: P
         waiting = socket.create_connection(("127.0.0.1", running.port))
         with taking(held, marker):
             assert running.tell("hide") == "done"
-            stopping = gatelib.ask(marker)
+            stopping = gatelib.ask(marker, 10)
         waiting.settimeout(0.2)
         with pytest.raises(TimeoutError):
             waiting.recv(1)
@@ -337,7 +337,7 @@ def test_a_listener_shut_down_is_said_to_be_so_while_the_service_still_holds_it(
         second = int(running.tell("second"))
         with taking(held, marker):
             assert running.tell("shut") == "done"
-            told = gatelib.ask(marker)
+            told = gatelib.ask(marker, 10)
     assert told.ports == {
         running.port: (
             "the service shut its listener down instead of closing it, which reset the "

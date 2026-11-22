@@ -37,6 +37,7 @@ BINDING = Path("docs/process/binding.md")
 READY_ENV = "RATCHET_READY"
 STOPPING_ENV = "RATCHET_STOPPING"
 SENDING_ENV = "RATCHET_SENDING"
+HOLD_WITHIN_ENV = "RATCHET_HOLD_WITHIN"
 ANSWER_POLL = 0.002
 PORT_RANGE = Path("/proc/sys/net/ipv4/ip_local_port_range")
 DYNAMIC_PORTS = 49152
@@ -698,9 +699,12 @@ def asking(path: Path) -> Path:
     return path.with_name(f"{path.name}.asked")
 
 
-def ask(path: Path) -> Stopping:
+def ask(path: Path, within: float) -> Stopping | None:
     asking(path).touch()
+    deadline = time.monotonic() + within
     while not (told := read_stopping(path)).answered:
+        if time.monotonic() >= deadline:
+            return None
         time.sleep(ANSWER_POLL)
     return told
 

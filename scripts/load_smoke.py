@@ -70,17 +70,39 @@ def announce(sending: Path, targets: list[Target]) -> None:
     pending.replace(sending)
 
 
-def announced(sending: Path) -> Target | None:
+def announced(sending: Path) -> list[Target]:
     try:
-        method, url, status, body = json.loads(sending.read_text(encoding="utf-8"))[0]
-        return Target(method, url, status, body and body.encode())
-    except (OSError, ValueError, LookupError, TypeError, AttributeError):
-        return None
+        return [
+            Target(method, url, status, body and body.encode())
+            for method, url, status, body in json.loads(sending.read_text(encoding="utf-8"))
+        ]
+    except (OSError, ValueError, TypeError, AttributeError):
+        return []
 
 
-def wait_for(path: Path) -> None:
+def wait_for(path: Path, within: float) -> bool:
+    deadline = time.monotonic() + within
     while not path.exists():
+        if time.monotonic() >= deadline:
+            return False
         time.sleep(HELD_POLL)
+    return True
+
+
+def released(sending: Path, targets: list[Target], within: float) -> str | None:
+    announce(sending, targets)
+    if wait_for(holding(sending), within):
+        return None
+    return (
+        f"the gate did not say within {within:g}s whether it holds a request across the stop signal"
+    )
+
+
+def seconds(text: str | None) -> float | None:
+    try:
+        return float(text) if text else None
+    except ValueError:
+        return None
 
 
 def is_held(sending: Path) -> bool:
@@ -237,6 +259,24 @@ def judge(
     return errors, notes
 
 
+def told_cut(
+    marker: Path | None, cuts: list[Cut], targets: list[Target], *, timeout: float
+) -> tuple[collections.Counter[str], list[str]]:
+    if marker is None or not marker.exists():
+        return collections.Counter(), []
+    told = gatelib.ask(marker, timeout)
+    if told is None:
+        unsaid = (
+            f"the gate did not say within {timeout:g}s which connections it took after the stop "
+            "signal"
+        )
+        return collections.Counter(), [unsaid]
+    cut, notes = judge(cuts, told, [goal.port() for goal in targets])
+    for note in notes:
+        print(note)
+    return cut, []
+
+
 def counted(
     errors: collections.Counter[str], timeout: float, *, held: bool
 ) -> collections.Counter[str]:
@@ -299,36 +339,34 @@ def main(argv: list[str]) -> int:
     stopping, sending = (
         os.environ.get(name) for name in (gatelib.STOPPING_ENV, gatelib.SENDING_ENV)
     )
-    if options.until_stopped and not (stopping and sending):
+    hold_within = seconds(os.environ.get(gatelib.HOLD_WITHIN_ENV))
+    if options.until_stopped and not (stopping and sending and hold_within is not None):
         parser.error(
-            f"--until-stopped needs {gatelib.STOPPING_ENV} and {gatelib.SENDING_ENV}, set by "
-            "with_service.py --graceful"
+            f"--until-stopped needs {gatelib.STOPPING_ENV}, {gatelib.SENDING_ENV} and "
+            f"{gatelib.HOLD_WITHIN_ENV} in seconds, set by with_service.py --graceful"
         )
     targets = targets_of(parser, options)
     if isinstance(targets, str):
         return gatelib.report("load-smoke", [targets])
     if options.until_stopped and sending:
-        announce(Path(sending), targets)
-        wait_for(holding(Path(sending)))
+        silent = released(Path(sending), targets, (hold_within or 0.0) + options.timeout)
+        if silent:
+            return gatelib.report("load-smoke", [silent])
     marker = Path(stopping) if options.until_stopped and stopping else None
     worked = hammer(
         targets, options.concurrency, options.seconds, timeout=options.timeout, stopping=marker
     )
     held = bool(options.until_stopped and sending and is_held(Path(sending)))
     latencies, errors = worked.latencies, counted(worked.errors, options.timeout, held=held)
-    if marker and marker.exists():
-        told = gatelib.ask(marker)
-        cut, notes = judge(worked.cuts, told, [goal.port() for goal in targets])
-        errors.update(cut)
-        for note in notes:
-            print(note)
+    cut, unsaid = told_cut(marker, worked.cuts, targets, timeout=options.timeout)
+    errors.update(cut)
     if latencies:
         p50, p95, p99, worst = (percentile(latencies, f) * 1000 for f in (0.5, 0.95, 0.99, 1.0))
         print(
             f"load-smoke: {len(latencies)} answered; latency ms p50 {p50:.0f} p95 {p95:.0f} "
             f"p99 {p99:.0f} max {worst:.0f} (printed, not judged)"
         )
-    problems = [f"{count} x {what}" for what, count in errors.most_common(LISTED)]
+    problems = [*unsaid, *(f"{count} x {what}" for what, count in errors.most_common(LISTED))]
     if len(errors) > LISTED:
         problems.append(f"and {len(errors) - LISTED} more kinds of error")
     if len(latencies) < options.min_requests and not held:

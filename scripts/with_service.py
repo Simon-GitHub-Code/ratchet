@@ -195,12 +195,15 @@ class Hold:
         return bool(waiting.poll(within * 1000))
 
 
-def hold_request(goal: load_smoke.Target, timeout: float) -> Hold | str:
-    if not goal.body:
+def hold_request(targets: list[load_smoke.Target], timeout: float) -> Hold | str:
+    goal = next((each for each in targets if each.body), None)
+    if goal is None:
+        named = ", ".join(each.label() for each in targets) or "none"
         return (
-            f"{goal.label()} sends no body, so a byte the gate held back would fall in the "
-            "request's head, which a server may close at a stop: bind a route with a body, "
-            "METHOD URL STATUS BODY, to have one of its requests held across the signal"
+            f"no route that takes a body was found among the routes the command named ({named}): "
+            "a byte the gate held back from a request without one would fall in the request's "
+            "head, which a server may close at a stop; bind a route with a body, METHOD URL "
+            "STATUS BODY, to have one of its requests held across the signal"
         )
     parts = urlsplit(goal.url)
     connect = gatelib.ToldTLS if parts.scheme == "https" else gatelib.Told
@@ -234,10 +237,14 @@ def early(hold: Hold) -> str:
 
 
 def until_signal(
-    process: subprocess.Popen[bytes], options: argparse.Namespace, *, hold: Hold, stop: Stop
+    process: subprocess.Popen[bytes],
+    options: argparse.Namespace,
+    *,
+    hold: Hold,
+    stop: Stop,
+    deadline: float,
 ) -> str | None:
     service = listeners.Service(process.pid, {process.pid})
-    deadline = time.monotonic() + options.timeout
     signal_at: float | None = None
     while not hold.ended(WATCH):
         if signal_at is not None:
@@ -258,11 +265,11 @@ def until_signal(
 def take_hold(
     process: subprocess.Popen[bytes], options: argparse.Namespace, stop: Stop
 ) -> Hold | str:
-    ready = load_smoke.Target("GET", options.ready, None, None)
-    hold = hold_request(load_smoke.announced(stop.sending) or ready, options.timeout)
+    deadline = time.monotonic() + options.timeout
+    hold = hold_request(load_smoke.announced(stop.sending), options.timeout)
     if isinstance(hold, str):
         return hold
-    waited = until_signal(process, options, hold=hold, stop=stop)
+    waited = until_signal(process, options, hold=hold, stop=stop, deadline=deadline)
     if waited is None:
         return hold
     hold.connection.close()
@@ -327,16 +334,16 @@ class Stop:
 def signal_midway(
     process: subprocess.Popen[bytes], options: argparse.Namespace, stop: Stop
 ) -> list[str]:
-    if not sends_within(stop.sending, options.timeout, stop.ended) and not stop.ended.is_set():
-        return [
-            (
-                f"the command did not start sending within {options.timeout:g}s: the signal "
-                f"waits until it creates ${gatelib.SENDING_ENV}, as load_smoke.py "
-                "--until-stopped does"
-            )
-        ]
     hold: Hold | str = ""
     try:
+        if not sends_within(stop.sending, options.timeout, stop.ended) and not stop.ended.is_set():
+            return [
+                (
+                    f"the command did not start sending within {options.timeout:g}s: the signal "
+                    f"waits until it creates ${gatelib.SENDING_ENV}, as load_smoke.py "
+                    "--until-stopped does"
+                )
+            ]
         hold = take_hold(process, options, stop)
     finally:
         stop.release(held=isinstance(hold, Hold))
@@ -404,6 +411,7 @@ def run_signalled(
     with tempfile.TemporaryDirectory() as scratch:
         stop = Stop(Path(scratch) / "stopping", Path(scratch) / "sending")
         env[gatelib.STOPPING_ENV], env[gatelib.SENDING_ENV] = str(stop.marker), str(stop.sending)
+        env[gatelib.HOLD_WITHIN_ENV] = str(options.timeout)
         found: list[str] = []
 
         def watch() -> None:
