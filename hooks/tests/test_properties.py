@@ -366,9 +366,8 @@ def _judge(tree: Path, cases: list[tuple[str, int]]) -> list[Judged]:
 @pytest.fixture(scope="module")
 def released(tmp_path_factory: pytest.TempPathFactory) -> Path:
     tags = _run("git", "-C", str(PLUGIN_ROOT), "tag", "--list", "v*", "--sort=-version:refname")
-    archive = _run(
-        "git", "-C", str(PLUGIN_ROOT), "archive", tags.split()[0].decode(), "hooks", "skills"
-    )
+    tag = tags.split()[0].decode()
+    archive = _run("git", "-C", str(PLUGIN_ROOT), "archive", tag, "hooks", "skills", "scripts")
     tree = tmp_path_factory.mktemp("released")
     _run("tar", "-x", "-C", str(tree), given=archive)
     return tree / "hooks"
