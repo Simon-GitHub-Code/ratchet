@@ -1,7 +1,7 @@
 export const meta = {
   name: 'pipeline',
   description: 'Build one feature from an agent-ready ticket with the Ratchet method: preflight -> spec -> ticket check (one amend of the spec when it finds a gap) -> implement -> adversarial critique -> fix loop (up to two rounds when the project is depended-on, one pass on a review blocker before that) -> independent review',
-  whenToUse: 'Run by the /ratchet:feature skill with args { ref, branch, base?, root?, preflight?, namedGates?, ticketFindings? } after its own preflight is green; not by hand. ticketFindings are the last run\'s, when its review found the build lost a promise of the ticket. With args.rejudge = { slug, specPath, conflicts?, checkRed?, dependencies?, namedGates?, assumptions?, settled? } it judges again a branch that was brought up to date behind another merge: Reconcile when the rebase conflicted or check went red, then Review. Never commits, pushes or opens a PR; the orchestrator does that after reading the result.',
+  whenToUse: 'Run by the /ratchet:feature skill with args { ref, branch, base?, root?, preflight?, namedGates?, ticketFindings? } after its own preflight is green; not by hand. ticketFindings are the last run\'s, when its review found the build lost a promise of the ticket. With args.rejudge = { slug, specPath, conflicts?, checkRed?, dependencies?, namedGates?, assumptions?, settled?, parent?, deployed?, flag? } it judges again a branch that was brought up to date behind another merge: Reconcile when the rebase conflicted or check went red, then Review. Never commits, pushes or opens a PR; the orchestrator does that after reading the result.',
   phases: [
     { title: 'Preflight', detail: 'scripts/feature_preflight.py on the ticket: open, `## Conjecture` stated, agent-ready label, clean tree; stops with verdict "blocked" naming what produces each missing piece' },
     { title: 'Spec', detail: 'ticket -> docs/features/<slug>/spec.md + failing tests; stops with verdict "blocked" if the ticket leaves open questions' },
@@ -43,6 +43,16 @@ let CRITIC = true
 let CRITIC_REASON = ''
 let NAMED_GATES = namedGatesOf(REJUDGE ? REJUDGE.namedGates : ARGS.namedGates)
 const CONFLICTS = REJUDGE ? (REJUDGE.conflicts || []).filter(Boolean).map(String) : []
+let PARENT = REJUDGE && typeof REJUDGE.parent === 'string' ? REJUDGE.parent.trim() : ''
+let DEPLOYED = !REJUDGE || REJUDGE.deployed !== false
+let FLAG = flagOf(REJUDGE && REJUDGE.flag, DEPLOYED)
+
+function flagOf(flag, deployed) {
+  const key = flag && typeof flag.key === 'string' ? flag.key : ''
+  if (flag && flag.form === 'hidden' && /^[^`\s]{1,80}$/.test(key)) return { form: 'hidden', key }
+  if (flag && flag.form === 'appears' && !deployed) return { form: 'appears', key: null }
+  return { form: 'unasked', key: null }
+}
 
 const AN_OPTION = [/^-/, 'starts with "-", so the command it goes into would read it as an option']
 const A_CONTROL = [/[\x00-\x1f\x7f]/, 'holds a control character']
@@ -76,6 +86,7 @@ function unfitArgument() {
     ['preflight', PREFLIGHT_SCRIPT, PATH_RULES, PATH_PRODUCE],
     ['base', BASE, REF_NAME_RULES, REF_NAME_PRODUCE],
     ['branch', BRANCH, BRANCH_RULES, BRANCH_PRODUCE],
+    ['parent', PARENT, PATH_RULES, PATH_PRODUCE],
     ...CONFLICTS.map(path => ['conflict', path, [A_CONTROL], 'a conflicted path with no control character']),
   ]
   for (const [slot, value, rules, produce] of slots) {
@@ -850,6 +861,18 @@ const PREFLIGHT_SCHEMA = {
     label: { type: 'string', description: 'the "label" field: the agent-ready label as this tracker spells it' },
     critic: { type: 'boolean', description: 'the "critic" field: whether the project is depended-on, so the critique and fix phases run' },
     critic_reason: { type: 'string', description: 'the "critic_reason" field, verbatim' },
+    parent: { type: ['string', 'null'], description: 'the "parent" field: the record the ticket inherits from, or null' },
+    deployed: { type: 'boolean', description: 'the "deployed" field: whether the binding\'s life events say the project is deployed' },
+    flag: {
+      type: 'object',
+      description: 'the "flag" field, verbatim: the form the ticket\'s `Flag:` line takes',
+      properties: {
+        form: { type: 'string', enum: ['hidden', 'appears', 'unasked'] },
+        key: { type: ['string', 'null'] },
+      },
+      required: ['form', 'key'],
+      additionalProperties: false,
+    },
     failures: {
       type: 'array',
       description: 'the "failures" field, verbatim; when the script could not run, one entry with check "script"',
@@ -865,23 +888,93 @@ const PREFLIGHT_SCHEMA = {
     },
     output: { type: 'string', description: 'the script\'s stdout and stderr, verbatim' },
   },
-  required: ['ok', 'number', 'title', 'slug', 'branch', 'label', 'failures', 'output'],
+  required: ['ok', 'number', 'title', 'slug', 'branch', 'label', 'parent', 'deployed', 'flag', 'failures', 'output'],
 }
 
-function ticketHint() {
-  if (/^#?\d+$/.test(REF)) {
-    const number = REF.replace('#', '')
+function codeSpan(value) {
+  const fence = '`'.repeat(Math.max(0, ...(value.match(/`+/g) || []).map(run => run.length)) + 1)
+  const pad = /^`|`$/.test(value) ? ' ' : ''
+  return `${fence}${pad}${value}${pad}${fence}`
+}
+
+function ticketHint(ref = REF) {
+  if (/^#?\d+$/.test(ref)) {
+    const number = ref.replace('#', '')
     return `issue ${number} on the tracker (\`gh issue view ${number} --json number,title,body,labels,comments\`).`
   }
-  if (!BASE) return `the file \`${REF}\` under ${ROOT_HINT}.`
-  return `the file \`${REF}\` as \`${BASE}\` holds it, not the copy in the working tree, which an
+  if (!BASE) return `the file ${codeSpan(ref)} under ${ROOT_HINT}.`
+  return `the file ${codeSpan(ref)} as \`${BASE}\` holds it, not the copy in the working tree, which an
   agent of this run may have changed. Read it, from ${ROOT_HINT}, with
 
-      git show --end-of-options ${shellWord(`${BASE}:${REF}`)} --
+      git show --end-of-options ${shellWord(`${BASE}:${ref}`)} --
 `
 }
 
-const PROMISE_READINGS = `List in \`ticketPromises\` every promise the ticket makes about what the product does or
+function parentInput() {
+  if (!PARENT) return ''
+  return `- The ticket's parent, which it inherits from: read only its \`## Conjecture\`,
+  \`## Operability\` and \`## Answers\`, beside the ticket's. It is ${ticketHint(PARENT)}
+`
+}
+
+function deployedNote() {
+  return `The project is ${DEPLOYED ? '' : 'not '}deployed. The preflight read the binding's
+\`- Life events:\` line, where a binding with none counts as deployed, so do not read it for this.
+`
+}
+
+function flagRule() {
+  const key = `\`${FLAG.key}\``
+  return {
+    unasked: {
+      spec: `   - Feature flag: the key in \`flags.toml\` that gates the new behaviour, declared there with
+     \`default = false\`, and what the system does with it off (the merge base's behaviour); or
+     "none" with the reason, when the change adds no behaviour a user could meet (a fix that
+     restores the specified behaviour, a refactoring, a change with nothing to turn off). The
+     merge judge does not read this line: a change that adds a route, a command or an exported
+     symbol to a contract artefact or public-surface snapshot, with no flag that is off declared
+     in \`flags.toml\` or named in the code it adds, waits for the owner (\`unflagged\`)`,
+      promise: '',
+      review: `   - Feature flag: new behaviour is reachable only through the flag spec.md names, read through
+     the seam binding.md's Feature flags section names, declared in \`flags.toml\` with
+     \`default = false\`, and tested with the flag off. Surface added to a contract
+     artefact or public-surface snapshot with no flag reaches the owner whatever spec.md says:
+     the merge judge reports it as \`unflagged\`, so say in the review which of the two it is,
+     behaviour that should be dark or surface with nothing to turn off`,
+    },
+    hidden: {
+      spec: `   - Feature flag: ${key}, the switch the \`Flag:\` line that applies names: the owner chose to
+     keep the behaviour hidden until they switch it on. Declare it in \`flags.toml\` with
+     \`default = false\`, a reason that cites that answer and a \`remove-by\` date, never
+     \`permanent\`; pick the date and list it under Assumptions. Say what the system does with
+     it off (the merge base's behaviour)`,
+      promise: `   The \`Flag:\` line that applies, the ticket's or else its parent's, is a promise too, with
+   the owner's answer: the behaviour stays hidden behind ${key} until they switch it on. A
+   spec.md whose feature flag line names no switch, or another one, reads it \`bent\`.
+`,
+      review: `   - Feature flag: new behaviour is reachable only through ${key}, the switch the \`Flag:\`
+     line that applies names with the owner's answer, read through the seam binding.md's Feature
+     flags section names, declared in \`flags.toml\` with \`default = false\` and a \`remove-by\`
+     date, and tested with it off. A spec.md that names no switch, or another one, against that
+     answer is a blocker`,
+    },
+    appears: {
+      spec: `   - Feature flag: "none", citing the \`Flag:\` line that applies: the owner chose to have the
+     behaviour appear as soon as it is finished, while the project is not deployed. Put nothing
+     behind a switch for it`,
+      promise: `   The \`Flag:\` line that applies, the ticket's or else its parent's, is a promise too, with
+   the owner's answer: the behaviour appears as soon as it is finished, with no switch to turn
+   it off. A spec.md whose feature flag line names a switch reads it \`bent\`.
+`,
+      review: `   - Feature flag: the \`Flag:\` line that applies is the owner's answer: the behaviour appears
+     as soon as it is finished, while the project is not deployed. spec.md's "none" cites it, and
+     a missing switch is no finding`,
+    },
+  }[FLAG.form]
+}
+
+function promiseReadings() {
+  return `List in \`ticketPromises\` every promise the ticket makes about what the product does or
    does not do: each checklist item and acceptance criterion, and each promise in its other
    sections ("it needs no account", "the list survives a restart"), in the ticket's words,
    one entry each, with the reading that fits:
@@ -898,10 +991,11 @@ const PROMISE_READINGS = `List in \`ticketPromises\` every promise the ticket ma
      the owner would see in the product because of it. Read each entry under the spec's
      Assumptions this way: one that decides part of a promise makes the promise \`assumed\`, and
      one that contradicts the ticket makes it \`bent\`.
-   What the ticket puts out of scope or leaves to a later ticket is no promise of this one, and an
+${flagRule().promise}   What the ticket puts out of scope or leaves to a later ticket is no promise of this one, and an
    answer under \`## Answers\` decides what it answers. A sentence about how the method treats the
    work (what a gate charges, which kind of code arrives first, what the route names next) is no
    promise either: it describes the work, not the product.`
+}
 
 const INPUT_READINGS = `List in \`acceptedInputs\` each thing the change makes the running product accept from its
    users or from other systems (a form field, a request body, a query parameter, an uploaded file,
@@ -924,12 +1018,13 @@ would be built to the letter. What you find goes back to the spec role, which am
 a promise still left out after that is built as the ticket says it, and a case still undecided
 with the safe answer.
 
-Read these two and nothing else (no code, no tests, no other record), and edit nothing:
+Read these ${PARENT ? 'three' : 'two'} and nothing else (no code, no tests, no other record), and edit nothing:
 - The ticket, with its comments and its \`## Answers\` section: what the owner asked for and
   agreed. It is ${ticketHint()}
-- The spec: \`${spec.specPath}\` under ${ROOT_HINT}.${enterRoot('      ').trimEnd()}
+${parentInput()}- The spec: \`${spec.specPath}\` under ${ROOT_HINT}.${enterRoot('      ').trimEnd()}
 
-1. ${PROMISE_READINGS}
+${deployedNote()}
+1. ${promiseReadings()}
 2. ${INPUT_READINGS}
 3. Read each line under \`## Neighbouring cases\` of spec.md as you read an input case. A line that
    holds the behaviour for fewer values than its test uses, with no assumption in spec.md giving
@@ -958,7 +1053,7 @@ Run, in a single Bash call, ${where}:
 ${enter}    ${PLUGIN_PY} ${script} ${shellWord(REF)} --root .${baseFlag}${branchFlag}
 
 It prints a JSON object on stdout ({ ok, ref, failures: [{ check, detail, produce }], number,
-title, slug, branch, base, label, critic, critic_reason }) and a verdict line on stderr. Return that JSON's fields in the
+title, slug, branch, base, label, critic, critic_reason, parent, deployed, flag }) and a verdict line on stderr. Return that JSON's fields in the
 structured result, verbatim, plus the full output. Do not fix, label, edit or commit anything,
 and do not re-run with different arguments. If it prints no JSON object, return ok: false with
 one failure { check: "script", detail: <what it printed, verbatim>, produce: <one of these two> }.
@@ -1000,10 +1095,11 @@ Inputs you may read:
   the alternatives and the criticism that killed each. Build that approach, not another.
   Read \`## Answers\` and the comments too: the owner's answers to an earlier run's
   questions live there, and each one is decided.
-- AGENTS.md, GLOSSARY.md, docs/process/binding.md, every ADR in docs/adr/ that the ticket
+${parentInput()}- AGENTS.md, GLOSSARY.md, docs/process/binding.md, every ADR in docs/adr/ that the ticket
   touches, and any design document AGENTS.md tells you to read first
 - The existing code and tests only as far as needed to place the feature and name test files
 
+${deployedNote()}
 Your tasks, in order:
 1. The slug is \`${SLUG}\`. Write \`docs/features/${SLUG}/spec.md\` containing:
    - Problem (one paragraph, from the ticket)
@@ -1033,13 +1129,7 @@ Your tasks, in order:
    - Telemetry: for each acceptance criterion, the signal that shows it working in production
      (the span, its attributes, the metric, the log field), named as binding.md's Telemetry
      section names them; a criterion with no entry point to observe says so
-   - Feature flag: the key in \`flags.toml\` that gates the new behaviour, declared there with
-     \`default = false\`, and what the system does with it off (the merge base's behaviour); or
-     "none" with the reason, when the change adds no behaviour a user could meet (a fix that
-     restores the specified behaviour, a refactoring, a change with nothing to turn off). The
-     merge judge does not read this line: a change that adds a route, a command or an exported
-     symbol to a contract artefact or public-surface snapshot, with no flag that is off declared
-     in \`flags.toml\` or named in the code it adds, waits for the owner (\`unflagged\`)
+${flagRule().spec}
    - Test plan: the list of test files you will create, mapped to acceptance criteria; it
      includes the telemetry tests under the directory binding.md names and, when there is a
      flag, a test of the behaviour with the flag off
@@ -1443,7 +1533,7 @@ ${commonRules('review')}${second}
 Inputs you may read, and nothing else:
 - The ticket, with its comments and its \`## Answers\` section: what the owner asked for and
   agreed. Read it; never edit it or comment on it. It is ${ticketHint()}
-- The spec: \`${spec.specPath}\`
+${parentInput()}- The spec: \`${spec.specPath}\`
 - The diff: the change is on branch \`${BRANCH}\`, uncommitted unless this is a second review.
   Enumerate it with these three (untracked files are new files: read them):
 
@@ -1459,7 +1549,8 @@ Inputs you may read, and nothing else:
 - Any generated contract artefacts that binding.md names
 ${outsideInputs(CRITIC)} are outside your inputs:
 judge the spec against the ticket, and the code against the spec and the standards.
-${roleAssumptionsNote()}${movedNote()}
+
+${deployedNote()}${roleAssumptionsNote()}${movedNote()}
 Load the \`mattpocock-skills:code-review\` skill and apply its two axes in-process, as both of
 its sub-agents (the pipeline fixes the agent count): the spec source is spec.md; the standards
 sources are AGENTS.md, the glossary, docs/adr/ and the binding, plus the skill's smell
@@ -1481,12 +1572,7 @@ B. Standards conformance:
      binding.md's Telemetry section names and emits the signal spec.md names, with a test that
      reads it from the in-memory exporter, and no span attribute or log field carries a secret
      or a personal identifier
-   - Feature flag: new behaviour is reachable only through the flag spec.md names, read through
-     the seam binding.md's Feature flags section names, declared in \`flags.toml\` with
-     \`default = false\`, and tested with the flag off. Surface added to a contract
-     artefact or public-surface snapshot with no flag reaches the owner whatever spec.md says:
-     the merge judge reports it as \`unflagged\`, so say in the review which of the two it is,
-     behaviour that should be dark or surface with nothing to turn off
+${flagRule().review}
    - Assumptions: each one spec.md lists is what the tests and the code actually do
    - Does this change make a decision with lasting consequences (new storage, new external
      dependency, new layer, a changed rule that versions over time)? If so set adrSuggested.
@@ -1499,7 +1585,7 @@ C. Guard paths: run \`guard-diff\` and list every guard path it prints in \`guar
    guard path by the Guard paths line of the severity list below. The check behind an
    \`additions:\` note reads shape, not meaning, so read each addition against the records.
 D. The ticket. Only the spec role and the ticket check read it before you, so a change that loses
-   what the owner asked for can pass every other axis. ${readings}${PROMISE_READINGS}
+   what the owner asked for can pass every other axis. ${readings}${promiseReadings()}
    Read them against spec.md as it now stands and the change: a promise is \`dropped\` when what
    carried it is gone from spec.md, or the tests and the code do not do it.
 E. Inputs. ${INPUT_READINGS} A case is null when the change does not decide it as spec.md states,
@@ -2111,6 +2197,9 @@ if (!preflight.ok) {
 SLUG = preflight.slug
 BRANCH = BRANCH || preflight.branch
 BASE = BASE || preflight.base || ''
+PARENT = typeof preflight.parent === 'string' ? preflight.parent.trim() : ''
+DEPLOYED = preflight.deployed !== false
+FLAG = flagOf(preflight.flag, DEPLOYED)
 const unfitPreflight = unfitArgument()
 if (unfitPreflight) return unfitPreflight
 CRITIC = preflight.critic !== false
@@ -2368,6 +2457,9 @@ return {
   checkOutput: lastCheckOutput,
   namedGates: NAMED_GATES,
   namedGatesRun: { implement: impl.namedGatesRun ?? [], review: review.namedGatesRun ?? [] },
+  parent: PARENT || null,
+  deployed: DEPLOYED,
+  flag: FLAG,
   branch: BRANCH,
   verdictRecord: verdictRecord({
     slug: SLUG,
