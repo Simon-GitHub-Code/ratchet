@@ -342,7 +342,7 @@ def test_a_smoke_whose_gate_never_says_whether_it_holds_a_request_is_red_at_the_
     args = ["--until-stopped", "--url", closed_port(), *SHORT, "--timeout", "0.3"]
     code, out = bounded(lambda: smoke(*args, capsys=capsys))
     assert out == (
-        "the gate did not say within 0.5s whether it holds a request across the stop signal\n"
+        "the gate did not say within 1.2s whether it holds a request across the stop signal\n"
         "load-smoke: red\n"
     )
     assert code == 1
@@ -357,10 +357,11 @@ def test_a_smoke_whose_gate_never_says_which_connections_it_took_is_red_at_the_b
         {urlsplit(url).port or 80: None}, listeners.ELSEWHERE, frozenset()
     )
     gatelib.write_stopping(marker, unanswered)
+    monkeypatch.setenv(gatelib.HOLD_WITHIN_ENV, "0.2")
     args = ["--until-stopped", "--url", url, "--min-requests", "0", "--seconds", "0.3"]
-    code, out = bounded(lambda: smoke(*args, "--timeout", "0.2", capsys=capsys))
+    code, out = bounded(lambda: smoke(*args, "--timeout", "0.3", capsys=capsys))
     assert out == (
-        "the gate did not say within 0.2s which connections it took after the stop signal\n"
+        "the gate did not say within 1.2s which connections it took after the stop signal\n"
         "load-smoke: red\n"
     )
     assert code == 1

@@ -17,6 +17,7 @@ import pytest
 
 import gatelib
 import listeners
+import load_smoke
 import with_service
 from tests import servers
 from tests.servers import (
@@ -1464,6 +1465,17 @@ def test_a_clean_service_however_slow_to_accept_is_signalled_only_once_it_has_ac
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     code, out = accepting_after(1, smoke(concurrency="1"), tmp_path=tmp_path, capsys=capsys)
+    assert ANSWERED_HELD.search(out), out
+    assert (code, out.endswith("with_service: green\n")) == (0, True)
+
+
+def test_a_service_slower_to_accept_than_the_smokes_timeout_is_still_judged_by_the_gate(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    load = smoke(concurrency="1", timeout="0.5")
+    slower = load_smoke.GATE_MARGIN + 1
+    code, out = accepting_after(slower, load, tmp_path=tmp_path, capsys=capfd)
+    assert "the gate did not say" not in out, out
     assert ANSWERED_HELD.search(out), out
     assert (code, out.endswith("with_service: green\n")) == (0, True)
 

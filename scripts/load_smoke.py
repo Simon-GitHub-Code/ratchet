@@ -22,6 +22,7 @@ FAILED = 400
 LISTED = 5
 HELD_POLL = 0.01
 HELD = "held"
+GATE_MARGIN = 1.0
 
 
 @dataclass(frozen=True)
@@ -260,14 +261,14 @@ def judge(
 
 
 def told_cut(
-    marker: Path | None, cuts: list[Cut], targets: list[Target], *, timeout: float
+    marker: Path | None, cuts: list[Cut], targets: list[Target], *, within: float
 ) -> tuple[collections.Counter[str], list[str]]:
     if marker is None or not marker.exists():
         return collections.Counter(), []
-    told = gatelib.ask(marker, timeout)
+    told = gatelib.ask(marker, within)
     if told is None:
         unsaid = (
-            f"the gate did not say within {timeout:g}s which connections it took after the stop "
+            f"the gate did not say within {within:g}s which connections it took after the stop "
             "signal"
         )
         return collections.Counter(), [unsaid]
@@ -348,8 +349,9 @@ def main(argv: list[str]) -> int:
     targets = targets_of(parser, options)
     if isinstance(targets, str):
         return gatelib.report("load-smoke", [targets])
+    gate_within = (hold_within or 0.0) + GATE_MARGIN
     if options.until_stopped and sending:
-        silent = released(Path(sending), targets, (hold_within or 0.0) + options.timeout)
+        silent = released(Path(sending), targets, gate_within)
         if silent:
             return gatelib.report("load-smoke", [silent])
     marker = Path(stopping) if options.until_stopped and stopping else None
@@ -358,7 +360,7 @@ def main(argv: list[str]) -> int:
     )
     held = bool(options.until_stopped and sending and is_held(Path(sending)))
     latencies, errors = worked.latencies, counted(worked.errors, options.timeout, held=held)
-    cut, unsaid = told_cut(marker, worked.cuts, targets, timeout=options.timeout)
+    cut, unsaid = told_cut(marker, worked.cuts, targets, within=gate_within)
     errors.update(cut)
     if latencies:
         p50, p95, p99, worst = (percentile(latencies, f) * 1000 for f in (0.5, 0.95, 0.99, 1.0))
