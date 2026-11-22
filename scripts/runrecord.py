@@ -24,9 +24,11 @@ NO_RUN = "none: RATCHET_RUN is not set"
 NO_TREE = "unknown: the tree's content could not be read"
 TIER = "tier"
 CACHE_MISSING = "cache-missing"
+CACHE_RESTORE = "cache-restore"
 FAULT = "fault"
 TIMING = gatelib.STATE / "timing.jsonl"
 SPEED = "## Speed"
+CACHE = "Cache"
 LOCAL_CACHES = "Local caches"
 LINE = 2**20
 FOLDER = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
@@ -155,6 +157,7 @@ class Facts:
     seconds: dict[str, float] = field(default_factory=dict)
     missing: list[object] | None = None
     faults: dict[tuple[object, object], tuple[float, bool]] = field(default_factory=dict)
+    restored: dict[tuple[str, ...], int] = field(default_factory=dict)
 
 
 HELD: contextvars.ContextVar[dict[Path, Facts] | None] = contextvars.ContextVar(
@@ -169,6 +172,18 @@ def read_once() -> Iterator[None]:
         yield
     finally:
         HELD.reset(token)
+
+
+def record_restore(record: dict[str, object], found: Facts) -> None:
+    size, raw_paths = record.get("bytes"), record.get("paths", [])
+    if (
+        isinstance(size, int)
+        and not isinstance(size, bool)
+        and size >= 0
+        and isinstance(raw_paths, list)
+        and all(isinstance(item, str) for item in raw_paths)
+    ):
+        found.restored[tuple(raw_paths)] = size
 
 
 def facts(path: Path) -> Facts:
@@ -188,6 +203,8 @@ def facts(path: Path) -> Facts:
             found.missing = []
         elif kind == CACHE_MISSING and found.missing is not None:
             found.missing.append(record.get("path"))
+        elif kind == CACHE_RESTORE:
+            record_restore(record, found)
     if held is not None:
         held[path] = found
     return found
@@ -196,6 +213,13 @@ def facts(path: Path) -> Facts:
 def cache_paths(binding: str) -> list[str]:
     line = markdown_text.bullets(markdown_text.section(binding, SPEED)).get(LOCAL_CACHES, "")
     if line.startswith("<"):
+        return []
+    return [span for span in markdown_text.ticked(line) if " " not in span]
+
+
+def ci_cache_paths(binding: str) -> list[str]:
+    line = markdown_text.bullets(markdown_text.section(binding, SPEED)).get(CACHE, "")
+    if line.startswith("<") or line.lower().startswith("none:"):
         return []
     return [span for span in markdown_text.ticked(line) if " " not in span]
 

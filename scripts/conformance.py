@@ -204,6 +204,10 @@ EXEMPT_STEPS = (
         "actions: write",
         "the deep workflow dispatches the merge workflow when it finishes",
     ),
+    (
+        "cache_restore.py",
+        "prints and records how many bytes the CI cache restored",
+    ),
 )
 DOOR_MEANINGS = {
     "change": "a path whose every change is final, such as a migration or infrastructure code",
@@ -283,6 +287,12 @@ FIRST_CELL = re.compile(r"^\|\s*([^|]+?)\s*\|", re.MULTILINE)
 WORKFLOWS = Path(".github/workflows")
 CACHE_USES = "uses: actions/cache"
 CACHE_KEY = re.compile(r"^(?P<head>\s*key:\s*)(?P<value>.*?)(?P<note>\s+#.*)?$")
+CACHE_ACTION = re.compile(r"^actions/cache(?:/(?:restore|save))?@\S+$")
+FLOW_MATRIX = re.compile(r"\bmatrix\s*:")
+GHA_EXPR = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
+MATRIX_EXPR = re.compile(r"\bmatrix\s*(?:\.[A-Za-z_][A-Za-z0-9_-]*|\[\s*['\"][^'\"]+['\"]\s*\])")
+YAML_JOB_KEY = re.compile(r"^([A-Za-z_][\w-]*):(?:\s|$)")
+MULTILINE_KEY = frozenset({"|", ">", "|-", ">-", "|+", ">+"})
 PER_RUN_PARTS = ("github.sha", "github.run_id")
 CI_SHAPE = (("concurrency:", "cancels superseded runs"), ("cache", "caches between runs"))
 ADR_STATUS = re.compile(r"^(proposed|accepted|deprecated|rejected|superseded( by ADR-\d{4})?)$")
@@ -1947,26 +1957,206 @@ def check_speed(root: Path) -> Iterable[Finding]:
     if not workflows.is_dir():
         return
     for path in sorted(workflows.glob("*.yml")):
-        content = path.read_text(encoding="utf-8")
-        for marker, meaning in CI_SHAPE:
-            builds = path.name != MERGE_WORKFLOW or marker != "cache"
-            if builds and marker not in content:
-                yield agent(f"{path.relative_to(root)}: nothing {meaning} ('{marker}' absent)")
-        yield from tier_step_findings(root, path, content)
-        for name, marker, meaning in CEILING_SHAPE:
-            if path.name == name and marker not in content:
-                problem = f"nothing {meaning} ('{marker}' absent)"
-                does = (
-                    "pass the template's budget flags to each budget call an older template wrote"
-                )
-                edit = Edit(does, budget_flags(name), Agent())
-                yield Finding(str(path.relative_to(root)), problem, edit)
-        yield from bare_cache_finding(root, path, content)
-        if path.name in TIER_WORKFLOWS and SHARD_MATRIX not in content:
-            yield agent(
-                f"{path.relative_to(root)}: no long gate runs over the binding's shard count "
-                f"('{SHARD_MATRIX}' absent)"
+        yield from workflow_speed_findings(root, path)
+    for path in sorted(workflows.glob("*.yaml")):
+        yield from matrix_cache_finding(root, path, path.read_text(encoding="utf-8"))
+
+
+def workflow_speed_findings(root: Path, path: Path) -> Iterable[Finding]:
+    content = path.read_text(encoding="utf-8")
+    for marker, meaning in CI_SHAPE:
+        builds = path.name != MERGE_WORKFLOW or marker != "cache"
+        if builds and marker not in content:
+            yield agent(f"{path.relative_to(root)}: nothing {meaning} ('{marker}' absent)")
+    yield from tier_step_findings(root, path, content)
+    for name, marker, meaning in CEILING_SHAPE:
+        if path.name == name and marker not in content:
+            problem = f"nothing {meaning} ('{marker}' absent)"
+            does = "pass the template's budget flags to each budget call an older template wrote"
+            yield Finding(
+                str(path.relative_to(root)), problem, Edit(does, budget_flags(name), Agent())
             )
+    yield from bare_cache_finding(root, path, content)
+    yield from matrix_cache_finding(root, path, content)
+    if path.name in TIER_WORKFLOWS and SHARD_MATRIX not in content:
+        yield agent(
+            f"{path.relative_to(root)}: no long gate runs over the binding's shard count "
+            f"('{SHARD_MATRIX}' absent)"
+        )
+
+
+def strip_yaml_comment(text: str) -> str:
+    quote = ""
+    for index, char in enumerate(text):
+        if quote:
+            if char == quote:
+                quote = ""
+        elif char in ("'", '"'):
+            quote = char
+        elif char == "#" and (index == 0 or text[index - 1].isspace()):
+            return text[:index].rstrip()
+    return text.rstrip()
+
+
+def unquote_yaml(raw: str) -> str:
+    stripped = strip_yaml_comment(raw).strip()
+    if len(stripped) > 1 and stripped[0] == stripped[-1] and stripped[0] in ("'", '"'):
+        return stripped[1:-1]
+    return stripped
+
+
+def has_matrix_expr(value: str) -> bool:
+    return any(MATRIX_EXPR.search(expr) for expr in GHA_EXPR.findall(value))
+
+
+def workflow_job_blocks(content: str) -> list[tuple[str, list[str]]]:
+    lines = content.splitlines()
+    jobs_at = next((i for i, line in enumerate(lines) if strip_yaml_comment(line) == "jobs:"), None)
+    if jobs_at is None:
+        return []
+    found: list[tuple[str, list[str]]] = []
+    job_indent: int | None = None
+    for line in lines[jobs_at + 1 :]:
+        stripped = line.lstrip(" ")
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(stripped)
+        if indent == 0:
+            break
+        if job_indent is None:
+            job_indent = indent
+        if indent == job_indent and (match := YAML_JOB_KEY.match(stripped)):
+            found.append((match.group(1), []))
+        elif found and indent > job_indent:
+            found[-1][1].append(line)
+    return found
+
+
+def mapping_section(lines: list[str], key: str) -> tuple[str, list[str]] | None:
+    if not lines:
+        return None
+    base_indent = min(len(line) - len(line.lstrip(" ")) for line in lines)
+    collecting, inline = False, ""
+    body: list[str] = []
+    for line in lines:
+        stripped = line.lstrip(" ")
+        indent = len(line) - len(stripped)
+        if indent == base_indent:
+            if collecting:
+                return inline, body
+            cleaned = strip_yaml_comment(stripped)
+            if cleaned == f"{key}:" or cleaned.startswith(f"{key}: "):
+                collecting = True
+                inline = cleaned.partition(":")[2].strip()
+        elif collecting and indent > base_indent:
+            body.append(line)
+    return (inline, body) if collecting else None
+
+
+def job_has_matrix(job_lines: list[str]) -> bool:
+    section = mapping_section(job_lines, "strategy")
+    if section is None:
+        return False
+    inline, body = section
+    if inline.startswith("{") and FLOW_MATRIX.search(inline):
+        return True
+    return mapping_section(body, "matrix") is not None
+
+
+def step_items(lines: list[str]) -> list[list[str]]:
+    if not lines:
+        return []
+    step_indent = len(lines[0]) - len(lines[0].lstrip(" "))
+    items: list[list[str]] = []
+    for line in lines:
+        stripped = line.lstrip(" ")
+        indent = len(line) - len(stripped)
+        if indent == step_indent and stripped.startswith("- "):
+            lead = len(stripped) - len(stripped[1:].lstrip(" "))
+            items.append([f"{' ' * (step_indent + lead)}{stripped[lead:]}"])
+        elif items and indent > step_indent:
+            items[-1].append(line)
+    return items
+
+
+def balanced_flow_item(text: str, start: int) -> str:
+    depth, quote = 0, ""
+    for index in range(start, len(text)):
+        char = text[index]
+        if quote:
+            if char == quote:
+                quote = ""
+        elif char in ("'", '"'):
+            quote = char
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            if depth == 0:
+                return text[start:index].strip()
+            depth -= 1
+        elif char == "," and depth == 0:
+            return text[start:index].strip()
+    return text[start:].strip()
+
+
+def flow_value(text: str, field: str) -> str | None:
+    match = re.search(rf"(?:^|[,{{\s]){re.escape(field)}\s*:\s*", text)
+    return None if match is None else balanced_flow_item(text, match.end())
+
+
+def flow_cache_key(text: str) -> tuple[bool, str | None]:
+    uses = flow_value(text, "uses")
+    if uses is None or not CACHE_ACTION.fullmatch(unquote_yaml(uses)):
+        return False, None
+    with_block = flow_value(text, "with")
+    key = flow_value(with_block, "key") if with_block else None
+    return True, (unquote_yaml(key) or None) if key else None
+
+
+def block_cache_key(step_lines: list[str]) -> tuple[bool, str | None]:
+    uses = mapping_section(step_lines, "uses")
+    if uses is None or not CACHE_ACTION.fullmatch(unquote_yaml(uses[0])):
+        return False, None
+    with_sec = mapping_section(step_lines, "with")
+    if with_sec is None:
+        return True, None
+    with_inline, with_body = with_sec
+    if with_inline.startswith("{"):
+        key = flow_value(with_inline, "key")
+        return True, (unquote_yaml(key) or None) if key else None
+    key_sec = mapping_section(with_body, "key")
+    if key_sec is None:
+        return True, None
+    key_inline, key_body = key_sec
+    if key_inline in MULTILINE_KEY:
+        joined = " ".join(strip_yaml_comment(line).strip() for line in key_body).strip()
+        return True, joined or None
+    return True, unquote_yaml(key_inline) or None
+
+
+def step_cache_key(step_lines: list[str]) -> tuple[bool, str | None]:
+    first = step_lines[0].lstrip(" ")
+    return flow_cache_key(first) if first.startswith("{") else block_cache_key(step_lines)
+
+
+def matrix_cache_finding(root: Path, path: Path, content: str) -> Iterable[Finding]:
+    rel = str(path.relative_to(root))
+    for job, job_lines in workflow_job_blocks(content):
+        if not job_has_matrix(job_lines):
+            continue
+        steps = mapping_section(job_lines, "steps")
+        for step_lines in step_items(steps[1] if steps else []):
+            is_cache, key = step_cache_key(step_lines)
+            if is_cache and (key is None or not has_matrix_expr(key)):
+                what = (
+                    f"cache key `{key}` names no matrix value"
+                    if key is not None
+                    else "its cache step has no `with.key` naming a matrix value"
+                )
+                yield agent(
+                    f"{rel}: job `{job}` defines a matrix, but {what} (include"
+                    " `${{ matrix.<key> }}` so matrix jobs do not share one cache key)"
+                )
 
 
 def bare_cache_finding(root: Path, path: Path, content: str) -> Iterable[Finding]:
@@ -2536,6 +2726,11 @@ def regroup_hunks() -> tuple[Hunk, ...]:
     timing_at = next(i for i in range(tier0_at, len(lines)) if "timing-tier0" in lines[i])
     shape_at = lines.index("  shape:")
     shape_runs_at = lines.index("    runs-on: ubuntu-latest", shape_at)
+    cache_uses = "      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6"
+    cache_step = (
+        '      - run: python3 "$RATCHET_PLUGIN/scripts/cache_restore.py"'
+        ' --report .ratchet/timing.jsonl --hit "${{ steps.cache.outputs.cache-hit }}" -- .cache'
+    )
     return (
         ("the shape job's steps", OLD_SHAPE_STEP, tuple(lines[at - 2 : end])),
         ("the `tier1:` line", ("  tier1:",), ("  tier1:", guard)),
@@ -2555,6 +2750,12 @@ def regroup_hunks() -> tuple[Hunk, ...]:
             "the `shape:` guard",
             ("  shape:",),
             tuple(lines[shape_at:shape_runs_at]),
+        ),
+        ("the `actions/cache` step ids", (cache_uses,), (cache_uses, "        id: cache")),
+        (
+            "the cache restore steps",
+            (TOOLCHAIN_PLACEHOLDER,),
+            (cache_step, TOOLCHAIN_PLACEHOLDER),
         ),
     )
 
@@ -3909,6 +4110,27 @@ def check_cache_written(root: Path) -> Iterable[Finding]:
         )
 
 
+def check_cache_restored(root: Path) -> Iterable[Finding]:
+    binding = read(root / BINDING_PATH) or ""
+    named = runrecord.ci_cache_paths(binding)
+    if not named:
+        return
+    restored = runrecord.facts(root / runrecord.TIMING).restored
+    for paths, size in restored.items():
+        if size == 0:
+            what = ", ".join(paths) if paths else ", ".join(named)
+            yield agent(
+                f"{BINDING_PATH}: the Cache line names {what}, and the last CI cache restore"
+                " restored 0 bytes",
+                then=(
+                    (
+                        "check the workflow's cache path and restore-keys, or take the path off"
+                        " the Cache line if CI does not cache it"
+                    ),
+                ),
+            )
+
+
 def full_proof_problem(root: Path, text: str) -> str:
     tier = budget.ceiling_of(text, "tier2")
     start = "`[ceilings.seconds]` has no `bite-all`, so the full proof after a merge "
@@ -4048,6 +4270,7 @@ CHECKS: tuple[Check, ...] = (
     check_quality,
     check_bite_all_ceiling,
     check_cache_written,
+    check_cache_restored,
     check_local_caches,
     check_gate_reads,
     check_bites,
@@ -4548,6 +4771,10 @@ def speed_mutations() -> list[Mutation]:
         (
             "CI workflow whose cache key has no per-run part",
             rewrite(ci, "-${{ github.sha }}", "", count=1),
+        ),
+        (
+            "CI workflow whose matrix job cache key names no matrix value",
+            rewrite(ci, "-${{ matrix.gate }}-", "-", count=1),
         ),
         ("CI workflow without a shard matrix", rewrite(ci, SHARD_MATRIX, "matrix.part")),
         ("CI that reads no job list for tier 1", rewrite(ci, JOB_LIST_SHAPE[0], "jobs.py")),
