@@ -116,6 +116,7 @@ class Row:
     command: str
     limit: float = GATE_LIMIT
     line: str = field(default="", compare=False)
+    verdict_check: bool = field(default=True, compare=False)
 
     @property
     def gate(self) -> str:
@@ -1238,7 +1239,12 @@ class Copy:
             if not bite.args and whole_before is None:
                 whole_before = before
             outcomes.append(self.prove_bite(row, bite, before=before, jobs=jobs))
-        if row.question == FORMAT_QUESTION and row.bound and not self.shell.stopped:
+        if (
+            row.question == FORMAT_QUESTION
+            and row.bound
+            and row.verdict_check
+            and not self.shell.stopped
+        ):
             before = whole_before or self.unfaulted(row, (), outcomes, greens=greens, jobs=jobs)
             outcomes.append(self.check_verdict_record(row, before, jobs=jobs))
         for args in dict.fromkeys(o.bite.args for o in outcomes if o.verdict is Verdict.BITES):
@@ -1709,9 +1715,10 @@ def proof(
     faults = [outcome for outcome in outcomes if outcome.fault]
     bit = sum(1 for outcome in faults if outcome.verdict is Verdict.BITES)
     unseen = [outcome for outcome in outcomes if outcome.verdict not in PASSING]
+    gates = len({row.gate for row, _ in tasks})
     print(
         f"bite: {'red' if unseen else 'green'}: {bit} of {len(faults)} "
-        f"faults bit, over {len(tasks)} gates in {time.monotonic() - started:.0f}s"
+        f"faults bit, over {gates} gates in {time.monotonic() - started:.0f}s"
     )
     if unseen:
         print(f"bite: load: {load_before} at the start, {load()} at the end")
@@ -1726,6 +1733,8 @@ class Touched(NamedTuple):
 class Cause(NamedTuple):
     gate: str | None
     why: str
+    bite: str | None = None
+    forced: bool = False
 
 
 Targets = dict[tuple[bool, str], set[tuple[str, str]]]
@@ -1780,11 +1789,12 @@ def registry_causes(root: Path, base: str) -> list[Cause]:
     old, new = registries(root, base)
     if old is None or new is None:
         return [Cause(None, f"{REGISTRY} was added, removed or does not parse")]
+    causes: list[Cause] = []
     if (old.setup, old.include) != (new.setup, new.include):
-        return [Cause(None, f"{REGISTRY} changed `setup` or `include`, which every copy holds")]
+        why = f"{REGISTRY} changed `setup` or `include`, which every copy holds"
+        causes.append(Cause(None, why))
     before = {(bite.gate, bite.name): bite for bite in old.bites}
     after = {(bite.gate, bite.name): bite for bite in new.bites}
-    causes = []
     for key in sorted(before.keys() | after.keys()):
         if before.get(key) != after.get(key):
             verb = "added" if key not in before else "removed" if key not in after else "changed"
@@ -1851,26 +1861,13 @@ def targeted_by(targets: Targets, path: str) -> set[tuple[str, str]]:
     }
 
 
-def binding_causes(root: Path, base: str) -> list[Cause]:
-    binding = str(gatelib.BINDING)
-    old = gatelib.show(root, base, binding) or ""
-    new = gatelib.read_text(root / binding) or ""
-    old_suites, old = suites.split(old)
-    new_suites, new = suites.split(new)
-    (old_rows, old_rest), (new_rows, new_rest) = split_gates(old), split_gates(new)
-    if (
-        plugin_pin.PIN_LINE.sub("", old_rest).strip()
-        != plugin_pin.PIN_LINE.sub("", new_rest).strip()
-    ):
-        return [Cause(None, f"{binding} changed outside its gate rows, which a gate may read")]
-    if old_rest.strip() != new_rest.strip():
-        return [Cause(None, "the plugin pin changed, and the plugin supplies gates")]
+def gate_row_causes(old_rows: Sequence[Row], new_rows: Sequence[Row], binding: str) -> list[Cause]:
     if any(len({row.question for row in rows}) != len(rows) for rows in (old_rows, new_rows)):
         why = f"{binding} has two gate rows for one question, so one could hide behind the other"
         return [Cause(None, why)]
     before = {row.question: row for row in old_rows}
     after = {row.question: row for row in new_rows}
-    causes = []
+    causes: list[Cause] = []
     for question in sorted(before.keys() | after.keys()):
         was, now = before.get(question), after.get(question)
         if was is not None and now is not None and was.line == now.line:
@@ -1878,9 +1875,31 @@ def binding_causes(root: Path, base: str) -> list[Cause]:
         verb = "added" if was is None else "removed" if now is None else "changed"
         rows = [row for row in (was, now) if row is not None]
         if not all(row.gate for row in rows):
-            why = f"the binding's row `{question}` {verb} and names no gate"
-            return [Cause(None, why)]
-        causes += [Cause(row.gate, f"the binding's row `{question}` {verb}") for row in rows]
+            causes.append(Cause(None, f"the binding's row `{question}` {verb} and names no gate"))
+        else:
+            causes += [Cause(row.gate, f"the binding's row `{question}` {verb}") for row in rows]
+    return causes
+
+
+def binding_causes(root: Path, base: str) -> list[Cause]:
+    binding = str(gatelib.BINDING)
+    old = gatelib.show(root, base, binding) or ""
+    new = gatelib.read_text(root / binding) or ""
+    old_suites, old = suites.split(old)
+    new_suites, new = suites.split(new)
+    (old_rows, old_rest), (new_rows, new_rest) = split_gates(old), split_gates(new)
+    causes: list[Cause] = []
+    if plugin_pin.PIN_LINE.findall(old_rest) != plugin_pin.PIN_LINE.findall(new_rest):
+        causes.append(
+            Cause(None, "the plugin pin changed, and the plugin supplies gates", forced=True)
+        )
+    if (
+        plugin_pin.PIN_LINE.sub("", old_rest).strip()
+        != plugin_pin.PIN_LINE.sub("", new_rest).strip()
+    ):
+        why = f"{binding} changed outside its gate rows, which a gate may read"
+        causes.append(Cause(None, why))
+    causes += gate_row_causes(old_rows, new_rows, binding)
     changed = sorted(
         name
         for name in old_suites.keys() | new_suites.keys()
@@ -1962,7 +1981,7 @@ def could_affect(root: Path, base: str | None, touched: Sequence[Touched] | None
         elif group != "fault":
             causes += unnamed_causes(root, path, group)
         causes += [
-            Cause(gate, f"{path} is changed by bite `{name}`")
+            Cause(gate, f"{path} is changed by bite `{name}`", bite=name)
             for gate, name in sorted(targeted_by(targets, path))
         ]
     return causes
@@ -1972,26 +1991,38 @@ def pull_request_gates(rows: Sequence[Row]) -> list[Row]:
     return [row for row in rows if row.tier in PULL_REQUEST_TIERS]
 
 
-def fallback(rows: Sequence[Row]) -> list[Row]:
-    return pull_request_gates(rows)
+def forced(causes: Sequence[Cause]) -> bool:
+    return any(cause.forced for cause in causes)
 
 
 def targeted(rows: Sequence[Row], causes: Sequence[Cause]) -> list[Row]:
-    if any(cause.gate is None for cause in causes):
-        return fallback(rows)
-    named = {cause.gate for cause in causes}
+    if forced(causes):
+        return pull_request_gates(rows)
+    named = {cause.gate for cause in causes if cause.gate is not None}
     return [row for row in pull_request_gates(rows) if row.gate in named]
 
 
+def chosen_bites(row: Row, bites: Sequence[Bite], causes: Sequence[Cause]) -> list[Bite]:
+    gate_bites = [bite for bite in bites if bite.gate == row.gate]
+    if forced(causes) or any(cause.bite is None for cause in causes if cause.gate == row.gate):
+        return gate_bites
+    names = {cause.bite for cause in causes if cause.gate == row.gate}
+    return [bite for bite in gate_bites if bite.name in names]
+
+
 def explain(rows: Sequence[Row], causes: Sequence[Cause]) -> list[str]:
-    if any(cause.gate is None for cause in causes):
-        whys = dict.fromkeys(cause.why for cause in causes if cause.gate is None)
+    if forced(causes):
+        whys = dict.fromkeys(cause.why for cause in causes if cause.forced)
         return [f"bite: fallback: {'; '.join(whys)}; proving every gate"]
-    return [
+    lines = [
         f"bite: {row.gate}: "
         + "; ".join(dict.fromkeys(cause.why for cause in causes if cause.gate == row.gate))
         for row in targeted(rows, causes)
     ]
+    unmapped = dict.fromkeys(cause.why for cause in causes if cause.gate is None)
+    if unmapped:
+        lines.append(f"bite: deferred: {'; '.join(unmapped)}; leaving the whole proof to bite-all")
+    return lines
 
 
 def deferred(rows: Sequence[Row], causes: Sequence[Cause], planted: dict[str, bool]) -> list[str]:
@@ -2012,7 +2043,9 @@ def deferred(rows: Sequence[Row], causes: Sequence[Cause], planted: dict[str, bo
     return lines
 
 
-def changed_gates(root: Path, rows: Sequence[Row], planted: dict[str, bool]) -> list[Row] | int:
+def changed_tasks(
+    root: Path, rows: Sequence[Row], *, bites: Sequence[Bite], planted: dict[str, bool]
+) -> list[Task] | int:
     base = gatelib.base_commit(root)
     if gatelib.adoption(root, base):
         print(
@@ -2030,13 +2063,30 @@ def changed_gates(root: Path, rows: Sequence[Row], planted: dict[str, bool]) -> 
     )
     causes = could_affect(root, base, touched)
     chosen = targeted(rows, causes)
-    later = deferred(rows, causes, planted)
+    lines = explain(rows, causes) + deferred(rows, causes, planted)
     if not chosen:
         nothing = "bite: green: the change affects no gate of tiers 0 and 1; nothing to prove"
-        print("\n".join([*later, nothing]))
+        print("\n".join([*lines, nothing]))
         return 0
-    print("\n".join([*explain(rows, causes), *later]))
-    return chosen
+    print("\n".join(lines))
+    return [(row, chosen_bites(row, bites, causes)) for row in chosen]
+
+
+def fault_tasks(selected: Sequence[Task], only: Sequence[str]) -> list[Task]:
+    tasks: list[Task] = []
+    for row, bites in selected:
+        if only and row.gate not in only:
+            continue
+        verdict_at = next((index for index, bite in enumerate(bites) if not bite.args), 0)
+        for index, bite in enumerate(bites):
+            check = index == verdict_at
+            task_row = (
+                row
+                if row.question != FORMAT_QUESTION or check
+                else replace(row, verdict_check=False)
+            )
+            tasks.append((task_row, [bite]))
+    return tasks
 
 
 def main(argv: list[str]) -> int:
@@ -2066,18 +2116,16 @@ def main(argv: list[str]) -> int:
         print(line)
     if red:
         return gatelib.report("bite", red)
-    chosen = pull_request_gates(rows) if options.pull_request_gates else rows
+    selected: list[Task] = [
+        (row, [bite for bite in registry.bites if bite.gate == row.gate])
+        for row in (pull_request_gates(rows) if options.pull_request_gates else rows)
+    ]
     if options.changed:
-        found = changed_gates(root, rows, planted)
+        found = changed_tasks(root, rows, bites=registry.bites, planted=planted)
         if isinstance(found, int):
             return found
-        chosen = found
-    tasks: list[Task] = [
-        (row, [bite for bite in registry.bites if bite.gate == row.gate])
-        for row in chosen
-        if not options.gate or row.gate in options.gate
-    ]
-    tasks = [task for task in tasks if task[1]]
+        selected = found
+    tasks = fault_tasks(selected, options.gate)
     if not tasks and options.changed:
         print("bite: green: the gates the change affects have no bite; nothing to prove")
         return 0
