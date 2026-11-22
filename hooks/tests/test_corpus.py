@@ -23,6 +23,7 @@ P = "guard-path-default"
 U = "unresolved-directory"
 D = "default-ref"
 M = "merge-default"
+S = "sync-default"
 A = "instructions-write"
 F = "workflow-write"
 
@@ -968,12 +969,11 @@ QUERIES_FROM_A_FILE = [
     "gh api graphql -Fquery=@q.graphql",
     "gh api graphql --field query=@q.graphql",
     "gh api graphql --field=query=@q.graphql",
+    "gh api /graphql --input q.json",
+    "gh api https://api.github.com/graphql -F query=@q.graphql",
+    "gh api graphql --input - <<'EOF'\n{}\nEOF",
 ]
-MERGED = [
-    ("gh pr merge 5", ["merge-pr"]),
-    *(row for row in ASKED if row[1] == ["merge-pr"]),
-    *((command, ["merge-pr"]) for command in QUERIES_FROM_A_FILE),
-]
+MERGED = [("gh pr merge 5", ["merge-pr"]), *(row for row in ASKED if row[1] == ["merge-pr"])]
 
 UNRESOLVED = U
 LOST = "sed -i s/a/b/ .github/workflows/ci.yml"
@@ -1220,6 +1220,8 @@ ALLOWED: list[str] = [
     "gh api graphql -f query='query { viewer { login } }'",
     "gh api graphql -F n=3 -f query='query { viewer { login } }'",
     "gh api graphql -f query=@literal -f q='{ viewer { login } }'",
+    "gh api graphql -f query='query { search(query: \"--input x\", type: ISSUE) { issueCount } }'",
+    "gh api graphql -f query='query { viewer { login } }' -f note='-F a=@b'",
     "gh api repos/o/r/issues/3/comments -F body=@notes.md",
     "gh api repos/o/r/pulls/3 --input body.json",
     "gh api repos/o/r/git/refs/heads/main",
@@ -1546,8 +1548,13 @@ def test_a_merge_where_nothing_is_adopted_still_asks_the_owner(
 
 
 @pytest.mark.parametrize("command", QUERIES_FROM_A_FILE)
-def test_a_forge_query_read_from_a_file_is_judged_as_the_merge_it_may_hold(command: str) -> None:
-    assert rules(command) == ["merge-pr"]
+def test_a_forge_query_read_from_a_file_is_a_line_the_guard_cannot_read_not_a_merge(
+    command: str,
+) -> None:
+    assert rules(command) == ["unread-query"]
+    assert rules(command, unadopted()) == ["unread-query"]
+    (verdict,) = verdicts(command)
+    assert "`gh api graphql -f query='…'`" in verdict.detail
 
 
 @pytest.mark.parametrize(("command", "expected"), MERGED)
@@ -1743,7 +1750,39 @@ ON_MAIN: list[tuple[str, list[str]]] = [
     ("git --git-dir=/r/.git pull origin main", [M]),
     ("GIT_DIR=/r/.git git pull origin main", [M]),
     ("export GIT_WORK_TREE=/r; git pull --ff-only origin main", [M]),
-    ("echo hi && git pull origin main", [M]),
+    ("echo hi && git pull origin main", []),
+    ("true || git pull origin main", []),
+    (": && git pull --ff-only origin main", []),
+    ("B=origin/feature/x; git pull origin main", []),
+    ("git fetch origin feature/x && git pull origin main", []),
+    ("git config branch.main.merge refs/heads/feature/x && git pull origin main", []),
+    ("git config branch.main.remote up && git pull origin main", []),
+    ("git branch -u origin/feature/x && git pull --rebase origin main", []),
+    ("git tag origin/main feature/x && git pull origin main", []),
+    ("git branch origin/main feature/x && git pull origin main", []),
+    ("git remote add up ../other && git fetch up && git pull origin main", []),
+    ("git switch --detach && git pull origin main", []),
+    ("git checkout feat/x -- . && git pull origin main", []),
+    ("git stash && git status && git pull origin main", []),
+    ("echo x > /dev/null && git pull origin main", []),
+    ("(true) && git pull origin main", []),
+    ("git config core.sshCommand ssh && git pull origin main", [S]),
+    ("git config set branch.main.merge x && git pull origin main", [S]),
+    ("git config --global branch.main.merge x && git pull origin main", [S]),
+    ("git config branch.main.mergeOptions -s && git pull origin main", [S]),
+    ("git remote update && git pull origin main", [S]),
+    ("git fetch --upload-pack=x origin && git pull origin main", [S]),
+    ("git -c core.pager=cat fetch && git pull origin main", [S]),
+    ("git --git-dir=/r/.git fetch && git pull origin main", [S]),
+    ("git replace -l && git pull origin main", [S]),
+    ("make && git pull origin main", [S]),
+    ("env true && git pull origin main", [S]),
+    ("X=1 true && git pull origin main", [S]),
+    ("echo $(make) && git pull origin main", [S]),
+    ("B=$(make); git pull origin main", [S]),
+    ("echo `make` && git pull origin main", [S]),
+    ("echo x > $F && git pull origin main", [S]),
+    ("(make) && git pull origin main", [S]),
     ("git fetch origin && git pull origin main", []),
     ("cd sub && git pull origin main", []),
     ("git -c color.ui=false pull", []),
@@ -1825,12 +1864,41 @@ def test_rules_on_main(command: str, expected: list[str]) -> None:
 
 @pytest.mark.parametrize(
     ("command", "expected"),
-    [(command, expected) for command, expected in ON_MAIN if expected in ([], [M])],
+    [(command, expected) for command, expected in ON_MAIN if expected in ([], [M], [S])],
 )
 def test_a_merge_on_main_where_nothing_is_adopted_asks_the_owner_and_a_sync_passes(
     command: str, expected: list[str]
 ) -> None:
-    asked = ["merge-default-unadopted"] if expected else []
+    asked = [f"{rule}-unadopted" for rule in expected]
+    assert rules(command, unadopted(FakeRepo(branch="main"))) == asked
+
+
+WRITES_INTO_GIT = [
+    ("printf x > .git/config.tmp && git pull origin main", []),
+    ("echo x > .git/config && git pull origin main", [S]),
+    ("echo x > .git/config.worktree && git pull origin main", [S]),
+    ("echo x > ~/.gitconfig && git pull origin main", [S]),
+    ("echo x > ~/.config/git/config && git pull origin main", [S]),
+    ("echo x > .git && git pull origin main", [S]),
+    ("echo x > sub/.git && cd sub && git pull origin main", [S]),
+    ("echo x > .git/refs/replace/abc && git pull origin main", [S]),
+    ("echo x > .git/packed-refs && git pull origin main", [S]),
+    ("echo x > .git/info/grafts && git pull origin main", [S]),
+    ("echo x >> .git/hooks/post-merge && git pull origin main", [S]),
+    ("git status > .git/config && git pull", [S]),
+    ("git status > .git/config && git merge --ff-only origin/main", [S]),
+    ("cd .git && echo x > config; cd /repo && git pull origin main", [S]),
+    ("cp ../g .git/config && git pull origin main", [S]),
+    ("(cp ../g .git/config) && git pull origin main", [S]),
+    ("echo $(cp ../g .git/config) && git pull origin main", [S]),
+]
+
+
+@pytest.mark.parametrize(("command", "expected"), WRITES_INTO_GIT)
+def test_a_named_pull_after_a_write_that_may_repoint_its_remote_is_a_sync_the_guard_cannot_read(
+    command: str, expected: list[str]
+) -> None:
+    asked = [f"{rule}-unadopted" for rule in expected]
     assert rules(command, unadopted(FakeRepo(branch="main"))) == asked
 
 

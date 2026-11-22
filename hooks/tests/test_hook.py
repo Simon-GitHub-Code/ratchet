@@ -247,12 +247,13 @@ def test_a_merge_refused_where_no_merge_job_is_committed_names_the_judge_and_the
         "permissionDecision": "deny",
         "permissionDecisionReason": (
             "Ratchet guard denied this tool call; no part of it ran. It merges a pull request, "
-            "which in a project on the method with no merge job only the owner does: gh pr "
-            "merge. The default branch holds no merge job, so nothing merges a pull request by "
-            "itself: the owner merges it, in the forge's interface or their own terminal. `just "
-            "merge-ready --head <branch>` prints each reason the merge judge gives, one a line: "
-            "report them to the owner. If the call also did unrelated work, redo that in a tool "
-            "call of its own."
+            "which in a project on the method only a merge job or the owner does: gh pr merge. "
+            "The guard found no `.github/workflows/merge.yml` on the default branch, so it names "
+            "no merge job: where the project has none, the owner merges a pull request, in the "
+            "forge's interface or their own terminal. With no forge, `just merge <branch>` merges "
+            "a branch when the merge judge and `check` pass it. `just merge-ready --head "
+            "<branch>` prints each reason the merge judge gives, one a line: report them to the "
+            "owner. If the call also did unrelated work, redo that in a tool call of its own."
         ),
     }
     on_main = make_guard(FakeRepo(branch="main", default_files=jobless))
@@ -1092,3 +1093,16 @@ def test_git_repo_state_reads_a_file_from_the_default_branch_not_the_work_tree(
     _git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "y")
     assert state.default_file(tmp_path, "t.md") == "held\n", "one tool call reads it once"
     assert hook.GitRepoState().default_file(tmp_path, "t.md") == "edited\n"
+
+
+def test_git_repo_state_remembers_each_checkout_on_its_own(tmp_path: Path) -> None:
+    for name in ("main", "master"):
+        (tmp_path / name).mkdir()
+        _git(tmp_path / name, "init", "-q", "-b", name)
+        (tmp_path / name / "t.md").write_text(f"{name}\n", encoding="utf-8")
+        _git(tmp_path / name, "add", "t.md")
+        _git(tmp_path / name, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x")
+    state = hook.GitRepoState()
+    assert state.default_file(tmp_path / "main", "t.md") == "main\n"
+    assert state.default_file(tmp_path / "master", "t.md") == "master\n"
+    assert state.default_branches(tmp_path / "master") == frozenset({"main", "master"})

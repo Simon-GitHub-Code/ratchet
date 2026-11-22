@@ -58,6 +58,11 @@ ON_MAIN = make_guard(FakeRepo(branch="main"))
 DEFAULT_REF_BECAUSE = (
     "moves, deletes or re-points the default branch, or a ref or setting it is read through"
 )
+SYNC_BECAUSE = (
+    "brings the default branch up to date with what its remote holds, on a line where a "
+    "setting, another repository or an earlier command may point the sync at another branch "
+    "instead"
+)
 
 
 def test_the_rule_catalogue_is_pinned() -> None:
@@ -133,17 +138,22 @@ def test_the_rule_catalogue_is_pinned() -> None:
         "merge-default-unadopted": ("ASK", "merges another branch into the default branch"),
         "merge-pr-no-job": (
             "DENY",
-            (
-                "merges a pull request, which in a project on the method with no merge job only "
-                "the owner does"
-            ),
+            "merges a pull request, which in a project on the method only a merge job or the owner "
+            "does",
         ),
         "merge-default-no-job": (
             "DENY",
             (
                 "merges another branch into the default branch, which in a project on the method "
-                "with no merge job only the merge entry point or the owner does"
+                "only the merge entry point, a merge job or the owner does"
             ),
+        ),
+        "sync-default": ("DENY", SYNC_BECAUSE),
+        "sync-default-unadopted": ("ASK", f"This {SYNC_BECAUSE}"),
+        "unread-query": (
+            "ASK",
+            "The guard cannot read a forge query whose body is in a file, so it cannot tell a "
+            "read from a merge",
         ),
         "branch-protection": ("DENY", "reads or changes branch protection or rulesets"),
         "repo-settings": ("DENY", "changes repository, secret, variable or workflow settings"),
@@ -189,6 +199,9 @@ def test_only_a_rule_with_a_way_out_of_its_own_points_somewhere_other_than_a_dis
         "merge-default-unadopted",
         "merge-pr-no-job",
         "merge-default-no-job",
+        "sync-default",
+        "sync-default-unadopted",
+        "unread-query",
         "unreadable",
         *allow,
         *rewriting,
@@ -218,12 +231,29 @@ def test_a_merge_deny_where_no_merge_job_is_committed_names_only_ways_out_that_e
     for words in (pull_request, default):
         assert "merge job merges" not in words
         assert "Leave it to" not in words
-        assert "holds no merge job" in words
+        assert "holds no merge job" not in words
+        assert "The guard found no `.github/workflows/merge.yml` on the default branch" in words
         assert "`just merge-ready --head <branch>`" in words
+        assert "`just merge <branch>`" in words
         assert "owner" in words
-    assert "`just merge <branch>`" not in pull_request
-    for named in ("`just merge <branch>`", "`git pull --ff-only`", "`git switch --detach`"):
+    for named in ("`git pull --ff-only`", "`git switch --detach`"):
         assert named in default
+
+
+def test_a_sync_the_guard_cannot_read_is_named_for_what_it_does_and_how_it_passes() -> None:
+    for rule in ("sync-default", "sync-default-unadopted"):
+        words = f"{RULES[rule].because} {RULES[rule].way_out}"
+        assert "merges another branch" not in words
+        assert "a tool call of its own" in words
+        assert "`color.*` or `advice.*`" in words
+    assert "`git pull --ff-only`" in RULES["sync-default"].way_out
+
+
+def test_a_forge_query_read_from_a_file_names_the_query_written_on_the_line() -> None:
+    rule = RULES["unread-query"]
+    assert rule.decision is Decision.ASK
+    assert "merge" not in rule.way_out
+    assert "on the command line" in rule.way_out
 
 
 def test_deny_outranks_ask_and_the_first_of_equals_wins() -> None:
