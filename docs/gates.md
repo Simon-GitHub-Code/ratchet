@@ -37,6 +37,7 @@ These gates need no stack, so the plugin ships them as code and proves them in i
 | `scripts/upgrade.py` | after the plugin updates | not a gate: what this plugin version needs that the repository lacks, each item marked `auto`, `agent` or `owner`; it reads the conformance gate's rules and plans on a copy of the repository. `--apply` writes the pin, the workflow refs, the permission rules and every other `auto` item in one run, writes down what the conformance gate can excuse in `quality/owed.toml` as owed, and lists the few findings that stay red |
 | `scripts/owed.py` | after an upgrade | not a gate: how many things the project owes since an upgrade, in one plain line for `/ratchet:next`. An owed finding is counted and not red; `lowered.py` is red when a change adds to the list without moving the pin, and the merge judge lets a change that only drops entries through (ADR 0037) |
 | `scripts/hooks_installed.py` | before a feature | would a commit here run tier 0? Red with the repair when not: the `hooks-install` entry point (`scripts/hooks_install.py`) where the repository's own hooks are missing, the owner's one command where git config must change; asked by the preflight, the route and `just ratchet`, not by CI |
+| `scripts/adr_renumber.py` | when an ADR collides | not a gate: renames a colliding ADR added on this branch and rewrites only the citations this branch added or edited |
 
 ## The gates a repository adds
 
