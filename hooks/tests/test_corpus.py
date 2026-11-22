@@ -1801,7 +1801,7 @@ ON_MAIN: list[tuple[str, list[str]]] = [
     ("git log $X && git pull origin main", [S]),
     ("git -c core.pager=x log && git pull origin main", [S]),
     ("git --git-dir=/r/.git commit -m x && git pull origin main", [S]),
-    ('git commit -m "$(make)" && git pull origin main', [S]),
+    ('git commit -m "$(make)" && git pull origin main', []),
     ("git remote set-url origin ../other && git pull origin main", [D, S]),
     ("git config remote.origin.url ../other && git pull origin main", [D, S]),
     ("sudo git remote set-url origin x && git pull origin main", [D, S]),
@@ -1831,18 +1831,32 @@ ON_MAIN: list[tuple[str, list[str]]] = [
     ("git commit -m \"$(cat <<'EOF'\nfix: x\n\nbody\nEOF\n)\" && git pull origin main", []),
     ("git commit -m \"$(printf 'x')\" && git pull origin main", []),
     ('git commit -m "fix $(date)" && git pull origin main', []),
-    ("git commit -m \"$(cat <<'EOF'\n$(git remote set-url origin y)\nEOF\n)\" && git pull origin main", []),
-    ("git commit -m \"$(cat <<EOF\nfix $X `date`\nEOF\n)\" && git pull origin main", []),
+    (
+        (
+            "git commit -m \"$(cat <<'EOF'\n$(git remote set-url origin y)\nEOF\n)\" && "
+            "git pull origin main"
+        ),
+        [],
+    ),
+    ('git commit -m "$(cat <<EOF\nfix $X `date`\nEOF\n)" && git pull origin main', []),
     ("git commit -F - <<'EOF' && git pull origin main\nfix: x\nEOF", []),
-    ("git commit -m \"$(cat <<EOF\n$(git remote set-url origin y)\nEOF\n)\" && git pull origin main", [D, S]),
+    (
+        (
+            'git commit -m "$(cat <<EOF\n$(git remote set-url origin y)\nEOF\n)" && '
+            "git pull origin main"
+        ),
+        [D, S],
+    ),
     ("bash <<'EOF' && git pull origin main\ngit remote set-url origin y\nEOF", [D, S]),
     ("bash <<'EOF' && git pull origin main\nmake\nEOF", [S]),
     ("x=$(git config remote.origin.url) && git pull origin main", [S]),
     ('git commit -m "$(git remote set-url origin y)" && git pull origin main', [D, S]),
     ("git commit -m \"$(bash -c 'git config core.sshCommand ssh')\" && git pull origin main", [S]),
-    ("git commit -m \"$(cd .git && make)\" && git pull origin main", [S]),
+    ('git commit -m "$(cd .git && make)" && git pull origin main', [S]),
     ('git log "$(printf x)" && git pull origin main', [S]),
     ("$(printf git) remote set-url origin y && git pull origin main", [S]),
+    ("echo ${ git config core.sshCommand ssh; } && git pull origin main", [S]),
+    ("echo ${ date; } && git pull origin main", []),
     ("$TOOL && git pull origin main", [S]),
     ("${TOOL} && git pull origin main", [S]),
     ("echo x > $F && git pull origin main", [S]),

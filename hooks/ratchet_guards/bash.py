@@ -86,6 +86,7 @@ _SWITCH_WORD = re.compile(r"(?<![\w-])(?:switch|checkout|symbolic-ref|bisect)(?!
 _XARGS = "xargs"
 _PATH_REFUSALS = frozenset({"guard-path-write", "guard-path-default", "guard-path-unseen-switch"})
 _NO_EFFECT = frozenset({"true", "false", ":", "echo", "printf"})
+_TEXT_READERS = frozenset({"cat", "git", "gh"})
 _NAMES_GIT = re.compile(r"(?<![\w-])(?:\.?git(?:config)?|gh)(?!\w)")
 _IN_SHELL = _REDEFINERS | _FORGETTERS | {"set", "command", "builtin"}
 _GIT_DIRECTORY = ".git"
@@ -392,7 +393,7 @@ def _hides_switch(words: Sequence[str], rest: Sequence[str], cwd: Path) -> bool:
 def _command_keeps_remote(words: Sequence[str], cwd: Path) -> bool:
     if words[0] in _DIRECTORY_MOVERS:
         return True
-    if any(PLACEHOLDER in word for word in words) or environment.declared(words):
+    if environment.declared(words):
         return False
     if words[0] == "git":
         return git.keeps_remote(words, cwd)
@@ -455,7 +456,7 @@ class _Checker:
 
     def script(self, text: str, context: Context, heredoc: str = "") -> list[Verdict]:
         key = (text, context, self.depth, heredoc)
-        judged, parsed = self.memo.judged, self.memo.parsed
+        judged = self.memo.judged
         if key in judged:
             return judged[key]
         if heredoc:
@@ -463,11 +464,15 @@ class _Checker:
         elif self.depth > MAX_DEPTH:
             verdicts = [Verdict("unreadable", "the command nests scripts too deeply")]
         else:
-            if text not in parsed:
-                parsed[text] = _read(text)
-            verdicts = self._judged(parsed[text], context)
+            verdicts = self._judged(self._parsed(text), context)
         judged[key] = verdicts
         return verdicts
+
+    def _parsed(self, text: str) -> _Read:
+        parsed = self.memo.parsed
+        if text not in parsed:
+            parsed[text] = _read(text)
+        return parsed[text]
 
     def _judged(self, read: _Read, context: Context) -> list[Verdict]:
         parsed, switching, nested = read
@@ -690,12 +695,23 @@ class _Checker:
 
     def _keeps_remote(self, command: SimpleCommand, words: Sequence[str], cwd: Path) -> bool:
         written = any(self._repoints(target, cwd) for target in command.writes)
-        if command.heredocs or command.herestrings or written:
-            return False
         lead, rest = _assignments(words)
-        if not rest:
-            return not any(PLACEHOLDER in word for word in lead)
-        return not lead and _command_keeps_remote(rest, cwd)
+        read = not command.heredocs or (bool(rest) and rest[0] in _TEXT_READERS)
+        if command.herestrings or written or not read:
+            return False
+        if not all(self._runs_keeping(script, cwd) for script in command.substitutions):
+            return False
+        return not rest or (not lead and _command_keeps_remote(rest, cwd))
+
+    def _runs_keeping(self, script: str, cwd: Path) -> bool:
+        for command in self._parsed(script)[0].commands:
+            words = list(dropwhile(RESERVED.__contains__, command.words))
+            rest = _assignments(words)[1]
+            if rest and rest[0] in _DIRECTORY_MOVERS:
+                return False
+            if not self._keeps_remote(command, words, cwd):
+                return False
+        return True
 
     def _repoints(self, target: str, cwd: Path) -> bool:
         expanded = self.guard.locator.filesystem.expand(target)

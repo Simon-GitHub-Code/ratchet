@@ -313,7 +313,7 @@ def keeps_remote(words: Sequence[str], cwd: Path) -> bool:
     if call.subcommand in _KEEPS_REMOTE:
         return True
     args = call.args
-    if any("$" in arg for arg in args):
+    if any(mark in arg for arg in args for mark in _UNKNOWN_MARKS):
         return False
     if call.subcommand in _PRINTS:
         return not _outputs(call)
