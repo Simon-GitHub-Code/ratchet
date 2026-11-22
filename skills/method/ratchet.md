@@ -104,10 +104,11 @@ date = 2026-11-06
 
 ## 6. Ceilings only fall
 
-`[ceilings.seconds]` in `quality/thresholds.toml` holds the wall-clock ceiling of each tier, and of any gate with its own runner.
+`quality/thresholds.toml` holds `[ceilings.loop]` (`seconds`, the owner's loop budget), `[ceilings.seconds]` (tier 2 seconds ceilings), and `[ceilings.work.<gate>]` (counts of work per unit).
 
-- The `budget` entry point wraps the run and goes red over the ceiling. That blocks everywhere but on a pull request, where the runner varies and CI asks it to report (`--over report`).
-- A ceiling is paid for by caching, splitting, sharding or running less, never by a quarantined test. Read [tiers.md](tiers.md#speed) for how.
+- The loop budget blocks locally at the end of `check` (and `check-fast` when it runs every gate) and on a pull request, and reports on the default branch. Seconds ceilings report before tier 2 and block in tier 2; work ceilings block everywhere.
+- Raising any ceiling is a loosening that needs an ADR with a `Relaxes:` line from the owner.
+- A ceiling is paid for by narrowing the gate to what the change reaches, moving it to tier 2 where a red deep run holds the next merge, caching, splitting, sharding or doing less work, never by quarantining a test. Read [tiers.md](tiers.md#speed) for how.
 
 ## Limits versus ratchets
 

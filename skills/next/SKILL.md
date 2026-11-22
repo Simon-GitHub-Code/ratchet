@@ -47,6 +47,11 @@ disable-model-invocation: true
      - **Ask** `event.depended-on`: "Do people other than you now rely on it?"
 
      **On yes:** the next command is `/ratchet:safeguard <event>`, which they type. **On not yet:** run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root . --decline <event>` in one Bash call.
+   - **It names `loop.wait`:** it is a product question. Ask it in plain words with the check times the line gives:
+     - **Ask** `loop.wait`: "When you ask for a check on a small change, how long will you wait for the answer?"
+
+     An agent writes the answer as `[ceilings.loop]` `seconds` in `quality/thresholds.toml` on a branch, which the merge judge leaves to the owner.
+   - **It names three runs in a row `not judged`:** relay it as it is, for the owner to act on (run `check` on a quieter machine or cap `RATCHET_JOBS` when `the machine` explains it; check the `loop` job's read access when `times unread`).
 
    Done when each `also:` line is relayed or asked, and the upgrade's, if there is one, has its sentence.
 
