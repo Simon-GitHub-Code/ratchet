@@ -12,7 +12,58 @@ env:
   RATCHET_PLUGIN: ${{ github.workspace }}/ratchet
   OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}
 jobs:
+  proven:
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with: { fetch-depth: 0 }
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with: { repository: Simon-GitHub-Code/ratchet, ref: "<ratchet-sha>", path: ratchet }
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          skip=false
+          tmp="$(mktemp -d)"
+          trap 'echo "skip=$skip" >> "$GITHUB_OUTPUT"; [ -n "${tmp:-}" ] && rm -rf "$tmp"' EXIT
+          [ -n "$tmp" ] || exit 0
+          head="$(git rev-parse --verify -q HEAD^2 2>/dev/null)" || exit 0
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${head}&event=pull_request&status=completed&per_page=100" > "$tmp/runs.json" || exit 0
+          python3 "$RATCHET_PLUGIN/scripts/already_proven.py" select \
+            --root . \
+            --repository "$GITHUB_REPOSITORY" \
+            --base-branch "$GITHUB_REF_NAME" \
+            --attempt "$GITHUB_RUN_ATTEMPT" \
+            --runs "$tmp/runs.json" \
+            --output "$tmp/select.out" || exit 0
+          run_id="$(sed -n 's/^run_id=//p' "$tmp/select.out" | head -n 1)"
+          [ -n "$run_id" ] || exit 0
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "$tmp/run.json" || exit 0
+          mkdir -p "$tmp/proven" "$tmp/timings" || exit 0
+          gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name proven --dir "$tmp/proven" || exit 0
+          gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --pattern "timing-*" --dir "$tmp/timings" || exit 0
+          python3 "$RATCHET_PLUGIN/scripts/already_proven.py" judge \
+            --root . \
+            --repository "$GITHUB_REPOSITORY" \
+            --attempt "$GITHUB_RUN_ATTEMPT" \
+            --run "$tmp/run.json" \
+            --proven "$tmp/proven/proven.json" \
+            --timings "$tmp/timings" \
+            --output "$tmp/judge.out" || exit 0
+          if grep -qx "skip=true" "$tmp/judge.out" 2>/dev/null; then
+            skip=true
+          fi
   tier0:
+    if: ${{ !cancelled() && (needs.proven.result == 'skipped' || needs.proven.outputs.skip != 'true') }}
+    needs: proven
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -33,7 +84,14 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with: { name: timing-tier0, path: .ratchet/timing.jsonl }
+      - if: github.event_name == 'pull_request'
+        run: python3 "$RATCHET_PLUGIN/scripts/already_proven.py" record --out .ratchet/proven.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: github.event_name == 'pull_request'
+        with: { name: proven, path: .ratchet/proven.json }
   shape:
+    if: ${{ !cancelled() && (needs.proven.result == 'skipped' || needs.proven.outputs.skip != 'true') }}
+    needs: proven
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:

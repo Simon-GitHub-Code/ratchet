@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import difflib
 import fcntl
 import json
 import os
@@ -76,6 +77,7 @@ class Plan:
     branch: str | None = None
     head: str = ""
     owes: bool = False
+    workflow_diffs: tuple[tuple[str, str], ...] = ()
 
     @property
     def edits(self) -> int:
@@ -227,6 +229,37 @@ def pinned_to(plugin: Path) -> Finding:
     )
 
 
+def workflow_diffs(sandbox: Path, plugin: Path) -> tuple[tuple[str, str], ...]:
+    templates = plugin / "skills/adopt/templates" / conformance.WORKFLOWS
+    commit = plugin_pin.commit_of(plugin) or conformance.PLUGIN_CHECKOUT_PLACEHOLDER
+    diffs: list[tuple[str, str]] = []
+    found = sorted(
+        (*templates.glob("*.yml"), *templates.glob("*.yaml")),
+        key=lambda path: path.name,
+    )
+    for template in found:
+        project = sandbox / conformance.WORKFLOWS / template.name
+        if not project.is_file():
+            continue
+        relative = f"{conformance.WORKFLOWS.as_posix()}/{template.name}"
+        template_text = template.read_text(encoding="utf-8").replace(
+            conformance.PLUGIN_CHECKOUT_PLACEHOLDER, commit
+        )
+        project_text = project.read_text(encoding="utf-8", errors="replace")
+        diff = list(
+            difflib.unified_diff(
+                template_text.splitlines(),
+                project_text.splitlines(),
+                fromfile=f"template/{relative}",
+                tofile=relative,
+                lineterm="",
+            )
+        )
+        if diff:
+            diffs.append((relative, "\n".join(diff)))
+    return tuple(diffs)
+
+
 def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
     reason = refusal(root, plugin)
     if reason is not None:
@@ -267,6 +300,7 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
             editor(sandbox, f.path) != NOT_GUARDED for f in converged.left if id(f) not in reds
         )
         owes = bool(owed.read(sandbox).entries)
+        diffs = workflow_diffs(sandbox, plugin)
     return Plan(
         old=standing(root, plugin),
         new=plugin_pin.in_use(plugin),
@@ -291,6 +325,7 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
         branch=gatelib.git(root, "symbolic-ref", "--short", "-q", "HEAD"),
         head=str(gatelib.git(root, "rev-parse", "--verify", "-q", "HEAD"))[:12],
         owes=owes,
+        workflow_diffs=diffs,
     )
 
 
@@ -497,6 +532,19 @@ def moved_lines(change: Change) -> list[str]:
     return [line for line in conformance.moved_items(text) if line not in kept]
 
 
+def workflow_diffs_block(diffs: tuple[tuple[str, str], ...]) -> str:
+    lines = [
+        (
+            "Workflow differences against the current templates "
+            "(review for fixed cache keys or steps):"
+        )
+    ]
+    for path, diff in diffs:
+        lines.append(f"  {path}")
+        lines += [f"    {line}" for line in diff.splitlines()]
+    return "\n".join(lines)
+
+
 def render(root: Path, result: Plan, *, applied: bool) -> str:
     blocks = [f"upgrade: {root} from {result.old} to {result.new}."]
     if result.changes:
@@ -521,6 +569,8 @@ def render(root: Path, result: Plan, *, applied: bool) -> str:
     if owing:
         title = f"Owed, none of them red, for an agent to work through ({owed.LEDGER}):"
         blocks.append(items_block(root, title, owing))
+    if result.workflow_diffs:
+        blocks.append(workflow_diffs_block(result.workflow_diffs))
     blocks += [summary(root, result, applied=applied), plain(result, applied=applied)]
     return "\n\n".join(blocks) + "\n"
 

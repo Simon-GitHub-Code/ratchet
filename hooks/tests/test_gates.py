@@ -42,6 +42,41 @@ def test_a_marker_inside_a_longer_word_is_not_counted(tmp_path: Path) -> None:
     assert markers.counts(root, None) == {"TODO": 0, "FIXME": 0, "HACK": 0, "XXX": 0}
 
 
+def test_markers_staged_judges_only_index_and_handles_deletes_and_chunks(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = repository(tmp_path, {"a.py": "x = 1  # TODO one\n"})
+    write(root, "b.py", "y = 2  # TODO two\n")
+    git(root, "add", "b.py")
+    write(root, "c.py", "z = 3  # TODO unstaged\n")
+    assert run(markers, root, "--staged") == 0
+    assert "no base commit yet; 2 marker(s) accepted as is" in capsys.readouterr().out
+    (root / "c.py").unlink()
+    commit(root, "feat(core): second")
+    branch(root)
+    assert markers.grep_count_paths(root, "TODO", []) == 0
+    assert run(markers, root, "--staged") == 0
+    assert "markers: green against" in capsys.readouterr().out
+    write(root, "a.py", "x = 1  # TODO one\n# FIXME unstaged\n")
+    write(root, "u.py", "# HACK untracked\n")
+    assert run(markers, root, "--staged") == 0
+    capsys.readouterr()
+    git(root, "add", "a.py")
+    assert run(markers, root, "--staged") == 1
+    assert "FIXME: rose from 0 to 1" in capsys.readouterr().out
+    git(root, "rm", "-q", "b.py")
+    write(root, "a.py", "x = 1  # TODO one\n# TODO two\n")
+    git(root, "add", "a.py")
+    assert run(markers, root, "--staged") == 0
+    capsys.readouterr()
+    (root / "u.py").unlink()
+    for i in range(205):
+        write(root, f"m{i:03d}.py", "# HACK chunk\n" if i == 204 else "x = 1\n")
+    git(root, "add", "-A")
+    assert run(markers, root, "--staged") == 1
+    assert "HACK: rose from 0 to 1" in capsys.readouterr().out
+
+
 PINNED = "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5"
 IMAGE_PINS = (
     "# Binding\n\n## Image pins\n\nWhy.\n\n| Files | Reference |\n| --- | --- |\n"

@@ -225,7 +225,7 @@ def test_a_session_whose_work_tree_was_removed_is_stale(
     shutil.rmtree(linked)
     code, out = down(product, capsys)
     assert code == 1
-    assert out[0] == f"session {directory.name} is stale: {acceptance.acceptance_record.STALE}"
+    assert f"session {directory.name} is stale: {acceptance.acceptance_record.STALE}" in out
 
 
 def test_a_session_that_cannot_say_what_it_served_is_stale(tmp_path: Path) -> None:
@@ -252,6 +252,33 @@ def test_a_session_whose_directory_was_removed_stops_all_it_started(
         with contextlib.suppress(ProcessLookupError):
             os.kill(supervisor, signal.SIGTERM)
     assert not gatelib.listening(url)
+
+
+def test_a_session_whose_work_tree_was_removed_stops_all_it_started(
+    product: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    linked = product.parent / "linked"
+    products.repos.git(product, "worktree", "add", "-q", "--detach", str(linked))
+    _, (url, _) = run(
+        linked, "up", "--slug", SLUG, "--ticket", str(linked / "ticket.md"), capsys=capsys
+    )
+    directory = session(linked)
+    proxy = json.loads((directory / "proxy.json").read_text(encoding="utf-8"))
+    supervisor = pid_of(directory / "live.lock")
+    started = [int(line.split()[0]) for line in products.processes_naming(str(product))]
+    assert supervisor in started
+    assert int(proxy["pid"]) in started
+    shutil.rmtree(linked)
+    try:
+        assert acceptance.wait_unlocked(directory, 5), "live.lock stayed held"
+        for pid in [supervisor, int(proxy["pid"]), *started]:
+            assert gone(pid, wait=5), "a session whose work tree was removed ran on"
+    finally:
+        if acceptance.acceptance_proxy.locked(directory):
+            acceptance.end(directory)
+    assert not gatelib.listening(url)
+    assert not gatelib.listening(str(proxy["upstream"]))
+    assert acceptance.state(directory) is acceptance.State.ENDED
 
 
 def test_a_work_tree_that_changed_while_the_session_ran_makes_it_stale(

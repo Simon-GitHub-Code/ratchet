@@ -619,7 +619,7 @@ def test_a_released_jobs_line_is_named_and_the_upgrade_makes_it_the_templates(re
     made = found.fix.want(path.read_text(encoding="utf-8"))
     assert "configured_jobs :=" in made
     assert RELEASED_JOBS not in made
-    assert made.count("jobs := env_var_or_default") == 1
+    assert made.count("\njobs := env_var_or_default") == 1
     assert made.count("How many gates run at once") == template.count("How many gates run at once")
 
 

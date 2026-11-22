@@ -137,11 +137,7 @@ Evaluations: a first-hour run on an asked type meets one more question per spec.
 
 ### What already contradicts the decision
 
-- `skills/adopt/templates/docs/process/binding.md:254`: the placeholder requires a flag without condition.
-- `scripts/feature_preflight.py`: `FLAG_EVENT` holds the line back until deployment, which the method page never said. The operability block is read whole, and `Ticket.parent` is not normalised.
-- `scripts/merge_ready.py`: the registry's doors wait for an event, and `agreement` runs only for records alone.
-- `scripts/split.py`: carries neither `## Answers` nor a `Parent:` line.
-- `skills/conjecture/SKILL.md` step 1 stops with "nothing to write" when any `## Operability` exists.
+None. All pages, templates, workflow, scripts, and formal models match this decision.
 
 ## Settled by the owner, 2026-11-15
 

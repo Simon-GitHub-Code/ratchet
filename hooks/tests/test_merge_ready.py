@@ -592,6 +592,10 @@ def test_a_contract_that_is_not_text_cannot_be_called_an_addition(root: Path) ->
             ["flag 'dark' becomes permanent"],
         ),
         (
+            FLAGS.replace("remove-by = 2999-01-01", "remove-by = 2999-06-01", 1),
+            ["flag 'dark' moves its removal date later (2999-01-01 to 2999-06-01)"],
+        ),
+        (
             FLAGS.partition("\n\n")[2],
             [
                 (
@@ -613,6 +617,20 @@ def test_a_flag_that_ships_on_or_stays_for_good_is_a_one_way_door(
 ) -> None:
     change(root, {"flags.toml": after})
     assert judged(root) == [f"door: flags.toml: {text}" for text in found]
+
+
+@pytest.mark.parametrize(
+    ("before_due", "after_due"),
+    [("2999-06-01", "2999-01-01"), ("2999-01-01T00:00:00Z", "2999-06-01")],
+)
+def test_moving_a_removal_date_earlier_or_from_a_timestamp_is_no_door(
+    tmp_path: Path, before_due: str, after_due: str
+) -> None:
+    was = FLAGS.replace("remove-by = 2999-01-01", f"remove-by = {before_due}", 1)
+    repository(tmp_path, BASE | {"flags.toml": was})
+    branch(tmp_path, "feature/4-thing")
+    change(tmp_path, {"flags.toml": was.replace(before_due, after_due, 1)})
+    assert judged(tmp_path) == []
 
 
 def test_removing_a_flag_that_is_already_on_changes_nothing_for_anyone(root: Path) -> None:
@@ -704,11 +722,16 @@ def young(tmp_path: Path, binding: str | None) -> Path:
     return tmp_path
 
 
-@pytest.mark.parametrize("binding", [None, EVENTS.format(events="none")])
-def test_new_surface_and_doors_wait_until_an_event_is_declared(
-    tmp_path: Path, binding: str | None
-) -> None:
-    repo = young(tmp_path, binding)
+APPEARS_LINE = (
+    "- Flag: none: the owner chose to have it appear as soon as it is finished, while the project"
+    " is not deployed\n"
+)
+THING_TICKET = ".scratch/thing/issues/01-thing.md"
+APPEARS_TICKET = f"# 01: Thing\n\nStatus: ready-for-agent\n\n## Operability\n\n{APPEARS_LINE}"
+
+
+def test_new_surface_and_doors_wait_until_an_event_is_declared(tmp_path: Path) -> None:
+    repo = young(tmp_path / "unadopted", None)
     notes: list[str] = []
     change(repo, SURFACE_CHANGE | DOOR_CHANGE | {"flags.toml": FLAGS + NEW_FLAG_ON})
     reasons = merge_ready.judge(repo, "main", "HEAD", notes=notes)
@@ -719,6 +742,21 @@ def test_new_surface_and_doors_wait_until_an_event_is_declared(
     ]
     assert "deployed, irreplaceable-data" in notes[0]
     assert "(ADR 0028)" in notes[1]
+
+    library = young(
+        tmp_path / "library", EVENTS.format(events="none").replace("service", "library")
+    )
+    lib_notes: list[str] = []
+    change(library, SURFACE_CHANGE | DOOR_CHANGE | {"flags.toml": FLAGS + NEW_FLAG_ON})
+    assert merge_ready.judge(library, "main", "HEAD", notes=lib_notes) == []
+    assert [note.split(" let through")[0] for note in lib_notes] == ["a one-way door"]
+
+    service = young(tmp_path / "service", EVENTS.format(events="none"))
+    svc_notes: list[str] = []
+    change(service, SURFACE_CHANGE | DOOR_CHANGE | {"flags.toml": FLAGS + NEW_FLAG_ON})
+    svc_reasons = merge_ready.judge(service, "main", "HEAD", notes=svc_notes)
+    assert [r.code for r in svc_reasons] == ["door", "unflagged"]
+    assert [note.split(" let through")[0] for note in svc_notes] == ["a one-way door"]
 
 
 @pytest.mark.parametrize(
@@ -733,7 +771,13 @@ def test_new_surface_and_doors_wait_until_an_event_is_declared(
 def test_each_event_wakes_only_the_judgement_it_guards(
     tmp_path: Path, events: str, woken: set[str]
 ) -> None:
-    repo = young(tmp_path, EVENTS.format(events=events))
+    files = {path: text for path, text in BASE.items() if path != BINDING} | {
+        BINDING: EVENTS.format(events=events),
+        THING_TICKET: APPEARS_TICKET,
+    }
+    repo = tmp_path / "first"
+    repository(repo, files)
+    branch(repo, "feature/4-thing")
     change(repo, SURFACE_CHANGE)
     assert ("unflagged" in codes(repo)) is ("unflagged" in woken)
     repo = young(tmp_path / "second", EVENTS.format(events=events))
@@ -742,7 +786,13 @@ def test_each_event_wakes_only_the_judgement_it_guards(
 
 
 def test_a_head_that_declares_the_event_does_not_wake_the_judge(tmp_path: Path) -> None:
-    repo = young(tmp_path, EVENTS.format(events="none"))
+    files = {path: text for path, text in BASE.items() if path != BINDING} | {
+        BINDING: EVENTS.format(events="none"),
+        THING_TICKET: APPEARS_TICKET,
+    }
+    repo = tmp_path
+    repository(repo, files)
+    branch(repo, "feature/4-thing")
     change(repo, SURFACE_CHANGE | DOOR_CHANGE | {BINDING: EVENTS.format(events="deployed")})
     assert codes(repo) == ["guard"]
 
@@ -1245,7 +1295,7 @@ def test_records_alone_are_asked_no_verdict_record(
 @pytest.mark.parametrize(
     ("files", "reasons"),
     [
-        ({SPEC: "# Thing\n", "src/a.py": "x = 2\n"}, [PLAIN_RECORD]),
+        ({SPEC: "# Thing\n", "src/a.py": "x = 2\n"}, [f"record: {SPEC} {INHERITED}", PLAIN_RECORD]),
         (
             {CHANGES: "## Summary\n", "lint.toml": "strict = false\n"},
             ["guard: lint.toml (tool-config)", PLAIN_RECORD],
@@ -2641,3 +2691,389 @@ def test_a_red_on_a_commit_a_merge_brought_onto_the_line_holds_and_a_green_there
             f" for `{pulled_at}` Merge the default branch; `{local}` feat(core): committed on a"
             " main that moved, and the owner merges what fixes it"
         )
+
+
+PRE_DEPLOY_BINDING = EVENTS.format(events="none")
+YES_LINE = "- Flag: `fresh`, off until the owner switches it on\n"
+OTHER_TICKET = ".scratch/thing/issues/02-other.md"
+
+
+def young_repo(
+    tmp_path: Path, extra: dict[str, str] | None = None, *, deployed: bool = False
+) -> Path:
+    binding = EVENTS.format(events="deployed" if deployed else "none")
+    files = {**BASE, BINDING: binding, **(extra or {})}
+    repository(tmp_path, files)
+    branch(tmp_path, "feature/4-thing")
+    return tmp_path
+
+
+def test_a_change_with_a_verdict_record_cannot_edit_a_labelled_ticket_or_its_spec(
+    tmp_path: Path,
+) -> None:
+    spec_text = "# Thing\n\n## Conjecture\n\nA.\n\n## Operability\n\n" + APPEARS_LINE
+    ticket_text = "# 01: Thing\n\nStatus: ready-for-agent\n\n- [ ] Build it.\n"
+    other_text = "# 02: Other\n\nStatus: ready-for-agent\n\nBlocked by: 01-thing.md\n"
+    repo = young_repo(
+        tmp_path,
+        {SPEC: spec_text, THING_TICKET: ticket_text, OTHER_TICKET: other_text},
+    )
+    change(repo, {SPEC: spec_text.replace("A.", "B."), "src/a.py": "x = 2\n"})
+    assert judged(repo) == [
+        (
+            f"record: {SPEC} is what {THING_TICKET} inherits its approach from, a ticket the owner"
+            " agreed to build"
+        )
+    ]
+
+    git(repo, "reset", "-q", "--hard", "main")
+    change(
+        repo, {THING_TICKET: ticket_text.replace("Build it.", "Skip it."), "src/a.py": "x = 2\n"}
+    )
+    assert judged(repo) == [
+        f"record: {THING_TICKET} is a ticket the owner agreed to build, and only they change it"
+    ]
+
+    git(repo, "reset", "-q", "--hard", "main")
+    change(
+        repo,
+        {
+            OTHER_TICKET: other_text.replace("ready-for-agent", "resolved"),
+            "src/a.py": "x = 2\n",
+        },
+    )
+    assert judged(repo) == [
+        f"record: {OTHER_TICKET} is a ticket the owner agreed to build, and only they change it"
+    ]
+
+
+def test_a_build_that_resolves_only_its_own_ticket_passes_and_frees_waiters(
+    tmp_path: Path,
+) -> None:
+    ticket_text = f"# 01: Thing\n\nStatus: ready-for-agent\n\n## Operability\n\n{APPEARS_LINE}"
+    waiter = "# 02: Next\n\nStatus: ready-for-agent\n\nBlocked by: 01-thing.md\n"
+    repo = young_repo(tmp_path, {THING_TICKET: ticket_text, OTHER_TICKET: waiter})
+    change(
+        repo,
+        {
+            THING_TICKET: ticket_text.replace("Status: ready-for-agent", "Status: resolved"),
+            "src/a.py": "x = 2\n",
+        },
+    )
+    assert judged(repo) == []
+
+
+def test_a_build_with_a_custom_label_spelling_resolves_its_own_ticket(tmp_path: Path) -> None:
+    labels = (
+        "| Label in mattpocock/skills | Label in our tracker |\n| --- | --- |\n"
+        "| `ready-for-agent` | `afk` |\n"
+    )
+    ticket_text = f"# 01: Thing\n\n**Status:** `AFK`\n\n## Operability\n\n{APPEARS_LINE}"
+    other = "# 02: Other\n\n**Status:** `AFK`\n"
+    repo = young_repo(
+        tmp_path,
+        {
+            "docs/agents/triage-labels.md": labels,
+            THING_TICKET: ticket_text,
+            OTHER_TICKET: other,
+        },
+    )
+    change(
+        repo,
+        {
+            THING_TICKET: ticket_text.replace("**Status:** `AFK`", "Status: resolved"),
+            "src/a.py": "x = 2\n",
+        },
+    )
+    assert judged(repo) == []
+
+
+@pytest.mark.parametrize(
+    "edited_ticket",
+    [
+        "# 01: Thing\n\nStatus: done\n\n## Operability\n\n" + APPEARS_LINE,
+        "# 01: Thing\n\nStatus: resolved\n\n## Operability\n\n" + APPEARS_LINE + "\nExtra.\n",
+        "# 01: Thing!\n\nStatus: resolved\n\n## Operability\n\n" + APPEARS_LINE,
+        None,
+    ],
+    ids=["closed to done", "resolved with extra line", "resolved and title edited", "deleted"],
+)
+def test_a_build_that_does_not_only_resolve_its_ticket_to_resolved_is_the_owners(
+    tmp_path: Path, edited_ticket: str | None
+) -> None:
+    ticket_text = f"# 01: Thing\n\nStatus: ready-for-agent\n\n## Operability\n\n{APPEARS_LINE}"
+    other = "# 02: Other\n\nStatus: ready-for-agent\n"
+    repo = young_repo(tmp_path, {THING_TICKET: ticket_text, OTHER_TICKET: other})
+    change(repo, {THING_TICKET: edited_ticket, "src/a.py": "x = 2\n"})
+    assert judged(repo) == [
+        f"record: {THING_TICKET} is a ticket the owner agreed to build, and only they change it"
+    ]
+
+
+def test_a_change_with_code_and_no_record_still_enforces_agreement(tmp_path: Path) -> None:
+    ticket_text = f"# 01: Thing\n\nStatus: ready-for-agent\n\n## Operability\n\n{APPEARS_LINE}"
+    other = "# 02: Other\n\nStatus: ready-for-agent\n"
+    repo = young_repo(tmp_path, {THING_TICKET: ticket_text, OTHER_TICKET: other})
+    change(
+        repo,
+        {
+            THING_TICKET: ticket_text.replace("Status: ready-for-agent", "Status: resolved"),
+            "src/a.py": "x = 2\n",
+        },
+        record=False,
+    )
+    assert judged(repo) == [
+        f"record: {THING_TICKET} is a ticket the owner agreed to build, and only they change it",
+        PLAIN_RECORD,
+    ]
+
+
+def test_ticket_with_missing_parent_fails_closed_before_deployment(tmp_path: Path) -> None:
+    ticket_text = "# 01: Thing\n\nStatus: ready-for-agent\n\nParent: ../missing.md\n"
+    repo = young_repo(tmp_path, {THING_TICKET: ticket_text})
+    change(repo, SURFACE_CHANGE)
+    assert codes(repo) == ["unflagged"]
+
+
+def test_ticket_is_found_by_slug_and_ignores_forged_ticket_field(tmp_path: Path) -> None:
+    other = "# 02: Other\n\nStatus: ready-for-agent\n\n## Operability\n\n- Flag: none: a fix\n"
+    repo = young_repo(tmp_path, {THING_TICKET: APPEARS_TICKET, OTHER_TICKET: other})
+    change(repo, SURFACE_CHANGE, record=False)
+    stamp(repo, {**VERDICT, "ticket": "02"})
+    notes: list[str] = []
+    assert merge_ready.judge(repo, "main", "HEAD", notes=notes) == []
+    assert any("new surface with no flag that is off let through" in n for n in notes)
+
+
+@pytest.mark.parametrize(
+    "tickets",
+    [
+        {},
+        {THING_TICKET: APPEARS_TICKET.replace("ready-for-agent", "needs-triage")},
+        {
+            ".scratch/a/issues/01-thing.md": APPEARS_TICKET,
+            ".scratch/b/issues/01-thing.md": APPEARS_TICKET,
+        },
+    ],
+    ids=["no ticket", "unlabelled ticket", "two tickets with the same slug"],
+)
+def test_zero_or_two_matching_slugs_fail_unflagged_before_deployment(
+    tmp_path: Path, tickets: dict[str, str]
+) -> None:
+    repo = young_repo(tmp_path, tickets)
+    change(repo, SURFACE_CHANGE)
+    assert codes(repo) == ["unflagged"]
+
+
+def test_ticket_added_in_change_is_never_found_before_deployment(tmp_path: Path) -> None:
+    repo = young_repo(tmp_path)
+    change(repo, {**SURFACE_CHANGE, THING_TICKET: APPEARS_TICKET.replace("ready-for-agent", "x")})
+    assert codes(repo) == ["unflagged"]
+
+
+def test_ticket_labelled_only_at_tip_and_inheriting_from_spec_lets_appears_through(
+    tmp_path: Path,
+) -> None:
+    spec_text = f"# Thing\n\n## Operability\n\n{APPEARS_LINE}"
+    unlabelled = "# 01: Thing\n\nStatus: needs-triage\n"
+    repo = young_repo(tmp_path, {SPEC: spec_text, THING_TICKET: unlabelled})
+    git(repo, "checkout", "-q", "main")
+    write(repo, THING_TICKET, "# 01: Thing\n\nStatus: ready-for-agent\n")
+    commit(repo, "docs(tracker): label ticket on main")
+    git(repo, "checkout", "-q", "feature/4-thing")
+    change(repo, SURFACE_CHANGE)
+    notes: list[str] = []
+    assert merge_ready.judge(repo, "main", "HEAD", notes=notes) == []
+    assert any("new surface with no flag that is off let through" in n for n in notes)
+
+
+def test_open_yes_ticket_blocks_appears_before_deployment_until_closed(tmp_path: Path) -> None:
+    yes_other = f"# 02: Other\n\nStatus: ready-for-agent\n\n## Operability\n\n{YES_LINE}"
+    repo = young_repo(tmp_path, {THING_TICKET: APPEARS_TICKET, OTHER_TICKET: yes_other})
+    change(repo, SURFACE_CHANGE)
+    assert codes(repo) == ["unflagged"]
+
+    git(repo, "checkout", "-q", "main")
+    write(repo, OTHER_TICKET, yes_other.replace("ready-for-agent", "resolved"))
+    commit(repo, "docs(tracker): close the yes ticket")
+    git(repo, "checkout", "-q", "feature/4-thing")
+    git(repo, "rebase", "-q", "main")
+    stamp(repo)
+    notes: list[str] = []
+    assert merge_ready.judge(repo, "main", "HEAD", notes=notes) == []
+    assert any("new surface with no flag that is off let through" in n for n in notes)
+
+
+def test_open_yes_inherited_from_spec_at_tip_blocks_appears_before_deployment(
+    tmp_path: Path,
+) -> None:
+    other_spec = ".scratch/other/spec.md"
+    other_issue = ".scratch/other/issues/02-other.md"
+    repo = young_repo(tmp_path, {THING_TICKET: APPEARS_TICKET})
+    git(repo, "checkout", "-q", "main")
+    write(repo, other_spec, f"# Other\n\n## Operability\n\n{YES_LINE}")
+    write(repo, other_issue, "# 02: Other\n\nStatus: ready-for-agent\n")
+    commit(repo, "docs(tracker): land yes ticket on main")
+    git(repo, "checkout", "-q", "feature/4-thing")
+    change(repo, SURFACE_CHANGE)
+    assert codes(repo) == ["unflagged"]
+
+
+def test_plain_none_beside_new_surface_before_deployment_is_unflagged(tmp_path: Path) -> None:
+    plain_none = "# 01: Thing\n\nStatus: ready-for-agent\n\n## Operability\n\n- Flag: none: a fix\n"
+    repo = young_repo(tmp_path, {THING_TICKET: plain_none})
+    change(repo, SURFACE_CHANGE)
+    assert codes(repo) == ["unflagged"]
+
+
+@pytest.mark.parametrize("deployed", [False, True], ids=["before-deployed", "after-deployed"])
+@pytest.mark.parametrize(
+    "surface", [{}, SURFACE_CHANGE], ids=["no-surface-door", "with-surface-door"]
+)
+@pytest.mark.parametrize(
+    ("flags_edit", "code_edit"),
+    [
+        ({}, {"src/a.py": "x = 2\n"}),
+        ({"flags.toml": FLAGS + NEW_FLAG_ON}, {"src/a.py": "x = flag('fresh')\n"}),
+        (
+            {"flags.toml": FLAGS + NEW_FLAG.replace("remove-by = 2999-01-01", "permanent = true")},
+            {"src/a.py": "x = flag('fresh')\n"},
+        ),
+        (
+            {
+                "flags.toml": FLAGS
+                + NEW_FLAG.replace(
+                    "remove-by = 2999-01-01", "remove-by = 2999-01-01\npermanent = true"
+                )
+            },
+            {"src/a.py": "x = flag('fresh')\n"},
+        ),
+        (
+            {"flags.toml": FLAGS + NEW_FLAG.replace("remove-by = 2999-01-01\n", "")},
+            {"src/a.py": "x = flag('fresh')\n"},
+        ),
+        (
+            {
+                "flags.toml": FLAGS
+                + NEW_FLAG.replace("remove-by = 2999-01-01", "remove-by = 2999-01-01T00:00:00Z")
+            },
+            {"src/a.py": "x = flag('fresh')\n"},
+        ),
+        (
+            {"flags.toml": FLAGS + NEW_FLAG.replace("default = false\n", "")},
+            {"src/a.py": "x = flag('fresh')\n"},
+        ),
+        (
+            {"flags.toml": FLAGS + NEW_FLAG.replace("default = false", 'default = "false"')},
+            {"src/a.py": "x = flag('fresh')\n"},
+        ),
+        ({"flags.toml": FLAGS + NEW_FLAG + NEW_FLAG}, {"src/a.py": "x = flag('fresh')\n"}),
+        ({"flags.toml": "[[flag]\n"}, {"src/a.py": "x = flag('fresh')\n"}),
+        ({"flags.toml": None}, {"src/a.py": "x = flag('fresh')\n"}),
+    ],
+    ids=[
+        "missing-key",
+        "default-true",
+        "permanent-true",
+        "remove-by-and-permanent",
+        "missing-remove-by",
+        "datetime-remove-by",
+        "missing-default",
+        "string-default",
+        "declared-twice",
+        "unparseable-registry",
+        "deleted-registry",
+    ],
+)
+def test_yes_ticket_enforces_its_key_regardless_of_life_events_and_surface(
+    tmp_path: Path,
+    *,
+    deployed: bool,
+    surface: dict[str, str],
+    flags_edit: dict[str, str | None],
+    code_edit: dict[str, str],
+) -> None:
+    yes_ticket = f"# 01: Thing\n\nStatus: ready-for-agent\n\n## Operability\n\n{YES_LINE}"
+    repo = young_repo(tmp_path, {THING_TICKET: yes_ticket}, deployed=deployed)
+    change(repo, {**surface, **flags_edit, **code_edit})
+    assert "unflagged" in codes(repo)
+
+
+@pytest.mark.parametrize("deployed", [False, True], ids=["before-deployed", "after-deployed"])
+@pytest.mark.parametrize(
+    "surface", [{}, SURFACE_CHANGE], ids=["no-surface-door", "with-surface-door"]
+)
+def test_yes_ticket_rejects_using_another_off_flag_instead_of_its_key(
+    tmp_path: Path, *, deployed: bool, surface: dict[str, str]
+) -> None:
+    yes_ticket = f"# 01: Thing\n\nStatus: ready-for-agent\n\n## Operability\n\n{YES_LINE}"
+    repo = young_repo(
+        tmp_path,
+        {THING_TICKET: yes_ticket, "flags.toml": FLAGS + NEW_FLAG},
+        deployed=deployed,
+    )
+    change(repo, {**surface, "src/a.py": 'x = flag("dark")\n'})
+    assert codes(repo) == ["unflagged"]
+
+
+@pytest.mark.parametrize("deployed", [False, True], ids=["before-deployed", "after-deployed"])
+def test_yes_ticket_passes_when_its_key_is_newly_declared_off_or_named_in_code(
+    tmp_path: Path, *, deployed: bool
+) -> None:
+    yes_ticket = f"# 01: Thing\n\nStatus: ready-for-agent\n\n## Operability\n\n{YES_LINE}"
+    repo1 = young_repo(tmp_path / "declared", {THING_TICKET: yes_ticket}, deployed=deployed)
+    change(repo1, {**SURFACE_CHANGE, "flags.toml": FLAGS + NEW_FLAG})
+    assert judged(repo1) == []
+
+    repo2 = young_repo(
+        tmp_path / "named",
+        {THING_TICKET: yes_ticket, "flags.toml": FLAGS + NEW_FLAG},
+        deployed=deployed,
+    )
+    change(repo2, {**SURFACE_CHANGE, "src/a.py": 'x = flag("fresh")\n'})
+    assert judged(repo2) == []
+
+
+@pytest.mark.parametrize("deployed", [False, True], ids=["before-deployed", "after-deployed"])
+@pytest.mark.parametrize(
+    "surface", [{}, SURFACE_CHANGE], ids=["no-surface-door", "with-surface-door"]
+)
+def test_yes_ticket_whose_key_was_already_on_at_base_passes(
+    tmp_path: Path, *, deployed: bool, surface: dict[str, str]
+) -> None:
+    lit_line = "- Flag: `lit`, off until the owner switches it on\n"
+    yes_ticket = f"# 01: Thing\n\nStatus: ready-for-agent\n\n## Operability\n\n{lit_line}"
+    repo = young_repo(tmp_path, {THING_TICKET: yes_ticket}, deployed=deployed)
+    change(repo, {**surface, "src/a.py": "x = 2\n"})
+    assert judged(repo) == []
+
+
+@pytest.mark.parametrize("types", ["library", "library, daemon"])
+def test_library_and_unknown_type_keep_flag_registry_doors_waiting_for_events(
+    tmp_path: Path, types: str
+) -> None:
+    binding = f"# Binding\n\n- Application types: {types}\n- Life events: none\n"
+    repo = young(tmp_path, binding)
+    notes: list[str] = []
+    change(repo, {"flags.toml": FLAGS + NEW_FLAG_ON})
+    assert merge_ready.judge(repo, "main", "HEAD", notes=notes) == []
+    assert [note.split(" let through")[0] for note in notes] == ["a one-way door"]
+
+
+def test_row_bound_none_lets_new_surface_through_before_deployment_and_keeps_doors_waiting(
+    tmp_path: Path,
+) -> None:
+    binding = (
+        "# Binding\n\n- Application types: service\n- Life events: none\n\n## Gates\n\n"
+        "| Question | Tool | Tier | Threshold source | Entry point |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "| changed flags off and on | none: accepted in ADR 0010 | 1 | | `just flag-states` |\n"
+    )
+    repo = young(tmp_path, binding)
+    notes: list[str] = []
+    change(repo, SURFACE_CHANGE | {"flags.toml": FLAGS + NEW_FLAG_ON})
+    assert merge_ready.judge(repo, "main", "HEAD", notes=notes) == []
+    assert [note.split(" let through")[0] for note in notes] == [
+        "a one-way door",
+        "new surface with no flag that is off",
+    ]

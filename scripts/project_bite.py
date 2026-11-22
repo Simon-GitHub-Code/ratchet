@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import contextlib
 import functools
+import io
+import json
 import os
 import re
 import shlex
@@ -88,6 +90,14 @@ SLOW_FLOOR = 1.0
 WAKE = 0.1
 GLOB_SPECIAL = re.compile(r"[\\*?\[]")
 SHIPPED = re.compile(r"`ratchet` plugin `[^`]+`(?: and `[^`]+`)*")
+FORMAT_QUESTION = "format"
+RECORD_CHECK_SLUG = "ratchet-verdict-format-check"
+RECORD_CHECK_NAME = "accepts verdict record"
+REJECTED_RECORD = (
+    "the format gate rejects the record the record step writes"
+    " (docs/features/<slug>/verdict.json); leave docs/features/*/verdict.json out of the"
+    " format gate"
+)
 
 
 class Unprovable(Exception):  # noqa: N818 # -- a verdict on the run, not a fault of the code
@@ -928,8 +938,11 @@ class Verdict(Enum):
     NOT_PLANTED = "THE FAULT WAS NOT PLANTED"
     NOT_PROVEN = "NOT PROVEN"
     TIMED_OUT = "TIMED OUT"
+    ACCEPTS_RECORD = "accepts verdict record"
+    REJECTS_RECORD = "REJECTS VERDICT RECORD"
 
 
+PASSING = (Verdict.BITES, Verdict.ACCEPTS_RECORD)
 CONTENDED = (Verdict.RED_BEFORE, Verdict.OTHER_REASON, Verdict.NOT_PROVEN, Verdict.TIMED_OUT)
 BESIDE = (
     "other lanes ran {gates} while this gate ran; if `--gate {gate} --jobs 1` bites, state the"
@@ -957,6 +970,7 @@ class Outcome:
     red_seconds: float = 0.0
     slower: float = 0.0
     beside: tuple[str, ...] = ()
+    fault: bool = True
 
     def lines(self) -> str:
         note = f"; {self.slower:.1f}x this gate's fastest green run" if self.slower > SLOW else ""
@@ -1020,6 +1034,23 @@ def judge(bite: Bite, green: str, planted: Run) -> Outcome:
     return Outcome(bite, Verdict.OTHER_REASON, f"{why}\n{tail(output)}")
 
 
+def format_record_slug(root: Path) -> str:
+    slug = RECORD_CHECK_SLUG
+    suffix = 1
+    while (root / f"docs/features/{slug}/verdict.json").exists():
+        suffix += 1
+        slug = f"{RECORD_CHECK_SLUG}-{suffix}"
+    return slug
+
+
+def slowed(outcomes: Sequence[Outcome], fastest: float) -> Iterator[Outcome]:
+    for outcome in outcomes:
+        if fastest and outcome.verdict not in PASSING and outcome.red_seconds >= SLOW_FLOOR:
+            yield replace(outcome, slower=outcome.red_seconds / fastest)
+        else:
+            yield outcome
+
+
 @dataclass(frozen=True)
 class Copy:
     tree: Tree
@@ -1066,52 +1097,98 @@ class Copy:
     def prove(self, row: Row, bites: Sequence[Bite], *, jobs: int = 0) -> Iterator[Outcome]:
         outcomes: list[Outcome] = []
         greens: list[float] = []
+        whole_before: Run | None = None
         for bite in bites:
             if self.shell.stopped:
                 return
             before = self.unfaulted(row, bite.args, outcomes, greens=greens, jobs=jobs)
-            green = before.output
-            if before.code != 0:
-                verdict = Verdict.TIMED_OUT if before.timed_out else Verdict.RED_BEFORE
-                outcomes.append(
-                    self.outcome(
-                        bite,
-                        verdict,
-                        detail=tail(green),
-                        seconds=before.seconds,
-                        red=before.seconds,
-                    )
-                )
-                continue
-            try:
-                bite.plant(self.tree)
-            except (Unprovable, OSError) as error:
-                self.restore()
-                why = str(error).replace(f"{self.path}/", "")
-                outcomes.append(
-                    self.outcome(bite, Verdict.NOT_PLANTED, detail=why, seconds=before.seconds)
-                )
-                continue
-            planted = self.run([*shlex.split(row.command), *bite.args], row.limit, jobs)
-            judged = judge(bite, green, planted)
-            outcomes.append(
-                replace(
-                    judged,
-                    seconds=before.seconds + planted.seconds,
-                    lane=self.lane,
-                    red_seconds=planted.seconds,
-                )
-            )
+            if not bite.args and whole_before is None:
+                whole_before = before
+            outcomes.append(self.prove_bite(row, bite, before=before, jobs=jobs))
+        if row.question == FORMAT_QUESTION and row.bound and not self.shell.stopped:
+            before = whole_before or self.unfaulted(row, (), outcomes, greens=greens, jobs=jobs)
+            outcomes.append(self.check_verdict_record(row, before, jobs=jobs))
         for args in dict.fromkeys(o.bite.args for o in outcomes if o.verdict is Verdict.BITES):
             self.unfaulted(row, args, outcomes, greens=greens, jobs=jobs)
-        fastest = min(greens, default=0.0)
         if not self.shell.stopped:
-            yield from (
-                replace(o, slower=o.red_seconds / fastest)
-                if fastest and o.verdict is not Verdict.BITES and o.red_seconds >= SLOW_FLOOR
-                else o
-                for o in outcomes
+            yield from slowed(outcomes, min(greens, default=0.0))
+
+    def prove_bite(self, row: Row, bite: Bite, *, before: Run, jobs: int) -> Outcome:
+        green = before.output
+        if before.code != 0:
+            verdict = Verdict.TIMED_OUT if before.timed_out else Verdict.RED_BEFORE
+            return self.outcome(
+                bite, verdict, detail=tail(green), seconds=before.seconds, red=before.seconds
             )
+        try:
+            bite.plant(self.tree)
+        except (Unprovable, OSError) as error:
+            self.restore()
+            why = str(error).replace(f"{self.path}/", "")
+            return self.outcome(bite, Verdict.NOT_PLANTED, detail=why, seconds=before.seconds)
+        planted = self.run([*shlex.split(row.command), *bite.args], row.limit, jobs)
+        judged = judge(bite, green, planted)
+        return replace(
+            judged,
+            seconds=before.seconds + planted.seconds,
+            lane=self.lane,
+            red_seconds=planted.seconds,
+        )
+
+    def check_verdict_record(self, row: Row, before: Run, *, jobs: int) -> Outcome:
+        slug = format_record_slug(self.path)
+        fault = Write(f"docs/features/{slug}/verdict.json", "")
+        bite = Bite(row.gate, RECORD_CHECK_NAME, "0", fault)
+        if before.code != 0:
+            verdict = Verdict.TIMED_OUT if before.timed_out else Verdict.RED_BEFORE
+            return Outcome(
+                bite,
+                verdict,
+                tail(before.output),
+                before.seconds,
+                self.lane,
+                before.seconds,
+                fault=False,
+            )
+        sample = {
+            "slug": slug,
+            "ticket": "00",
+            "verdict": gatelib.APPROVE,
+            "forcedBy": ["smoke", "lint"],
+            "unresolved": [],
+            "openQuestions": [],
+        }
+        buf = io.StringIO()
+        code = gatelib.write_record(self.path, json.dumps(sample), allow_dirty=True, out=buf)
+        if code != 0:
+            self.restore()
+            return Outcome(
+                bite, Verdict.NOT_PLANTED, buf.getvalue().strip(), 0.0, self.lane, fault=False
+            )
+        result = self.run(shlex.split(row.command), row.limit, jobs)
+        if result.timed_out:
+            return Outcome(
+                bite,
+                Verdict.TIMED_OUT,
+                tail(result.output),
+                result.seconds,
+                self.lane,
+                result.seconds,
+                fault=False,
+            )
+        if result.code != 0:
+            output = tail(result.output)
+            detail = f"{REJECTED_RECORD}\n{output}" if output else REJECTED_RECORD
+            return Outcome(
+                bite,
+                Verdict.REJECTS_RECORD,
+                detail,
+                result.seconds,
+                self.lane,
+                result.seconds,
+                fault=False,
+            )
+        return Outcome(bite, Verdict.ACCEPTS_RECORD, "", result.seconds, self.lane, fault=False)
 
     def outcome(
         self, bite: Bite, verdict: Verdict, *, detail: str, seconds: float, red: float = 0.0
@@ -1361,8 +1438,9 @@ def run_lanes(
                 outcome = replace(found, beside=beside)
                 with printing:
                     print(outcome.lines(), flush=True)
-                    record = {**outcome.record(), **stamp}
-                    runrecord.append(root / runrecord.TIMING, record, root=root, who="bite")
+                    if outcome.fault:
+                        record = {**outcome.record(), **stamp}
+                        runrecord.append(root / runrecord.TIMING, record, root=root, who="bite")
                 outcomes.append(outcome)
         return outcomes
 
@@ -1410,11 +1488,13 @@ def proof(
     ceiling = slow_ceiling(root)
     if ceiling is not None:
         for outcome in outcomes:
-            if not outcome.bite.narrowed and outcome.seconds > ceiling:
+            if outcome.fault and not outcome.bite.narrowed and outcome.seconds > ceiling:
                 print(f"bite: slow: {slow_line(outcome.bite, outcome.seconds, ceiling)}")
-    unseen = [outcome for outcome in outcomes if outcome.verdict is not Verdict.BITES]
+    faults = [outcome for outcome in outcomes if outcome.fault]
+    bit = sum(1 for outcome in faults if outcome.verdict is Verdict.BITES)
+    unseen = [outcome for outcome in outcomes if outcome.verdict not in PASSING]
     print(
-        f"bite: {'red' if unseen else 'green'}: {len(outcomes) - len(unseen)} of {len(outcomes)} "
+        f"bite: {'red' if unseen else 'green'}: {bit} of {len(faults)} "
         f"faults bit, over {len(tasks)} gates in {time.monotonic() - started:.0f}s"
     )
     if unseen:
