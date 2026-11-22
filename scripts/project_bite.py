@@ -936,9 +936,9 @@ BESIDE = (
     " gates that cannot share the machine in the binding's Speed section, `- Apart:` or `- Alone:`"
 )
 UNREAD = (
-    "bite: the {recipe} recipe passes parallel.py a schedule flag the proof cannot read as text,"
-    " so its lanes do not keep it; state it in the binding's Speed section, `- Apart:` or"
-    " `- Alone:`"
+    "bite: the {recipe} recipe passes parallel.py {words}, which the proof cannot read as text,"
+    " so its lanes run {gates} each with nothing beside it; pass the runner its schedule flags as"
+    " text to let them share the machine"
 )
 
 
@@ -1311,18 +1311,18 @@ def next_task(board: schedule.Board[int], ready: threading.Condition, shell: She
         return task
 
 
-def schedule_of(root: Path) -> schedule.Schedule:
+def schedule_of(root: Path, gates: Sequence[str]) -> schedule.Schedule:
     passed, unread = schedule.recipes(schedule.justfile(root))
-    for recipe in unread:
-        print(UNREAD.format(recipe=recipe), flush=True)
-    return schedule.stated(gatelib.read_text(root / gatelib.BINDING) or "").joined(passed)
-
-
-def cores_told(root: Path, lanes: int) -> tuple[int, int, int]:
-    cores, cap = os.cpu_count() or 1, gatelib.default_jobs(root)
-    if cap < cores:
-        lanes = max(1, min(lanes, cores // cap))
-    return lanes, max(1, min(cap, cores // lanes)), cap
+    alone: list[tuple[str, ...]] = []
+    for missed in unread:
+        each = tuple((gate,) for gate in (gates if missed.gates is None else missed.gates))
+        named = "every gate" if missed.gates is None else schedule.spans(each)
+        words = " ".join(missed.words)
+        print(UNREAD.format(recipe=missed.recipe, words=words, gates=named), flush=True)
+        alone += each
+    strictest = schedule.Schedule({schedule.ALONE: tuple(alone)})
+    stated = schedule.stated(gatelib.read_text(root / gatelib.BINDING) or "")
+    return stated.joined(passed).joined(strictest)
 
 
 def run_lanes(
@@ -1330,9 +1330,10 @@ def run_lanes(
 ) -> list[Outcome]:
     stamp = runrecord.stamp(root)
     limited = [(replace(row, limit=limit), bites) for row, bites in tasks]
-    kept = schedule_of(root)
+    kept = schedule_of(root, [row.gate for row, _ in limited])
     board = schedule.Board(range(len(limited)), kept, lambda task: limited[task][0].gate)
-    lanes, told, cap = cores_told(root, lanes)
+    cap = gatelib.default_jobs(root)
+    told = max(1, min(cap, (os.cpu_count() or 1) // lanes))
     ready = threading.Condition()
     shell = Shell()
     printing = threading.Lock()

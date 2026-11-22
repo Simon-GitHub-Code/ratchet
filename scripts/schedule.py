@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import re
 import shlex
 from collections.abc import Hashable
 from dataclasses import dataclass, field
@@ -12,7 +13,6 @@ import justfile_text
 import markdown_text
 
 if TYPE_CHECKING:
-    import re
     from collections.abc import Callable, Iterable
     from pathlib import Path
 
@@ -26,7 +26,11 @@ KIND = {flag: kind for kind, flag in FLAGS.items()}
 VALUED = frozenset(("--runner", "--jobs", "--root", "--report"))
 RUNNER = "parallel.py"
 UNREAD = "\0"
+SUBSTITUTED = "\1"
 SHELL = frozenset("();<>|&")
+SHELL_WORD = f"$`({SUBSTITUTED}"
+SUBSTITUTION = re.compile(r"\$\([^()]*\)|\$\{[^}]*\}|`[^`]*`|[<>]\([^()]*\)")
+HIDDEN = re.compile(f"([{UNREAD}{SUBSTITUTED}])([0-9a-f]*)\\1")
 
 Groups = tuple[tuple[str, ...], ...]
 Task = TypeVar("Task", bound=Hashable)
@@ -45,6 +49,21 @@ def distinct(groups: Iterable[tuple[str, ...]]) -> Groups:
 
 def spans(groups: Groups) -> str:
     return " ".join(f"`{' '.join(group)}`" for group in groups) or "none"
+
+
+def hidden(text: str, mark: str = UNREAD) -> str:
+    return f"{mark}{text.encode().hex()}{mark}"
+
+
+def shown(text: str) -> str:
+    return HIDDEN.sub(lambda found: bytes.fromhex(found[2]).decode(), text)
+
+
+@dataclass(frozen=True)
+class Unread:
+    recipe: str
+    words: tuple[str, ...]
+    gates: tuple[str, ...] | None
 
 
 @dataclass(frozen=True)
@@ -117,7 +136,7 @@ def stated(binding: str) -> Schedule:
 def value(justfile: str, expression: str, seen: frozenset[str]) -> str:
     words = justfile_text.words(expression)
     if len(words) % 2 == 0 or any(word != "+" for word in words[1::2]):
-        return UNREAD
+        return hidden(f"{{{{ {expression} }}}}")
     return "".join(operand(justfile, word, seen) for word in words[::2])
 
 
@@ -127,7 +146,7 @@ def operand(justfile: str, word: str, seen: frozenset[str]) -> str:
         return literal.group(1) if literal.group(1) is not None else literal.group(2)
     defined = justfile_text.variables(justfile).get(word)
     if literal or defined is None or word in seen:
-        return UNREAD
+        return hidden(f"{{{{ {word} }}}}")
     return value(justfile, defined[: justfile_text.comment_at(defined)], seen | {word})
 
 
@@ -135,27 +154,22 @@ def interpolated(justfile: str, params: frozenset[str], found: re.Match[str]) ->
     return value(justfile, found[1], params)
 
 
-def passed(line: str) -> tuple[Schedule, bool]:
-    lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
-    try:
-        words = list(lexer)
-    except ValueError:
-        return Schedule(), True
-    named = (at for at, word in enumerate(words) if word.rsplit("/", 1)[-1] == RUNNER)
-    start = next(named, len(words))
+def unreadable(word: str, *, valued: bool = False) -> bool:
+    return any(mark in word for mark in SHELL_WORD) or (UNREAD in word and not valued)
+
+
+def flagged(words: list[str]) -> tuple[Schedule, list[str]]:
     found: dict[str, list[list[str]]] = {kind: [] for kind in KINDS}
-    unread = False
+    missed: list[str] = []
     kind: str | None = None
     valued = False
-    for word in words[start + 1 :]:
+    for word in words:
         flag, equals, rest = word.partition("=")
-        if valued:
+        if unreadable(word, valued=valued):
+            missed.append(shown(word))
+            kind, valued = None, False
+        elif valued:
             valued = False
-        elif word == "--" or set(word) <= SHELL:
-            break
-        elif UNREAD in word:
-            unread, kind = True, None
         elif flag in KIND:
             kind = KIND[flag]
             found[kind].append([rest] if equals else [])
@@ -165,13 +179,36 @@ def passed(line: str) -> tuple[Schedule, bool]:
             found[kind][-1].append(word)
     groups = {kind: tuple(tuple(group) for group in found[kind] if group) for kind in KINDS}
     each = {kind: singles(groups[kind], frozenset()) for kind in (ALONE, WIDE)}
-    return Schedule({APART: groups[APART], **each}), unread
+    return Schedule({APART: groups[APART], **each}), missed
 
 
-def recipes(justfile: str) -> tuple[Schedule, list[str]]:
+def passed(line: str) -> tuple[Schedule, tuple[str, ...], tuple[str, ...] | None]:
+    lexer = shlex.shlex(
+        SUBSTITUTION.sub(lambda found: hidden(found[0], SUBSTITUTED), line),
+        posix=True,
+        punctuation_chars=True,
+    )
+    lexer.whitespace_split = True
+    try:
+        words = list(lexer)
+    except ValueError:
+        return Schedule(), (shown(line.strip()),), None
+    named = (at for at, word in enumerate(words) if word.rsplit("/", 1)[-1] == RUNNER)
+    after = words[next(named, len(words)) + 1 :]
+    ends = (at for at, word in enumerate(after) if set(word) <= SHELL and not unreadable(word))
+    command = after[: next(ends, len(after))]
+    split = command.index("--") if "--" in command else len(command)
+    given, missed = flagged(command[:split])
+    gates = command[split + 1 :]
+    missed += [shown(word) for word in gates if unreadable(word)]
+    known = split < len(command) and not any(map(unreadable, gates))
+    return given, tuple(missed), tuple(gates) if known else None
+
+
+def recipes(justfile: str) -> tuple[Schedule, list[Unread]]:
     lines = justfile.split("\n")
     kept = Schedule()
-    unread: list[str] = []
+    unread: list[Unread] = []
     for block in justfile_text.blocks(lines):
         if block.parsed is None:
             continue
@@ -179,11 +216,11 @@ def recipes(justfile: str) -> tuple[Schedule, list[str]]:
         text = justfile_text.INTERPOLATION.sub(
             functools.partial(interpolated, justfile, frozenset(block.parsed.params)),
             justfile_text.code_of(body),
-        ).replace("{{", UNREAD)
+        ).replace("{{", hidden("{{"))
         for line in (line for line in text.splitlines() if RUNNER in line):
-            given, missed = passed(line)
+            given, missed, gates = passed(line)
             kept = kept.joined(given)
-            unread += [block.name] if missed and block.name not in unread else []
+            unread += [Unread(block.name, missed, gates)] if missed else []
     return kept, unread
 
 
