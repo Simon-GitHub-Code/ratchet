@@ -9,7 +9,7 @@ Part of issue #139. Read with ADR 0080, whose point 5 lets `--graceful S` stand,
 
 ## Decision
 
-**1. Where the gate can see the service take it, the gate holds one request across the signal.** It opens a connection to the first `--url` the load command names and, when that route takes a body, sends the whole request but the body's last byte. The request's head is then whole, so the server has a request it is bound to answer. It reads that the service accepted it: the service's end of that connection in the kernel's TCP table has a socket inode, which it has only once `accept()` returned, and that inode is among the open files of a process of the boot command's group. A copy held by the gate, or by a process outside that group, does not count. From then the load command sends. After `--signal-after` seconds of load the gate signals SIGTERM, sends the last byte at once, and wants the bound status.
+**1. Where the gate can see the service take it, the gate holds one request across the signal.** It opens a connection to the first route the load command names that takes a body, and sends the whole request but the body's last byte. The request's head is then whole, so the server has a request it is bound to answer. It reads that the service accepted it: the service's end of that connection in the kernel's TCP table has a socket inode, which it has only once `accept()` returned, and that inode is among the open files of a process of the boot command's group. A copy held by the gate, or by a process outside that group, does not count. From then the load command sends. After `--signal-after` seconds of load the gate signals SIGTERM, sends the last byte at once, and wants the bound status.
 
 The gate waits for nothing between the signal and the last byte, because nothing there needs to be seen. A service cannot read a byte that has not been sent, so it cannot finish the held request before the signal: at the signal that request is in flight on every machine, however slow. What the service does next is its own: it answers the request, or closes it, or lets `--graceful S` run out. A correct service answers, whenever the byte arrives, since it has a whole head and a body it is waiting for. A service that drops what it holds at a stop has the stop ahead of the byte in every queue it reads in order: the signal is pending before the byte is sent, so a process that takes the signal in the thread that reads the connection acts on the stop before it can read the byte. Waiting for some sign that the service acted on the signal would wait on an event a correct service need not produce. The first round waited for the service to stop listening, and a server whose workers keep their inherited listener while they finish the current request never does, so that correct server was red.
 
@@ -17,7 +17,7 @@ The gate waits for nothing between the signal and the last byte, because nothing
 
 | Case | The reason the line gives |
 | --- | --- |
-| the route has no body, or the command names no route | a byte held back would fall in the request's head, which a server may close at a stop |
+| no route the command names takes a body, or the command names no route | no route that takes a body was found among the routes the command named, which it lists, and a byte held back would fall in a request's head, which a server may close at a stop |
 | the gate cannot connect or send | the error |
 | the service does not accept the held connection within `--timeout` | it was still in the listener's queue |
 | a process outside the boot command's group accepted it, as a forwarder does | no process of the service holds it |
@@ -27,6 +27,8 @@ The gate waits for nothing between the signal and the last byte, because nothing
 
 None of these waits out a limit the project did not set: each ends on what the gate sees, or on `--timeout` for the service to accept.
 
+Every way out of the gate's wait for the signal releases the load command, a command that starts sending after `--timeout` included. The smoke waits for that release no longer than the gate's `--timeout`, which the gate exports as `RATCHET_HOLD_WITHIN`, and its own `--timeout` after it, and for the gate to say which connections it took no longer than its own `--timeout`. Past either it is red and says what it waited for. Before the third round the gate gave up on a command that had not started sending without releasing it, so a load smoke that started sending after `--timeout` waited for ever.
+
 **3. Two outcomes, as before, and no third.** Green exits 0 and red exits 1, with the last lines they had. The held request is red when it is reset, closed, answered with another status or not answered within S. The first round added a third outcome, could not judge, with exit 3. It leaves this change: today `check` lists any non-zero exit as red, and the proof counts any non-zero exit as the gate biting, so a third outcome needs both taught, and a later record owns that decision.
 
 **4. No fixed limit on the held path can turn a clean service red.**
@@ -35,11 +37,12 @@ None of these waits out a limit the project did not set: each ends on what the g
 | --- | --- | --- |
 | `--signal-after`, from the load command creating `RATCHET_SENDING` to SIGTERM | could leave nothing in flight: red on the floor or on a drop counted as never accepted | timed from the service accepting the held request, so a request is in flight however late the load comes |
 | `--timeout` for the command to start sending | red | red, as before |
-| `--timeout` for the service to accept the held request | none | judged the older way past it |
+| `--timeout` for the gate to connect and see the service accept the held request | none | judged the older way past it |
+| the smoke's wait for the gate to say whether it holds a request | none | the gate's `--timeout` and the smoke's own `--timeout`: red past it |
 | the load command ending before the signal | red | red on the older way, as before; on the held path the gate signals at once and the held request judges |
 | `load_smoke.py --timeout` per request under `--until-stopped` | a slow answer was an error | applied, and a request that runs past it is not counted once the gate held a request to the signal: a busy machine is slow, and the held request is the one judged; counted as before on the older way |
 | `load_smoke.py --min-requests` under `--until-stopped` | red under the floor | not judged once the gate held a request to the signal, which is the request in flight; judged as before on the older way |
-| the smoke's `--timeout` to wait for the gate to say which connections it took | judged the older way past it | removed; the gate answers while the command runs, and once more when it stops taking connections |
+| the smoke's `--timeout` to wait for the gate to say which connections it took | judged the older way past it | red past it; the gate answers while the command runs, and once more when it stops taking connections |
 | `--graceful S` | red past S | red past S, the project's own question (ADR 0080, point 5) |
 
 **5. The not-counted rule stays.** After the signal the gate resets the connections still waiting in the service's listener, and the smoke does not count those. Only connections the gate itself took are excused, and the held request was seen accepted, so it is never among them. With the planted fault under 8 connections all 8 of the smoke's requests can still be excused, and the gate is red on the held request.
