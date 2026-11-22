@@ -2185,6 +2185,11 @@ def harm(
     return f"{said}; it was {f'a link to `{held}`' if stat.S_ISLNK(mode) else 'a folder'}"
 
 
+def held_in(checkout: Path) -> Aside | None:
+    with scratch_store(checkout) as scratch:
+        return aside_of(scratch)
+
+
 def restore(drain: Drain, options: argparse.Namespace) -> int:
     root, branch = drain.root, options.ref or ""
     held = sorted(kept_home(root, branch).glob("*.kept"))
@@ -2210,17 +2215,25 @@ def restore(drain: Drain, options: argparse.Namespace) -> int:
     if (gatelib.git(root, "switch", "--quiet", branch) if tip == aside.base else None) is None:
         gatelib.git(root, "switch", "--quiet", "--detach", aside.base)
     steps = [(part, flags) for part, flags in zip(parts, (("--cached",), ()), strict=True) if part]
-    if gatelib.git(root, "rev-parse", "HEAD") != aside.base or any(
-        plumb(root, *APPLY, "--check", *flags, "-", given=part) is None for part, flags in steps
-    ):
+    why = (
+        f"does not apply on {aside.base} in the checkout"
+        if gatelib.git(root, "rev-parse", "HEAD") != aside.base
+        or any(plumb(root, *APPLY, "--check", *f, "-", given=part) is None for part, f in steps)
+        else "could not be written into the checkout"
+        if any(plumb(root, *APPLY, *flags, "-", given=part) is None for part, flags in steps)
+        else "was applied, yet the checkout does not hold what it set aside"
+        if held_in(root) != aside
+        else None
+    )
+    if why is not None:
+        gatelib.git(root, "reset", "--hard", "--quiet")
+        gatelib.git(root, "clean", "-d", "--force", "--quiet")
         gatelib.git(root, "switch", "--quiet", *back)
         print(
-            f"restore: {unit} does not apply on {aside.base} in the checkout, so it stays and the"
-            " checkout is as it was"
+            f"restore: {unit} {why}, so it stays and the checkout is as it was: once the checkout"
+            f" can take it, run {again} again"
         )
         return 1
-    for part, flags in steps:
-        plumb(root, *APPLY, *flags, "-", given=part)
     unit.unlink()
     print(f"restored: what the work tree of `{branch}` held uncommitted, from {unit}")
     if rest:
