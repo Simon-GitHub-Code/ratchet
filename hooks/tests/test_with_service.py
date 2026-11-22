@@ -1,4 +1,5 @@
 import contextlib
+import ctypes
 import errno
 import ipaddress
 import os
@@ -1755,3 +1756,91 @@ def test_the_name_must_be_the_whole_setting_and_every_name_is_tried(
         "the service exited with code 1 without DB but did not name it"
     ), "DB_URL is not DB"
     assert out.count("without DB") == 1, "DB_URL itself was named"
+
+
+def unmeasured_env() -> dict[str, str]:
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("COV_CORE_", "COVERAGE_"))
+    }
+
+
+def test_killing_the_wrapper_outright_stops_its_product(
+    tmp_path: Path, spawn: servers.Spawn
+) -> None:
+    pid_file = tmp_path / "product.pid"
+    ready_file = tmp_path / "command.ready"
+    boot = f"exec {python(RECORDS_PID + SERVE)} {pid_file}"
+    wait_for_parent = (
+        "import os, pathlib, sys, time\n"
+        "parent = os.getppid()\n"
+        "pathlib.Path(sys.argv[1]).touch()\n"
+        "while os.getppid() == parent:\n"
+        "    time.sleep(0.05)\n"
+    )
+    wrapper = spawn(
+        [
+            sys.executable,
+            str(LOAD.with_name("with_service.py")),
+            "--boot",
+            boot,
+            "--ready",
+            READY,
+            "--",
+            sys.executable,
+            "-c",
+            wait_for_parent,
+            str(ready_file),
+        ],
+        env=unmeasured_env(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    deadline = time.monotonic() + 10
+    while not ready_file.is_file():
+        assert wrapper.poll() is None, "with_service exited before the command ran"
+        assert time.monotonic() < deadline, "the service never became ready"
+        time.sleep(0.02)
+    product = pid_of(pid_file)
+    try:
+        wrapper.kill()
+        wrapper.wait(timeout=10)
+        assert gone(product, wait=5), "the product outlived its SIGKILLed service wrapper"
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(product, signal.SIGKILL)
+
+
+def test_on_parent_exit_sets_pdeathsig_on_linux_and_checks_for_parent_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert with_service.on_parent_exit(os.getpid()) is None
+
+    prctl_calls: list[tuple[int, ...]] = []
+    kill_calls: list[tuple[int, int]] = []
+
+    class FakeLib:
+        def prctl(self, *args: int) -> int:
+            prctl_calls.append(args)
+            return 0
+
+    def fake_cdll(_name: str | None) -> FakeLib:
+        return FakeLib()
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(ctypes, "CDLL", fake_cdll)
+    monkeypatch.setattr(os, "kill", lambda pid, sig: kill_calls.append((pid, sig)))
+
+    alive = with_service.on_parent_exit(os.getppid())
+    assert alive is not None
+    alive()
+    assert prctl_calls == [(with_service.PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)]
+    assert kill_calls == []
+
+    raced = with_service.on_parent_exit(os.getppid() + 1)
+    assert raced is not None
+    raced()
+    assert prctl_calls == [(with_service.PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)] * 2
+    assert kill_calls == [(os.getpid(), signal.SIGTERM)]
