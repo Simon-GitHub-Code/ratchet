@@ -1040,7 +1040,27 @@ STOPPING = (
 SENDS_THEN_WAITS = (
     "import os, time\n"
     "open(os.environ['RATCHET_SENDING'], 'w').close()\n"
-    "while not os.path.exists(os.environ['RATCHET_STOPPING']): time.sleep(0.01)\n"
+    "deadline = time.monotonic() + 60\n"
+    "while not os.path.exists(os.environ['RATCHET_STOPPING']):\n"
+    "    assert time.monotonic() < deadline, 'the gate never signalled'\n"
+    "    time.sleep(0.01)\n"
+)
+RECORDS_THE_RELEASE = (
+    "import json, os, sys, time\n"
+    "seen, url, body, late = sys.argv[1:5]\n"
+    "time.sleep(float(late))\n"
+    "sending = os.environ['RATCHET_SENDING']\n"
+    "route = ['POST', url, 200, '{}'] if body == 'body' else ['GET', url, 200, None]\n"
+    "open(sending + '.pending', 'w').write(json.dumps([route]))\n"
+    "os.replace(sending + '.pending', sending)\n"
+    "deadline = time.monotonic() + 20\n"
+    "while not os.path.exists(sending + '.held'):\n"
+    "    assert time.monotonic() < deadline, 'the gate never released the command'\n"
+    "    time.sleep(0.01)\n"
+    "open(seen, 'w').write(open(sending + '.held').read())\n"
+    "while sys.argv[5:] and not os.path.exists(os.environ['RATCHET_STOPPING']):\n"
+    "    assert time.monotonic() < deadline, 'the gate never signalled'\n"
+    "    time.sleep(0.01)\n"
 )
 ANNOUNCES = (
     "import json, os, sys, time\n"
@@ -1094,6 +1114,7 @@ ANSWERED_HELD = re.compile(
 OLDER = (
     "with_service: the gate judged the stop the older way, by the command's own requests, since "
 )
+NAMED_NONE = "no route that takes a body was found among the routes the command named (none)"
 
 
 def smoke(
@@ -1254,7 +1275,7 @@ def test_workers_that_keep_the_listener_while_they_finish_are_green(
         (announces(), ""),
         (
             [sys.executable, "-c", SENDS_THEN_WAITS],
-            f"{OLDER}GET http://127.0.0.1:",
+            f"{OLDER}{NAMED_NONE}",
         ),
     ],
     ids=["with a body", "without one"],
@@ -1269,9 +1290,37 @@ def test_a_server_that_closes_half_sent_requests_at_a_stop_is_green(
     )
     if said:
         assert said in out, out
-        assert " sends no body, so a byte the gate held back would fall in the request's " in out
+        assert ": a byte the gate held back from a request without one would fall in the " in out
     else:
         assert ANSWERED_HELD.search(out), out
+    assert (code, out.endswith("with_service: green\n")) == (0, True)
+
+
+NO_BODY_ROUTE = re.compile(
+    rf"^{re.escape(OLDER)}no route that takes a body was found among the routes the command "
+    r"named \(GET http://127\.0\.0\.1:\d+/work\): a byte the gate held back from a request "
+    r"without one would fall in the request's head, which a server may close at a stop; bind a "
+    r"route with a body, METHOD URL STATUS BODY, to have one of its requests held across the "
+    r"signal$",
+    re.MULTILINE,
+)
+
+
+def test_a_product_with_no_route_that_takes_a_body_is_judged_the_older_way_and_says_so(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code, out = graceful("drain", capsys=capsys, command=smoke(url=f"GET {HOLDS} 200"))
+    assert NO_BODY_ROUTE.search(out), out
+    assert not ANSWERED_HELD.search(out), "no request was held"
+    assert (code, out.endswith("with_service: green\n")) == (0, True)
+
+
+def test_the_first_route_that_takes_a_body_is_held_whatever_route_comes_before_it(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    command = [*smoke(url=f"GET {HOLDS} 200"), "--url", f"POST {HOLDS} 200 {{}}"]
+    code, out = graceful("drain", capsys=capsys, command=command)
+    assert ANSWERED_HELD.search(out), out
     assert (code, out.endswith("with_service: green\n")) == (0, True)
 
 
@@ -1311,7 +1360,7 @@ def test_a_smoke_that_says_it_sends_after_the_gate_looked_is_judged_as_before_an
     capfd: pytest.CaptureFixture[str],
 ) -> None:
     code, out = graceful("drop", capsys=capfd, command=smoke(reaches_late=True))
-    assert f"{OLDER}GET http://127.0.0.1:" in out, out
+    assert f"{OLDER}{NAMED_NONE}" in out, out
     assert DROPPED.search(out), out
     assert (code, out.endswith("with_service: red\n")) == (1, True)
 
@@ -1523,6 +1572,66 @@ def test_a_command_that_never_starts_sending_is_red_and_the_service_is_not_signa
     assert "the command did not start sending within 2s: the signal waits until it " in out
     assert f"creates ${gatelib.SENDING_ENV}, as load_smoke.py --until-stopped does" in out
     assert code == 1
+
+
+def test_a_smoke_that_starts_sending_after_the_timeout_is_red_at_once_and_never_hangs() -> None:
+    gate = subprocess.Popen(  # noqa: S603 # -- the gate under test, no shell
+        [
+            *(sys.executable, str(LOAD.with_name("with_service.py"))),
+            *("--boot", f"MODE=drain exec {python(EXITS_ON_SIGNAL)}", "--ready", READY),
+            *("--timeout", "1", "--graceful", "10", "--", *smoke(starts_after="2")),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    try:
+        out, _ = gate.communicate(timeout=30)
+    except subprocess.TimeoutExpired:
+        gate.terminate()
+        out, _ = gate.communicate(timeout=30)
+        pytest.fail(f"the gate still ran 30s after it started:\n{out.decode()}")
+    said = out.decode()
+    assert "the command did not start sending within 1s: the signal waits until it " in said
+    assert (gate.returncode, said.endswith("with_service: red\n")) == (1, True), said
+
+
+@pytest.mark.parametrize(
+    ("way", "verdict"),
+    [
+        (
+            (["body", "2"], ["--timeout", "1"]),
+            ("the command did not start sending within 1s: ", "", 1),
+        ),
+        (
+            (["none", "0"], ["--signal-after", "5"]),
+            ("the command ended before the 5s signal: nothing was in flight", "", 1),
+        ),
+        ((["none", "0", "waits"], []), (OLDER, "", 0)),
+        (
+            (["body", "0", "waits"], []),
+            ("with_service: the service accepted the request the gate ", "held", 0),
+        ),
+    ],
+    ids=["it never started sending", "it ended first", "the older way", "held"],
+)
+def test_every_way_out_of_the_wait_for_the_signal_releases_the_command(
+    way: tuple[list[str], list[str]],
+    verdict: tuple[str, str, int],
+    *,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (stand_in, flags), (said, released, code) = way, verdict
+    seen = tmp_path / "seen"
+    exited, out = run(
+        *("--boot", f"MODE=drain exec {python(EXITS_ON_SIGNAL)}", "--ready", READY),
+        *("--graceful", "60", "--signal-after", "0.5", *flags, "--", sys.executable, "-c"),
+        *(RECORDS_THE_RELEASE, str(seen), HOLDS, *stand_in),
+        capsys=capsys,
+    )
+    assert said in out, out
+    assert (seen.read_text(encoding="utf-8") if seen.exists() else None) == released, out
+    assert exited == code, out
 
 
 def test_a_service_killed_by_the_signal_is_told_to_exec(

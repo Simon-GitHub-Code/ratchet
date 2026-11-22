@@ -292,8 +292,18 @@ def test_asking_the_gate_waits_for_its_answer(tmp_path: Path) -> None:
 
     answering = threading.Thread(target=gate)
     answering.start()
-    assert gatelib.ask(marker) == answer
+    assert gatelib.ask(marker, 30) == answer
     answering.join()
+
+
+def test_asking_a_gate_that_never_answers_gives_up_at_the_bound(tmp_path: Path) -> None:
+    marker = tmp_path / "stopping"
+    gatelib.write_stopping(marker, gatelib.Stopping({80: None}, "none", frozenset()))
+    told: list[gatelib.Stopping | None] = []
+    asking = threading.Thread(target=lambda: told.append(gatelib.ask(marker, 0.1)), daemon=True)
+    asking.start()
+    asking.join(20)
+    assert told == [None], "still asking 20s after a bound of 0.1s"
 
 
 def test_interrupts_raise_once_then_ignore_and_restore_the_handlers() -> None:

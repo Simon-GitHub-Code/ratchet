@@ -262,8 +262,18 @@ def until_stopped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path
     marker, sending = tmp_path / "stopping", tmp_path / "sending"
     monkeypatch.setenv(gatelib.STOPPING_ENV, str(marker))
     monkeypatch.setenv(gatelib.SENDING_ENV, str(sending))
+    monkeypatch.setenv(gatelib.HOLD_WITHIN_ENV, "30")
     load_smoke.holding(sending).touch()
     return marker, sending
+
+
+def bounded(call: Callable[[], tuple[int, str]], within: float = 20.0) -> tuple[int, str]:
+    result: list[tuple[int, str]] = []
+    waiting = threading.Thread(target=lambda: result.append(call()), daemon=True)
+    waiting.start()
+    waiting.join(within)
+    assert result, f"the smoke was still waiting {within:g}s after it started"
+    return result[0]
 
 
 @pytest.mark.parametrize("held", [True, False], ids=["held", "judged as before"])
@@ -288,12 +298,23 @@ def test_only_while_the_gate_holds_a_request_is_a_slow_answer_no_error(
     assert ("under the floor" in out) == (not held)
 
 
-@pytest.mark.parametrize("missing", [gatelib.STOPPING_ENV, gatelib.SENDING_ENV])
-def test_until_stopped_needs_both_paths_with_service_exports(
-    missing: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        (gatelib.STOPPING_ENV, None),
+        (gatelib.SENDING_ENV, None),
+        (gatelib.HOLD_WITHIN_ENV, None),
+        (gatelib.HOLD_WITHIN_ENV, "soon"),
+    ],
+)
+def test_until_stopped_needs_what_with_service_exports(
+    name: str, value: str | None, *, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     until_stopped(tmp_path, monkeypatch)
-    monkeypatch.delenv(missing)
+    if value is None:
+        monkeypatch.delenv(name)
+    else:
+        monkeypatch.setenv(name, value)
     with pytest.raises(SystemExit) as exit_:
         load_smoke.main(["load_smoke.py", "--until-stopped", "--url", closed_port()])
     assert exit_.value.code == 2
@@ -310,6 +331,39 @@ def test_the_smoke_says_it_is_sending_so_the_signal_can_wait_for_it(
         code, _ = smoke("--until-stopped", "--url", f"{url}/ok", *SHORT, capsys=capsys)
     assert code == 0
     assert sending.exists()
+
+
+def test_a_smoke_whose_gate_never_says_whether_it_holds_a_request_is_red_at_the_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, sending = until_stopped(tmp_path, monkeypatch)
+    load_smoke.holding(sending).unlink()
+    monkeypatch.setenv(gatelib.HOLD_WITHIN_ENV, "0.2")
+    args = ["--until-stopped", "--url", closed_port(), *SHORT, "--timeout", "0.3"]
+    code, out = bounded(lambda: smoke(*args, capsys=capsys))
+    assert out == (
+        "the gate did not say within 0.5s whether it holds a request across the stop signal\n"
+        "load-smoke: red\n"
+    )
+    assert code == 1
+
+
+def test_a_smoke_whose_gate_never_says_which_connections_it_took_is_red_at_the_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    marker, _ = until_stopped(tmp_path, monkeypatch)
+    url = closed_port()
+    unanswered = gatelib.Stopping(
+        {urlsplit(url).port or 80: None}, listeners.ELSEWHERE, frozenset()
+    )
+    gatelib.write_stopping(marker, unanswered)
+    args = ["--until-stopped", "--url", url, "--min-requests", "0", "--seconds", "0.3"]
+    code, out = bounded(lambda: smoke(*args, "--timeout", "0.2", capsys=capsys))
+    assert out == (
+        "the gate did not say within 0.2s which connections it took after the stop signal\n"
+        "load-smoke: red\n"
+    )
+    assert code == 1
 
 
 def test_a_refusal_after_the_signal_is_expected_and_before_it_is_an_error(
