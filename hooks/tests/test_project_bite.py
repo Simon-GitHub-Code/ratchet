@@ -1711,7 +1711,8 @@ def kept_apart(met: set[frozenset[str]]) -> None:
     "case",
     [
         ("4", 16, "0123", "4", "4"),
-        ("8", 16, "01", "8", "8"),
+        ("8", 16, "0123", "4", "8"),
+        ("12", 16, "0123", "4", "12"),
         ("1", 16, "0123", "1", "1"),
         ("16", 6, "0123", "1", "16"),
     ],
@@ -1733,6 +1734,37 @@ def test_the_proof_s_lanes_keep_the_binding_s_schedule_and_each_is_told_its_shar
     kept_apart(met)
     shares = {name: {each} for name in ("first", "second", "free", "other")}
     assert told == {**shares, "timed": {alone}}
+
+
+@pytest.mark.parametrize("cap", range(1, 17))
+def test_a_cap_runs_as_many_lanes_as_before_and_each_is_told_the_cores_they_share(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cap: int
+) -> None:
+    told: list[tuple[str, int]] = []
+    made: list[Path] = []
+
+    class Lane:
+        def prove(self, row: project_bite.Row, _bites: object, *, jobs: int) -> Iterator[object]:
+            told.append((row.gate, jobs))
+            return iter(())
+
+    def copy(_root: Path, path: Path, **_options: object) -> Lane:
+        made.append(path)
+        return Lane()
+
+    monkeypatch.setenv("RATCHET_JOBS", str(cap))
+    monkeypatch.setattr(project_bite.os, "cpu_count", lambda: 16)
+    monkeypatch.setattr(project_bite, "make_copy", copy)
+    gates = dict.fromkeys(("one", "two", "three", "four", "five", "timed"), LINT)
+    root = project(tmp_path / "repo", gates, None, speed="- Alone: `timed`\n")
+    tasks = [(project_bite.Row("q", "t", "1", f"gate {name}"), []) for name in gates]
+    lanes = min(project_bite.MAX_LANES, cap)
+    project_bite.run_lanes(root, None, tasks, lanes=lanes, limit=1.0)  # type: ignore[arg-type]
+    assert len(made) == lanes, f"cap {cap}: {len(made)} lanes where {lanes} ran before"
+    share = max(1, min(cap, 16 // lanes))
+    assert sorted(told) == sorted(
+        [*((name, share) for name in gates if name != "timed"), ("timed", cap)]
+    )
 
 
 HOLDER = (
@@ -1794,10 +1826,83 @@ def test_a_recipe_that_passes_the_runner_what_the_proof_cannot_read_is_named(
     commit(root, "recipes")
     assert prove(root) == 0
     assert (
-        "bite: the check recipe passes parallel.py a schedule flag the proof cannot read as text,"
-        " so its lanes do not keep it; state it in the binding's Speed section, `- Apart:` or"
-        " `- Alone:`"
+        "bite: the check recipe passes parallel.py {{ args }}, which the proof cannot read as"
+        " text, so its lanes run `lint` each with nothing beside it; pass the runner its schedule"
+        " flags as text to let them share the machine"
     ) in shown(capsys).splitlines()
+
+
+SHELL_FLAGS = [
+    (words, lanes)
+    for words in ("$FLAGS", "${FLAGS}", "`cat apart.txt`", "$(cat apart.txt)")
+    for lanes in "24"
+]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(case, marks=pytest.mark.shard_slot(n + 3 + len(KEPT)))
+        for n, case in enumerate(SHELL_FLAGS)
+    ],
+)
+def test_a_recipe_that_hands_the_runner_its_flags_through_the_shell_runs_its_gates_alone(
+    tmp_path: Path,
+    *,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    case: tuple[str, str],
+) -> None:
+    words, lanes = case
+    mark = tmp_path / "mark"
+    mark.mkdir()
+    monkeypatch.setenv("MARK", str(mark))
+    gates = {"holder": HOLDER, "user": USER, "one": LINT, "two": LINT}
+    registry = "".join(bite(name, "a planted word") for name in gates)
+    root = project(tmp_path / "repo", gates, registry)
+    write(root, "apart.txt", "--serial holder user\n")
+    write(root, "justfile", RECIPES.format(flags=words))
+    commit(root, "recipes")
+    code = project_bite.main(["project_bite.py", "--root", str(root), "--jobs", lanes])
+    out = shown(capsys)
+    assert code == 0, out
+    assert "bite: user: a planted word: bites\n" in out
+    said = project_bite.UNREAD.format(
+        recipe="check", words=words, gates="`holder` `user` `one` `two`"
+    )
+    assert f"{said}\n" in out
+
+
+UNREAD_GATES = [
+    ("{{run}} $FLAGS -- timed", {"timed"}),
+    ("{{run}} --serial first second -- $GATES", set(SCHEDULED)),
+]
+
+
+@pytest.mark.parametrize("case", UNREAD_GATES)
+def test_an_unread_recipe_s_gates_never_run_beside_another_gate(
+    tmp_path: Path,
+    *,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    case: tuple[str, set[str]],
+) -> None:
+    line, strict = case
+    log, mark = tmp_path / "log", tmp_path / "mark"
+    mark.mkdir()
+    monkeypatch.setenv("LOG", str(log))
+    monkeypatch.setenv("MARK", str(mark))
+    gates = {**SCHEDULED, "first": logged("first", "free"), "free": logged("free", "timed")}
+    registry = "".join(bite(name, "a planted word") for name in gates)
+    root = project(tmp_path / "repo", gates, registry)
+    write(root, "justfile", f'run := "python3 scripts/parallel.py"\n\ncheck:\n    {line}\n')
+    commit(root, "recipes")
+    assert project_bite.main(["project_bite.py", "--root", str(root), "--jobs", "4"]) == 0
+    met, _ = ran_with(log)
+    assert not [pair for pair in met if pair & strict], f"{sorted(map(sorted, met))} ran at once"
+    assert bool(met) is (strict != set(gates)), "the other gates share the lanes"
+    every = "every gate" if strict == set(gates) else "`timed`"
+    assert f"so its lanes run {every} each with nothing beside it" in shown(capsys)
 
 
 def test_check_keeps_the_schedule_the_proof_reads_from_the_same_binding(

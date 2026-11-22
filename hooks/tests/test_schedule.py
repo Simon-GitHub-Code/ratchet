@@ -4,6 +4,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
 
+import pytest
+
 import schedule
 
 SEEDS = range(200)
@@ -241,16 +243,57 @@ def test_the_recipes_flags_are_read_through_their_variables_as_the_runner_gets_t
         "Alone": (("perf",), ("load",)),
         "Wide": (("test",),),
     }
-    assert unread == ["fast", "odd", "other", "looped", "escapes"]
+    assert [(missed.recipe, missed.gates) for missed in unread] == [
+        ("fast", ("lint",)),
+        ("odd", ("x",)),
+        ("other", None),
+        ("looped", ("x",)),
+        ("escapes", ("x",)),
+        ("escapes", ("x",)),
+    ]
+    assert unread[0].words == ("{{ args }}",)
+    assert unread[-1].words == ('{{ "--alone \\"x\\"" }}',)
+
+
+EMPTY = schedule.Schedule({"Apart": (), "Alone": (), "Wide": ()})
 
 
 def test_a_recipe_whose_every_flag_is_text_is_read_whole_and_one_that_is_not_is_named() -> None:
     plain = "run := 'python3 parallel.py --jobs ' + num_cpus()\n\ncheck:\n    {{run}} -- a\n"
-    empty = schedule.Schedule({"Apart": (), "Alone": (), "Wide": ()})
-    assert schedule.recipes(plain) == (empty, [])
+    assert schedule.recipes(plain) == (EMPTY, [])
     assert schedule.recipes("check:\n    {{cmd}} --alone x -- x\n") == (schedule.Schedule(), [])
     named = "check:\n    python3 parallel.py {{ cmd }} -- x\n"
-    assert schedule.recipes(named)[1] == ["check"]
+    assert schedule.recipes(named)[1] == [schedule.Unread("check", ("{{ cmd }}",), ("x",))]
+
+
+SHELL_FLAGS = ("$FLAGS", "${FLAGS}", "`cat flags.txt`", "$(cat flags.txt)", "<(cat flags.txt)")
+
+
+@pytest.mark.parametrize("words", SHELL_FLAGS)
+def test_a_flag_the_shell_hands_the_runner_leaves_the_recipe_unread_with_the_gates_it_runs(
+    words: str,
+) -> None:
+    text = f"check:\n    python3 scripts/parallel.py --runner just {words} --alone c -- a b c\n"
+    kept, unread = schedule.recipes(text)
+    assert unread == [schedule.Unread("check", (words,), ("a", "b", "c"))]
+    assert kept.alone == {"c"}
+    valued = f"check:\n    python3 scripts/parallel.py --jobs {words} -- a\n"
+    assert schedule.recipes(valued)[1] == [schedule.Unread("check", (words,), ("a",))]
+
+
+def test_an_unread_recipe_s_gates_are_unknown_when_the_shell_or_just_names_them_too() -> None:
+    text = (
+        "check:\n    python3 parallel.py $FLAGS -- a $MORE\n"
+        "fast:\n    python3 parallel.py `x` --serial a b\n"
+        "deep:\n    python3 parallel.py $X -- a {{ gates() }}\n"
+        "odd:\n    python3 parallel.py $X -- a ( b\n"
+    )
+    assert [missed.gates for missed in schedule.recipes(text)[1]] == [None, None, None, None]
+
+
+def test_what_follows_the_runner_s_own_command_is_not_its_flags_or_gates() -> None:
+    text = "check:\n    python3 parallel.py -- a b; echo $HOME `date` $(id)\n"
+    assert schedule.recipes(text) == (EMPTY, [])
 
 
 def test_the_justfile_is_read_with_what_it_imports(tmp_path: Path) -> None:
