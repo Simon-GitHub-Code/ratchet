@@ -1888,3 +1888,15 @@ def test_deep_workflow_speaks_job_writes_summary_and_dispatches_merge(tmp_path: 
     )
     assert done.returncode == 0
     assert "::warning::" in done.stdout
+
+
+def test_ci_template_prints_and_records_restored_cache_size_in_every_cached_job() -> None:
+    ci = WORKFLOWS["ci.yml"]
+    assert ci.count("cache_restore.py") == 3
+    for job_name in ("tier0", "tier1", "tier1-long"):
+        after_head = ci.split(f"\n  {job_name}:\n", 1)[1]
+        section = re.split(r"\n  (?=[A-Za-z_][\w-]*:)", after_head, maxsplit=1)[0]
+        assert "id: cache" in section
+        assert "cache_restore.py" in section
+        assert "--report .ratchet/timing.jsonl" in section
+        assert section.index("uses: actions/cache@") < section.index("cache_restore.py")
