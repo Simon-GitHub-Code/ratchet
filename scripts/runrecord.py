@@ -25,6 +25,8 @@ NO_TREE = "unknown: the tree's content could not be read"
 TIER = "tier"
 CACHE_MISSING = "cache-missing"
 FAULT = "fault"
+MACHINE_FIELDS = ("cores", "load", "k", "share", "m", "machine_read")
+GATE_FIELDS = ("lane", "start", "cpu", "alone")
 TIMING = gatelib.STATE / "timing.jsonl"
 SPEED = "## Speed"
 LOCAL_CACHES = "Local caches"
@@ -126,16 +128,17 @@ def lines(path: Path) -> Iterator[bytes]:
         return
 
 
+def finite(value: object) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool) and 0 <= value < math.inf
+
+
 def well_formed(record: dict[str, object]) -> bool:
     if record.get("kind") != FAULT:
         return True
-    seconds = record.get("seconds")
     return (
         isinstance(record.get("gate"), str)
         and isinstance(record.get("bite"), str)
-        and isinstance(seconds, int | float)
-        and not isinstance(seconds, bool)
-        and 0 <= seconds < math.inf
+        and finite(record.get("seconds"))
         and isinstance(record.get("narrowed"), bool)
     )
 

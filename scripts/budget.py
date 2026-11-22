@@ -15,8 +15,13 @@ import time
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+import machine
 import runrecord
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 CEILINGS_TABLE = "ceilings.seconds"
 DEFAULT_HEADROOM = 1.5
@@ -28,6 +33,9 @@ GROUP = "group"
 GROUP_ENV = "RATCHET_BUDGET_GROUP"
 _TIMED_ENV: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
     "timed_env", default=None
+)
+_MEASURED: contextvars.ContextVar[list[machine.Machine] | None] = contextvars.ContextVar(
+    "measured", default=None
 )
 _TABLE_HEADER = re.compile(r"^\[ceilings\.seconds\]\s*$", re.MULTILINE)
 _ANY_HEADER = re.compile(r"^\[", re.MULTILINE)
@@ -41,6 +49,7 @@ class Outcome:
     exit_code: int
     tier: str | None = None
     blocks: bool = True
+    extra: Mapping[str, object] | None = None
 
     @property
     def over(self) -> bool:
@@ -143,8 +152,21 @@ def lowered_ceiling(
 
 def timed(command: list[str], cwd: Path) -> tuple[float, int]:
     started = time.monotonic()
-    completed = subprocess.run(command, cwd=cwd, env=_TIMED_ENV.get(), check=False)
-    return time.monotonic() - started, completed.returncode
+    with machine.Monitor() as monitor:
+        with monitor.spawning():
+            process = subprocess.Popen(command, cwd=cwd, env=_TIMED_ENV.get())
+            monitor.register(process.pid)
+        try:
+            code = process.wait()
+        except BaseException:
+            process.kill()
+            process.wait()
+            raise
+        finally:
+            monitor.unregister(process.pid)
+    if (holder := _MEASURED.get()) is not None:
+        holder.append(monitor.result())
+    return time.monotonic() - started, code
 
 
 Timed = tuple[float, int]
@@ -265,6 +287,7 @@ def report(
         "ceiling": outcome.ceiling,
         "status": outcome.status,
         "exit": outcome.exit_code,
+        **(outcome.extra or {}),
         **stamp,
     }
     if runrecord.append(path, record, root=root) and group_log is not None:
@@ -298,16 +321,22 @@ def main(argv: list[str]) -> int:
     report_to = root / options.report if options.report else None
     tree = runrecord.tree_id(root) if report_to else None
     earlier = len(records(report_to))
+    holder: list[machine.Machine] = []
     with tempfile.TemporaryDirectory() as directory:
         manifest = Path(directory) / "group.jsonl"
         env_token = _TIMED_ENV.set({**os.environ, GROUP_ENV: str(manifest)})
+        measured_token = _MEASURED.set(holder)
         try:
             seconds, exit_code = timed(command, root)
         finally:
+            _MEASURED.reset(measured_token)
             _TIMED_ENV.reset(env_token)
         gates = run_gates(report_to, earlier, job=options.key, manifest=manifest)
     ceiling, tier = held(text, options.key, None if gates is not None else options.tier)
-    outcome = Outcome(options.key, seconds, ceiling, exit_code, tier, options.over == "block")
+    extra = (holder[-1] if holder else machine.unavailable()).fields()
+    outcome = Outcome(
+        options.key, seconds, ceiling, exit_code, tier, options.over == "block", extra=extra
+    )
     said(outcome)
     each_gate = judged(outcome, gates or [], text=text, tier=options.tier)
     for each in each_gate:

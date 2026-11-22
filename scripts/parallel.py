@@ -125,6 +125,7 @@ from typing import IO, TYPE_CHECKING
 import application_types
 import budget
 import gatelib
+import machine
 import project_bite
 import runrecord
 import schedule
@@ -169,6 +170,9 @@ class Finished:
     exit_code: int
     output: str
     tool: bool = False
+    lane: int = 0
+    start: float = 0.0
+    cpu: float | None = None
 
     @property
     def green(self) -> bool:
@@ -198,6 +202,8 @@ class Live:
     log: IO[bytes]
     started: float
     tool: bool
+    lane: int = 0
+    offset: float = 0.0
 
 
 def say(text: str) -> None:
@@ -312,20 +318,24 @@ class Scheduler:
         self.finished: list[Finished] = []
         self.stopped: list[str] = []
         self.halted = False
+        self.tier_started = time.monotonic()
+        self.monitor = machine.Monitor()
 
     def run(self) -> None:
-        try:
-            while True:
-                self.start_ready()
-                if not self.live:
-                    return
-                time.sleep(POLL)
-                self.settle_exited()
-                if self.halted:
-                    self.stop_running()
-        except BaseException:
-            self.stop_running()
-            raise
+        self.tier_started = time.monotonic()
+        with self.monitor:
+            try:
+                while True:
+                    self.start_ready()
+                    if not self.live:
+                        return
+                    time.sleep(POLL)
+                    self.settle_exited()
+                    if self.halted:
+                        self.stop_running()
+            except BaseException:
+                self.stop_running()
+                raise
 
     def not_started(self) -> list[str]:
         return list(self.board.pending)
@@ -352,39 +362,69 @@ class Scheduler:
         env = {key: value for key, value in os.environ.items() if key != budget.GROUP_ENV}
         if name in self.shares:
             env["RATCHET_JOBS"] = str(self.shares[name])
-        try:
-            process = subprocess.Popen(
-                command,
-                cwd=self.root,
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
-        except OSError as error:
-            log.close()
-            return Finished(name, 0.0, 127, f"cannot run {command[0]}: {error}\n")
-        return Live(name, process, log, time.monotonic(), shlex.split(name)[-1] in self.tools)
+        used = {gate.lane for gate in self.live.values()}
+        lane = next(i for i in range(self.jobs) if i not in used)
+        started = time.monotonic()
+        offset = max(0.0, started - self.tier_started)
+        with self.monitor.spawning():
+            try:
+                process = subprocess.Popen(
+                    command,
+                    cwd=self.root,
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+            except OSError as error:
+                log.close()
+                return Finished(
+                    name,
+                    0.0,
+                    127,
+                    f"cannot run {command[0]}: {error}\n",
+                    lane=lane,
+                    start=offset,
+                    cpu=0.0,
+                )
+            self.monitor.register(process.pid)
+        return Live(name, process, log, started, shlex.split(name)[-1] in self.tools, lane, offset)
 
     def settle_exited(self) -> None:
         for name, gate in list(self.live.items()):
+            cpu = machine.process_cpu(gate.process.pid)
             code = gate.process.poll()
             if code is not None:
+                self.monitor.unregister(gate.process.pid)
                 del self.live[name]
-                self.settle(collect(gate, code))
+                self.settle(collect(gate, code, cpu))
 
     def settle(self, result: Finished) -> None:
-        self.board.done(result.name)
+        alone = not self.board.done(result.name)
         if result.output:
             say(f"==> {result.name} <==")
             say(result.output.rstrip("\n"))
         say(result.line())
         self.finished.append(result)
         if self.report_to is not None:
-            outcome = budget.Outcome(result.name, result.seconds, None, result.exit_code)
+            extra: dict[str, object] = {
+                "lane": result.lane,
+                "start": round(result.start, 3),
+                "cpu": None if result.cpu is None else round(result.cpu, 3),
+                "alone": alone,
+            }
+            outcome = budget.Outcome(
+                result.name, result.seconds, None, result.exit_code, extra=extra
+            )
             stamp = runrecord.stamp(self.root, self.tree)
-            budget.report(self.report_to, outcome, stamp, root=self.root, group_log=self.group_log)
+            budget.report(
+                self.report_to,
+                outcome,
+                stamp,
+                root=self.root,
+                group_log=self.group_log,
+            )
         if self.fail_fast and not result.green:
             self.halted = True
 
@@ -396,11 +436,12 @@ class Scheduler:
                 os.killpg(gate.process.pid, signal.SIGTERM)
         for gate in gates:
             gatelib.stop_group(gate.process)
+            self.monitor.unregister(gate.process.pid)
             gate.log.close()
             self.stopped.append(gate.name)
 
 
-def collect(gate: Live, code: int) -> Finished:
+def collect(gate: Live, code: int, cpu: float | None = None) -> Finished:
     seconds = time.monotonic() - gate.started
     left = gatelib.end_group(gate.process.pid)
     gate.log.seek(0)
@@ -408,7 +449,16 @@ def collect(gate: Live, code: int) -> Finished:
     gate.log.close()
     if left:
         output += f"parallel: {gate.name}: {gatelib.LEFT_RUNNING}\n"
-    return Finished(gate.name, seconds, 128 - code if code < 0 else code, output, gate.tool)
+    return Finished(
+        gate.name,
+        seconds,
+        128 - code if code < 0 else code,
+        output,
+        gate.tool,
+        gate.lane,
+        gate.offset,
+        cpu,
+    )
 
 
 def chains(scheduler: Scheduler) -> list[str]:
@@ -480,6 +530,7 @@ def record(scheduler: Scheduler, wall: float, *, exit_code: int, gates: list[str
         "status": "red" if exit_code else "green",
         "exit": exit_code,
         "gates": gates,
+        **scheduler.monitor.result().fields(),
         **stamp,
     }
     runrecord.append(scheduler.report_to, whole, root=scheduler.root)
