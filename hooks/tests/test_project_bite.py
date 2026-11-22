@@ -1715,6 +1715,7 @@ def kept_apart(met: set[frozenset[str]]) -> None:
         ("12", 16, "0123", "4", "12"),
         ("1", 16, "0123", "1", "1"),
         ("16", 6, "0123", "1", "16"),
+        ("4", 2, "0123", "1", "4"),
     ],
 )
 def test_the_proof_s_lanes_keep_the_binding_s_schedule_and_each_is_told_its_share_of_the_cores(
