@@ -260,6 +260,9 @@ UNREAD_PULLS = [
     "git diff --output=.git/config && git pull -q origin main",
     "bash -c 'git config core.sshCommand ssh' && git pull -q origin main",
     "gh repo fork --remote && git pull -q origin main",
+    "x=$(git config remote.origin.url) && git pull -q origin main",
+    'git commit -m "$(git config core.sshCommand ssh)" && git pull -q origin main',
+    "$TOOL && git pull -q origin main",
 ]
 
 
@@ -331,6 +334,9 @@ LEADS_THAT_ONLY_READ_OR_RECORD = [
     "git rev-parse --abbrev-ref HEAD && ",
     "gh pr view 7 && ",
     "just test && ",
+    "git commit -m \"$(cat <<'EOF'\nfix(core): x\n\nCo-Authored-By: y\nEOF\n)\" && ",
+    "git commit -m \"$(printf 'x')\" && ",
+    'git commit -m "fix $(date)" && ',
 ]
 
 
