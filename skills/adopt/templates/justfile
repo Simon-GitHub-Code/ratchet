@@ -304,7 +304,7 @@ test-counts:
     @echo "bind: through changed, collected test count at head, read from the test results that report.py --reader test-counts prints, >= at {base}"; exit 1
 
 mutation-changed:
-    @echo "bind: through changed, mutate the functions changed since {base}, with the `mutation_incremental` option added to the tool's command, shard {{shard}} of {{shards}}; convert its outcomes to the JSON lines mutation_survivors.py --tool <name> --mutants <file> reads, and judge them with it: zero unregistered survivors"; exit 1
+    @echo "bind: through changed, mutate the lines changed since {base} using mutation_survivors.py --changed --ranges (or --changed by file where the tool cannot take line ranges), with the `mutation_incremental` option added to the tool's command, shard {{shard}} of {{shards}}; convert its outcomes to the JSON lines mutation_survivors.py --tool <name> --mutants <file> --only ... reads, and judge them with it: zero unregistered survivors"; exit 1
 
 contracts-check:
     @echo "bind: regenerate contract artefacts and diff"; exit 1
