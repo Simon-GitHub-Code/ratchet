@@ -7,8 +7,8 @@ These gates need no stack, so the plugin ships them as code and proves them in i
 | Gate | Tier | The question it answers |
 | --- | --- | --- |
 | `scripts/commits.py` | 0 | does every commit subject follow the convention? |
-| `scripts/markers.py` | 0 | did the count of TODO, FIXME, HACK and XXX markers rise? |
-| `scripts/suppressions.py` | 0 | did any kind of suppression the binding lists rise, or a marker it forbids appear? |
+| `scripts/markers.py` | 0 | did the count of TODO, FIXME, HACK and XXX markers rise? With `--staged`, judges only the staged index diff against the merge base |
+| `scripts/suppressions.py` | 0 | did any kind of suppression the binding lists rise, or a marker it forbids appear? With `--staged`, judges only the staged index diff against the merge base |
 | `scripts/prose.py` | 0 | do the documents and comments keep to the glossary? |
 | `scripts/snapshots.py` | 0 | does each gate config the guard manifest lists match its recorded copy? |
 | `scripts/lowered.py` | 0 | was a threshold lowered, or a ceiling raised? |
