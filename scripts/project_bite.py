@@ -1594,6 +1594,27 @@ def schedule_of(root: Path, gates: Sequence[str]) -> schedule.Schedule:
     return stated.joined(passed).joined(strictest)
 
 
+class Forced(NamedTuple):
+    cause: str
+    record: str
+
+    def metadata(self) -> dict[str, str]:
+        return {"cause": self.cause, "record": self.record}
+
+
+PLUGIN_PIN_FORCED = Forced("plugin-pin", "ADR 0069")
+
+
+@dataclass(frozen=True)
+class Proof:
+    root: Path
+    registry: Registry
+    tasks: Sequence[Task]
+    lanes: int
+    limit: float | None
+    forced_by: Forced | None = None
+
+
 @dataclass(frozen=True)
 class LaneConfig:
     root: Path
@@ -1604,7 +1625,7 @@ class LaneConfig:
     ready: threading.Condition
     shell: Shell
     printing: threading.Lock
-    stamp: dict[str, str]
+    stamp: dict[str, object]
     cap: int
     told: int
 
@@ -1643,31 +1664,33 @@ def run_lane(config: LaneConfig, path: Path, made: Copy | None, *, number: int) 
             copy.close()
 
 
-def run_lanes(
-    root: Path, registry: Registry, tasks: Sequence[Task], *, lanes: int, limit: float
-) -> list[Outcome]:
-    limited = [(replace(row, limit=limit), bites) for row, bites in tasks]
-    kept = schedule_of(root, [row.gate for row, _ in limited])
-    cap = gatelib.default_jobs(root)
+def execute_lanes(plan: Proof, *, limit: float) -> list[Outcome]:
+    limited = [(replace(row, limit=limit), bites) for row, bites in plan.tasks]
+    kept = schedule_of(plan.root, [row.gate for row, _ in limited])
+    cap = gatelib.default_jobs(plan.root)
+    stamp: dict[str, object] = {
+        **runrecord.stamp(plan.root),
+        **({"forced": plan.forced_by.metadata()} if plan.forced_by is not None else {}),
+    }
     config = LaneConfig(
-        root=root,
-        registry=registry,
+        root=plan.root,
+        registry=plan.registry,
         tasks=limited,
         board=schedule.Board(range(len(limited)), kept, lambda task: limited[task][0].gate),
         kept=kept,
         ready=threading.Condition(),
         shell=Shell(),
         printing=threading.Lock(),
-        stamp=runrecord.stamp(root),
+        stamp=stamp,
         cap=cap,
-        told=max(1, min(cap, (os.cpu_count() or 1) // lanes)),
+        told=max(1, min(cap, (os.cpu_count() or 1) // plan.lanes)),
     )
     with (
         tempfile.TemporaryDirectory(prefix="ratchet-bite-", ignore_cleanup_errors=True) as scratch,
-        ThreadPoolExecutor(max_workers=lanes, thread_name_prefix="bite-lane") as pool,
+        ThreadPoolExecutor(max_workers=plan.lanes, thread_name_prefix="bite-lane") as pool,
     ):
-        paths = [Path(scratch) / f"copy-{n}" for n in range(lanes)]
-        first = make_copy(root, paths[0], registry=registry, shell=config.shell)
+        paths = [Path(scratch) / f"copy-{n}" for n in range(plan.lanes)]
+        first = make_copy(plan.root, paths[0], registry=plan.registry, shell=config.shell)
         try:
             with gatelib.signals_held():
                 futures = [
@@ -1685,6 +1708,12 @@ def run_lanes(
                 first.close()
 
 
+def run_lanes(
+    root: Path, registry: Registry, tasks: Sequence[Task], *, lanes: int, limit: float
+) -> list[Outcome]:
+    return execute_lanes(Proof(root, registry, tasks, lanes=lanes, limit=limit), limit=limit)
+
+
 def load() -> str:
     average = getattr(os, "getloadavg", None)
     if average is None:
@@ -1692,22 +1721,20 @@ def load() -> str:
     return f"{average()[0]:.1f} on {os.cpu_count()} cores"
 
 
-def proof(
-    root: Path, registry: Registry, tasks: Sequence[Task], *, lanes: int, limit: float | None
-) -> int:
+def run_proof(plan: Proof) -> int:
     started = time.monotonic()
     load_before = load()
-    seconds, first = run_limit(root, limit)
+    seconds, first = run_limit(plan.root, plan.limit)
     print(first)
     try:
         with gatelib.interrupts_raise():
-            outcomes = run_lanes(root, registry, tasks, lanes=lanes, limit=seconds)
+            outcomes = execute_lanes(plan, limit=seconds)
     except (Unprovable, OSError) as error:
         return gatelib.report("bite", [str(error)])
     except gatelib.Interrupted as stop:
         print(f"bite: red: {stop}")
         return 128 + stop.signum
-    ceiling = slow_ceiling(root)
+    ceiling = slow_ceiling(plan.root)
     if ceiling is not None:
         for outcome in outcomes:
             if outcome.fault and not outcome.bite.narrowed and outcome.seconds > ceiling:
@@ -1715,7 +1742,7 @@ def proof(
     faults = [outcome for outcome in outcomes if outcome.fault]
     bit = sum(1 for outcome in faults if outcome.verdict is Verdict.BITES)
     unseen = [outcome for outcome in outcomes if outcome.verdict not in PASSING]
-    gates = len({row.gate for row, _ in tasks})
+    gates = len({row.gate for row, _ in plan.tasks})
     print(
         f"bite: {'red' if unseen else 'green'}: {bit} of {len(faults)} "
         f"faults bit, over {gates} gates in {time.monotonic() - started:.0f}s"
@@ -1723,6 +1750,12 @@ def proof(
     if unseen:
         print(f"bite: load: {load_before} at the start, {load()} at the end")
     return 1 if unseen else 0
+
+
+def proof(
+    root: Path, registry: Registry, tasks: Sequence[Task], *, lanes: int, limit: float | None
+) -> int:
+    return run_proof(Proof(root, registry, tasks, lanes=lanes, limit=limit))
 
 
 class Touched(NamedTuple):
@@ -1734,7 +1767,7 @@ class Cause(NamedTuple):
     gate: str | None
     why: str
     bite: str | None = None
-    forced: bool = False
+    forced: Forced | None = None
 
 
 Targets = dict[tuple[bool, str], set[tuple[str, str]]]
@@ -1891,7 +1924,11 @@ def binding_causes(root: Path, base: str) -> list[Cause]:
     causes: list[Cause] = []
     if plugin_pin.PIN_LINE.findall(old_rest) != plugin_pin.PIN_LINE.findall(new_rest):
         causes.append(
-            Cause(None, "the plugin pin changed, and the plugin supplies gates", forced=True)
+            Cause(
+                None,
+                "the plugin pin changed, and the plugin supplies gates",
+                forced=PLUGIN_PIN_FORCED,
+            )
         )
     if (
         plugin_pin.PIN_LINE.sub("", old_rest).strip()
@@ -1991,8 +2028,8 @@ def pull_request_gates(rows: Sequence[Row]) -> list[Row]:
     return [row for row in rows if row.tier in PULL_REQUEST_TIERS]
 
 
-def forced(causes: Sequence[Cause]) -> bool:
-    return any(cause.forced for cause in causes)
+def forced(causes: Sequence[Cause]) -> Forced | None:
+    return next((cause.forced for cause in causes if cause.forced is not None), None)
 
 
 def targeted(rows: Sequence[Row], causes: Sequence[Cause]) -> list[Row]:
@@ -2045,7 +2082,7 @@ def deferred(rows: Sequence[Row], causes: Sequence[Cause], planted: dict[str, bo
 
 def changed_tasks(
     root: Path, rows: Sequence[Row], *, bites: Sequence[Bite], planted: dict[str, bool]
-) -> list[Task] | int:
+) -> tuple[list[Task], Forced | None] | int:
     base = gatelib.base_commit(root)
     if gatelib.adoption(root, base):
         print(
@@ -2069,7 +2106,7 @@ def changed_tasks(
         print("\n".join([*lines, nothing]))
         return 0
     print("\n".join(lines))
-    return [(row, chosen_bites(row, bites, causes)) for row in chosen]
+    return [(row, chosen_bites(row, bites, causes)) for row in chosen], forced(causes)
 
 
 def fault_tasks(selected: Sequence[Task], only: Sequence[str]) -> list[Task]:
@@ -2120,11 +2157,12 @@ def main(argv: list[str]) -> int:
         (row, [bite for bite in registry.bites if bite.gate == row.gate])
         for row in (pull_request_gates(rows) if options.pull_request_gates else rows)
     ]
+    forced_by: Forced | None = None
     if options.changed:
         found = changed_tasks(root, rows, bites=registry.bites, planted=planted)
         if isinstance(found, int):
             return found
-        selected = found
+        selected, forced_by = found
     tasks = fault_tasks(selected, options.gate)
     if not tasks and options.changed:
         print("bite: green: the gates the change affects have no bite; nothing to prove")
@@ -2132,7 +2170,13 @@ def main(argv: list[str]) -> int:
     if not tasks:
         return gatelib.report("bite", ["no bite to run: a gate with nothing to run is red"])
     lanes = max(1, min(options.jobs, len(tasks)))
-    return proof(root, registry, tasks, lanes=lanes, limit=options.limit)
+    return (
+        run_proof(
+            Proof(root, registry, tasks, lanes=lanes, limit=options.limit, forced_by=forced_by)
+        )
+        if forced_by is not None
+        else proof(root, registry, tasks, lanes=lanes, limit=options.limit)
+    )
 
 
 if __name__ == "__main__":
