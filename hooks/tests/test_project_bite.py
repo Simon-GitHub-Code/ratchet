@@ -72,7 +72,7 @@ def project(
 
 
 TIMING = re.compile(r" \(\d+\.\ds, lane \d+(; [^)]*)?\)")
-AID = re.compile(r"^bite: (limit|load): .*\n", re.MULTILINE)
+AID = re.compile(r"^bite: (limit|load|slowest): .*\n", re.MULTILINE)
 
 
 def shown(capsys: pytest.CaptureFixture[str]) -> str:

@@ -302,18 +302,35 @@ def justfile(root: Path) -> str:
 
 class Board(Generic[Task]):
     def __init__(
-        self, tasks: Iterable[Task], schedule: Schedule, gate: Callable[[Task], str]
+        self,
+        tasks: Iterable[Task],
+        schedule: Schedule,
+        gate: Callable[[Task], str],
+        *,
+        alone: Callable[[Task], bool] | None = None,
     ) -> None:
         self.schedule = schedule
         self.gate = gate
-        self.pending = sorted(tasks, key=lambda task: gate(task) in schedule.alone)
+        self.alone = alone
+        self.pending = sorted(tasks, key=self._is_alone)
         self.running: list[Task] = []
         self.met: dict[Task, set[str]] = {}
 
+    def _is_alone(self, task: Task) -> bool:
+        return self.gate(task) in self.schedule.alone or (
+            self.alone is not None and self.alone(task)
+        )
+
+    def _can_run(self, task: Task) -> bool:
+        if self._is_alone(task) or any(self._is_alone(other) for other in self.running):
+            return not self.running
+        name = self.gate(task)
+        return all(self.schedule.beside(name, self.gate(other)) for other in self.running)
+
     def take(self) -> Task | None:
         for task in self.pending:
-            name = self.gate(task)
-            if all(self.schedule.beside(name, self.gate(other)) for other in self.running):
+            if self._can_run(task):
+                name = self.gate(task)
                 self.pending.remove(task)
                 for other in self.running:
                     self.met[other].add(name)
