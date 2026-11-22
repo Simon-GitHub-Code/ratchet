@@ -20,7 +20,9 @@ gate to its own ceiling by its own seconds.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -379,7 +381,15 @@ def shape(root: Path, output: Path) -> int:
     return 0
 
 
+def write_group_log(path: Path | None, job: str, gates: tuple[str, ...]) -> None:
+    if path is None:
+        return
+    with contextlib.suppress(OSError), path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"kind": budget.GROUP, "job": job, "gates": list(gates)}) + "\n")
+
+
 def run(root: Path, name: str, options: argparse.Namespace) -> int:
+    group_path = os.environ.pop(budget.GROUP_ENV, None)
     justfile = schedule.justfile(root)
     found = lists(justfile)
     if isinstance(found, Own):
@@ -398,7 +408,12 @@ def run(root: Path, name: str, options: argparse.Namespace) -> int:
     if job.alone:
         command = [*shlex.split(options.runner), name]
         return subprocess.run(command, cwd=root, check=False).returncode
-    code = parallel.main(["parallel.py", *flags(justfile, gates, options), "--", *gates])
+    group_log = Path(group_path) if group_path else None
+    write_group_log(group_log, name, gates)
+    code = parallel.main(
+        ["parallel.py", *flags(justfile, gates, options), "--", *gates],
+        group_log=group_log,
+    )
     if options.report:
         ran: dict[str, object] = {"kind": budget.GROUP, "job": name, "gates": list(gates)}
         ran |= runrecord.stamp(root)
