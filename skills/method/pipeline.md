@@ -164,7 +164,7 @@ The script is a pure function of its arguments and the agents' structured result
 8. **Cases no record states.** The critic, the builders and the review return `unstated`: each case where no record says which behaviour is right, put through [the fork test](#the-fork-test).
    - A case the test gives a role is an assumption: it joins `assumptions`, and the next critic and the review judge against it.
    - A case it gives the owner stops the run `blocked` after the role that returned it, with the question in `openQuestions`. The builders also return `departures`: a departure from a criterion of `spec.md` stops the run the same way, and a departure from an assumption goes through the fork test and, where the role has the choice, is the amended assumption.
-   - The work of a blocked run is stashed, and the ticket is built again from the preflight once the owner has answered.
+   - The work of a blocked run is set aside, as a stash by `/ratchet:feature` and as a file under the git directory by the drain, and the ticket is built again from the preflight once the owner has answered.
 
 **Agents.** Each role is one agent. The ticket check adds two when it finds a gap (the amend and the second read), the fix loop two per round (the fix pass on a young project's review is one such round, which re-reviews instead of re-critiquing), and a change judged again behind another merge two more (reconcile and review). `AGENTS_AT_MOST` in the script holds the most a run spawns before and after `depended-on`.
 

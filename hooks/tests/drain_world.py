@@ -426,7 +426,6 @@ class World:
         )
         rows = {line.split(" ", 1)[0]: line.split(" ", 4)[1:] for line in refs.splitlines()}
         branches = {branch: row[1:] for branch, row in rows.items()}
-        stashes = git(self.root, "stash", "list", "--format=%gs").splitlines()
         tips = merged_tips(self.root)
         on_merge = {branch for branch, row in rows.items() if row[0] in tips}
         half = self.half()
@@ -455,7 +454,7 @@ class World:
                 merged=merged,
                 note=note,
                 text=text,
-                stashes=sum(f": {BRANCH[name]}: " in line for line in stashes),
+                stashes=len(list(drain.kept_home(self.root, BRANCH[name]).glob("*.kept"))),
                 published=was.published,
                 since=noted is not None and head != noted.head,
             )
@@ -829,7 +828,6 @@ class LeaseWorld:
             root,
             "for-each-ref",
             "--format=%(refname) %(objectname) %(ahead-behind:main)",
-            "refs/stash",
             branch,
         )
         rows = {ref: row for ref, _, row in (line.partition(" ") for line in refs.splitlines())}
@@ -857,7 +855,7 @@ class LeaseWorld:
             tree=ghost.tree if made else None,
             draft=made and bool(git(tree, "status", "--porcelain")),
             running=self.program is not None and self.program.poll() is None,
-            stashed="refs/stash" in rows,
+            stashed=any(drain.kept_home(root, BRANCH[Name.A]).glob("*.kept")),
             landing=self.landing[0] if self.landing is not None and live else None,
             orphan=orphan if merging else None,
             doomed=self.doomed is not None and running(self.doomed[0]),
