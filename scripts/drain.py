@@ -434,13 +434,15 @@ def proven(where: Path, path: Path, aside: Aside) -> str | None:
 def keep(scratch: Scratch, path: Path, aside: Aside) -> str | None:
     parts = patches(scratch, aside)
     header = json.dumps({**asdict(aside), "sizes": [len(part) for part in parts]})
-    partial = path.with_name(f".{path.name}.partial")
+    partial = path.with_name(f".{path.name}.{secrets.token_hex(4)}.partial")
     try:
         path.parent.mkdir(mode=OWNER_ONLY, parents=True, exist_ok=True)
         partial.write_bytes(header.encode() + b"\n" + b"".join(parts))
         why = proven(scratch.where, partial, aside)
         if why is None:
             partial.replace(path)
+            for left in partials(path.parent, path.name.removesuffix(".kept").rpartition("-")[2]):
+                left.unlink()
     except OSError as error:
         why = f"it could not be set aside under {path.parent}: {error.strerror}"
     if why is not None:
@@ -455,6 +457,10 @@ def unit_token(tree: Path) -> Path:
 
 def held_unit(home: Path, ident: str) -> Path | None:
     return next(home.glob(f"*-{ident}.kept"), None) if ident else None
+
+
+def partials(home: Path, ident: str) -> list[Path]:
+    return sorted(home.glob(f".*-{ident}.kept.*.partial"))
 
 
 def new_unit(home: Path, ident: str) -> Path:
@@ -476,16 +482,22 @@ def gathered(scratch: Scratch, home: Path) -> str | None:
     except OSError as error:
         return f"it could not be set aside under {token.parent}: {error.strerror}"
     path = held_unit(home, ident)
-    if path is None:
-        return keep(scratch, new_unit(home, ident), now_held)
-    read = read_unit(path)
-    if isinstance(read, str):
-        return read
-    given = given_back(scratch, read)
-    whole = None if given is None else overlaid(scratch, given, now_held)
-    if whole is None:
-        return f"{path} does not take what the work tree holds"
-    return None if whole == given else keep(scratch, path, whole)
+    left = partials(home, ident)
+    whole, given = now_held, None
+    for found in reversed([*([] if path is None else [path]), *left]):
+        read = read_unit(found)
+        if isinstance(read, str) and found != path:
+            continue
+        if isinstance(read, str):
+            return read
+        given = given_back(scratch, read)
+        laid = None if given is None else overlaid(scratch, given, whole)
+        if laid is None:
+            return f"{found} does not take what the work tree holds"
+        whole = laid
+    if path is not None and not left and whole == given:
+        return None
+    return keep(scratch, path or new_unit(home, ident), whole)
 
 
 def set_aside(root: Path, tree: Path, branch: str) -> str | None:
@@ -1412,6 +1424,8 @@ def finish_close(root: Path, branch: str) -> list[str]:
         return []
     if tree not in worktrees(root):
         drop_mark(root, branch)
+        for unit in sorted(kept_home(root, branch).glob("*.kept"))[-1:]:
+            print(kept_line(branch, unit))
         return []
     kept = discard(root, tree, branch)
     stays = [f"the work tree stays at {tree}: {kept}"] if kept else []
@@ -2256,15 +2270,22 @@ def stashed_aside(scratch: Scratch, sha: str) -> Aside:
 def move_stashes(root: Path) -> None:
     listing = gatelib.git(root, "stash", "list", "--format=%H%x09%gs") or ""
     for sha, _, subject in reversed([line.partition("\t") for line in listing.splitlines()]):
-        on, _, label = subject.partition(": ")
+        _, _, label = subject.partition(": ")
         branch, _, run = label.partition(": ")
         if run not in DRAIN_RUNS:
             continue
         listed = (gatelib.git(root, "stash", "list", "--format=%H") or "").splitlines()
         entry = f"stash@{{{listed.index(sha)}}}"
         said = f"kept: stash {sha} (`{subject}`) stays"
-        mine = on in {f"On {branch}", "On (no branch)"} and run in OWN_RUNS
-        if not mine or "opened" not in queue_notes.read_note(root, branch):
+        word = STASHED.get(str(queue_notes.read_note(root, branch).get("outcome")), INTERRUPTED)
+        start = noted_start(root, branch)
+        made_on = gatelib.git(root, "rev-parse", "--verify", "--quiet", f"{sha}^1")
+        if (
+            subject != f"On {branch}: {branch}: {word} run"
+            or run not in OWN_RUNS
+            or start is None
+            or made_on != start.head
+        ):
             print(
                 f"{said}: nothing the drain recorded proves the drain made it; to move it by hand,"
                 f" run `git stash pop --index {entry}` in a clean checkout of `{branch}`"
