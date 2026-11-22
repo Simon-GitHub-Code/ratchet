@@ -74,7 +74,7 @@ def test_the_hash_needs_no_git_and_stores_nothing(tmp_path: Path) -> None:
     done = just(root, "plugin-pin", plugin=copy, env={"PATH": path})
     assert done.returncode == 0, done.stdout + done.stderr
     calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
-    assert set(calls) <= {"config --get ratchet.jobs"}
+    assert set(calls) <= {"config --get ratchet.jobs", "config --get ratchet.hook-jobs"}
 
 
 def forged_world(tmp_path: Path) -> tuple[Path, Path, Path, str]:
