@@ -703,8 +703,9 @@ def test_a_merge_workflow_that_reads_tier_2_its_own_way_is_left_for_an_agent_to_
     merge = ".github/workflows/merge.yml"
     lines = text(repo, merge).splitlines(keepends=True)
     own = "".join(line for line in lines if not line.lstrip().startswith("tier1="))
-    own = own.replace('--tier1 "$tier1" --tier2 "$tier2"', '--tier2 "$deep"')
-    own = own.replace('tier2="$(', 'deep="$(')
+    own = own.replace('--tier1 "$tier1" --deep "$answer"', '--deep "$deep"')
+    own = own.replace('answer="$RUNNER_TEMP/deep.json"\n', "")
+    own = own.replace('need="$(', 'deep="$(')
     (repo / merge).write_text(own, encoding="utf-8")
     left = [f for f in settle(repo) if "--tier1" in f.problem]
     assert text(repo, merge) == own
@@ -716,22 +717,22 @@ def without_tier1(root: Path) -> str:
     merge = ".github/workflows/merge.yml"
     lines = text(root, merge).splitlines(keepends=True)
     kept = "".join(line for line in lines if not line.lstrip().startswith("tier1="))
-    return kept.replace('--tier1 "$tier1" --tier2 "$tier2"', '--tier2 "$tier2"')
+    return kept.replace('--tier1 "$tier1" --deep "$answer"', '--deep "$answer"')
 
 
 def test_tier_1_is_read_at_the_indent_of_the_merge_workflows_own_tier_2_line(repo: Path) -> None:
     merge = ".github/workflows/merge.yml"
     deeper = "".join(
-        f"    {line}" if line.lstrip().startswith("tier2=") else line
+        f"    {line}" if line.lstrip().startswith("answer=") else line
         for line in without_tier1(repo).splitlines(keepends=True)
     )
     (repo / merge).write_text(deeper, encoding="utf-8")
     assert not [f for f in settle(repo) if "--tier1" in f.problem]
     lines = text(repo, merge).splitlines()
-    read, tier2 = (
-        next(line for line in lines if line.lstrip().startswith(k)) for k in ("tier1=", "tier2=")
+    read, answer = (
+        next(line for line in lines if line.lstrip().startswith(k)) for k in ("tier1=", "answer=")
     )
-    assert len(read) - len(read.lstrip()) == len(tier2) - len(tier2.lstrip())
+    assert len(read) - len(read.lstrip()) == len(answer) - len(answer.lstrip())
 
 
 def test_tier_1_is_passed_on_the_judges_call_and_not_on_a_line_above_that_names_tier_2(
@@ -739,15 +740,55 @@ def test_tier_1_is_passed_on_the_judges_call_and_not_on_a_line_above_that_names_
 ) -> None:
     merge = ".github/workflows/merge.yml"
     lines = without_tier1(repo).splitlines(keepends=True)
-    at = next(i for i, line in enumerate(lines) if line.lstrip().startswith("tier2="))
+    at = next(i for i, line in enumerate(lines) if line.lstrip().startswith("answer="))
     indent = lines[at][: len(lines[at]) - len(lines[at].lstrip())]
-    lines.insert(at + 1, f"{indent}echo 'judging with --tier2 \"$tier2\"'\n")
+    lines.insert(at + 1, f"{indent}echo 'judging with --deep \"$answer\"'\n")
     (repo / merge).write_text("".join(lines), encoding="utf-8")
     settle(repo)
     written = text(repo, merge).splitlines()
     [call] = [line for line in written if "--target" in line]
-    assert '--tier1 "$tier1" --tier2 "$tier2"' in call
+    assert '--tier1 "$tier1" --deep "$answer"' in call
     assert not [line for line in written if line.lstrip().startswith("echo") and "--tier1" in line]
+
+
+def test_upgrading_a_0_13_3_project_rewrites_all_three_with_no_deep_ceiling(
+    tmp_path: Path,
+) -> None:
+    root = adopted.copy(adopted.adopted("0.13.3"), tmp_path / "repo")
+    commit(root, "chore: adopted at 0.13.3")
+    branch(root, "upgrade")
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    pin = plugin_pin.pinned(text(root, BINDING))
+    assert pin is not None
+    assert text(root, DEEP) == conformance.template_file(DEEP).replace("<ratchet-sha>", pin.commit)
+    assert "cancel-in-progress: false" in text(root, DEEP)
+    assert "\n  speaks:\n" in text(root, DEEP)
+    merge_path = ".github/workflows/merge.yml"
+    assert text(root, merge_path) == conformance.template_file(merge_path).replace(
+        "<ratchet-sha>", pin.commit
+    )
+    assert "--deep" in text(root, merge_path)
+    assert "[ceilings.deep]" not in text(root, THRESHOLDS)
+    assert conformance.run(root) == 0
+
+
+def test_upgrading_a_0_13_3_project_with_a_hand_edited_merge_workflow_owes_it(
+    tmp_path: Path,
+) -> None:
+    root = adopted.copy(adopted.adopted("0.13.3"), tmp_path / "repo")
+    merge_path = ".github/workflows/merge.yml"
+    own = text(root, merge_path).replace('tier2="$(', 'deep="$(').replace('"$tier2"', '"$deep"')
+    (root / merge_path).write_text(own, encoding="utf-8")
+    commit(root, "chore: adopted at 0.13.3 with hand-edited merge")
+    branch(root, "upgrade")
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    pin = plugin_pin.pinned(text(root, BINDING))
+    assert pin is not None
+    assert text(root, DEEP) == conformance.template_file(DEEP).replace("<ratchet-sha>", pin.commit)
+    assert "--deep" not in text(root, merge_path)
+    owed_merge = [e for e in owed.read(root).entries if e.path == merge_path]
+    assert owed_merge
+    assert conformance.run(root) == 0
 
 
 def test_a_run_id_the_justfile_sets_without_exporting_it_is_exported(repo: Path) -> None:

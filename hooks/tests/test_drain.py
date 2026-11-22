@@ -633,6 +633,32 @@ def test_land_waits_on_an_unproven_tip_and_lands_once_merge_deep_proved_it(
     assert note(root, BRANCH_A)["outcome"] == "merged"
 
 
+def test_land_reads_merge_wait_when_unproven_is_beside_behind_and_retries(
+    tmp_path: Path, capsys: Out
+) -> None:
+    proved = binding(MERGE) + "| check-deep | `true` |\n" + GATES + FUZZ
+    bound = "[ceilings.deep]\nunproven = 0\n"
+    root = project(
+        tmp_path, **{"docs/process/binding.md": proved, "quality/thresholds.toml": bound}
+    )
+    run(root, "open", ALPHA)
+    change = {"src/b.py": "B = 1\n", ALPHA: ticket(1, "Alpha", status="resolved")}
+    build(root, BRANCH_A, change, record=approval("alpha"))
+    write(root, "other.txt", "ahead\n")
+    commit(root, "feat(core): move main ahead")
+    capsys.readouterr()
+    assert run(root, "land", ALPHA) == 1
+    out = capsys.readouterr().out
+    assert "merge: wait\n" in out
+    assert "behind:" in out
+    assert "unproven:" in out
+    assert "the owner types" not in out
+    kept = note(root, BRANCH_A)
+    assert kept["outcome"] == "waits"
+    assert queue_notes.mechanical(kept["reasons"])
+    assert states(root)[BRANCH_A] != "held"
+
+
 def test_land_needs_the_merge_entry_point_and_no_forge(tmp_path: Path, capsys: Out) -> None:
     root = project(tmp_path, **{"docs/process/binding.md": binding(None)})
     assert run(root, "land", ALPHA) == 2

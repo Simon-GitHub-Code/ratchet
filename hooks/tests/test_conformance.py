@@ -1842,3 +1842,70 @@ def test_adr_citation_checks_catch_missing_superseded_by_and_broken_links(repo: 
     )
     assert any("quality/thresholds.toml" in line and "0097" in line for line in found)
     assert not any("0001" in line for line in found)
+
+
+def test_a_project_on_0_13_3_templates_yields_the_three_deep_edits_giving_new_templates(
+    repo: Path,
+) -> None:
+    templates = adopted.template_files(adopted.LATER["0.13.3"])
+    pin = "0" * 40
+    deep_old = templates[".github/workflows/deep.yml"].replace("<ratchet-sha>", pin)
+    merge_old = templates[".github/workflows/merge.yml"].replace("<ratchet-sha>", pin)
+    (repo / ".github/workflows/deep.yml").write_text(deep_old, encoding="utf-8")
+    (repo / ".github/workflows/merge.yml").write_text(merge_old, encoding="utf-8")
+    raw_speed = list(conformance.check_speed(repo))
+    raw_merge = list(conformance.check_merge_workflow(repo))
+    deep_edits = [
+        f
+        for f in (*raw_speed, *raw_merge)
+        if isinstance(f.fix, conformance.Edit)
+        and f.path in {".github/workflows/deep.yml", ".github/workflows/merge.yml"}
+        and conformance.KEPT_BRANCH not in f.problem
+    ]
+    assert {f.path for f in deep_edits} == {
+        ".github/workflows/deep.yml",
+        ".github/workflows/merge.yml",
+    }
+    assert len({id(f.fix.want) for f in deep_edits}) == 3
+    found = conformance.findings(repo)
+    assert found
+    assert all(isinstance(f.fix, conformance.Auto) for f in found), found
+    deep_now = deep_old
+    merge_now = merge_old
+    for f in found:
+        if f.path == ".github/workflows/deep.yml":
+            assert isinstance(f.fix, conformance.Auto)
+            deep_now = f.fix.want(deep_now)
+        elif f.path == ".github/workflows/merge.yml":
+            assert isinstance(f.fix, conformance.Auto)
+            merge_now = f.fix.want(merge_now)
+    assert deep_now == conformance.template_file(".github/workflows/deep.yml").replace(
+        "<ratchet-sha>", pin
+    )
+    assert merge_now == conformance.template_file(".github/workflows/merge.yml").replace(
+        "<ratchet-sha>", pin
+    )
+    (repo / ".github/workflows/deep.yml").write_text(deep_now, encoding="utf-8")
+    (repo / ".github/workflows/merge.yml").write_text(merge_now, encoding="utf-8")
+    assert conformance.findings(repo) == []
+
+
+def test_non_template_deep_and_merge_workflows_leave_deep_edits_owed(repo: Path) -> None:
+    deep_path = repo / ".github/workflows/deep.yml"
+    merge_path = repo / ".github/workflows/merge.yml"
+    deep_text = deep_path.read_text(encoding="utf-8")
+    merge_text = merge_path.read_text(encoding="utf-8")
+    deep_path.write_text(
+        deep_text.replace("cancel-in-progress: false", "cancel-in-progress: ${{ true }}").split(
+            "\n  speaks:\n"
+        )[0]
+        + "\n",
+        encoding="utf-8",
+    )
+    merge_path.write_text(
+        merge_text.replace("--deep", "--custom-deep"),
+        encoding="utf-8",
+    )
+    found = conformance.findings(repo)
+    assert {f.path for f in found} == {".github/workflows/deep.yml", ".github/workflows/merge.yml"}
+    assert all(isinstance(f.fix, conformance.Agent) for f in found), found

@@ -37,13 +37,14 @@ from tests.drain_world import (
     lock_held,
     running,
 )
-from tests.repos import git
+from tests.repos import git, snapshot, write
 from tests.support import PLUGIN_ROOT
 from tests.test_drain import (
     HALVES,
     plan_file,
     scratch,  # noqa: F401 # -- an autouse fixture of the drain's tests
 )
+from tests.test_merge_ready import FUZZ, GATES
 from tests.test_queue_gate import COMMIT, judged
 
 if TYPE_CHECKING:
@@ -467,6 +468,25 @@ def test_a_branch_judged_on_an_older_tip_does_not_land_and_is_retried(tmp_path: 
     assert play.state.of(Name.A).note == model.Note(
         model.Outcome.CLOSED, hold=False, text=0, fresh=True, attempts=1, passed=True
     ), "behind alone is a reason the drain resolves itself"
+
+
+def test_a_branch_held_by_unproven_alone_reads_merge_wait_and_is_retried(tmp_path: Path) -> None:
+    play = Play(tmp_path)
+    proved = play.world.binding + "| check-deep | `true` |\n" + GATES + FUZZ
+    write(play.world.root, "docs/process/binding.md", proved)
+    write(play.world.root, "quality/thresholds.toml", "[ceilings.deep]\nunproven = 0\n")
+    snapshot(play.world.root, "chore(quality): bind deep and unproven ceiling")
+    for step in JUDGED_A:
+        play.named(step, compare=False)
+    printed = play.named("drain.py land a", compare=False)
+    assert play.world.code == 1
+    assert "merge: wait\nunproven: no finished deep run covers" in printed
+    assert "the owner types" not in printed
+    actual = play.world.seen(play.state)
+    assert actual.tickets[0].note == model.Note(
+        model.Outcome.CLOSED, hold=False, text=0, fresh=True, attempts=1, passed=True
+    ), "unproven alone is retried, not held"
+    assert actual.statuses[Name.A] != model.Status.HELD
 
 
 def test_land_refuses_a_held_ticket(tmp_path: Path) -> None:

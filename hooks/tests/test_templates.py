@@ -20,6 +20,7 @@ import pytest
 import change_size
 import conformance
 import justfile_text
+import merge_ready
 import parallel
 import pins
 import plugin_pin
@@ -901,6 +902,10 @@ path = [a for a in args if a.startswith("repos/")]
 path = path[0] if path else ""
 if args[:2] == ["pr", "list"]:
     print("\\n".join(world["open"]))
+elif args[:2] == ["workflow", "run"]:
+    if world.get("dispatch_fail"):
+        print(world["dispatch_fail"], file=sys.stderr)
+        sys.exit(1)
 elif path.endswith("/workflows/deep.yml/runs"):
     print(json.dumps(world["deep"]))
 elif path.endswith("/workflows/ci.yml/runs") and "branch" in fields:
@@ -936,9 +941,14 @@ FAKE_JUDGE = """import json, os, sys
 args = sys.argv[1:]
 head = args[args.index("--head") + 1]
 report = args[args.index("--report") + 1]
+world = json.load(open(os.environ["WORLD"]))
 open(os.environ["CALLS"], "a").write("judge " + " ".join(args) + "\\n")
-open(report, "w").write("<!-- ratchet:merge -->\\nverdict for " + head + "\\n")
-sys.exit(0 if head in json.load(open(os.environ["WORLD"]))["agent"] else 1)
+verdict = (
+    "agent" if head in world["agent"] else ("wait" if head in world.get("wait", []) else "owner")
+)
+print(f"merge: {verdict}")
+open(report, "w").write(f"<!-- ratchet:merge -->\\n**merge: {verdict}** for " + head + "\\n")
+sys.exit(0 if verdict == "agent" else 1)
 """
 MERGE_STEP = re.compile(
     r"      - name: Judge every green.*\n        run: \|\n((?:          .*\n)+)"
@@ -1055,7 +1065,10 @@ def test_the_merge_job_judges_every_green_pull_request_not_only_the_one_that_wok
     assert log.count("workflow run deep.yml --ref main") == 1
     judged = [line for line in log.splitlines() if line.startswith("judge ")]
     assert len(judged) == 5
-    assert all(" --tier1 green --tier2 green " in line for line in judged)
+    assert all(" --tier1 green --deep " in line for line in judged)
+    deep_asked = [line for line in log.splitlines() if "deep.yml/runs" in line]
+    assert len(deep_asked) == 1
+    assert "status=completed" not in deep_asked[0]
     fetches = [line for line in log.splitlines() if line.startswith("git fetch")]
     assert fetches[0].endswith("+refs/heads/main:refs/remotes/origin/main")
     assert [line.split()[-1] for line in fetches[1:]] == ["aaaa", "bbbb", "dddd", "ffff", "gggg"]
@@ -1114,9 +1127,9 @@ def test_the_merge_job_counts_nothing_the_forge_did_not_answer(tmp_path: Path) -
     assert "#1: the forge's answer could not be read: left alone" in out
     assert "#2: the forge's answer could not be read: left alone" in out
     judged = [line for line in log.splitlines() if line.startswith("judge ")]
-    assert [" --head cccc " in line and " --tier1 red --tier2 red " in line for line in judged] == [
-        True
-    ]
+    assert len(judged) == 1
+    assert " --head cccc " in judged[0]
+    assert " --tier1 red --deep " in judged[0]
     assert log.count("-X PUT") == 1
 
 
@@ -1131,7 +1144,7 @@ def test_the_merge_job_hands_the_judge_the_ci_a_push_started_on_the_default_bran
     assert all(f" {field} " in f"{asked[0]} " for field in ("event=push", "status=completed"))
     judged = [line for line in log.splitlines() if line.startswith("judge ")]
     assert len(judged) == 2
-    assert all(" --tier1 red --tier2 green " in line for line in judged)
+    assert all(" --tier1 red --deep " in line for line in judged)
 
 
 def bodies(root: Path) -> dict[str, str]:
@@ -1270,20 +1283,119 @@ def test_a_superseded_run_is_cancelled_but_a_default_branch_ci_or_a_merge_in_fli
 ):
     pulls_only = "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}"
     assert concurrency_of(WORKFLOWS["ci.yml"]) == f"  group: ci-${{{{ github.ref }}}}\n{pulls_only}"
-    assert concurrency_of(WORKFLOWS["deep.yml"]).endswith("\n  cancel-in-progress: true")
+    assert concurrency_of(WORKFLOWS["deep.yml"]).endswith("\n  cancel-in-progress: false")
     assert concurrency_of(WEEKLY).endswith("\n  cancel-in-progress: true")
     assert concurrency_of(MERGE) == "  group: merge\n  cancel-in-progress: false"
 
 
-def test_the_merge_job_runs_only_after_a_green_ci_of_a_pull_request_from_this_repository() -> None:
+def evaluate_merge_if(condition: str, github: dict[str, Any]) -> bool:
+    expr = " ".join(condition.split())
+    expr = expr.replace("&&", " and ").replace("||", " or ")
+
+    def lookup(match: re.Match[str]) -> str:
+        cur: Any = {"github": github}
+        for part in match.group(0).split("."):
+            cur = cur.get(part) if isinstance(cur, dict) else None
+        return repr(cur)
+
+    rendered = re.sub(r"github(?:\.[a-z_]+)+", lookup, expr)
+    return bool(eval(rendered, {"__builtins__": {}}, {}))  # noqa: S307 # -- evaluates the workflow's own if: expression over test dicts
+
+
+def test_the_merge_job_runs_after_green_ci_any_default_branch_deep_run_or_workflow_dispatch() -> (
+    None
+):
+    assert "workflows: [ci, deep]" in MERGE
+    assert "\n  workflow_dispatch:\n" in MERGE
     condition = MERGE.partition("  merge:\n    if: >-\n")[2].partition("\n    runs-on:")[0]
-    assert [line.strip() for line in condition.splitlines()] == [
-        "github.event.workflow_run.event == 'pull_request'",
-        "&& github.event.workflow_run.conclusion == 'success'",
-        "&& github.event.workflow_run.path == '.github/workflows/ci.yml'",
-        "&& github.event.workflow_run.head_repository.full_name == github.repository",
-    ]
-    assert "on:\n  workflow_run:\n    workflows: [ci]\n    types: [completed]\n" in MERGE
+    base_repo = "owner/repo"
+    assert evaluate_merge_if(
+        condition, {"event_name": "workflow_dispatch", "repository": base_repo}
+    )
+    assert evaluate_merge_if(
+        condition,
+        {
+            "event_name": "workflow_run",
+            "repository": base_repo,
+            "event": {
+                "repository": {"default_branch": "main"},
+                "workflow_run": {
+                    "event": "pull_request",
+                    "conclusion": "success",
+                    "path": ".github/workflows/ci.yml",
+                    "head_repository": {"full_name": base_repo},
+                },
+            },
+        },
+    )
+    for conclusion in ("success", "failure", "cancelled", "timed_out", "skipped"):
+        assert evaluate_merge_if(
+            condition,
+            {
+                "event_name": "workflow_run",
+                "repository": base_repo,
+                "event": {
+                    "repository": {"default_branch": "main"},
+                    "workflow_run": {
+                        "event": "workflow_dispatch",
+                        "conclusion": conclusion,
+                        "path": ".github/workflows/deep.yml",
+                        "head_branch": "main",
+                        "head_repository": {"full_name": base_repo},
+                    },
+                },
+            },
+        ), conclusion
+    assert not evaluate_merge_if(
+        condition,
+        {
+            "event_name": "workflow_run",
+            "repository": base_repo,
+            "event": {
+                "repository": {"default_branch": "main"},
+                "workflow_run": {
+                    "event": "pull_request",
+                    "conclusion": "failure",
+                    "path": ".github/workflows/ci.yml",
+                    "head_repository": {"full_name": base_repo},
+                },
+            },
+        },
+    )
+    assert not evaluate_merge_if(
+        condition,
+        {
+            "event_name": "workflow_run",
+            "repository": base_repo,
+            "event": {
+                "repository": {"default_branch": "main"},
+                "workflow_run": {
+                    "event": "push",
+                    "conclusion": "success",
+                    "path": ".github/workflows/deep.yml",
+                    "head_branch": "other",
+                    "head_repository": {"full_name": base_repo},
+                },
+            },
+        },
+    )
+    assert not evaluate_merge_if(
+        condition,
+        {
+            "event_name": "workflow_run",
+            "repository": base_repo,
+            "event": {
+                "repository": {"default_branch": "main"},
+                "workflow_run": {
+                    "event": "push",
+                    "conclusion": "success",
+                    "path": ".github/workflows/deep.yml",
+                    "head_branch": "main",
+                    "head_repository": {"full_name": "fork/repo"},
+                },
+            },
+        },
+    )
 
 
 def test_the_merge_job_merges_only_the_head_it_judged_and_as_a_merge_commit(
@@ -1492,3 +1604,287 @@ def test_the_proven_check_step_decides_skip_safely_end_to_end(tmp_path: Path) ->
     assert run_step()["skip"] == "true"
     assert run_step(attempt="2")["skip"] == "false"
     assert run_step(gh_mode="fail")["skip"] == "false"
+
+
+def setup_real_merge_repo(tmp_path: Path, *, bound: int | None) -> tuple[Path, list[str]]:
+    remote = tmp_path / "origin.git"
+    remote.mkdir()
+    repos.git(remote, "init", "--bare", "-q")
+    thresholds = f"[ceilings.deep]\nunproven = {bound}\n" if bound is not None else ""
+    binding = (
+        "# Binding\n\n- Default branch: `main`\n\n"
+        "## Gates\n\n| Question | Tool | Tier | Threshold | Command |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "| every gate bites | `ratchet` plugin `scripts/bite.py` and `scripts/project_bite.py`"
+        " | 2 | | `just bite-all` |\n"
+    )
+    files = {
+        "guards/manifest.toml": (TEMPLATES / "guards/manifest.toml").read_text(encoding="utf-8"),
+        "docs/process/binding.md": binding,
+        "quality/thresholds.toml": thresholds,
+    }
+    repo = repos.repository(tmp_path / "repo", files)
+    commits = [repos.git(repo, "rev-parse", "HEAD")]
+    for idx in (1, 2):
+        repos.write(repo, f"m{idx}.txt", f"{idx}\n")
+        commits.append(repos.commit(repo, f"feat(core): merge {idx}"))
+    repos.git(repo, "remote", "add", "origin", str(remote))
+    repos.git(repo, "push", "-q", "origin", "main")
+    repos.git(repo, "branch", "feat/a")
+    repos.git(repo, "switch", "-q", "feat/a")
+    repos.write(repo, "src/a.py", "A = 1\n")
+    repos.commit(repo, "feat(core): alpha")
+    verdict = {
+        "slug": "a",
+        "ticket": "1",
+        "verdict": "approve",
+        "unresolved": [],
+        "openQuestions": [],
+        "assumptions": [],
+    }
+    assert merge_ready.write_record(repo, json.dumps(verdict)) == 0
+    pr_sha = repos.commit(repo, "docs(core): verdict")
+    repos.git(repo, "push", "-q", "origin", "feat/a")
+    repos.git(repo, "switch", "-q", "main")
+    commits.append(pr_sha)
+    return repo, commits
+
+
+def run_real_merge_step(tmp_path: Path, repo: Path, world: dict[str, Any]) -> tuple[int, str, str]:
+    step = MERGE_STEP.search(MERGE)
+    bash = shutil.which("bash")
+    assert step
+    assert bash
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / "gh").write_text(FAKE_GH.format(python=sys.executable), encoding="utf-8")
+    (bin_dir / "gh").chmod(0o755)
+    (tmp_path / "world.json").write_text(json.dumps(world), encoding="utf-8")
+    calls = tmp_path / "calls"
+    calls.write_text("", encoding="utf-8")
+    temp_dir = tmp_path / "runner_temp"
+    temp_dir.mkdir(exist_ok=True)
+    done = subprocess.run(  # noqa: S603 # -- a fixed argv; the script is the template's own
+        [bash, "-e", "-c", textwrap.dedent(step.group(1))],
+        cwd=repo,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "WORLD": str(tmp_path / "world.json"),
+            "CALLS": str(calls),
+            "RUNNER_TEMP": str(temp_dir),
+            "RATCHET_PLUGIN": str(PLUGIN_ROOT),
+            "DEFAULT_BRANCH": "main",
+            "GITHUB_REPOSITORY": "owner/repo",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return done.returncode, done.stdout, calls.read_text(encoding="utf-8")
+
+
+def deep_run(
+    run_id: int, sha: str, *, status: str = "completed", conclusion: str | None = "success", at: str
+) -> dict[str, Any]:
+    return {
+        "id": run_id,
+        "event": "push",
+        "status": status,
+        "conclusion": conclusion,
+        "head_sha": sha,
+        "head_repository": OURS,
+        "created_at": at,
+        "html_url": f"https://example.invalid/runs/{run_id}",
+    }
+
+
+def test_the_merge_job_comments_merge_wait_naming_an_in_flight_run_two_merges_back(
+    tmp_path: Path,
+) -> None:
+    repo, commits = setup_real_merge_repo(tmp_path, bound=1)
+    base_sha, merge1, _tip, pr_sha = commits
+    world = forge({1: (pr_sha, "feat/a")})
+    world["deep"] = {
+        "total_count": 2,
+        "workflow_runs": [
+            deep_run(202, merge1, status="in_progress", conclusion=None, at="2026-11-22T10:05:00Z"),
+            deep_run(
+                201, base_sha, status="completed", conclusion="success", at="2026-11-22T10:00:00Z"
+            ),
+        ],
+    }
+    code, out, log = run_real_merge_step(tmp_path, repo, world)
+    assert code == 0
+    assert "#1: merge: wait" in out
+    assert "-X PUT" not in log
+    assert "workflow run deep.yml" not in log
+    comment = bodies(tmp_path)["repos/owner/repo/issues/1/comments"]
+    assert comment.startswith("<!-- ratchet:merge -->\n**merge: wait**")
+    assert "`unproven`:" in comment
+    assert "https://example.invalid/runs/202" in comment
+
+
+def test_a_red_deep_run_comment_names_every_merge_since_the_last_green(tmp_path: Path) -> None:
+    repo, commits = setup_real_merge_repo(tmp_path, bound=None)
+    base_sha, merge1, tip, pr_sha = commits
+    world = forge({1: (pr_sha, "feat/a")})
+    world["deep"] = {
+        "total_count": 2,
+        "workflow_runs": [
+            deep_run(302, tip, status="completed", conclusion="failure", at="2026-11-22T10:05:00Z"),
+            deep_run(
+                301, base_sha, status="completed", conclusion="success", at="2026-11-22T10:00:00Z"
+            ),
+        ],
+    }
+    code, out, log = run_real_merge_step(tmp_path, repo, world)
+    assert code == 0
+    assert "#1: merge: owner" in out
+    assert "-X PUT" not in log
+    comment = bodies(tmp_path)["repos/owner/repo/issues/1/comments"]
+    assert comment.startswith("<!-- ratchet:merge -->\n**merge: owner**")
+    assert "`tier2`:" in comment
+    assert tip[:12] in comment
+    assert merge1[:12] in comment
+    assert base_sha[:12] not in comment
+
+
+def test_a_failed_deep_dispatch_still_judges_every_pr_and_says_why_it_failed(
+    tmp_path: Path,
+) -> None:
+    repo, commits = setup_real_merge_repo(tmp_path, bound=0)
+    base_sha, _, _, pr_sha = commits
+    world = forge({1: (pr_sha, "feat/a")})
+    world["deep"] = {
+        "total_count": 1,
+        "workflow_runs": [
+            deep_run(
+                401, base_sha, status="completed", conclusion="success", at="2026-11-22T10:00:00Z"
+            ),
+        ],
+    }
+    world["dispatch_fail"] = "HTTP 403: workflow disabled\ndetails\tignored"
+    code, out, log = run_real_merge_step(tmp_path, repo, world)
+    assert code == 0
+    assert "workflow run deep.yml --ref main" in log
+    assert "#1: merge: wait" in out
+    comment = bodies(tmp_path)["repos/owner/repo/issues/1/comments"]
+    assert "`unproven`:" in comment
+    assert "HTTP 403: workflow disabled" in comment
+    assert "::warning::" in out
+
+
+def test_a_failed_post_merge_deep_dispatch_does_not_fail_the_merge_job(tmp_path: Path) -> None:
+    world = forge({1: ("aaaa", "feat/a")})
+    world["dispatch_fail"] = "HTTP 403: workflow disabled"
+    code, out, log = merge_job(tmp_path, world)
+    assert code == 0
+    assert log.count("-X PUT") == 1
+    assert "workflow run deep.yml --ref main" in log
+    assert "::warning::" in out
+
+
+SPEAKS_STEP = re.compile(r"  speaks:\n[\s\S]*?      - run: \|\n((?:          .*\n?)+)")
+
+
+def test_deep_workflow_speaks_job_writes_summary_and_dispatches_merge(tmp_path: Path) -> None:
+    deep = WORKFLOWS["deep.yml"]
+    assert "\n  speaks:\n" in deep
+    speaks_block = deep.partition("\n  speaks:\n")[2]
+    assert "if: always()" in speaks_block
+    assert "needs: [shape, tier2, tier2-long]" in speaks_block
+    assert "contents: read" in speaks_block
+    assert "actions: write" in speaks_block
+    step = SPEAKS_STEP.search(deep)
+    bash = shutil.which("bash")
+    assert step
+    assert bash
+    repo = repos.repository(tmp_path / "repo")
+    base_sha = repos.git(repo, "rev-parse", "HEAD")
+    repos.write(repo, "m1.txt", "1\n")
+    tip_sha = repos.commit(repo, "feat(core): landed")
+    repos.git(repo, "update-ref", "refs/remotes/origin/main", tip_sha)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text(FAKE_GH.format(python=sys.executable), encoding="utf-8")
+    gh.chmod(0o755)
+    world = {
+        "deep": {
+            "total_count": 1,
+            "workflow_runs": [
+                deep_run(
+                    501,
+                    base_sha,
+                    status="completed",
+                    conclusion="success",
+                    at="2026-11-22T10:00:00Z",
+                )
+            ],
+        },
+        "dispatch_fail": "",
+    }
+    for shape_res, t2_res, t2_long_res, expected_state in (
+        ("success", "success", "skipped", "green"),
+        ("success", "failure", "skipped", "red"),
+        ("failure", "skipped", "skipped", "red"),
+    ):
+        (tmp_path / "world.json").write_text(json.dumps(world), encoding="utf-8")
+        calls = tmp_path / f"calls-{expected_state}-{t2_res}"
+        calls.write_text("", encoding="utf-8")
+        summary = tmp_path / f"summary-{expected_state}-{t2_res}.md"
+        summary.write_text("", encoding="utf-8")
+        done = subprocess.run(  # noqa: S603 # -- fixed argv; script is the template's own
+            [bash, "-e", "-c", textwrap.dedent(step.group(1))],
+            cwd=repo,
+            env={
+                **os.environ,
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "WORLD": str(tmp_path / "world.json"),
+                "CALLS": str(calls),
+                "GITHUB_STEP_SUMMARY": str(summary),
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_SHA": tip_sha,
+                "DEFAULT_BRANCH": "main",
+                "RATCHET_PLUGIN": str(PLUGIN_ROOT),
+                "SHAPE_RESULT": shape_res,
+                "TIER2_RESULT": t2_res,
+                "TIER2_LONG_RESULT": t2_long_res,
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert done.returncode == 0, done.stderr
+        written = summary.read_text(encoding="utf-8")
+        assert f"deep: {expected_state} at `{tip_sha[:12]}`." in written
+        assert tip_sha[:12] in written
+        assert "workflow run merge.yml --ref main" in calls.read_text(encoding="utf-8")
+    world["dispatch_fail"] = "forbidden"
+    (tmp_path / "world.json").write_text(json.dumps(world), encoding="utf-8")
+    summary_fail = tmp_path / "summary-fail.md"
+    summary_fail.write_text("", encoding="utf-8")
+    done = subprocess.run(  # noqa: S603 # -- fixed argv; script is the template's own
+        [bash, "-e", "-c", textwrap.dedent(step.group(1))],
+        cwd=repo,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "WORLD": str(tmp_path / "world.json"),
+            "CALLS": str(tmp_path / "calls-fail"),
+            "GITHUB_STEP_SUMMARY": str(summary_fail),
+            "GITHUB_REPOSITORY": "owner/repo",
+            "GITHUB_SHA": tip_sha,
+            "DEFAULT_BRANCH": "main",
+            "RATCHET_PLUGIN": str(PLUGIN_ROOT),
+            "SHAPE_RESULT": "success",
+            "TIER2_RESULT": "success",
+            "TIER2_LONG_RESULT": "success",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0
+    assert "::warning::" in done.stdout
