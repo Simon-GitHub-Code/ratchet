@@ -4064,3 +4064,95 @@ def test_a_format_verdict_record_check_that_cannot_plant_reports_not_planted(
     out = shown(capsys)
     assert "bite: format: accepts verdict record: THE FAULT WAS NOT PLANTED\n" in out
     assert "  record: refused in test\n" in out
+
+
+def test_swapping_copy_git_dir_for_symlink_never_writes_to_real_repository(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "a planted word"))
+    before_head = git(root, "rev-parse", "HEAD")
+    before_root = fingerprint(root)
+    copy = project_bite.make_copy(
+        root, tmp_path / "copy", registry=project_bite.Registry(), shell=project_bite.Shell()
+    )
+    aside_git = tmp_path / "aside_git"
+    (copy.path / ".git").rename(aside_git)
+    (copy.path / ".git").symlink_to(root / ".git", target_is_directory=True)
+    bite_spec = project_bite.Bite(
+        "lint",
+        "committed",
+        "L001",
+        project_bite.Write("src/_bite.txt", "planted\n"),
+        commit=True,
+    )
+    bite_spec.plant(copy.tree)
+    assert git(root, "rev-parse", "HEAD") == before_head
+    assert fingerprint(root) == before_root
+    assert git(tmp_path, "--git-dir", str(aside_git), "log", "-1", "--format=%s") == (
+        "test(bite): committed"
+    )
+
+    swap = f"mv .git ../{aside_git.name}2 && ln -s {shlex.quote(str(root / '.git'))} .git"
+    (root / "quality/bites.toml").write_text(
+        f"setup = [{json.dumps('sh -c ' + shlex.quote(swap))}]\n" + bite("lint", "a planted word"),
+        encoding="utf-8",
+    )
+    commit(root, "swap git dir in setup")
+    expected_head = git(root, "rev-parse", "HEAD")
+    assert prove(root) == 1
+    assert not (root / ".git/bite-index").exists()
+    assert git(root, "rev-parse", "HEAD") == expected_head
+    assert "reached through a symbolic link" in shown(capsys)
+
+
+def test_rewrite_with_same_size_and_mtime_between_clear_and_diff_is_still_restored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, None)
+    old = (int(time.time()) - 10) * 10**9
+    os.utime(root / "src/code.txt", ns=(old, old))
+    copy = project_bite.make_copy(
+        root, tmp_path / "copy", registry=project_bite.Registry(), shell=project_bite.Shell()
+    )
+    (copy.path / "junk.txt").write_text("untracked\n", encoding="utf-8")
+    real_clear = project_bite.Tree.clear
+
+    def tamper_during_clear(self: project_bite.Tree, path: str) -> None:
+        real_clear(self, path)
+        if path == "junk.txt":
+            target = copy.path / "src/code.txt"
+            target.write_text("dirty\n", encoding="utf-8")
+            os.utime(target, ns=(old, old))
+
+    monkeypatch.setattr(project_bite.Tree, "clear", tamper_during_clear)
+    while time.time() % 1 > 0.5:
+        time.sleep(0.05)
+    os.utime(copy.path / "src/code.txt", ns=(old, old))
+    copy.restore()
+    assert (copy.path / "src/code.txt").read_text(encoding="utf-8") == "clean\n"
+
+
+@pytest.mark.parametrize("kind", ["file", "symlink"])
+def test_ignored_parent_replaced_by_file_or_symlink_refuses_with_blocking_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], kind: str
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "kept.txt").write_text("outside\n", encoding="utf-8")
+    replace_dir = (
+        "echo blocker > dir.secret"
+        if kind == "file"
+        else f"ln -s {shlex.quote(str(outside))} dir.secret"
+    )
+    gate = f"rm -rf dir.secret && {replace_dir}\n{LINT}"
+    root = project(tmp_path / "repo", {"lint": gate}, bite("lint", "a planted word"))
+    write(root, "dir.secret/kept.txt", "tracked\n")
+    git(root, "add", "--force", "dir.secret/kept.txt")
+    commit(root, "feat(core): tracked file in ignored directory")
+    assert prove(root) == 1
+    out = shown(capsys)
+    assert "dir.secret" in out
+    assert "dir.secret/kept.txt" in out
+    assert ("file" if kind == "file" else "symbolic link") in out
+    assert "standing where a directory is needed" in out
+    assert (outside / "kept.txt").read_text(encoding="utf-8") == "outside\n"
