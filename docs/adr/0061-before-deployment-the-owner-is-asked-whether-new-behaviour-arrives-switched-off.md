@@ -137,7 +137,7 @@ Evaluations: a first-hour run on an asked type meets one more question per spec.
 
 ### What already contradicts the decision
 
-None in the pages, templates, workflow or scripts. Only the Route and Drain formal models remain to be updated.
+None. All pages, templates, workflow, scripts, and formal models match this decision.
 
 ## Settled by the owner, 2026-11-15
 
