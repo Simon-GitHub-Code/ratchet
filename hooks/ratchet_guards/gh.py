@@ -68,6 +68,8 @@ _FROM_FILE = re.compile(r"^[^=]+=@")
 _GRAPHQL = re.compile(r"(^|/)graphql/?$")
 _INLINE_QUERY = "`gh api graphql -f query='…'`"
 _RELEASE_CREATE = ("release", "create")
+_READ_GROUPS = frozenset({"pr", "issue", "run", "repo", "release", "workflow"})
+_READS = frozenset({"view", "list", "status", "diff", "checks"})
 
 
 def _operands(words: Sequence[str]) -> list[str]:
@@ -263,6 +265,11 @@ def _label_create(words: Sequence[str], context: Context, guard: Guard) -> bool:
     if len(names) != 1 or options.flags & (_REPO_FLAGS | _FORCE):
         return False
     return _recorded(names[0], context, guard)
+
+
+def keeps_remote(words: Sequence[str]) -> bool:
+    group, action, *_ = [*_operands(words[1:]), "", ""]
+    return group in _READ_GROUPS and action in _READS
 
 
 def check(words: Sequence[str], context: Context, guard: Guard) -> list[Verdict]:

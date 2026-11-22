@@ -86,6 +86,8 @@ _SWITCH_WORD = re.compile(r"(?<![\w-])(?:switch|checkout|symbolic-ref|bisect)(?!
 _XARGS = "xargs"
 _PATH_REFUSALS = frozenset({"guard-path-write", "guard-path-default", "guard-path-unseen-switch"})
 _NO_EFFECT = frozenset({"true", "false", ":", "echo", "printf"})
+_NAMES_GIT = re.compile(r"(?<![\w-])(?:\.?git(?:config)?|gh)(?!\w)")
+_IN_SHELL = _REDEFINERS | _FORGETTERS | {"set", "command", "builtin"}
 _GIT_DIRECTORY = ".git"
 _GIT_FILES = frozenset({_GIT_DIRECTORY, ".gitconfig", "config", "config.worktree"})
 _GIT_LAYOUT = frozenset(
@@ -387,6 +389,24 @@ def _hides_switch(words: Sequence[str], rest: Sequence[str], cwd: Path) -> bool:
     return any(map(_switches, texts))
 
 
+def _command_keeps_remote(words: Sequence[str], cwd: Path) -> bool:
+    if words[0] in _DIRECTORY_MOVERS:
+        return True
+    if any(PLACEHOLDER in word for word in words) or environment.declared(words):
+        return False
+    if words[0] == "git":
+        return git.keeps_remote(words, cwd)
+    if words[0] == "gh":
+        return gh.keeps_remote(words)
+    return words[0] in _NO_EFFECT or _apart_from_git(words, cwd)
+
+
+def _apart_from_git(words: Sequence[str], cwd: Path) -> bool:
+    text = " ".join(words)
+    unknown = any(mark in text for mark in _DYNAMIC) or _NAMES_GIT.search(text) is not None
+    return not unknown and words[0] not in _IN_SHELL and _GIT_DIRECTORY not in cwd.parts
+
+
 def _switches(text: str) -> bool:
     found = _GIT_WORD.search(text)
     return found is not None and _SWITCH_WORD.search(text, found.end()) is not None
@@ -675,13 +695,7 @@ class _Checker:
         lead, rest = _assignments(words)
         if not rest:
             return not any(PLACEHOLDER in word for word in lead)
-        if lead:
-            return False
-        if rest[0] in _DIRECTORY_MOVERS:
-            return True
-        substituted = any(PLACEHOLDER in word for word in rest)
-        known = rest[0] in _NO_EFFECT or (rest[0] == "git" and git.keeps_remote(rest, cwd))
-        return known and not substituted
+        return not lead and _command_keeps_remote(rest, cwd)
 
     def _repoints(self, target: str, cwd: Path) -> bool:
         expanded = self.guard.locator.filesystem.expand(target)
