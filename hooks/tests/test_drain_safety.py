@@ -34,6 +34,7 @@ from tests.test_drain import (
     offline,
     plan_file,
     project,
+    restored_text,
     run,
     scratch,  # noqa: F401 # -- an autouse fixture of the drain's tests
     ticket,
@@ -44,8 +45,10 @@ def gitdir(tree: Path) -> Path:
     return Path(git(tree, "rev-parse", "--absolute-git-dir"))
 
 
-def stashes(root: Path) -> str:
-    return git(root, "stash", "list", "--format=%gs")
+def kept_branches(root: Path) -> list[str]:
+    assert git(root, "stash", "list") == "", "the drain makes no stash"
+    kept = drain.state_dir(root) / drain.KEPT
+    return sorted(path.parent.name for path in kept.glob("*/*.kept"))
 
 
 def registered(root: Path) -> list[str]:
@@ -74,8 +77,8 @@ def test_a_stale_index_lock_keeps_the_tree_and_its_work(tmp_path: Path, capsys: 
     lock.unlink()
     assert run(root, "clean", "--all") == 0
     assert not tree.exists()
-    assert stashes(root) == f"On {BRANCH_A}: {BRANCH_A}: interrupted run"
-    assert git(root, "show", "stash@{0}^3:src/work.py") == "an hour of uncommitted work"
+    assert kept_branches(root) == ["feature-1-alpha"]
+    assert restored_text(root, BRANCH_A, "src/work.py") == "an hour of uncommitted work\n"
 
 
 def test_a_tree_left_mid_merge_is_kept_when_it_is_closed(tmp_path: Path, capsys: Out) -> None:
@@ -163,7 +166,7 @@ def test_a_second_drain_does_not_clean_the_first(
             assert service.poll() is None
             assert (tree / "src/b.py").is_file()
             assert tree in drain.worktrees(root)
-            assert stashes(root) == ""
+            assert kept_branches(root) == []
             first.kill()
             first.wait()
             assert run(root, "clean", "--all") == 2, "a program of its trees still runs"
@@ -171,7 +174,7 @@ def test_a_second_drain_does_not_clean_the_first(
             service.wait()
             assert run(root, "clean", "--all") == 0, "a drain whose session is gone is not held"
             assert not tree.exists()
-            assert stashes(root) == f"On {BRANCH_A}: {BRANCH_A}: interrupted run"
+            assert kept_branches(root) == ["feature-1-alpha"]
         finally:
             service.kill()
             service.wait()
@@ -293,7 +296,7 @@ def test_a_second_open_of_the_ticket_waits_and_is_then_not_started(tmp_path: Pat
     assert (rc1, rc2, waiting) == (0, 1, True), "the second waited while the first ran"
     assert "is not started: it is building" in str(out2)
     assert tree in drain.worktrees(root), "the tree the first reported is still there"
-    assert stashes(root) == ""
+    assert kept_branches(root) == []
 
 
 def test_a_second_open_is_refused_when_its_wait_runs_out(tmp_path: Path) -> None:
@@ -301,7 +304,7 @@ def test_a_second_open_is_refused_when_its_wait_runs_out(tmp_path: Path) -> None
     assert (rc1, rc2, waiting) == (0, 1, True)
     assert "another drain command is running on this repository" in str(out2)
     assert drain.tree_of(root, BRANCH_A) in drain.worktrees(root)
-    assert stashes(root) == ""
+    assert kept_branches(root) == []
 
 
 SESSION = """
@@ -410,7 +413,7 @@ def test_a_drain_whose_processes_are_all_gone_does_not_block_the_next(tmp_path: 
     )
     assert new.returncode == 0, new.stdout
     assert not tree.exists()
-    assert stashes(root) == f"On {BRANCH_A}: {BRANCH_A}: interrupted run"
+    assert kept_branches(root) == ["feature-1-alpha"]
 
 
 def test_a_rebase_git_cannot_abort_stops_the_update(tmp_path: Path, capsys: Out) -> None:
@@ -2133,7 +2136,7 @@ def test_a_second_drains_report_leaves_the_first_drains_lease_standing(
         first.wait()
 
 
-def test_what_a_program_wrote_until_it_was_ended_is_stashed_too(
+def test_what_a_program_wrote_until_it_was_ended_is_set_aside_too(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = project(tmp_path)
@@ -2153,7 +2156,7 @@ def test_what_a_program_wrote_until_it_was_ended_is_stashed_too(
         service.kill()
         service.wait()
     assert not tree.exists()
-    assert git(root, "show", "stash@{0}^3:src/late.py") == "written until the end"
+    assert restored_text(root, BRANCH_A, "src/late.py") == "written until the end\n"
 
 
 def test_a_merge_the_note_says_is_not_recorded_again(tmp_path: Path, capsys: Out) -> None:

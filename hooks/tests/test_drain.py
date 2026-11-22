@@ -131,6 +131,19 @@ def note(root: Path, branch: str) -> dict[str, object]:
     return queue_notes.read_note(root, branch)
 
 
+def kept_said(root: Path, branch: str) -> str:
+    [path] = drain.kept_home(root, branch).glob("*.kept")
+    return (
+        f"kept: what the work tree of `{branch}` held uncommitted is set aside at {path}:"
+        f" `drain.py restore {branch}` puts it back in the checkout"
+    )
+
+
+def restored_text(root: Path, branch: str, path: str) -> str:
+    assert run(root, "restore", branch) == 0
+    return (root / path).read_text(encoding="utf-8")
+
+
 def test_the_plan_orders_tickets_by_their_blockers_and_starts_the_buildable(tmp_path: Path) -> None:
     root = project(tmp_path)
     drafted = drain.plan(offline(root))
@@ -665,7 +678,7 @@ RESULT = {
 }
 
 
-def test_close_parks_a_ticket_with_the_results_reasons_and_stashes_its_draft(
+def test_close_parks_a_ticket_with_the_results_reasons_and_sets_its_draft_aside(
     tmp_path: Path, capsys: Out
 ) -> None:
     root = project(tmp_path)
@@ -679,7 +692,10 @@ def test_close_parks_a_ticket_with_the_results_reasons_and_stashes_its_draft(
         root, "close", GAMMA, "--outcome", "parked", "--reason", "first", "--result", str(result)
     )
     assert code == 0
-    assert capsys.readouterr().out == f"closed: {GAMMA}: parked\n"
+    assert capsys.readouterr().out.splitlines() == [
+        kept_said(root, BRANCH_C),
+        f"closed: {GAMMA}: parked",
+    ]
     assert note(root, BRANCH_C)["reasons"] == [
         "first",
         "label: none -> the owner",
@@ -695,7 +711,7 @@ def test_close_parks_a_ticket_with_the_results_reasons_and_stashes_its_draft(
         "dispute: docs/disputes/0001-x.md: raise the limit",
     ]
     assert not tree.exists()
-    assert git(root, "stash", "list", "--format=%gs") == f"On {BRANCH_C}: {BRANCH_C}: blocked run"
+    assert git(root, "stash", "list") == ""
     assert states(root)[BRANCH_C] == "held"
     held = next(e for e in drain.plan(offline(root)).tickets if e.branch == BRANCH_C)
     assert held.why[0] == "first"
@@ -817,7 +833,10 @@ def test_clean_removes_merged_and_gone_work_trees_and_keeps_work_in_progress(
     assert not tree_a.exists()
     git(root, "update-ref", "-d", f"refs/heads/{BRANCH_C}")
     assert run(root, "clean") == 0
-    assert capsys.readouterr().out == f"removed: {tree_c}: its branch is gone\n"
+    assert capsys.readouterr().out.splitlines() == [
+        kept_said(root, tree_c.name),
+        f"removed: {tree_c}: its branch is gone",
+    ]
     assert git(root, "worktree", "list", "--porcelain").count("worktree ") == 1
     assert not drain.queue_home(root).exists()
     by = {entry.branch: entry for entry in drain.plan(offline(root)).tickets}
@@ -841,16 +860,15 @@ def test_clean_all_ends_an_interrupted_drain_and_keeps_its_uncommitted_work(
     capsys.readouterr()
     assert run(root, "clean", "--all") == 0
     assert capsys.readouterr().out.splitlines() == [
+        kept_said(root, BRANCH_A),
         f"removed: {tree_a}: the drain that made it was interrupted",
         f"removed: {tree_c}: the drain that made it was interrupted",
     ]
     assert git(root, "worktree", "list", "--porcelain").count("worktree ") == 1
-    assert git(root, "stash", "list", "--format=%gs") == (
-        f"On {BRANCH_A}: {BRANCH_A}: interrupted run"
-    )
     assert states(root) == {BRANCH_A: "buildable", BRANCH_C: "buildable", BRANCH_B: "waiting"}
     assert run(root, "clean", "--all") == 0, "a second clean finds nothing and says nothing"
     assert capsys.readouterr().out == ""
+    assert restored_text(root, BRANCH_A, "src/b.py") == "half done\n"
 
 
 def test_the_report_says_what_merged_what_waits_and_every_assumption(
@@ -1106,8 +1124,8 @@ def test_a_removed_work_tree_takes_what_ran_from_it_along(tmp_path: Path, capsys
     try:
         capsys.readouterr()
         assert run(root, "clean", "--all", "--take-over") == 0
-        assert capsys.readouterr().out.splitlines()[0] == (
-            f"ended: process {service.pid}, which ran a program of {tree}"
+        assert f"ended: process {service.pid}, which ran a program of {tree}" in (
+            capsys.readouterr().out.splitlines()
         )
         assert service.wait(timeout=5) == -signal.SIGKILL
     finally:

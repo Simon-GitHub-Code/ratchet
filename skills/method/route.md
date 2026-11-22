@@ -160,7 +160,7 @@ A change to the ticket never releases guard edits, and landing them never releas
 - **Another instance of a kind that reopens the architecture, added while that kind's review was owed (step 9):** `/ratchet:architecture`.
 - **Any other park:** a change to the ticket.
 
-It never names a bare `/ratchet:feature` for a held ticket, since the drain would refuse it again. Dropping the stash releases nothing.
+It never names a bare `/ratchet:feature` for a held ticket, since the drain would refuse it again. Restoring the work the drain set aside (`drain.py restore <branch>`) releases nothing.
 
 **The drain (step 19).** With more than one agent-ready ticket that states a conjecture, the route names `/ratchet:feature` with no ticket: the drain. It builds them in work trees of their own and merges what the merge judge passes. Read the drain section of [pipeline.md](pipeline.md) for how it plans, builds and merges them.
 
