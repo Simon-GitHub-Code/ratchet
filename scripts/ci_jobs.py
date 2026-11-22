@@ -12,7 +12,9 @@ binding's `- Shards: N` line, the jobs `tier1`, and `tier1_long`, the jobs of on
 It refuses a list it cannot read in that form, or that drops a gate, names one twice, or names
 two jobs alike. `--run NAME` runs the job NAME: a gate alone through the runner, a group through
 `parallel.py`, which names every red gate, with the schedule the justfile's recipes and the
-binding's Speed section state.
+binding's Speed section state. With `--report FILE` a group adds one line to FILE, after the
+line of each gate, naming the job and its gates, so `budget.py NAME --report FILE` holds each
+gate to its own ceiling by its own seconds.
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ import justfile_text
 import markdown_text
 import parallel
 import project_bite
+import runrecord
 import schedule
 
 if TYPE_CHECKING:
@@ -93,7 +96,6 @@ class Own:
 @dataclass(frozen=True)
 class Facts:
     ceilings: frozenset[str] = frozenset()
-    shards: int = 1
     own: frozenset[str] = frozenset()
     set_up: frozenset[str] = frozenset()
 
@@ -164,8 +166,11 @@ def held_alone(gate: str, found: Lists, facts: Facts) -> str | None:
             "its own ceiling under `[ceilings.seconds]` is found by the name of the job that"
             " runs it, so a group does not hold it"
         )
-    if gate in found.sharded and facts.shards > 1:
-        return f"it runs as {facts.shards} shards, which would shard the whole group"
+    if gate in found.sharded:
+        return (
+            f"it is in `{SHARDED}`, whose gates run in the long job, one job per shard with a time"
+            " limit of its own"
+        )
     if gate in facts.set_up:
         return "the workflow sets up a step for it alone by `matrix.gate`, which a group skips"
     return None
@@ -235,7 +240,7 @@ def ungrouped(found: Lists, facts: Facts) -> Iterator[Problem]:
                 Kind.DRIFT,
                 job.name,
                 f"`{job.name}` runs in a job of its own with no reason the check can read: no"
-                " ceiling of its own, no shard count over 1, no step the workflow sets up for it"
+                f" ceiling of its own, not in `{SHARDED}`, no step the workflow sets up for it"
                 f" alone, and no `- {OWN_JOBS}:` line of the binding's Speed section naming it;"
                 f" move it into `{REST}`",
             )
@@ -329,7 +334,6 @@ def facts(root: Path) -> Facts:
     }
     return Facts(
         frozenset(seconds) if isinstance(seconds, dict) else frozenset(),
-        shard_count(binding) or 1,
         frozenset(() if own.startswith("<") else markdown_text.ticked(own)),
         frozenset(set_up),
     )
@@ -394,7 +398,12 @@ def run(root: Path, name: str, options: argparse.Namespace) -> int:
     if job.alone:
         command = [*shlex.split(options.runner), name]
         return subprocess.run(command, cwd=root, check=False).returncode
-    return parallel.main(["parallel.py", *flags(justfile, gates, options), "--", *gates])
+    code = parallel.main(["parallel.py", *flags(justfile, gates, options), "--", *gates])
+    if options.report:
+        ran: dict[str, object] = {"kind": budget.GROUP, "job": name, "gates": list(gates)}
+        ran |= runrecord.stamp(root)
+        runrecord.append(root / options.report, ran, root=root)
+    return code
 
 
 def flags(justfile: str, gates: tuple[str, ...], options: argparse.Namespace) -> list[str]:

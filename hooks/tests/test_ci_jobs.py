@@ -26,7 +26,7 @@ JUSTFILE = "justfile"
 CI = ".github/workflows/ci.yml"
 BINDING = "docs/process/binding.md"
 THRESHOLDS = "quality/thresholds.toml"
-JOBS_LINE = 'tier1_jobs := "bite rest"'
+JOBS_LINE = 'tier1_jobs := "test mutation-changed bite rest"'
 NEW_STEP = '+          python3 "$RATCHET_PLUGIN/scripts/ci_jobs.py" --output "$GITHUB_OUTPUT"'
 TOOLCHAIN = "      - run: ./scripts/install-toolchain\n"
 BUILD_STEP = "      - if: matrix.gate == 'build'\n        run: ./scripts/install-build-tools\n"
@@ -83,23 +83,26 @@ def with_seconds(*keys: tuple[str, float]) -> Mutate:
 def test_every_gate_of_tier_1_runs_in_exactly_one_job_and_rest_takes_the_others(
     repo: Path,
 ) -> None:
-    base.replace(JUSTFILE, JOBS_LINE, 'tier1_jobs := "bite suite=test,coverage rest"')(repo)
+    grouped = 'tier1_jobs := "test mutation-changed bite suite=coverage,audit rest"'
+    base.replace(JUSTFILE, JOBS_LINE, grouped)(repo)
     assert base.red(repo) == []
     gates = justfile_text.ordered(read(repo, JUSTFILE), "tier1_gates")
     found = jobs(repo)
-    assert list(found) == ["bite", "suite", "rest"]
-    assert found["suite"] == ("test", "coverage")
-    assert found["rest"] == tuple(g for g in gates if g not in {"bite", "test", "coverage"})
+    assert list(found) == ["test", "mutation-changed", "bite", "suite", "rest"]
+    assert found["suite"] == ("coverage", "audit")
+    named_elsewhere = {"bite", "test", "mutation-changed", "coverage", "audit"}
+    assert found["rest"] == tuple(g for g in gates if g not in named_elsewhere)
     assert sorted(gate for each in found.values() for gate in each) == sorted(gates)
 
 
 def test_a_gate_no_job_runs_is_a_finding_whose_edit_adds_rest(repo: Path) -> None:
-    base.replace(JUSTFILE, JOBS_LINE, 'tier1_jobs := "bite"')(repo)
+    base.replace(JUSTFILE, JOBS_LINE, 'tier1_jobs := "test mutation-changed bite"')(repo)
     found = on_justfile(repo)
     gates = justfile_text.ordered(read(repo, JUSTFILE), "tier1_gates")
-    assert [named(f) for f in found] == [g for g in gates if g != "bite"]
+    alone = {"test", "mutation-changed", "bite"}
+    assert [named(f) for f in found] == [g for g in gates if g not in alone]
     assert found[0].problem == (
-        "`test` is in `tier1_gates` and no job of `tier1_jobs` runs it; add `rest`, the job of"
+        "`coverage` is in `tier1_gates` and no job of `tier1_jobs` runs it; add `rest`, the job of"
         " every gate no other job names"
     )
     mended(repo, found[0])
@@ -108,12 +111,12 @@ def test_a_gate_no_job_runs_is_a_finding_whose_edit_adds_rest(repo: Path) -> Non
 
 
 def test_a_gate_in_two_jobs_is_a_finding_for_an_agent(repo: Path) -> None:
-    twice = 'tier1_jobs := "bite suite=test,coverage again=test rest"'
+    twice = 'tier1_jobs := "test mutation-changed bite suite=coverage,audit again=coverage rest"'
     base.replace(JUSTFILE, JOBS_LINE, twice)(repo)
     [found] = on_justfile(repo)
     assert (
         found.problem
-        == "`test` runs in the jobs `suite` and `again` of `tier1_jobs`; name it in one"
+        == "`coverage` runs in the jobs `suite` and `again` of `tier1_jobs`; name it in one"
     )
     assert isinstance(found.fix, conformance.Agent)
 
@@ -127,9 +130,9 @@ def test_a_gate_in_two_jobs_is_a_finding_for_an_agent(repo: Path) -> None:
             "its own ceiling under `[ceilings.seconds]`",
         ),
         (
-            base.replace(BINDING, "- Shards: 1", "- Shards: 2"),
+            base.replace(JUSTFILE, JOBS_LINE, 'tier1_jobs := "bite rest"'),
             ["test", "mutation-changed"],
-            "it runs as 2 shards, which would shard the whole group",
+            "it is in `tier1_sharded`, whose gates run in the long job",
         ),
         (
             base.replace(CI, TOOLCHAIN, TOOLCHAIN + BUILD_STEP),
@@ -156,7 +159,7 @@ def test_a_gate_that_must_be_alone_inside_a_group_is_a_finding_whose_edit_frees_
 def test_a_gate_alone_for_no_reason_is_moved_into_rest_unless_the_binding_says_why(
     repo: Path,
 ) -> None:
-    alone = 'tier1_jobs := "bite audit rest"'
+    alone = 'tier1_jobs := "test mutation-changed bite audit rest"'
     base.replace(JUSTFILE, JOBS_LINE, alone)(repo)
     [found] = on_justfile(repo)
     assert found.problem.startswith(
@@ -344,6 +347,35 @@ def test_the_shape_job_starts_no_runner_for_a_gate_its_rows_wait_on_and_names_it
     )
 
 
+def test_a_gate_in_the_sharded_list_runs_alone_in_the_long_job_whatever_its_shard_count(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path / "repo", '"bite rest"', "", recipes="", speed="- Shards: 1\n")
+    found = ci_jobs.lists(read(root, JUSTFILE))
+    assert isinstance(found, ci_jobs.Lists)
+    known = ci_jobs.facts(root)
+    [grouped] = ci_jobs.problems(found, known)
+    assert (grouped.kind, grouped.gate) == (ci_jobs.Kind.GROUPED, "alpha")
+    words = ci_jobs.default(found.gates, found.sharded, known)
+    assert words == ("bite", "alpha", "rest")
+    project(tmp_path / "own", f'"{" ".join(words)}"', "", recipes="", speed="- Shards: 1\n")
+    own = ci_jobs.lists(read(tmp_path / "own", JUSTFILE))
+    assert isinstance(own, ci_jobs.Lists)
+    assert ci_jobs.problems(own, ci_jobs.facts(tmp_path / "own")) == []
+    assert jobs(tmp_path / "own")["rest"] == ("beta", "gamma", "delta")
+    output = tmp_path / "output"
+    assert (
+        ci_jobs.main(["ci_jobs.py", "--root", str(tmp_path / "own"), "--output", str(output)]) == 0
+    )
+    capsys.readouterr()
+    outputs = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+    assert (outputs["tier1"], outputs["tier1_long"], outputs["list"]) == (
+        '["bite","rest"]',
+        '["alpha"]',
+        "[1]",
+    )
+
+
 def test_the_shape_job_refuses_a_job_list_that_drops_a_gate(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -380,6 +412,152 @@ def test_a_group_runs_each_of_its_gates_through_the_parallel_runner_and_names_th
     assert run_job(root, "bite", monkeypatch, "bite") == (1, ["bite"])
     assert run_job(root, "nothing", monkeypatch) == (2, [])
     assert capsys.readouterr().out.endswith("justfile: `tier1_jobs` names no job `nothing`\n")
+
+
+SLEEPER = textwrap.dedent(
+    """\
+    import json, os, sys, time
+    time.sleep(json.loads(os.environ["SLEEPS"]).get(sys.argv[1], 0))
+    """
+)
+RECORD = ".ratchet/timing.jsonl"
+
+
+def grouped_project(root: Path, thresholds: str) -> Path:
+    project(root, '"bite rest"', "", recipes="", speed="- Shards: 1\n")
+    lists = (
+        'tier1_gates := "bite alpha beta gamma"\ntier1_sharded := ""\ntier1_jobs := "bite rest"\n'
+    )
+    (root / JUSTFILE).write_text(lists, encoding="utf-8")
+    (root / "quality").mkdir()
+    (root / THRESHOLDS).write_text(thresholds, encoding="utf-8")
+    return root
+
+
+def judged_in_ci(
+    root: Path,
+    sleeps: dict[str, float],
+    *,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    command: list[str] | None = None,
+) -> tuple[int, list[str]]:
+    sleeper = root.parent / "sleeper.py"
+    sleeper.write_text(SLEEPER, encoding="utf-8")
+    monkeypatch.setenv("SLEEPS", json.dumps(sleeps))
+    job = [
+        *(sys.executable, str(PLUGIN_ROOT / "scripts/ci_jobs.py"), "--root", str(root)),
+        *("--run", "rest", "--runner", f"{sys.executable} {sleeper}", "--jobs", "1"),
+        *("--report", RECORD),
+    ]
+    argv = ["budget.py", "rest", "--root", str(root), "--tier", "tier1", "--report", RECORD]
+    code = budget.main([*argv, "--", *(job if command is None else command)])
+    said = capsys.readouterr().out.splitlines()
+    return code, [line for line in said if line.startswith("ratchet-budget: ")]
+
+
+def judged_gate(lines: list[str], gate: str) -> str:
+    [line] = [line for line in lines if line.startswith(f"ratchet-budget: {gate} ")]
+    return line
+
+
+TIER_CEILING = "[ceilings.seconds]\ntier1 = 1.5\n"
+
+
+def test_a_group_whose_gates_each_finish_under_the_tier_ceiling_is_green_however_long_it_took(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = grouped_project(tmp_path / "repo", TIER_CEILING)
+    sleeps = {"alpha": 0.6, "beta": 0.6, "gamma": 0.6}
+    code, lines = judged_in_ci(root, sleeps, monkeypatch=monkeypatch, capsys=capsys)
+    assert code == 0, lines
+    for gate in sleeps:
+        assert re.fullmatch(
+            rf"ratchet-budget: {gate} took \d+\.\ds \(ceiling 1\.5s of tier1, \d+% used\): green",
+            judged_gate(lines, gate),
+        )
+    assert re.fullmatch(
+        r"ratchet-budget: rest took \d+\.\ds \(no ceiling recorded\): unbounded",
+        judged_gate(lines, "rest"),
+    )
+    assert float(judged_gate(lines, "rest").split(" took ")[1].split("s")[0]) > 1.5
+
+
+def test_a_gate_over_the_tier_ceiling_inside_a_group_is_red_and_its_line_names_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = grouped_project(tmp_path / "repo", TIER_CEILING)
+    code, lines = judged_in_ci(root, {"beta": 1.6}, monkeypatch=monkeypatch, capsys=capsys)
+    assert code == 1
+    assert judged_gate(lines, "beta").endswith("(ceiling 1.5s of tier1): red")
+    assert judged_gate(lines, "alpha").endswith(": green")
+    assert judged_gate(lines, "gamma").endswith(": green")
+
+
+def test_a_gate_with_its_own_key_below_the_tier_s_is_held_to_it_inside_a_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = grouped_project(tmp_path / "repo", "[ceilings.seconds]\ntier1 = 900\nalpha = 0.5\n")
+    code, lines = judged_in_ci(root, {"alpha": 0.6}, monkeypatch=monkeypatch, capsys=capsys)
+    assert code == 1
+    assert judged_gate(lines, "alpha").endswith("(ceiling 0.5s): red")
+    assert "(ceiling 900s of tier1" in judged_gate(lines, "beta")
+
+
+def test_a_group_with_a_key_of_its_own_under_its_job_name_is_held_to_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = grouped_project(tmp_path / "repo", "[ceilings.seconds]\ntier1 = 900\nrest = 0.5\n")
+    sleeps = {"alpha": 0.3, "beta": 0.3}
+    code, lines = judged_in_ci(root, sleeps, monkeypatch=monkeypatch, capsys=capsys)
+    assert code == 1
+    assert judged_gate(lines, "rest").endswith("(ceiling 0.5s): red")
+    assert all(judged_gate(lines, gate).endswith(": green") for gate in sleeps)
+
+
+def test_an_earlier_run_s_lines_in_the_record_are_not_read_as_this_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = grouped_project(tmp_path / "repo", TIER_CEILING)
+    code, lines = judged_in_ci(root, {"alpha": 1.6}, monkeypatch=monkeypatch, capsys=capsys)
+    assert (code, judged_gate(lines, "alpha").endswith(": red")) == (1, True)
+    nothing = [sys.executable, "-c", "pass"]
+    code, lines = judged_in_ci(root, {}, monkeypatch=monkeypatch, capsys=capsys, command=nothing)
+    assert code == 0, lines
+    assert [line.split(" took ")[0] for line in lines] == ["ratchet-budget: rest"]
+    assert re.search(r"\(ceiling 1\.5s of tier1, \d+% used\): green$", lines[0])
+
+
+GROUP_ONLY = textwrap.dedent(
+    """\
+    import json, sys
+    lines = [
+        {"key": "beta", "seconds": "slow", "exit": 0},
+        {"key": "gamma", "seconds": 0.2, "exit": 0},
+        {"kind": "group", "job": "rest", "gates": ["alpha", "beta", "gamma"]},
+    ]
+    with open(sys.argv[1], "a", encoding="utf-8") as out:
+        out.writelines(json.dumps(line) + "\\n" for line in lines)
+    """
+)
+
+
+def test_a_gate_whose_time_this_run_s_record_does_not_hold_is_named_and_not_judged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = grouped_project(tmp_path / "repo", TIER_CEILING)
+    writer = tmp_path / "group_only.py"
+    writer.write_text(GROUP_ONLY, encoding="utf-8")
+    command = [sys.executable, str(writer), str(root / RECORD)]
+    (root / RECORD).parent.mkdir()
+    code, lines = judged_in_ci(root, {}, monkeypatch=monkeypatch, capsys=capsys, command=command)
+    assert code == 0, lines
+    for gate in ("alpha", "beta"):
+        assert judged_gate(lines, gate) == (
+            f"ratchet-budget: {gate} ran in rest, and this run's record holds no time of it:"
+            " not judged"
+        )
+    assert judged_gate(lines, "gamma").endswith("(ceiling 1.5s of tier1, 13% used): green")
 
 
 def problems_of(words: str) -> list[tuple[ci_jobs.Kind, str]]:
@@ -565,12 +743,17 @@ def job_names(root: Path, capsys: pytest.CaptureFixture[str]) -> list[str]:
     if "ci_jobs.py" not in workflow:
         listed = "tier1_jobs" if "tier1_jobs" in workflow else "tier1_gates"
         return list(justfile_text.ordered(justfile, listed) or ())
+    given = shaped(root, capsys)
+    return [*given["tier1"], *given["tier1_long"]]
+
+
+def shaped(root: Path, capsys: pytest.CaptureFixture[str]) -> dict[str, list[str]]:
     output = root.parent / "shape-output"
     output.write_text("", encoding="utf-8")
     assert ci_jobs.main(["ci_jobs.py", "--root", str(root), "--output", str(output)]) == 0
     capsys.readouterr()
     given = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
-    return [*json.loads(given["tier1"]), *json.loads(given["tier1_long"])]
+    return {key: json.loads(given[key]) for key in ("tier1", "tier1_long")}
 
 
 def unresolved(root: Path, capsys: pytest.CaptureFixture[str]) -> list[str]:
@@ -588,12 +771,12 @@ def held(root: Path) -> set[tuple[str, str, float | None]]:
     workflow = read(root, CI)
     if "ci_jobs.py" in workflow:
         assert 'just ci-job "${{ matrix.gate }}"' in workflow
-        by_job = [(job, gate) for job, gates in jobs(root).items() for gate in gates]
+        gates = [gate for each in jobs(root).values() for gate in each]
     else:
         assert HAND_EDIT in workflow
         assert ' -- just "${{ matrix.gate }}"' in workflow
-        by_job = [(g, g) for g in justfile_text.ordered(read(root, JUSTFILE), "tier1_gates")]
-    return {(gate, f"just {gate}", budget.held(text, job, "tier1")[0]) for job, gate in by_job}
+        gates = list(justfile_text.ordered(read(root, JUSTFILE), "tier1_gates") or ())
+    return {(gate, f"just {gate}", budget.held(text, gate, "tier1")[0]) for gate in gates}
 
 
 def leftover(root: Path) -> list[conformance.Finding]:
@@ -690,7 +873,7 @@ KEPT_EDITS = {
         CACHE_KEY,
         CACHE_KEY + "      - if: matrix.gate == 'audit'\n        run: ./scripts/install-audit-db\n",
         "reads `matrix.gate`, which the new shape changes",
-        'tier1_jobs := "audit bite rest"',
+        'tier1_jobs := "test mutation-changed audit bite rest"',
     ),
 }
 
@@ -731,9 +914,14 @@ def test_the_upgrade_groups_a_template_shaped_workflow_and_keeps_every_gate_its_
     root = adopted.copy(adopted.adopted(version), tmp_path / "repo")
     edited(root, edit)
     before = held(root)
+    long_before = justfile_text.ordered(read(root, JUSTFILE), "tier1_sharded")
+    assert long_before == ("test", "mutation-changed")
     upgraded(root)
     capsys.readouterr()
     assert held(root) == before
+    assert shaped(root, capsys) == {"tier1": ["bite", "rest"], "tier1_long": list(long_before)}
+    gates = justfile_text.ordered(read(root, JUSTFILE), "tier1_gates") or ()
+    assert jobs(root)["rest"] == tuple(g for g in gates if g not in {"bite", *long_before})
     written = (root / CI).read_bytes().decode()
     template = conformance.template_file(CI).replace("<ratchet-sha>", pinned(root))
     if edit is None:
@@ -754,6 +942,7 @@ def test_the_upgrade_groups_a_template_shaped_workflow_and_keeps_every_gate_its_
     assert isinstance(plan, upgrade.Plan)
     assert not {CI, JUSTFILE, BINDING} & set(plan.changes), "a second run writes nothing"
     assert {path: (root / path).read_bytes() for path in files} == files
+    assert conformance.run(root) == 0
 
 
 KEPT = [

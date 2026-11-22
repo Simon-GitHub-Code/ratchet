@@ -663,6 +663,7 @@ def test_a_tier_list_a_workflow_reads_and_the_justfile_lacks_is_named_with_the_t
 
 def test_a_tier_list_may_be_empty_or_exported(repo: Path) -> None:
     replace(JUSTFILE, 'tier1_sharded := "test mutation-changed"', 'tier1_sharded := ""')(repo)
+    replace(JUSTFILE, '"test mutation-changed bite rest"', '"bite rest"')(repo)
     replace(JUSTFILE, "tier2_gates :=", "export tier2_gates :=")(repo)
     assert red(repo) == []
 

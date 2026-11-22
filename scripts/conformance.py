@@ -4240,9 +4240,9 @@ def bite_mutations() -> list[Mutation]:
     ]
 
 
-TIER1_JOBS_LINE = 'tier1_jobs := "bite rest"'
-BARE_PROOF = 'tier1_jobs := "bite"'
-ALONE_AUDIT = 'tier1_jobs := "bite audit rest"'
+TIER1_JOBS_LINE = 'tier1_jobs := "test mutation-changed bite rest"'
+BARE_PROOF = 'tier1_jobs := "test mutation-changed bite"'
+ALONE_AUDIT = 'tier1_jobs := "test mutation-changed bite audit rest"'
 AUDIT_CEILING = (
     "quality/thresholds.toml",
     "[ceilings.change]",
