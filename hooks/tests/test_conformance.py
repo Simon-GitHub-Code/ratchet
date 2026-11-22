@@ -1921,3 +1921,124 @@ def test_non_template_deep_and_merge_workflows_leave_deep_edits_owed(repo: Path)
     assert speaks(after_jobs) == after_jobs
     no_ref = "jobs:\n  shape:\n  tier2:\n  tier2-long:\n"
     assert speaks(no_ref) == no_ref
+
+
+def matrix_workflow(repo: Path, body: str, filename: str = "ci.yml") -> list[conformance.Finding]:
+    (repo / ".github/workflows" / filename).write_text(body, encoding="utf-8")
+    return [
+        found
+        for found in conformance.check_speed(repo)
+        if found.path.endswith(filename) and "defines a matrix" in found.problem
+    ]
+
+
+def test_matrix_job_cache_key_without_matrix_value_is_a_finding(repo: Path) -> None:
+    sha = "55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+    bad = (
+        "name: ci\non: push\nconcurrency:\n  group: ci\njobs:\n"
+        "  gates:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    strategy:\n"
+        "      fail-fast: false\n"
+        "      matrix:\n"
+        "        gate: [lint, types]\n"
+        "    steps:\n"
+        f"      - uses: actions/cache@{sha} # v6\n"
+        "        with:\n"
+        "          path: .cache\n"
+        "          key: tools-${{ runner.os }}-${{ github.sha }} # ${{ matrix.gate }}\n"
+        "      - uses: actions/cache/restore@v4\n"
+        "        with:\n"
+        "          path: .cache\n"
+        "      - uses: actions/cache/save@v4\n"
+    )
+    findings = matrix_workflow(repo, bad)
+    assert len(findings) == 3
+    assert findings[0].path == ".github/workflows/ci.yml"
+    assert "`gates`" in findings[0].problem
+    assert "tools-${{ runner.os }}-${{ github.sha }}" in findings[0].problem
+    assert "${{ matrix.<key> }}" in findings[0].problem
+    assert "no `with.key`" in findings[1].problem
+    assert "no `with.key`" in findings[2].problem
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "tools-${{ runner.os }}-${{ matrix.gate }}-${{ github.sha }}",
+        "\"tools-${{ matrix['os'] }}-${{ github.sha }}\"",
+        "'tools-${{ matrix[\"py\"] }}-${{ github.sha }}'",
+    ],
+)
+def test_matrix_job_cache_key_with_matrix_value_passes(repo: Path, key: str) -> None:
+    good = (
+        "name: ci\non: push\nconcurrency:\n  group: ci\njobs:\n"
+        "  gates:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    strategy:\n"
+        "      matrix:\n"
+        "        gate: [lint, types]\n"
+        "    steps:\n"
+        "      - name: Restore\n"
+        "        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6\n"
+        "        with:\n"
+        f"          key: {key}\n"
+        "          path: .cache\n"
+    )
+    assert matrix_workflow(repo, good) == []
+
+
+def test_non_matrix_job_cache_key_without_matrix_value_passes(repo: Path) -> None:
+    non_matrix = (
+        "name: ci\non: push\nconcurrency:\n  group: ci\njobs:\n"
+        "  lint:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    env:\n"
+        "      matrix: not-a-strategy\n"
+        "    steps:\n"
+        "      - run: echo 'strategy:\\n  matrix:'\n"
+        "      - uses: actions/cache@v4\n"
+        "        with:\n"
+        "          path: .cache\n"
+        "          key: lint-${{ runner.os }}-${{ github.sha }}\n"
+    )
+    assert matrix_workflow(repo, non_matrix) == []
+
+
+def test_matrix_cache_key_check_handles_flow_syntax_multiline_keys_and_yaml_extension(
+    repo: Path,
+) -> None:
+    yaml_text = (
+        "name: extra\non: push\nconcurrency:\n  group: extra\njobs:\n"
+        "  - stray\n"
+        "  matrixed:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    strategy: { matrix: { os: [linux, macos] } }\n"
+        "    steps:\n"
+        "      - { uses: actions/cache@v4, with: { path: .cache, key: plain-${{ github.sha }} } }\n"
+        "      - uses: actions/cache@v4\n"
+        "        with:\n"
+        "          key: |\n"
+        "            cache-${{ matrix.os }}-${{ github.sha }}\n"
+        "      - uses: actions/cache@v4\n"
+        "        with: { path: .cache, key: 'flow-${{ github.sha }}' }\n"
+        "      - uses: actions/cache@v4\n"
+        "        with: { path: .cache, key: unclosed\n"
+        "      plain-line: ignored\n"
+        "  empty-matrix:\n"
+        "    strategy:\n"
+        "    steps:\n"
+        "    runs-on: ubuntu-latest\n"
+        "  empty-steps:\n"
+        "    strategy: { matrix: { a: [1] } }\n"
+        "    steps:\n"
+        "    runs-on: ubuntu-latest\n"
+        "env:\n"
+        "  AFTER_JOBS: 1\n"
+    )
+    findings = matrix_workflow(repo, yaml_text, filename="extra.yaml")
+    assert len(findings) == 3
+    assert findings[0].path == ".github/workflows/extra.yaml"
+    assert "plain-${{ github.sha }}" in findings[0].problem
+    assert "flow-${{ github.sha }}" in findings[1].problem
+    assert "unclosed" in findings[2].problem
