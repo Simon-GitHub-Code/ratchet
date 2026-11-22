@@ -155,6 +155,13 @@ def tools(root: Path) -> frozenset[str]:
     )
 
 
+def standing_of(output: str, *, tool: bool) -> Standing:
+    waiting = WAITING.fullmatch(output.strip())
+    if waiting is None or (waiting["standing"] == "none" and tool):
+        return Standing.GREEN
+    return Standing[waiting["standing"].upper()]
+
+
 @dataclass(frozen=True, slots=True)
 class Finished:
     name: str
@@ -169,12 +176,7 @@ class Finished:
 
     @property
     def standing(self) -> Standing:
-        if not self.green:
-            return Standing.RED
-        waiting = WAITING.fullmatch(self.output.strip())
-        if waiting is None or (waiting["standing"] == "none" and self.tool):
-            return Standing.GREEN
-        return Standing[waiting["standing"].upper()]
+        return standing_of(self.output, tool=self.tool) if self.green else Standing.RED
 
     def line(self) -> str:
         match self.standing:

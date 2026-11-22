@@ -236,7 +236,12 @@ def test_a_job_list_the_reader_cannot_read_exactly_is_never_red_unless_the_plugi
     assert "`ci_jobs.py` in `.github/workflows/ci.yml` reads it" in refused.problem
     output = tmp_path / "output"
     assert ci_jobs.main(["ci_jobs.py", "--root", str(repo), "--output", str(output)]) == 1
-    assert "`tier1_jobs` is not one plain string" in capsys.readouterr().out
+    assert ci_jobs.main(["ci_jobs.py", "--root", str(repo), "--run", "rest"]) == 2
+    said = capsys.readouterr().out.splitlines()
+    assert said == [
+        "justfile: `tier1_jobs` is not one plain string, so no jobs are read from it",
+        "justfile: `tier1_jobs` is not one plain string, so no job `rest` is read from it",
+    ]
     base.replace(CI, SHAPE_STEP, OWN_MATRIX)(repo)
     [offered] = on_justfile(repo)
     assert OWN_LINE in offered.problem
@@ -247,8 +252,7 @@ def test_a_job_list_the_reader_cannot_read_exactly_is_never_red_unless_the_plugi
 
 
 WAITING_RECIPES = (
-    'delta:\n    @echo "later: code:outbound-call"\n\n'
-    'gamma:\n    @echo "none: nothing calls out"\n'
+    'delta:\n    @echo "later: code:outbound-call"\n\ngamma:\n    @echo "none: nothing calls out"\n'
 )
 
 
@@ -258,12 +262,11 @@ def project(
     rows: str,
     *,
     recipes: str = WAITING_RECIPES,
-    gates: str = "bite alpha beta gamma delta",
     speed: str = "- Shards: 2\n",
 ) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     (root / JUSTFILE).write_text(
-        f'tier1_gates := "{gates}"\ntier1_sharded := "alpha"\n'
+        'tier1_gates := "bite alpha beta gamma delta"\ntier1_sharded := "alpha"\n'
         f"tier1_jobs := {jobs_line}\n\n{recipes}",
         encoding="utf-8",
     )
@@ -283,13 +286,22 @@ WAITING = (
     "| f | a tool | 1 | | `just gamma` |\n"
 )
 NOT_A_LIBRARY = "| n | none: not a library | 1 | | `just beta` |\n"
-STILL_RED = 'beta:\n    @echo "bind: documentation coverage of the public surface"; exit 1\n'
+DOES_MORE = {
+    "exits 1": 'beta:\n    @echo "bind: documentation coverage of the public surface"; exit 1\n',
+    "has a dependency": 'beta: delta\n    @echo "none: not a library"\n',
+    "has two lines": 'beta:\n    @echo "none: not a library"\n    ./scripts/doc-coverage\n',
+}
 
 
+@pytest.mark.parametrize("recipe", list(DOES_MORE))
 def test_a_gate_whose_rows_wait_still_gets_a_runner_when_its_recipe_does_more_than_say_so(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    recipe: str,
 ) -> None:
-    recipes = f"{WAITING_RECIPES}\n{STILL_RED}"
+    recipes = f"{WAITING_RECIPES}\n{DOES_MORE[recipe]}"
     root = project(tmp_path / "repo", '"bite rest"', WAITING + NOT_A_LIBRARY, recipes=recipes)
     output = tmp_path / "output"
     assert ci_jobs.main(["ci_jobs.py", "--root", str(root), "--output", str(output)]) == 0
@@ -302,7 +314,9 @@ def test_a_gate_whose_rows_wait_still_gets_a_runner_when_its_recipe_does_more_th
 
 def test_rest_keeps_the_binding_s_apart_and_alone_lines(tmp_path: Path) -> None:
     speed = "- Shards: 1\n- Apart: `a b`\n- Alone: `c`\n"
-    root = project(tmp_path / "repo", '"bite rest"', "", recipes="", gates="bite a b c d e f", speed=speed)
+    root = project(tmp_path / "repo", '"bite rest"', "", recipes="", speed=speed)
+    lists = 'tier1_gates := "bite a b c d e f"\ntier1_sharded := ""\ntier1_jobs := "bite rest"\n'
+    (root / JUSTFILE).write_text(lists, encoding="utf-8")
     log = tmp_path / "log"
     runner = shlex.join([sys.executable, "-c", parallel_tests.PAIRED, str(log)])
     run = ["ci_jobs.py", "--root", str(root), "--run", "rest", "--runner", runner, "--jobs", "6"]
@@ -325,7 +339,8 @@ def test_the_shape_job_starts_no_runner_for_a_gate_its_rows_wait_on_and_names_it
     }
     assert capsys.readouterr().out == (
         "ci_jobs: no runner for the gates whose every row of the binding's Gates table says"
-        " none: or later:, so each is green by its row: `delta` (later: code:outbound-call)\n"
+        " none: or later: and whose recipe only says so, so each is green by its row: `delta`"
+        " (later: code:outbound-call)\n"
     )
 
 
@@ -378,14 +393,42 @@ def problems_of(words: str) -> list[tuple[ci_jobs.Kind, str]]:
         ("bite rest rest", [(ci_jobs.Kind.NAME, "rest")]),
         ("bite alpha=alpha,beta", [(ci_jobs.Kind.NAME, "alpha")]),
         ("bite rest=alpha rest", [(ci_jobs.Kind.NAME, "rest"), (ci_jobs.Kind.NAME, "rest")]),
-        ("bite pair=alpha,omega rest", [(ci_jobs.Kind.UNKNOWN, "omega")]),
         ("bite pair=alpha,beta", []),
     ],
 )
-def test_a_job_list_that_names_a_job_twice_after_a_gate_or_a_gate_the_tier_lacks_is_refused(
+def test_a_job_list_that_names_a_job_twice_or_after_a_gate_is_refused(
     words: str, expected: list[tuple[ci_jobs.Kind, str]]
 ) -> None:
     assert problems_of(words) == expected
+
+
+@pytest.mark.parametrize("word", ["pair=alpha,omega", "pair=", "omega", "=alpha"])
+def test_a_job_list_with_a_word_that_is_no_gate_rest_or_group_of_gates_is_the_project_s_own(
+    word: str,
+) -> None:
+    justfile = (
+        f'tier1_gates := "bite alpha"\ntier1_sharded := ""\ntier1_jobs := "bite {word} rest"\n'
+    )
+    assert ci_jobs.lists(justfile) == ci_jobs.Own(
+        f"`tier1_jobs` holds `{word}`, which is no gate of `tier1_gates`, `rest` or"
+        " `NAME=gate,gate`"
+    )
+
+
+@pytest.mark.parametrize(
+    ("values", "reason"),
+    [
+        (("base", '""', '"rest"'), "`tier1_gates` is not a value read exactly"),
+        (('"a"', "x", '"rest"'), "`tier1_sharded` is not a value read exactly"),
+        (('"a"', '""', '"a" + " rest"'), "`tier1_jobs` is not one plain string"),
+    ],
+)
+def test_a_list_the_reader_cannot_read_exactly_makes_the_job_list_the_project_s_own(
+    values: tuple[str, str, str], reason: str
+) -> None:
+    names = ("tier1_gates", "tier1_sharded", "tier1_jobs")
+    justfile = "".join(f"{name} := {value}\n" for name, value in zip(names, values, strict=True))
+    assert ci_jobs.lists(justfile) == ci_jobs.Own(reason)
 
 
 @pytest.mark.parametrize(
@@ -495,8 +538,13 @@ def workflow_faults(text: str) -> list[str]:
     faults = []
     for name, body in bodies.items():
         keys = Counter(match[1] for line in body if (match := KEY.match(line)))
-        faults += [f"{name}: the key {key} {count} times" for key, count in keys.items() if count > 1]
-        needs = {word for line in body if line.startswith("    needs:") for word in re.findall(r"[\w-]+", line[10:])}
+        faults += [f"{name}: the key {key} {n} times" for key, n in keys.items() if n > 1]
+        needs = {
+            word
+            for line in body
+            if line.startswith("    needs:")
+            for word in re.findall(r"[\w-]+", line.removeprefix("    needs:"))
+        }
         matrix = keys_under(body, "      matrix:", MATRIX_KEY)
         for line in body:
             faults += [
@@ -504,7 +552,11 @@ def workflow_faults(text: str) -> list[str]:
                 for job, out in OUTPUT_READ.findall(line)
                 if job not in needs or out not in outputs.get(job, set())
             ]
-            faults += [f"{name}: matrix.{key} has no value" for key in MATRIX_READ.findall(line) if key not in matrix]
+            faults += [
+                f"{name}: matrix.{key} has no value"
+                for key in MATRIX_READ.findall(line)
+                if key not in matrix
+            ]
     return faults
 
 
@@ -565,13 +617,16 @@ TIER1_HEAD = "  tier1:\n    runs-on: ubuntu-latest"
 CACHE_KEY = "            tier1-${{ runner.os }}-${{ matrix.gate }}-\n"
 SHAPE_RUN = "      - id: shards\n        run: |\n"
 GUARD = "  tier1:\n    if: needs.shape.outputs.tier1 != '[]'"
+LONG_OUTPUT = '          echo "tier1_long=$(json "$long")" >> "$GITHUB_OUTPUT"\n'
 LINE_ENDS = "its own line ends"
 OWN_EDITS = {
     "a step of its own": (CACHE_KEY, CACHE_KEY + "      - run: ./scripts/warm-cache\n"),
     "a job of its own": (
         "jobs:\n",
-        "jobs:\n  docs:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    steps:\n"
-        "      - run: echo docs\n",
+        (
+            "jobs:\n  docs:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    steps:\n"
+            "      - run: echo docs\n"
+        ),
     ),
     "a runner of its own": (
         TIER1_HEAD,
@@ -614,17 +669,36 @@ KEPT_EDITS = {
     ),
     "a job that reads the shape's outputs": (
         "jobs:\n",
-        "jobs:\n  gate-list:\n    needs: shape\n    runs-on: ubuntu-latest\n    strategy:\n"
-        "      matrix:\n        gate: ${{ fromJSON(needs.shape.outputs.tier1) }}\n    steps:\n"
-        '      - run: just --dry-run "${{ matrix.gate }}"\n',
+        (
+            "jobs:\n  gate-list:\n    needs: shape\n    runs-on: ubuntu-latest\n    strategy:\n"
+            "      matrix:\n        gate: ${{ fromJSON(needs.shape.outputs.tier1) }}\n    steps:\n"
+            '      - run: just --dry-run "${{ matrix.gate }}"\n'
+        ),
         "reads `needs.shape.outputs.`, which the new shape changes",
+    ),
+    "a line of its own after the shape script": (
+        LONG_OUTPUT,
+        LONG_OUTPUT + '          echo "extra=1" >> "$GITHUB_OUTPUT"\n',
+        "a line the plugin did not write runs on from the shape job's steps",
+    ),
+    "a step that reads tier 0's result": (
+        CACHE_KEY,
+        CACHE_KEY + "      - if: needs.tier0.result == 'success'\n        run: ./scripts/after\n",
+        "reads `needs.tier0.`, which the new shape changes",
     ),
     "a step chosen by its gate": (
         CACHE_KEY,
         CACHE_KEY + "      - if: matrix.gate == 'audit'\n        run: ./scripts/install-audit-db\n",
         "reads `matrix.gate`, which the new shape changes",
+        'tier1_jobs := "audit bite rest"',
     ),
 }
+
+
+def test_the_template_the_upgrade_compares_with_is_the_ci_yml_the_releases_wrote() -> None:
+    for version in ("0.13.3", "0.13.4", "0.13.5"):
+        wrote = adopted.template_files(adopted.LATER[version])[CI]
+        assert "\n".join(conformance.released()).rstrip("\n") == wrote.rstrip("\n")
 
 
 def edited(root: Path, edit: str | None) -> bytes:
@@ -712,9 +786,20 @@ def test_the_upgrade_keeps_a_workflow_it_cannot_regroup_without_changing_a_line_
     assert KEPT_EDITS[edit][2] in found.fix.start[0]
     assert NEW_STEP in found.fix.start
     assert "-    needs: [tier0, shape]" in found.fix.start
-    assert JOBS_LINE in read(root, JUSTFILE)
+    assert (*KEPT_EDITS[edit][3:], JOBS_LINE)[0] in read(root, JUSTFILE)
     assert unresolved(root, capsys) == []
     assert conformance.run(root) == 0
+
+
+@pytest.mark.shard_slot(6)
+def test_a_template_shaped_workflow_waits_for_the_recipe_that_runs_each_job_by_its_name(
+    tmp_path: Path,
+) -> None:
+    root = adopted.copy(adopted.adopted("0.13.5"), tmp_path / "repo")
+    (root / JUSTFILE).write_text(f"{read(root, JUSTFILE)}\n{JOBS_LINE}\n", encoding="utf-8")
+    [found] = [f for f in conformance.findings(root) if f.path == CI and "ci_jobs.py" in f.problem]
+    assert isinstance(found.fix, conformance.Agent)
+    assert "the justfile has no `ci-job` recipe to run each job by its name" in found.fix.start[0]
 
 
 OWN_LIST = 'tier1_jobs := "suite boot bite others"'
@@ -722,10 +807,12 @@ OWN_RECIPES = (
     "\nsuite:\n    just test coverage\n\nboot:\n    just build smoke\n\nothers:\n    just tier1\n"
 )
 OWN_READ = (
-    "          for gate in $(just --evaluate tier1_gates); do\n"
-    '            case " $long " in *" $gate "*) ;; *) short="$short $gate" ;; esac\n'
-    "          done\n"
-    '          echo "tier1=$(json "$short")" >> "$GITHUB_OUTPUT"\n',
+    (
+        "          for gate in $(just --evaluate tier1_gates); do\n"
+        '            case " $long " in *" $gate "*) ;; *) short="$short $gate" ;; esac\n'
+        "          done\n"
+        '          echo "tier1=$(json "$short")" >> "$GITHUB_OUTPUT"\n'
+    ),
     '          echo "tier1=$(json "$(just --evaluate tier1_jobs)")" >> "$GITHUB_OUTPUT"\n',
 )
 

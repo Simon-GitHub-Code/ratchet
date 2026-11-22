@@ -409,7 +409,11 @@ def with_first_line(recipe: str, line: str) -> Want:
 VARIABLE = re.compile(r"^(?:export[ \t]+)?([A-Za-z_][\w-]*)[ \t]*:=[ \t]*(.*)$", re.MULTILINE)
 STRING = re.compile(r"\"([^\"]*)\"|'([^']*)'")
 QUOTED = re.compile(r'"([^"]*)"')
-PART = re.compile(r"\"(?P<double>[^\"]*)\"|'(?P<single>[^']*)'|(?P<name>[A-Za-z_][\w-]*)")
+TERM = re.compile(
+    r"""[ \t]*(?:"(?P<double>[^"\\]*)"|'(?P<single>[^']*)'|(?P<name>[A-Za-z_][\w-]*))[ \t]*"""
+)
+END = re.compile(r"(?:#.*)?")
+ECHO = re.compile(r'@echo "([^"\\]*)"')
 
 
 @functools.lru_cache(maxsize=256)
@@ -420,21 +424,57 @@ def variables(justfile: str) -> Mapping[str, str]:
     return MappingProxyType(found)
 
 
-def listed(justfile: str, name: str) -> set[str]:
-    return set(ordered(justfile, name))
-
-
-def ordered(justfile: str, name: str, seen: frozenset[str] = frozenset()) -> tuple[str, ...]:
+def listed(justfile: str, name: str, seen: frozenset[str] = frozenset()) -> set[str]:
     value = variables(justfile).get(name)
     if value is None or name in seen:
-        return ()
-    found: list[str] = []
-    for part in PART.finditer(value):
-        if part["name"]:
-            found += ordered(justfile, part["name"], seen | {name})
-        else:
-            found += (part["double"] or part["single"] or "").split()
-    return tuple(dict.fromkeys(found))
+        return set()
+    found = {word for one, other in STRING.findall(value) for word in (one or other).split()}
+    for built in BARE_NAME.findall(STRING.sub(" ", value)):
+        found |= listed(justfile, built, seen | {name})
+    return found
+
+
+def exact(justfile: str, name: str, seen: frozenset[str] = frozenset()) -> str | None:
+    value = variables(justfile).get(name)
+    if value is None or name in seen:
+        return None
+    parts: list[str] = []
+    at = 0
+    while term := TERM.match(value, at):
+        part = term["double"] if term["double"] is not None else term["single"]
+        if term["name"]:
+            part = exact(justfile, term["name"], seen | {name})
+        if part is None:
+            return None
+        parts.append(part)
+        at = term.end()
+        if END.fullmatch(value, at):
+            return "".join(parts)
+        if value[at] != "+":
+            return None
+        at += 1
+    return None
+
+
+def ordered(justfile: str, name: str) -> tuple[str, ...] | None:
+    value = exact(justfile, name)
+    return None if value is None else tuple(dict.fromkeys(value.split()))
+
+
+def echoed(justfile: str, recipe: str) -> str | None:
+    lines = justfile.split("\n")
+    block = next((b for b in blocks(lines) if b.name == recipe), None)
+    head = block.parsed if block else None
+    if block is None or head is None or head.params or head.before or head.after:
+        return None
+    body = [line.strip() for line in uncommented(lines[block.head + 1 : block.end]) if line.strip()]
+    said = ECHO.fullmatch(body[0]) if len(body) == 1 else None
+    return said[1] if said else None
+
+
+def plain(justfile: str, name: str) -> bool:
+    value = variables(justfile).get(name)
+    return value is not None and QUOTED.fullmatch(value.strip()) is not None
 
 
 def reaches(justfile: str, recipe: str) -> set[str]:
