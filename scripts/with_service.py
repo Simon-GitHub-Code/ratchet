@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import ctypes
 import http.client
 import ipaddress
 import os
@@ -25,10 +26,12 @@ import load_smoke
 
 if TYPE_CHECKING:
     import socket
+    from collections.abc import Callable
 
 POLL = 0.1
 SENDING_POLL = 0.01
 WATCH = 0.01
+PR_SET_PDEATHSIG = 1
 TAIL = 30
 HEAD = 30
 PORT_TOKEN = "{port}"  # noqa: S105 # -- a placeholder, not a credential
@@ -148,6 +151,19 @@ def tail(log: IO[bytes], *, exited: bool = False) -> list[str]:
     return ["boot output:", *(f"  {line}" for line in lines)]
 
 
+def on_parent_exit(parent: int) -> Callable[[], None] | None:
+    if sys.platform != "linux":
+        return None
+    prctl = ctypes.CDLL(None).prctl
+
+    def set_death_signal() -> None:
+        prctl(PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
+        if os.getppid() != parent:
+            os.kill(os.getpid(), signal.SIGTERM)
+
+    return set_death_signal
+
+
 def start(
     options: argparse.Namespace, env: dict[str, str], log: IO[bytes]
 ) -> subprocess.Popen[bytes]:
@@ -159,6 +175,7 @@ def start(
         stdout=log,
         stderr=subprocess.STDOUT,
         start_new_session=True,
+        preexec_fn=on_parent_exit(os.getpid()),  # noqa: PLW1509 # -- start runs before threads
     )
 
 

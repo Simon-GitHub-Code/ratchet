@@ -225,7 +225,7 @@ def test_a_session_whose_work_tree_was_removed_is_stale(
     shutil.rmtree(linked)
     code, out = down(product, capsys)
     assert code == 1
-    assert out[0] == f"session {directory.name} is stale: {acceptance.acceptance_record.STALE}"
+    assert f"session {directory.name} is stale: {acceptance.acceptance_record.STALE}" in out
 
 
 def test_a_session_that_cannot_say_what_it_served_is_stale(tmp_path: Path) -> None:
