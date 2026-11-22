@@ -1451,3 +1451,140 @@ def test_a_blocked_run_of_one_feature_does_not_hold_the_same_number_in_another(
     root = repository(tmp_path, files)
     blocked(root, "feature/1-alpha")
     assert route.decide(root, None).command == f"{route.FEATURE} {beta}"
+
+
+def test_loop_wait_is_surfaced_with_median_and_range_until_budget_is_set(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = repository(
+        tmp_path,
+        {
+            **ADOPTED,
+            "quality/thresholds.toml": "[ceilings.change]\nproduct_files = 25\n",
+            "justfile": 'tier1_gates := "test"\n',
+        },
+    )
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    also = [line for line in capsys.readouterr().out.splitlines() if line.startswith("also:")]
+    assert len(also) == 1
+    assert "loop.wait" in also[0]
+    assert (
+        "When you ask for a check on a small change, how long will you wait for the answer?"
+        in (also[0])
+    )
+    assert "under the median makes every check red until the loop is narrowed" in also[0]
+
+    times = [100.0 + i * 10.0 for i in range(12)]
+    records = [
+        {
+            "kind": "tier",
+            "seconds": t,
+            "status": "green",
+            "judgement": "not judged",
+            "reason": "no budget is declared",
+        }
+        for t in times
+    ]
+    write(root, ".ratchet/timing.jsonl", "\n".join(json.dumps(r) for r in records) + "\n")
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    also = [line for line in capsys.readouterr().out.splitlines() if line.startswith("also:")]
+    assert len(also) == 1
+    assert "120.0s to 210.0s" in also[0]
+    assert "median 165.0s" in also[0]
+
+    write(root, "quality/thresholds.toml", "[ceilings.loop]\nseconds = 300\n")
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    also = [line for line in capsys.readouterr().out.splitlines() if line.startswith("also:")]
+    assert also == []
+
+
+def test_three_consecutive_not_judged_runs_surface_for_machine_and_unread(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = repository(
+        tmp_path,
+        {**ADOPTED, "quality/thresholds.toml": "[ceilings.loop]\nseconds = 300\n"},
+    )
+    two_machine = [
+        {
+            "kind": "tier",
+            "seconds": 350.0,
+            "judgement": "not judged",
+            "reason": "the machine explains the time",
+        },
+        {
+            "kind": "tier",
+            "seconds": 360.0,
+            "judgement": "not judged",
+            "reason": "the machine explains the time",
+        },
+    ]
+    write(root, ".ratchet/timing.jsonl", "\n".join(json.dumps(r) for r in two_machine) + "\n")
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    assert not any(line.startswith("also:") for line in capsys.readouterr().out.splitlines())
+
+    three_machine = [
+        *two_machine,
+        {
+            "kind": "tier",
+            "seconds": 370.0,
+            "judgement": "not judged",
+            "reason": "the machine explains the time",
+        },
+    ]
+    write(root, ".ratchet/timing.jsonl", "\n".join(json.dumps(r) for r in three_machine) + "\n")
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    also = [line for line in capsys.readouterr().out.splitlines() if line.startswith("also:")]
+    assert len(also) == 1
+    assert "3 runs in a row" in also[0]
+    assert "machine explains the time" in also[0]
+    assert "owner" in also[0]
+
+    three_unread = [
+        {
+            "kind": "tier",
+            "seconds": None,
+            "judgement": "not judged",
+            "reason": "the run's times could not be read",
+            "missing": "timing-tier0 artifact",
+        }
+        for _ in range(3)
+    ]
+    write(root, ".ratchet/timing.jsonl", "\n".join(json.dumps(r) for r in three_unread) + "\n")
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    also = [line for line in capsys.readouterr().out.splitlines() if line.startswith("also:")]
+    assert len(also) == 1
+    assert "3 runs in a row" in also[0]
+    assert "timing-tier0 artifact" in also[0]
+
+    three_unread_default = [
+        {
+            "kind": "tier",
+            "seconds": None,
+            "judgement": "not judged",
+            "reason": "the run's times could not be read",
+        }
+        for _ in range(3)
+    ]
+    write(
+        root,
+        ".ratchet/timing.jsonl",
+        "\n".join(json.dumps(r) for r in three_unread_default) + "\n",
+    )
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    also = [line for line in capsys.readouterr().out.splitlines() if line.startswith("also:")]
+    assert len(also) == 1
+    assert "actions: read" in also[0]
+
+    three_no_budget = [
+        {
+            "kind": "tier",
+            "seconds": 10.0,
+            "judgement": "not judged",
+            "reason": "no budget is declared",
+        }
+        for _ in range(3)
+    ]
+    write(root, ".ratchet/timing.jsonl", "\n".join(json.dumps(r) for r in three_no_budget) + "\n")
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    assert not any(line.startswith("also:") for line in capsys.readouterr().out.splitlines())
