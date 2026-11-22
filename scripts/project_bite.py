@@ -941,9 +941,9 @@ UNREAD = (
     " text to let them share the machine"
 )
 ASSUMED = (
-    "bite: the {recipe} recipe passes parallel.py {words}, whose value the proof cannot read;"
-    " a recipe's --jobs sets how many of its gates check runs at once and never the proof's"
-    " lanes, so they run as they would for any value"
+    "bite: the {recipe} recipe passes parallel.py {words}, a value the shell fills in; a"
+    " recipe's --jobs sets how many of its gates check runs at once and never the proof's lanes,"
+    " so they run as they would for any value"
 )
 
 
