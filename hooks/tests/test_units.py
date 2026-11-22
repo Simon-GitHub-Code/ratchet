@@ -138,8 +138,10 @@ def test_the_rule_catalogue_is_pinned() -> None:
         "merge-default-unadopted": ("ASK", "merges another branch into the default branch"),
         "merge-pr-no-job": (
             "DENY",
-            "merges a pull request, which in a project on the method only a merge job or the owner "
-            "does",
+            (
+                "merges a pull request, which in a project on the method only a merge job or the "
+                "owner does"
+            ),
         ),
         "merge-default-no-job": (
             "DENY",
@@ -152,8 +154,10 @@ def test_the_rule_catalogue_is_pinned() -> None:
         "sync-default-unadopted": ("ASK", f"This {SYNC_BECAUSE}"),
         "unread-query": (
             "ASK",
-            "The guard cannot read a forge query whose body is in a file, so it cannot tell a "
-            "read from a merge",
+            (
+                "The guard cannot read a forge query whose body is in a file, so it cannot tell a "
+                "read from a merge"
+            ),
         ),
         "branch-protection": ("DENY", "reads or changes branch protection or rulesets"),
         "repo-settings": ("DENY", "changes repository, secret, variable or workflow settings"),

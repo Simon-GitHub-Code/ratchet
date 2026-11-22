@@ -49,6 +49,9 @@ _PUSHED = "@{push}"
 _SETTLED_FETCH = frozenset({"origin", "--prune", "-p", "--all", "--tags", "-q", "--quiet"})
 _SETTLED_STASH = frozenset({"push", "-u", "--include-untracked", "-q", "--quiet"})
 _QUIET = frozenset({"-q", "--quiet"})
+_KEEPS_REMOTE = frozenset({"branch", "tag", "switch", "checkout", "status", "stash"})
+_BRANCH_KEY = "branch."
+_UPSTREAM_KEYS = (".merge", ".remote")
 _OUTPUT = "--output"
 _OUTPUT_INDICATOR = "--output-indicator"
 _OUTPUT_SHORT = {"format-patch": "-o", "archive": "-o", "config": "-f"}
@@ -298,6 +301,24 @@ def settled(words: Sequence[str], cwd: Path) -> bool:
         names = sorted(args - _QUIET)
         return plain and len(names) == 1 and not names[0].startswith("-")
     return plain and call.subcommand == "status"
+
+
+def keeps_remote(words: Sequence[str], cwd: Path) -> bool:
+    call = invocation(words, cwd)
+    if call.configs or call.redirected:
+        return False
+    if call.subcommand in _KEEPS_REMOTE:
+        return True
+    args = call.args
+    if any("$" in arg for arg in args):
+        return False
+    if call.subcommand == "fetch":
+        return all(arg in _SETTLED_FETCH or not arg.startswith("-") for arg in args)
+    if call.subcommand == "remote":
+        return args[:1] == ("add",)
+    key = args[0].lower() if args else ""
+    upstream = key.startswith(_BRANCH_KEY) and key.endswith(_UPSTREAM_KEYS)
+    return call.subcommand == "config" and upstream and len(args[1:]) == 1
 
 
 @dataclass(frozen=True, slots=True)

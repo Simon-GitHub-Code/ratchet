@@ -2,7 +2,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import IntEnum
 
-from ratchet_guards.early import Kind
+from ratchet_guards.early import WORKFLOWS, Kind
+
+MERGE_JOB = "/".join((*WORKFLOWS, "merge.yml"))
 
 DISPUTE = (
     "Do not work around it. If you believe the gate is wrong, stop, write a gate dispute "
@@ -30,6 +32,20 @@ OWNERS_HAND = (
     "their own terminal: report its reasons to them."
 )
 WAITS = "`just merge-ready --head <branch>` prints each reason one waits, one a line."
+NO_JOB_FOUND = (
+    f"The guard found no `{MERGE_JOB}` on the default branch, so it names no merge job: where "
+    "the project has none,"
+)
+BY_ENTRY_POINT = "`just merge <branch>` merges a branch when the merge judge and `check` pass it."
+SYNC = (
+    "brings the default branch up to date with what its remote holds, on a line where a "
+    "setting, another repository or an earlier command may point the sync at another branch "
+    "instead"
+)
+ALONE = (
+    "in a tool call of its own, with no setting other than a `color.*` or `advice.*` one and no "
+    "other repository"
+)
 LOCALLY = (
     "Where the default branch tracks a remote, `git pull --ff-only` brings it up to date. To try "
     "a merge, a cherry-pick or a read-tree, first move to a detached `HEAD` (`git switch "
@@ -128,20 +144,37 @@ RULES: dict[str, Rule] = {
     ),
     "merge-pr-no-job": Rule(
         Decision.DENY,
-        "merges a pull request, which in a project on the method with no merge job only the "
-        "owner does",
-        "The default branch holds no merge job, so nothing merges a pull request by itself: the "
-        "owner merges it, in the forge's interface or their own terminal. `just merge-ready "
-        "--head <branch>` prints each reason the merge judge gives, one a line: report them to "
-        "the owner.",
+        "merges a pull request, which in a project on the method only a merge job or the owner "
+        "does",
+        f"{NO_JOB_FOUND} the owner merges a pull request, in the forge's interface or their own "
+        f"terminal. With no forge, {BY_ENTRY_POINT} `just merge-ready --head <branch>` prints "
+        "each reason the merge judge gives, one a line: report them to the owner.",
     ),
     "merge-default-no-job": Rule(
         Decision.DENY,
-        "merges another branch into the default branch, which in a project on the method with "
-        "no merge job only the merge entry point or the owner does",
-        "With no forge `just merge <branch>` merges a branch when the merge judge and `check` "
-        "pass it. The default branch holds no merge job, so on a forge the owner merges. "
+        "merges another branch into the default branch, which in a project on the method only "
+        "the merge entry point, a merge job or the owner does",
+        f"With no forge {BY_ENTRY_POINT} {NO_JOB_FOUND} the owner merges on a forge. "
         f"{WAITS} {OWNERS_HAND} {LOCALLY}",
+    ),
+    "sync-default": Rule(
+        Decision.DENY,
+        SYNC,
+        f"Where the default branch tracks a remote, run the sync {ALONE}: `git pull --ff-only` "
+        "then passes.",
+    ),
+    "sync-default-unadopted": Rule(
+        Decision.ASK,
+        f"This {SYNC}",
+        f"Run {ALONE}, the sync passes with no question. Allow it only if you know what the line "
+        "points it at.",
+    ),
+    "unread-query": Rule(
+        Decision.ASK,
+        "The guard cannot read a forge query whose body is in a file, so it cannot tell a read "
+        "from a merge",
+        "Written on the command line, the same query is read and judged, and a read passes with "
+        "no question. Allow it only if you know what the file holds.",
     ),
     "merge-default-unadopted": Rule(
         Decision.ASK,
@@ -185,9 +218,16 @@ RULES: dict[str, Rule] = {
 
 
 ACTING_RULES = {Kind.WORKFLOW: "workflow-write", Kind.INSTRUCTIONS: "instructions-write"}
-UNADOPTED = {"merge-pr": "merge-pr-unadopted", "merge-default": "merge-default-unadopted"}
+UNADOPTED = {
+    "merge-pr": "merge-pr-unadopted",
+    "merge-default": "merge-default-unadopted",
+    "sync-default": "sync-default-unadopted",
+}
 NO_MERGE_JOB = {"merge-pr": "merge-pr-no-job", "merge-default": "merge-default-no-job"}
-OWNER_ASKS = frozenset({*ACTING_RULES.values(), "agent-ready-label", "unreadable"})
+OWNER_ASKS = frozenset(
+    {*ACTING_RULES.values(), "agent-ready-label", "unreadable", "unread-query"}
+    | {"sync-default-unadopted"}
+)
 
 
 @dataclass(frozen=True, slots=True)

@@ -28,20 +28,22 @@ _REMOTE_DEFAULTS = MAIN_BRANCHES | {"HEAD"}
 _PRINTING = ("color.", "advice.")
 
 
-def _asks(call: Invocation, guard: Guard) -> list[Verdict]:
+def _asks(call: Invocation, guard: Guard, *, sync: bool = False) -> list[Verdict]:
     detail = " ".join(("git", call.subcommand, *call.args))
-    return [guard.merging("merge-default", detail, call.cwd)]
+    return [guard.merging("sync-default" if sync else "merge-default", detail, call.cwd)]
+
+
+def _inert(call: Invocation) -> bool:
+    keys = (config.partition("=")[0].lower() for config in call.configs)
+    return all(key.startswith(_PRINTING) for key in keys)
 
 
 def _readable(call: Invocation, context: Context) -> bool:
-    keys = (config.partition("=")[0].lower() for config in call.configs)
-    inert = all(key.startswith(_PRINTING) for key in keys)
-    return inert and not (context.unread or context.unsettled)
+    unsure = context.unread or context.unsettled or context.repointed
+    return _inert(call) and not unsure
 
 
 def _tracks(names: Sequence[str], call: Invocation, context: Context, *, guard: Guard) -> bool:
-    if not _readable(call, context):
-        return False
     defaults = guard.defaults(context, call.cwd)
     mains = sorted(guard.branches(context, call.cwd) & defaults)
     spelled = [
@@ -57,6 +59,10 @@ def merge(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     if options.flags & _RESUMES:
         return []
     names = options.operands or (_UPSTREAM,)
+    if not _readable(call, context):
+        spelled = {f"{REMOTE}/{name}" for name in guard.defaults(context, call.cwd)}
+        bare = (name.removeprefix("refs/").removeprefix("remotes/") for name in names)
+        return _asks(call, guard, sync=all(n in _UPSTREAMS or n in spelled for n in bare))
     return [] if _tracks(names, call, context, guard=guard) else _asks(call, guard)
 
 
@@ -66,12 +72,15 @@ def pull(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     repository, *refspecs = scan(call.args, _PULL).operands or (REMOTE,)
     sources = [spec.removeprefix("+").partition(":")[0] for spec in refspecs]
     named = {source.removeprefix("refs/heads/") for source in sources}
-    remote = repository == REMOTE and named <= _REMOTE_DEFAULTS and _readable(call, context)
-    return (
-        []
-        if remote and (named or _tracks([_UPSTREAM], call, context, guard=guard))
-        else _asks(call, guard)
-    )
+    if repository != REMOTE or not named <= _REMOTE_DEFAULTS:
+        return _asks(call, guard)
+    if named:
+        unsure = not _inert(call) or context.unread or context.repointed
+    else:
+        unsure = not _readable(call, context)
+    if unsure:
+        return _asks(call, guard, sync=True)
+    return [] if named or _tracks([_UPSTREAM], call, context, guard=guard) else _asks(call, guard)
 
 
 def cherry_pick(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:

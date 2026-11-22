@@ -4,11 +4,10 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Protocol
 
-from ratchet_guards.early import WORKFLOWS
 from ratchet_guards.environment import TRACKED
 from ratchet_guards.paths import Hit, Locator
 from ratchet_guards.refs import MAIN_BRANCHES
-from ratchet_guards.verdict import ACTING_RULES, NO_MERGE_JOB, UNADOPTED, Verdict
+from ratchet_guards.verdict import ACTING_RULES, MERGE_JOB, NO_MERGE_JOB, UNADOPTED, Verdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import justfile_text
@@ -16,7 +15,6 @@ import justfile_text
 DETACHED = "HEAD"
 RECIPES = "justfile"
 MERGES_BY_ITSELF = ("merge-ready", "merge")
-MERGE_JOB = "/".join((*WORKFLOWS, "merge.yml"))
 
 
 class RepoState(Protocol):
@@ -43,6 +41,7 @@ class Context:
     exported: frozenset[str] = frozenset()
     unread: bool = False
     unsettled: bool = False
+    repointed: bool = False
     lost: bool = False
     unspelled: bool = False
     hidden_switch: bool = False
@@ -74,6 +73,9 @@ class Context:
 
     def unsettling(self) -> "Context":
         return replace(self, unsettled=True)
+
+    def repointing(self) -> "Context":
+        return replace(self, repointed=True)
 
     def switching_unseen(self) -> "Context":
         return replace(self, hidden_switch=True)
@@ -145,6 +147,8 @@ class Guard:
             or not all(justfile_text.defines_recipe(recipes, name) for name in MERGES_BY_ITSELF)
         ):
             return Verdict(UNADOPTED[rule], detail)
+        if rule not in NO_MERGE_JOB:
+            return Verdict(rule, detail)
         job = self.repo.default_file(checkout.root, MERGE_JOB)
         return Verdict(NO_MERGE_JOB[rule] if job is None else rule, detail)
 

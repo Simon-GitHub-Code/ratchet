@@ -44,6 +44,7 @@ _API = Spec(
         | {"--preview", "--hostname", "--cache"}
     ),
 )
+_API_VALUES = _API.long_values | {f"-{letter}" for letter in _API.short_values}
 _BODY_FLAGS = frozenset({"-f", "-F", "--field", "--raw-field", "--input"})
 _PROTECTION = re.compile(r"branches/[^/\s]+/protection|rulesets?\b|branchprotectionrule")
 _MERGE_ENDPOINT = re.compile(r"pulls/\d+/merge/?$")
@@ -62,8 +63,10 @@ _BRANCH_MERGE = re.compile(r"/merges/?$")
 _CONTENTS_ENDPOINT = re.compile(r"/contents/")
 _OTHER_BRANCH = re.compile(rf"\bbranch=(?!({_DEFAULT_NAMES})(\s|$))\S")
 _BODY_FILE = "--input"
-_FILE_FIELD = re.compile(r"(?:^|\s)(?:-F\s*|--field[=\s])[^\s=]+=@")
-_GRAPHQL = "graphql"
+_TYPED_FIELDS = ("-F", "--field")
+_FROM_FILE = re.compile(r"^[^=]+=@")
+_GRAPHQL = re.compile(r"(^|/)graphql/?$")
+_INLINE_QUERY = "`gh api graphql -f query='…'`"
 _RELEASE_CREATE = ("release", "create")
 
 
@@ -119,7 +122,6 @@ _API_RULES: list[tuple[str, Callable[[_Call], bool]]] = [
         lambda c: bool(
             (c.writes and (_MERGE_ENDPOINT.search(c.endpoint) or _BRANCH_MERGE.search(c.endpoint)))
             or _MERGE_MUTATION.search(c.text)
-            or (c.endpoint == _GRAPHQL and c.unread_body)
         ),
     ),
     ("default-ref", _writes_default_ref),
@@ -136,6 +138,7 @@ _API_RULES: list[tuple[str, Callable[[_Call], bool]]] = [
         "repo-settings",
         lambda c: c.writes and bool(_REPOSITORY.search(c.endpoint) or _SETTINGS.search(c.endpoint)),
     ),
+    ("unread-query", lambda c: c.unread_body and bool(_GRAPHQL.search(c.endpoint))),
 ]
 
 
@@ -158,9 +161,31 @@ def _api(args: Sequence[str], context: Context, guard: Guard) -> list[Verdict]:
     endpoint = options.operands[0].lower()
     method = _method(options.values, options.flags)
     text = " ".join(args).lower()
-    unread = _BODY_FILE in text or bool(_FILE_FIELD.search(" ".join(args)))
+    unread = _BODY_FILE in options.flags or _field_from_a_file(args)
     rule = _api_rule(_Call(endpoint, method, text, unread))
-    return _verdicts(rule, f"gh api {method} {endpoint}", context=context, guard=guard)
+    detail = f"gh api {method} {endpoint}"
+    if rule == "unread-query":
+        detail += f", on the command line {_INLINE_QUERY}"
+    return _verdicts(rule, detail, context=context, guard=guard)
+
+
+def _field_from_a_file(args: Sequence[str]) -> bool:
+    words = iter(args)
+    for word in words:
+        name, equals, joined = word.partition("=")
+        if word in _TYPED_FIELDS:
+            value = next(words, "")
+        elif name == _TYPED_FIELDS[1] and equals:
+            value = joined
+        elif word.startswith(_TYPED_FIELDS[0]):
+            value = word.removeprefix(_TYPED_FIELDS[0])
+        else:
+            if word in _API_VALUES:
+                next(words, None)
+            continue
+        if _FROM_FILE.match(value):
+            return True
+    return False
 
 
 def _cells(line: str) -> list[str]:

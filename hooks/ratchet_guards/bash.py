@@ -85,6 +85,13 @@ _GIT_WORD = re.compile(r"(?<![\w.-])git(?![\w.-])")
 _SWITCH_WORD = re.compile(r"(?<![\w-])(?:switch|checkout|symbolic-ref|bisect)(?![\w-])")
 _XARGS = "xargs"
 _PATH_REFUSALS = frozenset({"guard-path-write", "guard-path-default", "guard-path-unseen-switch"})
+_NO_EFFECT = frozenset({"true", "false", ":", "echo", "printf"})
+_GIT_DIRECTORY = ".git"
+_GIT_FILES = frozenset({_GIT_DIRECTORY, ".gitconfig", "config", "config.worktree"})
+_GIT_LAYOUT = frozenset(
+    {"HEAD", "FETCH_HEAD", "ORIG_HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"}
+    | {"AUTO_MERGE", "commondir", "gitdir", "index", "packed-refs", "shallow"}
+)
 
 _UNCLOSED = Verdict(
     "unreadable", "the guard cannot tell where a quote or a substitution on the command line ends"
@@ -129,9 +136,13 @@ def _distinct(contexts: Iterable[Context]) -> list[Context]:
 def _levelled(contexts: Sequence[Context]) -> list[Context]:
     exported = frozenset(name for context in contexts for name in context.exported)
     unsettled = any(context.unsettled for context in contexts)
+    repointed = any(context.repointed for context in contexts)
     hidden = any(context.hidden_switch for context in contexts)
     return _distinct(
-        replace(c, exported=exported, unsettled=unsettled, hidden_switch=hidden) for c in contexts
+        replace(
+            c, exported=exported, unsettled=unsettled, repointed=repointed, hidden_switch=hidden
+        )
+        for c in contexts
     )
 
 
@@ -187,8 +198,15 @@ def _substituted(target: str, chosen: Mapping[str, str | None]) -> str:
 def _left(entered: Sequence[Context], inside: Sequence[Context]) -> list[Context]:
     claims = frozenset(b for c in inside for b in (*c.maybe, c.branch) if b is not None)
     unsettled = any(context.unsettled for context in inside)
+    repointed = any(context.repointed for context in inside)
     return _distinct(
-        replace(c, maybe=c.maybe | claims, unsettled=c.unsettled or unsettled) for c in entered
+        replace(
+            c,
+            maybe=c.maybe | claims,
+            unsettled=c.unsettled or unsettled,
+            repointed=c.repointed or repointed,
+        )
+        for c in entered
     )
 
 
@@ -634,6 +652,8 @@ class _Checker:
         quiet = head in _DIRECTORY_MOVERS or (head == "git" and git.settled(rest, context.cwd))
         still = bare and quiet
         context = context if still else context.unsettling()
+        keeps = self._keeps_remote(command, unreserved, context.cwd)
+        context = context if keeps else context.repointing()
         plain = sure and bare
         if head in _DIRECTORY_MOVERS:
             if self.modelled and command.then in _APART:
@@ -647,6 +667,30 @@ class _Checker:
         if plain and move.certain:
             return [context.switched_to(*move.branches)]
         return [context.claiming(move.branches)]
+
+    def _keeps_remote(self, command: SimpleCommand, words: Sequence[str], cwd: Path) -> bool:
+        written = any(self._repoints(target, cwd) for target in command.writes)
+        if command.heredocs or command.herestrings or written:
+            return False
+        lead, rest = _assignments(words)
+        if not rest:
+            return not any(PLACEHOLDER in word for word in lead)
+        if lead:
+            return False
+        if rest[0] in _DIRECTORY_MOVERS:
+            return True
+        substituted = any(PLACEHOLDER in word for word in rest)
+        known = rest[0] in _NO_EFFECT or (rest[0] == "git" and git.keeps_remote(rest, cwd))
+        return known and not substituted
+
+    def _repoints(self, target: str, cwd: Path) -> bool:
+        expanded = self.guard.locator.filesystem.expand(target)
+        if _unreadable(expanded):
+            return True
+        parts = PurePosixPath(cwd, expanded).parts
+        inside = parts[parts.index(_GIT_DIRECTORY) + 1 :] if _GIT_DIRECTORY in parts else ()
+        layout = len(inside) > 1 or bool(set(inside) & _GIT_LAYOUT)
+        return parts[-1] in _GIT_FILES or layout
 
     def _moved(
         self,
