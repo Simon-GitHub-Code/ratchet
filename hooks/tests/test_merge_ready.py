@@ -1295,7 +1295,7 @@ def test_records_alone_are_asked_no_verdict_record(
 @pytest.mark.parametrize(
     ("files", "reasons"),
     [
-        ({SPEC: "# Thing\n", "src/a.py": "x = 2\n"}, [PLAIN_RECORD]),
+        ({SPEC: "# Thing\n", "src/a.py": "x = 2\n"}, [f"record: {SPEC} {INHERITED}", PLAIN_RECORD]),
         (
             {CHANGES: "## Summary\n", "lint.toml": "strict = false\n"},
             ["guard: lint.toml (tool-config)", PLAIN_RECORD],
@@ -2769,7 +2769,15 @@ def test_a_build_with_a_custom_label_spelling_resolves_its_own_ticket(tmp_path: 
         "| `ready-for-agent` | `afk` |\n"
     )
     ticket_text = f"# 01: Thing\n\n**Status:** `AFK`\n\n## Operability\n\n{APPEARS_LINE}"
-    repo = young_repo(tmp_path, {"docs/agents/triage-labels.md": labels, THING_TICKET: ticket_text})
+    other = "# 02: Other\n\n**Status:** `AFK`\n"
+    repo = young_repo(
+        tmp_path,
+        {
+            "docs/agents/triage-labels.md": labels,
+            THING_TICKET: ticket_text,
+            OTHER_TICKET: other,
+        },
+    )
     change(
         repo,
         {
@@ -2785,14 +2793,17 @@ def test_a_build_with_a_custom_label_spelling_resolves_its_own_ticket(tmp_path: 
     [
         "# 01: Thing\n\nStatus: done\n\n## Operability\n\n" + APPEARS_LINE,
         "# 01: Thing\n\nStatus: resolved\n\n## Operability\n\n" + APPEARS_LINE + "\nExtra.\n",
+        "# 01: Thing!\n\nStatus: resolved\n\n## Operability\n\n" + APPEARS_LINE,
+        None,
     ],
-    ids=["closed to done", "resolved with extra line"],
+    ids=["closed to done", "resolved with extra line", "resolved and title edited", "deleted"],
 )
 def test_a_build_that_does_not_only_resolve_its_ticket_to_resolved_is_the_owners(
-    tmp_path: Path, edited_ticket: str
+    tmp_path: Path, edited_ticket: str | None
 ) -> None:
     ticket_text = f"# 01: Thing\n\nStatus: ready-for-agent\n\n## Operability\n\n{APPEARS_LINE}"
-    repo = young_repo(tmp_path, {THING_TICKET: ticket_text})
+    other = "# 02: Other\n\nStatus: ready-for-agent\n"
+    repo = young_repo(tmp_path, {THING_TICKET: ticket_text, OTHER_TICKET: other})
     change(repo, {THING_TICKET: edited_ticket, "src/a.py": "x = 2\n"})
     assert judged(repo) == [
         f"record: {THING_TICKET} is a ticket the owner agreed to build, and only they change it"
@@ -2801,7 +2812,8 @@ def test_a_build_that_does_not_only_resolve_its_ticket_to_resolved_is_the_owners
 
 def test_a_change_with_code_and_no_record_still_enforces_agreement(tmp_path: Path) -> None:
     ticket_text = f"# 01: Thing\n\nStatus: ready-for-agent\n\n## Operability\n\n{APPEARS_LINE}"
-    repo = young_repo(tmp_path, {THING_TICKET: ticket_text})
+    other = "# 02: Other\n\nStatus: ready-for-agent\n"
+    repo = young_repo(tmp_path, {THING_TICKET: ticket_text, OTHER_TICKET: other})
     change(
         repo,
         {
@@ -2814,6 +2826,13 @@ def test_a_change_with_code_and_no_record_still_enforces_agreement(tmp_path: Pat
         f"record: {THING_TICKET} is a ticket the owner agreed to build, and only they change it",
         PLAIN_RECORD,
     ]
+
+
+def test_ticket_with_missing_parent_fails_closed_before_deployment(tmp_path: Path) -> None:
+    ticket_text = "# 01: Thing\n\nStatus: ready-for-agent\n\nParent: ../missing.md\n"
+    repo = young_repo(tmp_path, {THING_TICKET: ticket_text})
+    change(repo, SURFACE_CHANGE)
+    assert codes(repo) == ["unflagged"]
 
 
 def test_ticket_is_found_by_slug_and_ignores_forged_ticket_field(tmp_path: Path) -> None:
