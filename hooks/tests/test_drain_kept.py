@@ -498,6 +498,38 @@ def test_a_partial_holding_work_the_tree_no_longer_holds_gives_it_to_the_unit(
     assert MARKER in (back / "src/a.py").read_text(encoding="utf-8")
 
 
+def test_a_partial_whose_patches_do_not_apply_keeps_the_tree_and_says_how_to_go_on(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", GAMMA)
+    tree = drain.tree_of(root, BRANCH_C)
+    unfinished_work(tree)
+    wanted = snapshot(tree)
+    with mock.patch.object(drain, "proven", killed), pytest.raises(Killed):
+        close_parked(root)
+    home = drain.kept_home(root, BRANCH_C)
+    [partial] = home.glob(".*.partial")
+    partial.write_bytes(partial.read_bytes().replace(b"-A = 1", b"-B = 1"))
+    stays = (
+        f"kept: the work tree stays at {tree}: {partial} does not take what the work tree holds:"
+        f" the work is still in the work tree, and {partial} holds what a stopped pass set aside,"
+        f" as patches; move {partial} out of {home}, then run `clean` again to set the work tree"
+        " aside"
+    )
+    for _ in range(2):
+        capsys.readouterr()
+        assert run(root, "clean", "--all") == 0
+        assert stays in capsys.readouterr().out.splitlines()
+        assert snapshot(tree) == wanted, "the work stays in the work tree"
+    partial.rename(tmp_path / partial.name)
+    assert run(root, "clean", "--all") == 0
+    assert not tree.exists()
+    [unit] = kept_files(root, BRANCH_C)
+    assert list(home.iterdir()) == [unit]
+    assert snapshot(restored(root, BRANCH_C)) == wanted
+
+
 def no_diff(real: Callable[..., bytes | None]) -> Callable[..., bytes | None]:
     def patched(store: drain.Scratch, *args: str, given: bytes = b"") -> bytes | None:
         return None if args[0] == "diff-tree" else real(store, *args, given=given)
@@ -809,6 +841,118 @@ def test_a_restore_whose_apply_to_the_files_fails_keeps_the_unit_and_the_checkou
     assert snapshot(root) == was
     assert git(root, "branch", "--show-current") == "main"
     assert MARKER in (restored(root, BRANCH_C) / "src/a.py").read_text(encoding="utf-8")
+
+
+def test_an_edit_git_does_not_report_survives_a_restore_that_fails(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", GAMMA)
+    unfinished_work(drain.tree_of(root, BRANCH_C))
+    assert close_parked(root) == 0
+    [unit] = kept_files(root, BRANCH_C)
+    git(root, "update-index", "--assume-unchanged", "GLOSSARY.md")
+    write(root, "GLOSSARY.md", "the owner's own edit\n")
+    assert git(root, "status", "--porcelain") == ""
+    was = snapshot(root)
+    (root / "src").chmod(0o555)
+    capsys.readouterr()
+    try:
+        assert run(root, "restore", BRANCH_C) == 1
+    finally:
+        (root / "src").chmod(0o755)
+    assert capsys.readouterr().out == not_taken(unit, "could not be written into the checkout")
+    assert (root / "GLOSSARY.md").read_text(encoding="utf-8") == "the owner's own edit\n"
+    assert snapshot(root) == was
+    assert kept_files(root, BRANCH_C) == [unit]
+
+
+COMING = {
+    "outside what the unit changes": ("notes/owner.txt", "the owner's editor wrote this\n"),
+    "over a file the restore created": ("src/untracked.py", "the owner's editor rewrote this\n"),
+}
+
+
+@pytest.mark.parametrize("coming", list(COMING))
+def test_a_file_written_while_a_restore_fails_stays(
+    tmp_path: Path, capsys: Out, coming: str
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", GAMMA)
+    unfinished_work(drain.tree_of(root, BRANCH_C))
+    assert close_parked(root) == 0
+    [unit] = kept_files(root, BRANCH_C)
+    head, index, files = snapshot(root)
+    path, text = COMING[coming]
+    real = drain.held_in
+
+    def held_in(checkout: Path) -> drain.Aside | None:
+        write(checkout, path, text)
+        return real(checkout)
+
+    capsys.readouterr()
+    with mock.patch.object(drain, "held_in", held_in):
+        assert run(root, "restore", BRANCH_C) == 1
+    assert capsys.readouterr().out == not_taken(
+        unit, "was applied, yet the checkout does not hold what it set aside"
+    )
+    assert snapshot(root) == (head, index, {**files, path: ("0o0", text.encode())})
+    assert git(root, "branch", "--show-current") == "main"
+    assert kept_files(root, BRANCH_C) == [unit]
+
+
+def test_a_restore_that_fails_on_paths_the_checkout_ignores_leaves_none_of_them(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", GAMMA)
+    tree = drain.tree_of(root, BRANCH_C)
+    unfinished_work(tree)
+    write(tree, "notes/new/idea.md", "an idea\n")
+    assert close_parked(root) == 0
+    [unit] = kept_files(root, BRANCH_C)
+    exclude = root / git(root, "rev-parse", "--git-path", "info/exclude")
+    exclude.write_text("src/untracked.py\nnotes/\n", encoding="utf-8")
+    listed = ("status", "--porcelain", "--ignored", "--untracked-files=all")
+    was = snapshot(root), git(root, *listed)
+    for _ in range(2):
+        capsys.readouterr()
+        assert run(root, "restore", BRANCH_C) == 1
+        assert capsys.readouterr().out == not_taken(
+            unit, "was applied, yet the checkout does not hold what it set aside"
+        ), "a restore that failed leaves nothing the next one meets"
+        assert (snapshot(root), git(root, *listed)) == was
+        assert not (root / "notes").exists(), "the folders the restore made go too"
+    exclude.write_text("", encoding="utf-8")
+    back = restored(root, BRANCH_C)
+    assert (back / "notes/new/idea.md").read_text(encoding="utf-8") == "an idea\n"
+    assert kept_files(root, BRANCH_C) == []
+
+
+@pytest.mark.parametrize("mark", ["assume-unchanged", "skip-worktree"])
+def test_a_restore_refuses_a_path_git_hides_before_it_writes_anything(
+    tmp_path: Path, capsys: Out, mark: str
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", GAMMA)
+    unfinished_work(drain.tree_of(root, BRANCH_C))
+    assert close_parked(root) == 0
+    [unit] = kept_files(root, BRANCH_C)
+    git(root, "update-index", f"--{mark}", "src/a.py")
+    write(root, "src/a.py", "the owner's own edit\n")
+    was = snapshot(root), git(root, "ls-files", "-v")
+    capsys.readouterr()
+    assert run(root, "restore", BRANCH_C) == 1
+    assert capsys.readouterr().out == (
+        f"restore: `src/a.py` is marked {mark} in the checkout, so git does not show what it holds"
+        f" and nothing is restored: run `git update-index --no-{mark} -- src/a.py`, then"
+        f" `drain.py restore {BRANCH_C}` again\n"
+    )
+    assert (snapshot(root), git(root, "ls-files", "-v")) == was
+    assert git(root, "branch", "--show-current") == "main"
+    assert kept_files(root, BRANCH_C) == [unit]
+    git(root, "update-index", f"--no-{mark}", "--", "src/a.py")
+    assert git(root, "status", "--porcelain") == "M src/a.py", "the command shows the edit"
 
 
 def test_a_unit_that_meets_a_file_in_the_checkout_restores_nothing(
