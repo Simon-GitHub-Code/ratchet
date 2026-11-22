@@ -244,7 +244,8 @@ def _awaiting(path: Path, tree: Path) -> str | None:
 class GitRepoState:
     def __init__(self) -> None:
         self._heads: dict[Path, str | None] = {}
-        self._defaults: dict[Path, frozenset[str]] = {}
+        self._refs: dict[Path, str | None] = {}
+        self._files: dict[tuple[Path, str], str | None] = {}
         self._branches: dict[Path, str | None] = {}
 
     def current_branch(self, cwd: Path) -> str | None:
@@ -258,15 +259,21 @@ class GitRepoState:
             self._heads[root] = _head(root)
         return self._heads[root]
 
+    def _default_ref(self, root: Path) -> str | None:
+        if root not in self._refs:
+            self._refs[root] = default_branch(root)
+        return self._refs[root]
+
     def default_branches(self, root: Path) -> frozenset[str]:
-        if root not in self._defaults:
-            name = (default_branch(root) or "").removeprefix(_TRACKING).removeprefix(_HEADS)
-            self._defaults[root] = MAIN_BRANCHES | ({name} if name else frozenset())
-        return self._defaults[root]
+        name = (self._default_ref(root) or "").removeprefix(_TRACKING).removeprefix(_HEADS)
+        return MAIN_BRANCHES | ({name} if name else frozenset())
 
     def default_file(self, root: Path, relative: str) -> str | None:
-        ref = default_branch(root)
-        return None if ref is None else _output(root, "show", f"{ref}:{relative}")
+        if (root, relative) not in self._files:
+            ref = self._default_ref(root)
+            shown = None if ref is None else _output(root, "show", f"{ref}:{relative}")
+            self._files[root, relative] = shown
+        return self._files[root, relative]
 
     def awaiting_final(self, cwd: Path) -> str | None:
         tree = _git(cwd, "rev-parse", "--show-toplevel")

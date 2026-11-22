@@ -47,6 +47,7 @@ class Token:
     text: str
     operator: bool = False
     heredoc: str = ""
+    substitutions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +61,7 @@ class SimpleCommand:
     opens: int = 0
     closes: int = 0
     heredoc: str = ""
+    substitutions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +95,7 @@ class _Lexer:
         self.closer = closer
         self.tokens: list[Token] = []
         self.word: list[str] = []
+        self.substitutions: list[str] = []
         self.pending: list[tuple[int, str, bool, bool, int, bool]] = []
         self.depth = 0
         self.cases = 0
@@ -165,8 +168,8 @@ class _Lexer:
             self.cases += _CASE_NESTING.get(word, 0)  # pragma: no mutate # -- only zero matters
             if self._command_starts():
                 self.braces = max(self.braces + _BRACES.get(word, 0), 0)
-            self.tokens.append(Token(word))
-            self.word = []
+            self.tokens.append(Token(word, substitutions=tuple(self.substitutions)))
+            self.word, self.substitutions = [], []
 
     def _find(self, needle: str, start: int) -> int:
         try:
@@ -287,6 +290,7 @@ class _Lexer:
     def _nests(self, script: str, *, closed: bool) -> None:
         self.shared.closed &= closed
         self.shared.nested.append(script if closed else script.removesuffix("\n"))
+        self.substitutions.append(self.shared.nested[-1])
 
     def _skip_comment(self) -> None:
         self.at = self._find("\n", self.at)
@@ -347,6 +351,8 @@ class _Lexer:
                 first = len(self.shared.nested)
                 reader = _Lexer(text, 0, self.shared, body=True)
                 reader.expand()
+                mark = self.tokens[after - 1]
+                self.tokens[after - 1] = replace(mark, substitutions=tuple(reader.substitutions))
                 cure = delimiter if sure and not beyond and not self.shared.unsure else ""
                 if cure:
                     found = range(first, len(self.shared.nested))
@@ -438,17 +444,19 @@ class _Splitter:
     writes: list[str] = field(default_factory=list)
     heredocs: list[int] = field(default_factory=list)
     herestrings: list[str] = field(default_factory=list)
+    substitutions: list[str] = field(default_factory=list)
     redirect: str | None = None
     subshells: bool = True
     nesting: list[str] = field(default_factory=list)
     opens: int = 0
     closed: bool = False
     heredoc: str = ""
-    held: list[tuple[list[str], list[str], list[int], list[str], str | None]] = field(
+    held: list[tuple[list[str], list[str], list[int], list[str], list[str], str | None]] = field(
         default_factory=list
     )
 
-    def word(self, word: str) -> None:
+    def word(self, word: str, substitutions: tuple[str, ...] = ()) -> None:
+        self.substitutions += substitutions
         redirect, self.redirect = self.redirect, None
         if redirect is None:
             self.closed = False
@@ -463,16 +471,28 @@ class _Splitter:
     def operator(self, operator: str) -> None:
         if operator == _HOIST:
             self.held.append(
-                (self.words, self.writes, self.heredocs, self.herestrings, self.redirect)
+                (
+                    self.words,
+                    self.writes,
+                    self.heredocs,
+                    self.herestrings,
+                    self.substitutions,
+                    self.redirect,
+                )
             )
             self.words, self.writes, self.heredocs, self.herestrings = [], [], [], []
-            self.redirect = None
+            self.substitutions, self.redirect = [], None
             return
         if operator == _HOISTED:
             self._end(";")
-            self.words, self.writes, self.heredocs, self.herestrings, self.redirect = (
-                self.held.pop()
-            )
+            (
+                self.words,
+                self.writes,
+                self.heredocs,
+                self.herestrings,
+                self.substitutions,
+                self.redirect,
+            ) = self.held.pop()
             return
         if "<" in operator or ">" in operator:
             self.redirect = operator
@@ -519,11 +539,12 @@ class _Splitter:
                 self.opens,
                 closes,
                 self.heredoc,
+                tuple(self.substitutions),
             )
             self.commands.append(command)
             self.opens = 0
         self.words, self.writes, self.heredocs, self.redirect = [], [], [], None
-        self.herestrings = []
+        self.herestrings, self.substitutions = [], []
 
 
 def split(tokens: list[Token], *, subshells: bool = True) -> list[SimpleCommand]:
@@ -533,7 +554,7 @@ def split(tokens: list[Token], *, subshells: bool = True) -> list[SimpleCommand]
         if token.operator:
             splitter.operator(token.text)
         else:
-            splitter.word(unquote(token.text))
+            splitter.word(unquote(token.text), token.substitutions)
     return splitter.commands
 
 

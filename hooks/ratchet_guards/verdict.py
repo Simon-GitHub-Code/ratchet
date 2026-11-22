@@ -2,7 +2,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import IntEnum
 
-from ratchet_guards.early import Kind
+from ratchet_guards.early import WORKFLOWS, Kind
+
+MERGE_JOB = "/".join((*WORKFLOWS, "merge.yml"))
 
 DISPUTE = (
     "Do not work around it. If you believe the gate is wrong, stop, write a gate dispute "
@@ -28,6 +30,26 @@ EXPANDED_BODY = (
 OWNERS_HAND = (
     "A merge the judge leaves to the owner is the owner's to make, in the forge's interface or "
     "their own terminal: report its reasons to them."
+)
+WAITS = "`just merge-ready --head <branch>` prints each reason one waits, one a line."
+NO_JOB_FOUND = (
+    f"The guard found no `{MERGE_JOB}` on the default branch, so it names no merge job: where "
+    "the project has none,"
+)
+BY_ENTRY_POINT = "`just merge <branch>` merges a branch when the merge judge and `check` pass it."
+SYNC = (
+    "brings the default branch up to date with what its remote holds, on a line where a "
+    "setting, another repository or an earlier command may point the sync at another branch "
+    "instead"
+)
+ALONE = (
+    "in a tool call of its own, with no setting other than a `color.*` or `advice.*` one and no "
+    "other repository"
+)
+LOCALLY = (
+    "Where the default branch tracks a remote, `git pull --ff-only` brings it up to date. To try "
+    "a merge, a cherry-pick or a read-tree, first move to a detached `HEAD` (`git switch "
+    "--detach`) or a scratch branch in a tool call of its own, and run it there."
 )
 SWITCH_ALONE = (
     "Run the branch switch in a tool call of its own and make the change in the next one: the "
@@ -118,11 +140,41 @@ RULES: dict[str, Rule] = {
         "the merge entry point, the merge job or the owner does",
         "Leave it to what merges by itself: with no forge `just merge <branch>` merges a branch "
         "when the merge judge and `check` pass it, and on a forge the merge job merges its pull "
-        "request. `just merge-ready --head <branch>` prints each reason one waits, one a line. "
-        f"{OWNERS_HAND} Where the default branch tracks a remote, `git pull --ff-only` brings it "
-        "up to date. To try "
-        "a merge, a cherry-pick or a read-tree, first move to a detached `HEAD` (`git switch "
-        "--detach`) or a scratch branch in a tool call of its own, and run it there.",
+        f"request. {WAITS} {OWNERS_HAND} {LOCALLY}",
+    ),
+    "merge-pr-no-job": Rule(
+        Decision.DENY,
+        "merges a pull request, which in a project on the method only a merge job or the owner "
+        "does",
+        f"{NO_JOB_FOUND} the owner merges a pull request, in the forge's interface or their own "
+        f"terminal. With no forge, {BY_ENTRY_POINT} `just merge-ready --head <branch>` prints "
+        "each reason the merge judge gives, one a line: report them to the owner.",
+    ),
+    "merge-default-no-job": Rule(
+        Decision.DENY,
+        "merges another branch into the default branch, which in a project on the method only "
+        "the merge entry point, a merge job or the owner does",
+        f"With no forge {BY_ENTRY_POINT} {NO_JOB_FOUND} the owner merges on a forge. "
+        f"{WAITS} {OWNERS_HAND} {LOCALLY}",
+    ),
+    "sync-default": Rule(
+        Decision.DENY,
+        SYNC,
+        f"Where the default branch tracks a remote, run the sync {ALONE}: `git pull --ff-only` "
+        "then passes.",
+    ),
+    "sync-default-unadopted": Rule(
+        Decision.ASK,
+        f"This {SYNC}",
+        f"Run {ALONE}, the sync passes with no question. Allow it only if you know what the line "
+        "points it at.",
+    ),
+    "unread-query": Rule(
+        Decision.ASK,
+        "The guard cannot read a forge query whose body is in a file, so it cannot tell a read "
+        "from a merge",
+        "Written on the command line, the same query is read and judged, and a read passes with "
+        "no question. Allow it only if you know what the file holds.",
     ),
     "merge-default-unadopted": Rule(
         Decision.ASK,
@@ -166,8 +218,16 @@ RULES: dict[str, Rule] = {
 
 
 ACTING_RULES = {Kind.WORKFLOW: "workflow-write", Kind.INSTRUCTIONS: "instructions-write"}
-UNADOPTED = {"merge-pr": "merge-pr-unadopted", "merge-default": "merge-default-unadopted"}
-OWNER_ASKS = frozenset({*ACTING_RULES.values(), "agent-ready-label", "unreadable"})
+UNADOPTED = {
+    "merge-pr": "merge-pr-unadopted",
+    "merge-default": "merge-default-unadopted",
+    "sync-default": "sync-default-unadopted",
+}
+NO_MERGE_JOB = {"merge-pr": "merge-pr-no-job", "merge-default": "merge-default-no-job"}
+OWNER_ASKS = frozenset(
+    {*ACTING_RULES.values(), "agent-ready-label", "unreadable", "unread-query"}
+    | {"sync-default-unadopted"}
+)
 
 
 @dataclass(frozen=True, slots=True)

@@ -85,6 +85,16 @@ _GIT_WORD = re.compile(r"(?<![\w.-])git(?![\w.-])")
 _SWITCH_WORD = re.compile(r"(?<![\w-])(?:switch|checkout|symbolic-ref|bisect)(?![\w-])")
 _XARGS = "xargs"
 _PATH_REFUSALS = frozenset({"guard-path-write", "guard-path-default", "guard-path-unseen-switch"})
+_NO_EFFECT = frozenset({"true", "false", ":", "echo", "printf"})
+_TEXT_READERS = frozenset({"cat", "git", "gh"})
+_NAMES_GIT = re.compile(r"(?<![\w-])(?:\.?git(?:config)?|gh)(?!\w)")
+_IN_SHELL = _REDEFINERS | _FORGETTERS | {"set", "command", "builtin"}
+_GIT_DIRECTORY = ".git"
+_GIT_FILES = frozenset({_GIT_DIRECTORY, ".gitconfig", "config", "config.worktree"})
+_GIT_LAYOUT = frozenset(
+    {"HEAD", "FETCH_HEAD", "ORIG_HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"}
+    | {"AUTO_MERGE", "commondir", "gitdir", "index", "packed-refs", "shallow"}
+)
 
 _UNCLOSED = Verdict(
     "unreadable", "the guard cannot tell where a quote or a substitution on the command line ends"
@@ -129,9 +139,13 @@ def _distinct(contexts: Iterable[Context]) -> list[Context]:
 def _levelled(contexts: Sequence[Context]) -> list[Context]:
     exported = frozenset(name for context in contexts for name in context.exported)
     unsettled = any(context.unsettled for context in contexts)
+    repointed = any(context.repointed for context in contexts)
     hidden = any(context.hidden_switch for context in contexts)
     return _distinct(
-        replace(c, exported=exported, unsettled=unsettled, hidden_switch=hidden) for c in contexts
+        replace(
+            c, exported=exported, unsettled=unsettled, repointed=repointed, hidden_switch=hidden
+        )
+        for c in contexts
     )
 
 
@@ -187,8 +201,15 @@ def _substituted(target: str, chosen: Mapping[str, str | None]) -> str:
 def _left(entered: Sequence[Context], inside: Sequence[Context]) -> list[Context]:
     claims = frozenset(b for c in inside for b in (*c.maybe, c.branch) if b is not None)
     unsettled = any(context.unsettled for context in inside)
+    repointed = any(context.repointed for context in inside)
     return _distinct(
-        replace(c, maybe=c.maybe | claims, unsettled=c.unsettled or unsettled) for c in entered
+        replace(
+            c,
+            maybe=c.maybe | claims,
+            unsettled=c.unsettled or unsettled,
+            repointed=c.repointed or repointed,
+        )
+        for c in entered
     )
 
 
@@ -369,6 +390,24 @@ def _hides_switch(words: Sequence[str], rest: Sequence[str], cwd: Path) -> bool:
     return any(map(_switches, texts))
 
 
+def _command_keeps_remote(words: Sequence[str], cwd: Path) -> bool:
+    if words[0] in _DIRECTORY_MOVERS:
+        return True
+    if environment.declared(words):
+        return False
+    if words[0] == "git":
+        return git.keeps_remote(words, cwd)
+    if words[0] == "gh":
+        return gh.keeps_remote(words)
+    return words[0] in _NO_EFFECT or _apart_from_git(words, cwd)
+
+
+def _apart_from_git(words: Sequence[str], cwd: Path) -> bool:
+    text = " ".join(words)
+    unknown = any(mark in text for mark in _DYNAMIC) or _NAMES_GIT.search(text) is not None
+    return not unknown and words[0] not in _IN_SHELL and _GIT_DIRECTORY not in cwd.parts
+
+
 def _switches(text: str) -> bool:
     found = _GIT_WORD.search(text)
     return found is not None and _SWITCH_WORD.search(text, found.end()) is not None
@@ -417,7 +456,7 @@ class _Checker:
 
     def script(self, text: str, context: Context, heredoc: str = "") -> list[Verdict]:
         key = (text, context, self.depth, heredoc)
-        judged, parsed = self.memo.judged, self.memo.parsed
+        judged = self.memo.judged
         if key in judged:
             return judged[key]
         if heredoc:
@@ -425,11 +464,15 @@ class _Checker:
         elif self.depth > MAX_DEPTH:
             verdicts = [Verdict("unreadable", "the command nests scripts too deeply")]
         else:
-            if text not in parsed:
-                parsed[text] = _read(text)
-            verdicts = self._judged(parsed[text], context)
+            verdicts = self._judged(self._parsed(text), context)
         judged[key] = verdicts
         return verdicts
+
+    def _parsed(self, text: str) -> _Read:
+        parsed = self.memo.parsed
+        if text not in parsed:
+            parsed[text] = _read(text)
+        return parsed[text]
 
     def _judged(self, read: _Read, context: Context) -> list[Verdict]:
         parsed, switching, nested = read
@@ -634,6 +677,8 @@ class _Checker:
         quiet = head in _DIRECTORY_MOVERS or (head == "git" and git.settled(rest, context.cwd))
         still = bare and quiet
         context = context if still else context.unsettling()
+        keeps = self._keeps_remote(command, unreserved, context.cwd)
+        context = context if keeps else context.repointing()
         plain = sure and bare
         if head in _DIRECTORY_MOVERS:
             if self.modelled and command.then in _APART:
@@ -647,6 +692,35 @@ class _Checker:
         if plain and move.certain:
             return [context.switched_to(*move.branches)]
         return [context.claiming(move.branches)]
+
+    def _keeps_remote(self, command: SimpleCommand, words: Sequence[str], cwd: Path) -> bool:
+        written = any(self._repoints(target, cwd) for target in command.writes)
+        lead, rest = _assignments(words)
+        read = not command.heredocs or (bool(rest) and rest[0] in _TEXT_READERS)
+        if command.herestrings or written or not read:
+            return False
+        if not all(self._runs_keeping(script, cwd) for script in command.substitutions):
+            return False
+        return not rest or (not lead and _command_keeps_remote(rest, cwd))
+
+    def _runs_keeping(self, script: str, cwd: Path) -> bool:
+        for command in self._parsed(script)[0].commands:
+            words = list(dropwhile(RESERVED.__contains__, command.words))
+            rest = _assignments(words)[1]
+            if rest and rest[0] in _DIRECTORY_MOVERS:
+                return False
+            if not self._keeps_remote(command, words, cwd):
+                return False
+        return True
+
+    def _repoints(self, target: str, cwd: Path) -> bool:
+        expanded = self.guard.locator.filesystem.expand(target)
+        if _unreadable(expanded):
+            return True
+        parts = PurePosixPath(cwd, expanded).parts
+        inside = parts[parts.index(_GIT_DIRECTORY) + 1 :] if _GIT_DIRECTORY in parts else ()
+        layout = len(inside) > 1 or bool(set(inside) & _GIT_LAYOUT)
+        return parts[-1] in _GIT_FILES or layout
 
     def _moved(
         self,
