@@ -20,6 +20,7 @@ LATER = {
     "0.12.3": "429b3bfd45d8df7aa70b04599984fcbc66c6e41c",
     "0.12.4": "31aaaf1c987b4c681d8604f1645132d3b58ebb76",
     "0.13.3": "16af13b43859451be8ce77027d949e4536889d85",
+    "0.13.4": "c528ebcb96278414a2561b746b7b0e3a8534031b",
     "0.13.5": "e2083d88c05898139f064a559693348014bb84b3",
 }
 TEMPLATES = ("skills/init/templates/", "skills/adopt/templates/")
