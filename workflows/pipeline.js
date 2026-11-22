@@ -49,7 +49,7 @@ let FLAG = flagOf(REJUDGE && REJUDGE.flag, DEPLOYED)
 
 function flagOf(flag, deployed) {
   const key = flag && typeof flag.key === 'string' ? flag.key : ''
-  if (flag && flag.form === 'hidden' && /^[^`\s]+$/.test(key)) return { form: 'hidden', key }
+  if (flag && flag.form === 'hidden' && /^[^`\s]{1,80}$/.test(key)) return { form: 'hidden', key }
   if (flag && flag.form === 'appears' && !deployed) return { form: 'appears', key: null }
   return { form: 'unasked', key: null }
 }
@@ -891,13 +891,19 @@ const PREFLIGHT_SCHEMA = {
   required: ['ok', 'number', 'title', 'slug', 'branch', 'label', 'parent', 'deployed', 'flag', 'failures', 'output'],
 }
 
+function codeSpan(value) {
+  const fence = '`'.repeat(Math.max(0, ...(value.match(/`+/g) || []).map(run => run.length)) + 1)
+  const pad = /^`|`$/.test(value) ? ' ' : ''
+  return `${fence}${pad}${value}${pad}${fence}`
+}
+
 function ticketHint(ref = REF) {
   if (/^#?\d+$/.test(ref)) {
     const number = ref.replace('#', '')
     return `issue ${number} on the tracker (\`gh issue view ${number} --json number,title,body,labels,comments\`).`
   }
-  if (!BASE) return `the file \`${ref}\` under ${ROOT_HINT}.`
-  return `the file \`${ref}\` as \`${BASE}\` holds it, not the copy in the working tree, which an
+  if (!BASE) return `the file ${codeSpan(ref)} under ${ROOT_HINT}.`
+  return `the file ${codeSpan(ref)} as \`${BASE}\` holds it, not the copy in the working tree, which an
   agent of this run may have changed. Read it, from ${ROOT_HINT}, with
 
       git show --end-of-options ${shellWord(`${BASE}:${ref}`)} --

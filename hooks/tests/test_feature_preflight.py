@@ -973,6 +973,7 @@ NO = (
 HIDDEN = {"form": "hidden", "key": "notes"}
 APPEARS = {"form": "appears", "key": None}
 UNASKED = {"form": "unasked", "key": None}
+LONG = "k" * 80
 
 
 def flag_of(report: preflight.Report) -> object:
@@ -993,7 +994,7 @@ def flag_of(report: preflight.Report) -> object:
         (YES + YES, HIDDEN),
         (f"```\n{NO}```\n{YES}", HIDDEN),
         (f"~~~~\n{NO}~~~~~\n{YES}", HIDDEN),
-        ("- Flag: `" + "k" * 80 + "`, off until the owner switches it on\n", {"form": "hidden", "key": "k" * 80}),
+        (YES.replace("notes", LONG), {"form": "hidden", "key": LONG}),
     ],
 )
 def test_the_report_says_which_form_the_flag_line_takes(
@@ -1071,7 +1072,8 @@ def test_a_life_events_value_the_preflight_cannot_read_is_refused(
         " joined by commas"
     )
     for name, fine in (("ticked", "`deployed`"), ("two", "deployed, depended-on")):
-        report = adopted(tmp_path / name, "cli", BODY + f"\n## Operability\n\n{NO}", extra=events(fine))
+        body = BODY + f"\n## Operability\n\n{NO}"
+        report = adopted(tmp_path / name, "cli", body, extra=events(fine))
         assert report.ok, (name, report.failures)
 
 

@@ -49,6 +49,12 @@ FLAG_APPEARS = re.findall(
     "none: the owner chose to have it appear as soon as it is finished, while the project is not"
     " deployed",
 )
+FLAG_KEY_WIDTH = 80
+FENCE = re.compile(
+    r"^[ \t]*(?P<fence>(?P<mark>[`~])(?P=mark){2,})[^\n]*$"
+    r".*?(?:^[ \t]*(?P=fence)(?P=mark)*[ \t]*$|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
 CRITIC_EVENT = "depended-on"
 DEPLOYED_EVENT = "deployed"
 CRITERIA = "## Acceptance criteria"
@@ -79,6 +85,7 @@ STATUS_LINE = re.compile(
 PARENT_LINE = re.compile(
     r"^\*{0,2}parent:?\*{0,2}:?\s*`?([^`\s]+\.md|#?\d+)`?", re.IGNORECASE | re.MULTILINE
 )
+PARENT_TO_LINE_END = re.compile(f"{PARENT_LINE.pattern}.*", PARENT_LINE.flags)
 PARENT_SECTION = "## Parent"
 SECTION_REF = re.compile(r"(?:#|/issues/)(\d+)|([^`\s()\[\]]+\.md)")
 BLOCKED_LINE = re.compile(r"^\*{0,2}blocked by:?\*{0,2}:?[ \t]*(.*)$", re.IGNORECASE | re.MULTILINE)
@@ -120,6 +127,9 @@ PRODUCES = {
     "blocked": (
         "build the blocking tickets first; when the order no longer holds, the owner edits the"
         " ticket's Blocked by"
+    ),
+    "life-events": (
+        "the owner writes the binding's `- Life events:` line in the spellings the refusal names"
     ),
     "clean": "commit or stash the working tree; the pipeline's agents leave their work uncommitted",
     "branch": "`git switch -c <branch> <base>`; the `/ratchet:feature` skill does this",
@@ -470,14 +480,14 @@ def operability_asked(root: Path) -> list[tuple[str, str]]:
     ]
 
 
-def operability_lines(ticket: Ticket, parent: Ticket | None) -> dict[str, str]:
-    lines: dict[str, str] = {}
+def operability_lines(ticket: Ticket, parent: Ticket | None) -> dict[str, tuple[str, ...]]:
+    lines: dict[str, tuple[str, ...]] = {}
     for record in (ticket, parent):
-        block = "" if record is None else section(record.body, OPERABILITY)
+        block = "" if record is None else FENCE.sub("", section(record.body, OPERABILITY))
         for name, _question, _says in OPERABILITY_LINES:
             found = operability_line(name).findall(block)
             if found:
-                lines.setdefault(name, found[0])
+                lines.setdefault(name, tuple(found))
     return lines
 
 
@@ -495,11 +505,13 @@ def operability_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
             unreadable.append(f"its parent {parent_ref} {why}")
         lines = operability_lines(ticket, parent)
     for name, says in asked:
-        cause = unfilled(lines.get(name, ""), says)
+        cause = unfilled(next(iter(lines.get(name, ())), ""), says)
         if cause == "nothing":
             lacking.append(f"`{name}:` ({says})")
         elif cause is not None:
             templated.append(f"has `{name}:` with {cause}")
+        elif name == FLAG_LINE and (problem := flag_reading(lines[name])[1]):
+            templated.append(problem)
     if lacking and parent_ref is None and (unlinked := unlinked_part(ticket, root, gh)):
         return unlinked
     parts = ([f"lacks {', '.join(lacking)}"] if lacking else []) + unreadable + templated
@@ -511,12 +523,12 @@ def operability_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
 def unlinked_part(ticket: Ticket, root: Path, gh: Runner) -> str | None:
     origin_ref = splits.split_from(ticket.body)
     origin = None if origin_ref is None else read_parent(origin_ref, root, gh)
-    link = None if origin is None else PARENT_LINE.search(origin.body)
+    link = None if origin is None else PARENT_TO_LINE_END.search(origin.body)
     if link is None:
         return None
     return (
         f"{ticket.ref}: the part names no parent, and the ticket it was split from, {origin_ref},"
-        f" names {link.group(1)}; add its line `Parent: {link.group(1)}` to the part, or run"
+        f' names {link.group(1)}; add its line "{link.group()}" to the part, or run'
         f" `/ratchet:conjecture {ticket.ref}`, which writes it"
     )
 
@@ -528,7 +540,23 @@ def flag_of(ticket: Ticket, root: Path, gh: Runner) -> Flag:
     parent_ref = parent_of(ticket, root)
     if FLAG_LINE not in lines and parent_ref is not None:
         lines = operability_lines(ticket, read_parent(parent_ref, root, gh))
-    text = INVISIBLE.sub("", lines.get(FLAG_LINE, ""))
+    return flag_reading(lines.get(FLAG_LINE, ()))[0]
+
+
+def flag_reading(lines: Sequence[str]) -> tuple[Flag, str | None]:
+    forms = set(map(flag_form, lines))
+    if len(forms) > 1:
+        quoted = ", ".join(f'"{line.strip()}"' for line in lines)
+        return Flag(), f"has `Flag:` lines that disagree, {quoted}: keep the owner's answer alone"
+    flag = next(iter(forms), Flag())
+    if flag.key is not None and len(flag.key) > FLAG_KEY_WIDTH:
+        width = f"a key of {len(flag.key)} characters, and a key is at most {FLAG_KEY_WIDTH}"
+        return Flag(), f"has `Flag:` with {width}"
+    return flag, None
+
+
+def flag_form(line: str) -> Flag:
+    text = INVISIBLE.sub("", line)
     if switch := FLAG_SWITCH.fullmatch(text):
         return Flag("hidden", switch.group(1))
     return Flag("appears") if re.findall(r"\w+", text.lower()) == FLAG_APPEARS else Flag()
@@ -721,6 +749,15 @@ def check_fill_first(report: Report, root: Path) -> None:
 def check_life_events(report: Report, root: Path) -> None:
     text = binding_text(root)
     declared = frozenset() if text is None else application_types.declared_or_all(text)
+    events = application_types.load().events
+    if declared - events.keys():
+        written = application_types.EVENTS.findall(text or "")[0].strip()
+        spelled = ", ".join(f"`{name}`" for name in events)
+        report.fail(
+            "life-events",
+            f"the binding's `- Life events:` line reads `{written}`, which the preflight cannot"
+            f" read: it takes `none`, or one or more of {spelled} joined by commas",
+        )
     report.deployed = DEPLOYED_EVENT in declared
     report.critic = CRITIC_EVENT in declared
     report.critic_reason = (
