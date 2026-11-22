@@ -940,6 +940,11 @@ UNREAD = (
     " so its lanes run {gates} each with nothing beside it; pass the runner its schedule flags as"
     " text to let them share the machine"
 )
+ASSUMED = (
+    "bite: the {recipe} recipe passes parallel.py {words}, whose value the proof cannot read;"
+    " a recipe's --jobs sets how many of its gates check runs at once and never the proof's"
+    " lanes, so they run as they would for any value"
+)
 
 
 @dataclass(frozen=True)
@@ -1312,7 +1317,9 @@ def next_task(board: schedule.Board[int], ready: threading.Condition, shell: She
 
 
 def schedule_of(root: Path, gates: Sequence[str]) -> schedule.Schedule:
-    passed, unread = schedule.recipes(schedule.justfile(root))
+    passed, unread, assumed = schedule.recipes(schedule.justfile(root))
+    for read_as in assumed:
+        print(ASSUMED.format(recipe=read_as.recipe, words=" ".join(read_as.words)), flush=True)
     alone: list[tuple[str, ...]] = []
     for missed in unread:
         each = tuple((gate,) for gate in (gates if missed.gates is None else missed.gates))

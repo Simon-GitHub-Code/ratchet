@@ -23,14 +23,16 @@ WIDE = "Wide"
 KINDS = (APART, ALONE, WIDE)
 FLAGS = {APART: "--serial", ALONE: "--alone", WIDE: "--wide"}
 KIND = {flag: kind for kind, flag in FLAGS.items()}
-VALUED = frozenset(("--runner", "--jobs", "--root", "--report"))
+JOBS = "--jobs"
+VALUED = frozenset(("--runner", JOBS, "--root", "--report"))
 RUNNER = "parallel.py"
 UNREAD = "\0"
 SUBSTITUTED = "\1"
+UNKNOWN = "\2"
 SHELL = frozenset("();<>|&")
-SHELL_WORD = f"$`({SUBSTITUTED}"
-SUBSTITUTION = re.compile(r"\$\([^()]*\)|\$\{[^}]*\}|`[^`]*`|[<>]\([^()]*\)")
-HIDDEN = re.compile(f"([{UNREAD}{SUBSTITUTED}])([0-9a-f]*)\\1")
+SPLITS = frozenset("*?[{")
+PARAMETER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9#?$!*-]")
+HIDDEN = re.compile(f"([{UNREAD}{SUBSTITUTED}{UNKNOWN}])([0-9a-f]*)\\1")
 
 Groups = tuple[tuple[str, ...], ...]
 Task = TypeVar("Task", bound=Hashable)
@@ -64,6 +66,12 @@ class Unread:
     recipe: str
     words: tuple[str, ...]
     gates: tuple[str, ...] | None
+
+
+@dataclass(frozen=True)
+class Assumed:
+    recipe: str
+    words: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -154,61 +162,114 @@ def interpolated(justfile: str, params: frozenset[str], found: re.Match[str]) ->
     return value(justfile, found[1], params)
 
 
+def closing(line: str, at: int, pair: str) -> int:
+    depth = 0
+    for end in range(at, len(line)):
+        depth += (line[end] == pair[0]) - (line[end] == pair[1])
+        if depth == 0:
+            return end + 1
+    return len(line)
+
+
+def expansion(line: str, at: int, *, quoted: bool) -> tuple[int, str]:
+    following = line[at + 1 : at + 2]
+    if following == "(":
+        return closing(line, at + 1, "()"), SUBSTITUTED
+    if following == "{":
+        end = closing(line, at + 1, "{}")
+        one = line[end - 1] == "}" and not re.search(r"\$\(|`|@", line[at:end])
+        return end, UNKNOWN if quoted and one else SUBSTITUTED
+    name = PARAMETER.match(line, at + 1)
+    if name is None:
+        return at + 1, SUBSTITUTED
+    return name.end(), UNKNOWN if quoted else SUBSTITUTED
+
+
+def marked(line: str) -> str:
+    out: list[str] = []
+    at, quote = 0, ""
+    while at < len(line):
+        char, end, mark = line[at], at + 1, ""
+        if quote == "'":
+            quote = "" if char == "'" else quote
+        elif char == "\\":
+            end = at + 2
+        elif char == '"' or (char == "'" and not quote):
+            quote = "" if quote else char
+        elif char == "`":
+            found = line.find("`", at + 1)
+            end, mark = (found + 1 if found > at else len(line)), SUBSTITUTED
+        elif char == "$":
+            end, mark = expansion(line, at, quoted=bool(quote))
+        elif not quote and char in "<>(" and "(" in line[at : at + 2]:
+            end, mark = closing(line, line.index("(", at), "()"), SUBSTITUTED
+        elif not quote and char in SPLITS:
+            mark = SUBSTITUTED
+        out.append(hidden(line[at:end], mark) if mark else line[at:end])
+        at = end
+    return "".join(out)
+
+
 def unreadable(word: str, *, valued: bool = False) -> bool:
-    return any(mark in word for mark in SHELL_WORD) or (UNREAD in word and not valued)
+    return SUBSTITUTED in word or (not valued and (UNREAD in word or UNKNOWN in word))
 
 
-def flagged(words: list[str]) -> tuple[Schedule, list[str]]:
+def flagged(words: list[str]) -> tuple[Schedule, list[str], list[str]]:
     found: dict[str, list[list[str]]] = {kind: [] for kind in KINDS}
     missed: list[str] = []
+    assumed: list[str] = []
     kind: str | None = None
-    valued = False
+    waiting = ""
     for word in words:
         flag, equals, rest = word.partition("=")
-        if unreadable(word, valued=valued):
+        if waiting or (equals and flag in VALUED):
+            option, value = (waiting, word) if waiting else (flag, rest)
+            if unreadable(value, valued=True):
+                missed.append(shown(word))
+            elif UNKNOWN in value and option == JOBS:
+                assumed.append(shown(f"{option} {value}" if waiting else word))
+            kind, waiting = None, ""
+        elif unreadable(word):
             missed.append(shown(word))
-            kind, valued = None, False
-        elif valued:
-            valued = False
+            kind = None
         elif flag in KIND:
             kind = KIND[flag]
             found[kind].append([rest] if equals else [])
         elif word.startswith("-"):
-            kind, valued = None, word in VALUED
+            kind, waiting = None, word if word in VALUED else ""
         elif kind is not None:
             found[kind][-1].append(word)
     groups = {kind: tuple(tuple(group) for group in found[kind] if group) for kind in KINDS}
     each = {kind: singles(groups[kind], frozenset()) for kind in (ALONE, WIDE)}
-    return Schedule({APART: groups[APART], **each}), missed
+    return Schedule({APART: groups[APART], **each}), missed, assumed
 
 
-def passed(line: str) -> tuple[Schedule, tuple[str, ...], tuple[str, ...] | None]:
-    lexer = shlex.shlex(
-        SUBSTITUTION.sub(lambda found: hidden(found[0], SUBSTITUTED), line),
-        posix=True,
-        punctuation_chars=True,
-    )
+def passed(
+    line: str,
+) -> tuple[Schedule, tuple[str, ...], tuple[str, ...] | None, tuple[str, ...]]:
+    lexer = shlex.shlex(marked(line), posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     try:
         words = list(lexer)
     except ValueError:
-        return Schedule(), (shown(line.strip()),), None
+        return Schedule(), (shown(line.strip()),), None, ()
     named = (at for at, word in enumerate(words) if word.rsplit("/", 1)[-1] == RUNNER)
     after = words[next(named, len(words)) + 1 :]
-    ends = (at for at, word in enumerate(after) if set(word) <= SHELL and not unreadable(word))
+    ends = (at for at, word in enumerate(after) if set(word) <= SHELL)
     command = after[: next(ends, len(after))]
     split = command.index("--") if "--" in command else len(command)
-    given, missed = flagged(command[:split])
+    given, missed, assumed = flagged(command[:split])
     gates = command[split + 1 :]
     missed += [shown(word) for word in gates if unreadable(word)]
     known = split < len(command) and not any(map(unreadable, gates))
-    return given, tuple(missed), tuple(gates) if known else None
+    return given, tuple(missed), tuple(gates) if known else None, tuple(assumed)
 
 
-def recipes(justfile: str) -> tuple[Schedule, list[Unread]]:
+def recipes(justfile: str) -> tuple[Schedule, list[Unread], list[Assumed]]:
     lines = justfile.split("\n")
     kept = Schedule()
     unread: list[Unread] = []
+    assumed: list[Assumed] = []
     for block in justfile_text.blocks(lines):
         if block.parsed is None:
             continue
@@ -218,10 +279,11 @@ def recipes(justfile: str) -> tuple[Schedule, list[Unread]]:
             justfile_text.code_of(body),
         ).replace("{{", hidden("{{"))
         for line in (line for line in text.splitlines() if RUNNER in line):
-            given, missed, gates = passed(line)
+            given, missed, gates, read_as = passed(line)
             kept = kept.joined(given)
             unread += [Unread(block.name, missed, gates)] if missed else []
-    return kept, unread
+            assumed += [Assumed(block.name, read_as)] if read_as and not missed else []
+    return kept, unread, assumed
 
 
 def justfile(root: Path) -> str:
