@@ -511,17 +511,17 @@ def test_a_partial_whose_patches_do_not_apply_keeps_the_tree_and_says_how_to_go_
     home = drain.kept_home(root, BRANCH_C)
     [partial] = home.glob(".*.partial")
     partial.write_bytes(partial.read_bytes().replace(b"-A = 1", b"-B = 1"))
-    stays = (
-        f"kept: the work tree stays at {tree}: {partial} does not take what the work tree holds:"
-        f" the work is still in the work tree, and {partial} holds what a stopped pass set aside,"
-        f" as patches; move {partial} out of {home}, then run `clean` again to set the work tree"
-        " aside"
+    why = (
+        f"{partial} does not take what the work tree holds: the work is still in the work tree,"
+        f" and {partial} holds what a stopped pass set aside, as patches; move {partial} out of"
+        f" {home}, then run `clean` again to set the work tree aside"
     )
-    for _ in range(2):
-        capsys.readouterr()
-        assert run(root, "clean", "--all") == 0
-        assert stays in capsys.readouterr().out.splitlines()
-        assert snapshot(tree) == wanted, "the work stays in the work tree"
+    capsys.readouterr()
+    assert run(root, "clean", "--all") == 0
+    assert f"kept: the work tree stays at {tree}: {why}" in capsys.readouterr().out.splitlines()
+    assert run(root, "clean", "--all") == 0
+    assert capsys.readouterr().out.splitlines()[-1].endswith(why), "every rerun says it"
+    assert snapshot(tree) == wanted, "the work stays in the work tree"
     partial.rename(tmp_path / partial.name)
     assert run(root, "clean", "--all") == 0
     assert not tree.exists()

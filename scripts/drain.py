@@ -493,7 +493,13 @@ def gathered(scratch: Scratch, home: Path) -> str | None:
         given = given_back(scratch, read)
         laid = None if given is None else overlaid(scratch, given, whole)
         if laid is None:
-            return f"{found} does not take what the work tree holds"
+            return f"{found} does not take what the work tree holds" + (
+                ""
+                if found == path
+                else f": the work is still in the work tree, and {found} holds what a stopped pass"
+                f" set aside, as patches; move {found} out of {home}, then run `clean` again to"
+                " set the work tree aside"
+            )
         whole = laid
     if path is not None and not left and whole == given:
         return None
@@ -2204,6 +2210,87 @@ def held_in(checkout: Path) -> Aside | None:
         return aside_of(scratch)
 
 
+@dataclass(frozen=True)
+class Footprint:
+    head: bytes
+    tracked: bytes
+    written: dict[bytes, bytes]
+    paths: frozenset[bytes]
+
+
+def footprint_of(checkout: Path, read: tuple[Aside, list[bytes]]) -> Footprint | None:
+    with scratch_store(checkout) as scratch:
+        given = given_back(scratch, read)
+        if given is None:
+            return None
+        index, files = (
+            scratch.git("diff-tree", "-r", "-z", "--no-renames", given.base, tree) or b""
+            for tree in (given.index, given.worktree)
+        )
+    head, tracked, written = {}, [], {}
+    for changed, on_files in ((index, False), (files, True)):
+        fields = changed.split(b"\0")[:-1]
+        for meta, path in zip(fields[0::2], fields[1::2], strict=True):
+            was, now, was_id, now_id, _ = meta.removeprefix(b":").split(b" ")
+            head[path] = b"%s %s\t%s\0" % (was, was_id, path)
+            if on_files and int(was, 8):
+                tracked.append(path + b"\0")
+            elif on_files:
+                written[path] = b"%s %s" % (now, now_id)
+    return Footprint(b"".join(head.values()), b"".join(tracked), written, frozenset(head))
+
+
+def hidden(checkout: Path, paths: frozenset[bytes], again: str) -> str | None:
+    for entry in (plumb(checkout, "ls-files", "-v", "-z") or b"").split(b"\0")[:-1]:
+        tag, _, path = entry.partition(b" ")
+        if path in paths and (tag.islower() or tag == b"S"):
+            name = os.fsdecode(path)
+            mark = "assume-unchanged" if tag.islower() else "skip-worktree"
+            return (
+                f"restore: `{name}` is marked {mark} in the checkout, so git does not show what it"
+                f" holds and nothing is restored: run `git update-index --no-{mark} -- {name}`,"
+                f" then {again} again"
+            )
+    return None
+
+
+def folders_made(checkout: Path, footprint: Footprint) -> list[Path]:
+    folders = {
+        folder
+        for path in footprint.written
+        for folder in (checkout / os.fsdecode(path)).parents
+        if not folder.exists()
+    }
+    return sorted(folders, reverse=True)
+
+
+def put_back(checkout: Path, footprint: Footprint, folders: list[Path]) -> None:
+    plumb(checkout, *INDEX_INFO, given=footprint.head)
+    on_disk = b"".join(
+        path + b"\0"
+        for path, file in ((path, checkout / os.fsdecode(path)) for path in footprint.written)
+        if file.is_symlink() or file.is_file()
+    )
+    with scratch_store(checkout) as scratch:
+        scratch.git("update-index", "--add", "-z", "--stdin", given=on_disk)
+        staged = scratch.git("ls-files", "--stage", "-z") or b""
+    for entry in staged.split(b"\0")[:-1]:
+        meta, _, path = entry.partition(b"\t")
+        if footprint.written[path] == meta.rpartition(b" ")[0]:
+            (checkout / os.fsdecode(path)).unlink()
+    for folder in folders:
+        with contextlib.suppress(OSError):
+            folder.rmdir()
+    plumb(checkout, "checkout-index", "--force", "-z", "--stdin", given=footprint.tracked)
+
+
+def not_restored(unit: Path, why: str, again: str) -> str:
+    return (
+        f"restore: {unit} {why}, so it stays and the checkout is as it was: once the checkout"
+        f" can take it, run {again} again"
+    )
+
+
 def restore(drain: Drain, options: argparse.Namespace) -> int:
     root, branch = drain.root, options.ref or ""
     held = sorted(kept_home(root, branch).glob("*.kept"))
@@ -2223,14 +2310,25 @@ def restore(drain: Drain, options: argparse.Namespace) -> int:
         print(f"restore: {read}, so nothing is restored: once it can be read, run {again} again")
         return 1
     aside, parts = read
+    unapplied = f"does not apply on {aside.base} in the checkout"
+    footprint = footprint_of(root, read)
+    refused = (
+        not_restored(unit, unapplied, again)
+        if footprint is None
+        else hidden(root, footprint.paths, again)
+    )
+    if footprint is None or refused is not None:
+        print(refused)
+        return 1
     current = gatelib.git(root, "branch", "--show-current")
     back = [current] if current else ["--detach", gatelib.git(root, "rev-parse", "HEAD") or ""]
     tip = gatelib.git(root, "rev-parse", "--verify", "--quiet", f"{merge.HEADS}{branch}")
     if (gatelib.git(root, "switch", "--quiet", branch) if tip == aside.base else None) is None:
         gatelib.git(root, "switch", "--quiet", "--detach", aside.base)
     steps = [(part, flags) for part, flags in zip(parts, (("--cached",), ()), strict=True) if part]
+    folders = folders_made(root, footprint)
     why = (
-        f"does not apply on {aside.base} in the checkout"
+        unapplied
         if gatelib.git(root, "rev-parse", "HEAD") != aside.base
         or any(plumb(root, *APPLY, "--check", *f, "-", given=part) is None for part, f in steps)
         else "could not be written into the checkout"
@@ -2240,13 +2338,10 @@ def restore(drain: Drain, options: argparse.Namespace) -> int:
         else None
     )
     if why is not None:
-        gatelib.git(root, "reset", "--hard", "--quiet")
-        gatelib.git(root, "clean", "-d", "--force", "--quiet")
+        if why != unapplied:
+            put_back(root, footprint, folders)
         gatelib.git(root, "switch", "--quiet", *back)
-        print(
-            f"restore: {unit} {why}, so it stays and the checkout is as it was: once the checkout"
-            f" can take it, run {again} again"
-        )
+        print(not_restored(unit, why, again))
         return 1
     unit.unlink()
     print(f"restored: what the work tree of `{branch}` held uncommitted, from {unit}")
