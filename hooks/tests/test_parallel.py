@@ -1144,3 +1144,119 @@ def test_collect_takes_two_arguments_and_stop_running_skips_nonpositive_pid(
     assert scheduler.stopped == ["fake"]
     assert scheduler.live == {}
     assert log.closed
+
+
+def test_budget_loop_judges_within_over_and_not_judged_as_the_last_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    report = tmp_path / ".ratchet/timing.jsonl"
+    ok = gate(EXIT, 0)
+    assert (
+        run(
+            "--root",
+            str(tmp_path),
+            "--report",
+            ".ratchet/timing.jsonl",
+            "--budget",
+            "loop",
+            "--",
+            ok,
+        )
+        == 0
+    )
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[-2] == "parallel: green (1 ran)"
+    assert lines[-1].startswith("loop: not judged: no budget:")
+    tier = [json.loads(line) for line in report.read_text().splitlines()][-1]
+    assert tier["judgement"] == "not judged"
+    assert tier["reason"] == "no budget is declared"
+    assert tier["budget"] is None
+
+    (tmp_path / "quality").mkdir()
+    (tmp_path / "quality/thresholds.toml").write_text(
+        "[ceilings.loop]\nseconds = 60\n", encoding="utf-8"
+    )
+    assert (
+        run(
+            "--root",
+            str(tmp_path),
+            "--report",
+            ".ratchet/timing.jsonl",
+            "--budget",
+            "loop",
+            "--",
+            ok,
+        )
+        == 0
+    )
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[-2] == "parallel: green (1 ran)"
+    assert lines[-1].startswith("loop: within:")
+
+    (tmp_path / "quality/thresholds.toml").write_text(
+        "[ceilings.loop]\nseconds = 0.05\n", encoding="utf-8"
+    )
+    slow = gate("import time; time.sleep(0.15)")
+    assert (
+        run(
+            "--root",
+            str(tmp_path),
+            "--report",
+            ".ratchet/timing.jsonl",
+            "--budget",
+            "loop",
+            "--",
+            slow,
+        )
+        == 1
+    )
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[-2] == "parallel: green (1 ran)"
+    assert lines[-1].startswith("loop: over:")
+    tier = [json.loads(line) for line in report.read_text().splitlines()][-1]
+    assert (tier["status"], tier["exit"], tier["judgement"]) == ("red", 1, "over")
+
+
+def test_budget_loop_skips_early_fail_fast_and_preserves_non_budget_behavior(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "quality").mkdir()
+    (tmp_path / "quality/thresholds.toml").write_text(
+        "[ceilings.loop]\nseconds = 0.01\n", encoding="utf-8"
+    )
+    report = tmp_path / ".ratchet/timing.jsonl"
+    slow = gate("import time; time.sleep(0.05)")
+    assert run("--root", str(tmp_path), "--report", ".ratchet/timing.jsonl", "--", slow) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[-1] == "parallel: green (1 ran)"
+    assert not any(line.startswith("loop:") for line in lines)
+    tier = [json.loads(line) for line in report.read_text().splitlines()][-1]
+    assert "judgement" not in tier
+
+    (tmp_path / "quality/thresholds.toml").write_text(
+        "[ceilings.loop]\nseconds = 60\n", encoding="utf-8"
+    )
+    red = gate(EXIT, 3)
+    assert (
+        run(
+            "--root",
+            str(tmp_path),
+            "--fail-fast",
+            "--jobs",
+            "1",
+            "--budget",
+            "loop",
+            "--",
+            red,
+            slow,
+        )
+        == 1
+    )
+    out = capsys.readouterr().out
+    assert "loop:" not in out
+    assert run("--root", str(tmp_path), "--fail-fast", "--budget", "loop", "--", gate(EXIT, 0)) == 0
+    assert capsys.readouterr().out.splitlines()[-1].startswith("loop: within:")
+    assert run("--root", str(tmp_path), "--budget", "loop", "--", red) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[-2] == "parallel: red"
+    assert lines[-1].startswith("loop: within:")

@@ -125,6 +125,7 @@ from typing import IO, TYPE_CHECKING
 import application_types
 import budget
 import gatelib
+import loop_budget
 import machine
 import project_bite
 import runrecord
@@ -517,7 +518,14 @@ def closing(scheduler: Scheduler, wall: float) -> list[str]:
     return problems
 
 
-def record(scheduler: Scheduler, wall: float, *, exit_code: int, gates: list[str]) -> None:
+def record(
+    scheduler: Scheduler,
+    wall: float,
+    *,
+    exit_code: int,
+    gates: list[str],
+    extra: Mapping[str, object] | None = None,
+) -> None:
     missing = runrecord.missing_cache(scheduler.root)
     for path in missing:
         say(
@@ -534,6 +542,7 @@ def record(scheduler: Scheduler, wall: float, *, exit_code: int, gates: list[str
         "exit": exit_code,
         "gates": gates,
         **scheduler.monitor.result().fields(),
+        **(extra or {}),
         **stamp,
     }
     runrecord.append(scheduler.report_to, whole, root=scheduler.root)
@@ -581,7 +590,54 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fail-fast", action="store_true", help="stop at the first red gate")
     parser.add_argument("--root", type=Path, default=Path(), help="directory the gates run in")
     parser.add_argument("--report", type=Path, help="append one budget.py record per gate")
+    parser.add_argument("--budget", choices=("loop",), help="judge the run against a budget")
     return parser
+
+
+def judge_loop(
+    scheduler: Scheduler, options: argparse.Namespace, wall: float
+) -> loop_budget.Result | None:
+    if options.budget != "loop" or scheduler.stopped or scheduler.not_started():
+        return None
+    monitor = scheduler.monitor.result()
+    reading = loop_budget.Reading(wall, monitor.m, monitor.machine_read)
+    gates = [
+        loop_budget.GateTime(result.name, result.seconds, result.green)
+        for result in scheduler.finished
+    ]
+    return loop_budget.evaluate(
+        scheduler.root,
+        reading=reading,
+        report=scheduler.report_to,
+        tree=scheduler.tree,
+        gates=gates,
+    )
+
+
+def finish_run(
+    scheduler: Scheduler,
+    options: argparse.Namespace,
+    wall: float,
+    *,
+    gates: list[str],
+) -> int:
+    problems = closing(scheduler, wall)
+    for line in problems:
+        say(line)
+    gates_exit = 1 if problems else 0
+    judged = judge_loop(scheduler, options, wall)
+    exit_code = judged.exit_for(gates_exit) if judged is not None else gates_exit
+    record(
+        scheduler,
+        wall,
+        exit_code=exit_code,
+        gates=gates,
+        extra=None if judged is None else judged.tier_fields(),
+    )
+    say(verdict(scheduler, problems))
+    if judged is not None:
+        say(judged.line())
+    return exit_code
 
 
 def main(argv: list[str], *, group_log: Path | None = None) -> int:
@@ -625,12 +681,7 @@ def main(argv: list[str], *, group_log: Path | None = None) -> int:
         say(f"parallel: {stop}; stopped {', '.join(scheduler.stopped) or 'nothing'}")
         return 128 + stop.signum
     wall = time.monotonic() - started
-    problems = closing(scheduler, wall)
-    for line in problems:
-        say(line)
-    record(scheduler, wall, exit_code=1 if problems else 0, gates=gates)
-    say(verdict(scheduler, problems))
-    return 1 if problems else 0
+    return finish_run(scheduler, options, wall, gates=gates)
 
 
 if __name__ == "__main__":

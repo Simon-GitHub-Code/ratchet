@@ -169,6 +169,16 @@ def test_the_conjecture_alone_asks_whether_new_behaviour_arrives_switched_off() 
     )
 
 
+def test_loop_wait_is_a_product_question_asked_by_adopt_and_next() -> None:
+    assert registry()["loop.wait"] == Entry(
+        key="loop.wait",
+        table="ask",
+        skills=("adopt", "next"),
+        kind="product",
+        text="When you ask for a check on a small change, how long will you wait for the answer?",
+    )
+
+
 def plant(tmp_path: Path, page: str, registered: str = "") -> list[str]:
     skill = tmp_path / "skills/demo/SKILL.md"
     skill.parent.mkdir(parents=True)

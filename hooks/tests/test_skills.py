@@ -854,3 +854,22 @@ def test_no_skill_holds_text_the_harness_replaces_with_its_argument() -> None:
         if re.search(r"^arguments:", frontmatter(text), re.MULTILINE)
     ]
     assert not named, f"each `$name` these declare is replaced by an argument too: {named}"
+
+
+def test_method_and_adopt_skills_reflect_local_loop_budget() -> None:
+    method = flat("method/SKILL.md")
+    assert "A tier runs over its ceiling" not in method
+    assert (
+        "**The loop is over its budget:** narrow the gate the red names to what the change"
+        " reaches, or move it to tier 2 where the red offers that; never raise the budget, which"
+        " is the owner's, and when the red says the loop was over before this change, report it"
+        " as a blocker." in method
+    )
+    tiers = flat("method/tiers.md")
+    assert "[ceilings.loop]" in tiers
+    assert "loop.wait" in tiers
+    ratchet = flat("method/ratchet.md")
+    assert "[ceilings.loop]" in ratchet
+    assert "**Ask** `loop.wait`" in ADOPT
+    next_page = flat("next/SKILL.md")
+    assert "**Ask** `loop.wait`" in next_page

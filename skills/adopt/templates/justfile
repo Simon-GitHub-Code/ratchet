@@ -176,10 +176,10 @@ ci-job name: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/ci_jobs.py" --run {{name}} --jobs {{jobs}} --report .ratchet/timing.jsonl
 
 check: plugin-pin
-    {{parallel}} {{serial0}} {{serial1}} -- {{tier0_gates}} {{tier1_gates}}
+    {{parallel}} --budget loop {{serial0}} {{serial1}} -- {{tier0_gates}} {{tier1_gates}}
 
 check-fast: plugin-pin
-    {{parallel}} --fail-fast {{serial0}} {{serial1}} -- {{tier0_gates}} {{tier1_gates}}
+    {{parallel}} --budget loop --fail-fast {{serial0}} {{serial1}} -- {{tier0_gates}} {{tier1_gates}}
 
 check-deep: plugin-pin
     {{parallel}} {{serial0}} {{serial1}} {{serial2}} -- {{tier0_gates}} {{tier1_gates}} {{tier2_gates}}

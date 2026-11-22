@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import statistics
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -15,12 +16,15 @@ import flags
 import formal_model
 import gatelib
 import hooks_installed
+import justfile_text
+import loop_budget
 import merge
 import merge_ready
 import owed
 import plugin_pin
 import questions
 import queue_notes
+import runrecord
 import triggers
 
 INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md")
@@ -1024,6 +1028,75 @@ def expired_switches(root: Path) -> list[str]:
     return flags.expired(flags.parse(text)[0], dt.datetime.now(tz=dt.UTC).date())
 
 
+def loop_wait_proposal(root: Path, records: list[dict[str, object]]) -> list[str]:
+    has_state = (root / gatelib.THRESHOLDS).is_file() or (root / runrecord.TIMING).is_file()
+    if adoption_step(root) is not None or not has_state or loop_budget.budget_of(root) is not None:
+        return []
+    justfile = gatelib.read_text(root / "justfile") or ""
+    tier1 = frozenset(justfile_text.listed(justfile, "tier1_gates"))
+    times = loop_budget.check_run_times(records, tier1_gates=tier1)
+    question = (
+        '`loop.wait`: "When you ask for a check on a small change, how long will you wait'
+        ' for the answer?"'
+    )
+    tail = (
+        "a number under the median makes every check red until the loop is narrowed;"
+        " write the answer as `[ceilings.loop]` `seconds` in `quality/thresholds.toml` on a branch"
+    )
+    if not times:
+        return [f"{question} (no check runs are recorded yet; {tail})"]
+    low, high, med = min(times), max(times), statistics.median(times)
+    unit = "run" if len(times) == 1 else "runs"
+    return [
+        (
+            f"{question} (the last {len(times)} check {unit} took {low:.1f}s to {high:.1f}s,"
+            f" median {med:.1f}s; {tail})"
+        )
+    ]
+
+
+def last_unread_detail(records: list[dict[str, object]]) -> str:
+    last = next(
+        (
+            rec
+            for rec in reversed(records)
+            if rec.get("kind") == runrecord.TIER and "judgement" in rec
+        ),
+        {},
+    )
+    missing = last.get("missing") or last.get("detail")
+    return missing if isinstance(missing, str) and missing else ""
+
+
+def not_judged_proposals(records: list[dict[str, object]]) -> list[str]:
+    found = loop_budget.trailing_not_judged(records)
+    if found is None or found[1] < questions.STREAK:
+        return []
+    reason, count = found
+    if reason is loop_budget.Reason.MACHINE:
+        return [
+            (
+                f"the loop budget was not judged {count} runs in a row because {reason.value}"
+                " (for the owner: run `check` on a quieter machine or cap parallel gates with"
+                " `RATCHET_JOBS`)"
+            )
+        ]
+    if reason is loop_budget.Reason.UNREAD:
+        detail = (
+            last_unread_detail(records)
+            or "the `loop` job needs `actions: read` to read the run's jobs and timing artefacts"
+        )
+        return [
+            f"the loop budget was not judged {count} runs in a row because {reason.value}: {detail}"
+        ]
+    return []
+
+
+def loop_proposals(root: Path) -> list[str]:
+    records = list(runrecord.read(root / runrecord.TIMING))
+    return loop_wait_proposal(root, records) + not_judged_proposals(records)
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=".")
@@ -1040,6 +1113,7 @@ def main(argv: list[str]) -> int:
         + questions.proposals(root)
         + event_proposals(root)
         + expired_switches(root)
+        + loop_proposals(root)
     )
     if options.as_json:
         print(json.dumps({**asdict(step), "also": also}, indent=2))

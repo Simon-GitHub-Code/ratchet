@@ -83,6 +83,12 @@ kind = "product"
 text = "<the question the build stopped on, in the words of someone using the product>"
 
 [[ask]]
+key = "loop.wait"
+skills = ["adopt", "next"]
+kind = "product"
+text = "When you ask for a check on a small change, how long will you wait for the answer?"
+
+[[ask]]
 key = "architecture.system"
 skills = ["adopt", "architecture"]
 kind = "architecture"

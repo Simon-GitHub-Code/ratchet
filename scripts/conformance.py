@@ -393,6 +393,8 @@ CHANGED_TESTS_STOPS = "changed tests run"
 SHOWN = 3
 VARIADIC = re.compile(r"\s[*+]\w")
 TIMED = frozenset({"perf", "load"})
+LOOP_RECIPES = ("check", "check-fast")
+LOOP_BUDGET_FLAG = "--budget loop"
 
 
 @dataclass(frozen=True)
@@ -3839,6 +3841,43 @@ def ratchet_asks(justfile: str) -> Finding:
     return Finding("justfile", problem, Edit(does, want, Agent(start=start)))
 
 
+def with_loop_budget(recipe: str) -> gatelib.Want:
+    template = template_file("justfile")
+    block = next((b for b in justfile_text.blocks(template.split("\n")) if b.name == recipe), None)
+    after = "\n".join(template.split("\n")[block.head : block.end]) if block is not None else ""
+    before = after.replace(f" {LOOP_BUDGET_FLAG}", "", 1)
+
+    def want(current: str | None) -> str:
+        text = current or ""
+        if not before or before == after:
+            return text
+        lines = text.split("\n")
+        found = next((b for b in justfile_text.blocks(lines) if b.name == recipe), None)
+        if found is None:
+            return text
+        held = "\n".join(lines[found.head : found.end])
+        return text.replace(before, after, 1) if before in held else text
+
+    return want
+
+
+def check_loop_budget(justfile: str) -> Iterable[Finding]:
+    for recipe in LOOP_RECIPES:
+        body = "\n".join(justfile_text.definition(justfile, recipe))
+        code = justfile_text.code_of(body)
+        if ("{{parallel}}" not in code and "parallel.py" not in code) or (
+            LOOP_BUDGET_FLAG in code or "--budget=loop" in code
+        ):
+            continue
+        problem = (
+            f"the `{recipe}` recipe runs `parallel.py` without `{LOOP_BUDGET_FLAG}`,"
+            " so local checks never judge the loop budget"
+        )
+        does = f"pass `{LOOP_BUDGET_FLAG}` to `parallel.py` in `{recipe}`"
+        edit = Edit(does, with_loop_budget(recipe), Agent(start=template_definition(recipe)))
+        yield Finding("justfile", problem, edit, identity=f"no {LOOP_BUDGET_FLAG} on {recipe}")
+
+
 def check_runner(root: Path) -> Iterable[Finding]:
     justfile = read_justfile(root)
     if justfile is None:
@@ -3846,6 +3885,7 @@ def check_runner(root: Path) -> Iterable[Finding]:
     yield from unrun_gates(read(root / BINDING_PATH) or "", justfile)
     yield from ci_unrun(root, read(root / BINDING_PATH) or "")
     yield from check_tier_lists(root, justfile)
+    yield from check_loop_budget(justfile)
     code = justfile_text.code_of(justfile)
     gates = answered_gates(read(root / BINDING_PATH) or "")
     if gates & OVER_THE_CHANGE and "changed.py" not in code:
@@ -4629,6 +4669,10 @@ def upgrade_mutations() -> list[Mutation]:
         (
             "justfile without the list of sharded tier 2 gates the workflow reads",
             rewrite("justfile", "tier2_sharded :=", "tier2_shard :="),
+        ),
+        (
+            "justfile check without --budget loop",
+            rewrite("justfile", " --budget loop", ""),
         ),
     ]
 

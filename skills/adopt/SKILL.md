@@ -28,6 +28,7 @@ Then the architecture and its tools, drafted as [architecture.md](../method/arch
 
 4. **Ask** `architecture.system`: "How should it be built? Each choice says what it is made of, where it runs, where your things are kept, and what changing it later would cost." The options are the systems, recommended first, and "You decide", which takes the recommendation.
 5. **Ask** `architecture.tools`: "Which tools should check the work? Each set names one tool for each kind of check, for the design I recommend." The options are the recommended system's set, one concrete current tool for each concept the rows bound now and the tests need, a second set only where two tools are close, and "You decide", which takes the first. When the owner picks another system, that system's own set holds and this answer is set aside.
+6. **Ask** `loop.wait`: "When you ask for a check on a small change, how long will you wait for the answer?" Offer plain durations (such as 2 minutes, 5 minutes, 10 minutes), with your estimate for this stack first.
 
 Whether others reach it, rely on it, or trust it with what cannot be got back is something a machine cannot see reliably, so the owner declares it. On a repository that already has code, always ask the first in the same message, naming any sign the tree shows (a deploy configuration or workflow, a production address, a host's configuration); recommend "no" only when the tree shows none:
 
@@ -38,7 +39,7 @@ Ask the other two in the same message when the tree shows a sign of them (data t
 - **Ask** `event.irreplaceable-data`: "Does it now hold anything that could not be got back if it were lost?"
 - **Ask** `event.depended-on`: "Do people other than you now rely on it?"
 
-On an empty repository none of the three is asked. So a repository with code is asked at most nine questions here, an empty one at most six. Where the harness takes fewer in one call, the rest follow in the next call at once, with nothing done between: it is still one round.
+On an empty repository none of the three is asked. So a repository with code is asked at most ten questions here, an empty one at most seven. Where the harness takes fewer in one call, the rest follow in the next call at once, with nothing done between: it is still one round.
 
 A choice the owner's words already make is not asked. A deeper interview is the owner's `/mattpocock-skills:grill-with-docs`. Adoption does not wait for it.
 
@@ -226,9 +227,9 @@ Tell the owner this before step 1. It is not a question.
     - Run `tier0-tree` and `tier1` three times each. A gate red in parallel and green alone shares state, which tiers.md says how to separate.
     - Fill each cache of the CI templates with this stack's caches, and keep their shape. Its `path` names, in place of `.cache`, the dependency directory and every tool cache its job writes: in `deep.yml` the mutation cache and the fuzz corpus too, and for a compiled stack the content-addressed compiler cache outside the tree. Its `key` hashes this stack's lockfiles and tool configs in place of `**/*.lock`.
     - Fill the binding's Speed section, one line per concept, saying how this stack will meet it where nothing is bound yet. Leave `- Shards: 1`.
-    - Run `just budget tier0 --set` and `just budget tier1 --set` once. Take those readings on a quiet machine or the CI runner, and vet each with `pstack:benchmark-checklist`. On a shared machine, cap the gates with `RATCHET_JOBS`.
+    - Write the owner's answer to `loop.wait` into `quality/thresholds.toml` under `[ceilings.loop]` as `seconds` before the first `check` runs (step 12). When that first `check` is already over its budget, say so with the way out and record no ceiling from a run that was over. On a shared machine, cap the gates with `RATCHET_JOBS`.
 
-    Done when the parallel modes are on, every CI cache names this stack's paths and lockfiles, the Speed section has no placeholder, three runs of each are green, and `[ceilings.seconds]` has a key per tier.
+    Done when the parallel modes are on, every CI cache names this stack's paths and lockfiles, the Speed section has no placeholder, three runs of each are green, and `[ceilings.loop]` has `seconds`.
 
 11. **Records and CI.**
     - Write `docs/design-brief.md` from step 3's answers, dated, and under `## In the owner's words` each question the owner answered here with the answer word for word, after init's answers as `AGENTS.md` and `PRODUCT.md` hold them.
