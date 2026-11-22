@@ -1189,8 +1189,20 @@ def test_the_binding_template_holds_the_suites_table_and_names_the_gate_in_affec
     assert problems == [suites_module.PLACEHOLDER]
     assert "| changed tests run |" in BINDING
     assert "| `just tests-changed` |" in BINDING
+    assert "| changed tests order-independent |" in BINDING
+    assert "| `just test-stability-changed` |" in BINDING
     affected = next(line for line in BINDING.splitlines() if line.startswith("- Affected only:"))
     assert "`tests-changed`" in affected
+    assert "`test-stability-changed`" in affected
+
+
+def test_the_stability_recipes_point_to_test_stability_and_replay_output() -> None:
+    assert "test-stability-changed" in gate_list("tier1_gates")
+    assert "test-stability-changed" not in gate_list("tier1_sharded")
+    assert "scripts/test_stability.py --changed" in recipe("test-stability-changed")
+    assert "replay:" in recipe("test-stability-changed")
+    assert "scripts/test_stability.py" in recipe("test-stability")
+    assert "replay:" in recipe("test-stability")
 
 
 def test_the_ci_template_job_that_runs_tests_changed_asks_for_the_later_tier_setup() -> None:

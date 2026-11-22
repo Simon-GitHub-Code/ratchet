@@ -106,7 +106,7 @@ test-files *files:
 
 tier0_tree_gates := "fmt-check lint types imports deadcode lint-workflows secrets flags pins limits markers prose snapshots-check ratchet-lowered suppressions comments"
 tier0_gates := tier0_tree_gates + " commits"
-tier1_gates := "test coverage diff-coverage test-counts tests-changed mutation-changed contracts-check audit duplication build smoke telemetry flag-states load-smoke bite api-check data-compat doctests sast iac artefact-scan type-coverage doc-coverage change-size guard-diff settings-check conformance triggers incidents rollback dependency-faults config-refusal graceful-stop"
+tier1_gates := "test coverage diff-coverage test-counts tests-changed test-stability-changed mutation-changed contracts-check audit duplication build smoke telemetry flag-states load-smoke bite api-check data-compat doctests sast iac artefact-scan type-coverage doc-coverage change-size guard-diff settings-check conformance triggers incidents rollback dependency-faults config-refusal graceful-stop"
 tier2_gates := "mutation api-deep symbolic fuzz e2e test-stability reproducible sanitizers perf dast pentest load telemetry-e2e flags-expired a11y formal bite-all"
 
 tier1_sharded := "test mutation-changed"
@@ -322,6 +322,9 @@ bite: _plugin
 tests-changed *suites: _plugin
     {{changed}} -- {{plugin_py}} "{{ratchet_plugin}}/scripts/changed_tests.py" --base {base} {{suites}}
 
+test-stability-changed:
+    @echo "bind: run changed test files shuffled through scripts/test_stability.py --changed -- <runner with {seed}> (no retries), printing replay: on red; green when no test file changed"; exit 1
+
 rollback:
     @echo "bind: build the merge base ({base}) and run it against the data head's migrations leave; or later: life:deployed and code:stored-format"; exit 1
 
@@ -377,7 +380,7 @@ e2e *files:
     @echo "bind: end-to-end suite, shard {{shard}} of {{shards}}, building what it needs first; with files given, only those files; red when it holds no test"; exit 1
 
 test-stability:
-    @echo "bind: run the suite shuffled and repeated, each run a fresh seed that is printed"; exit 1
+    @echo "bind: run the suite shuffled and repeated through scripts/test_stability.py -- <runner with {seed}> (no retries), printing a replay: command with the failing seed"; exit 1
 
 reproducible:
     @echo "bind: build twice and compare hashes"; exit 1
