@@ -1159,8 +1159,7 @@ class Copy:
             "openQuestions": [],
         }
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            code = gatelib.write_record(self.path, json.dumps(sample), allow_dirty=True)
+        code = gatelib.write_record(self.path, json.dumps(sample), allow_dirty=True, out=buf)
         if code != 0:
             self.restore()
             return Outcome(

@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import re
@@ -4051,9 +4052,11 @@ def test_a_format_verdict_record_check_that_cannot_plant_reports_not_planted(
         bite("format", "a planted word"),
     )
 
-    def fail_write(_root: Path, _text: str, *, allow_dirty: bool = False) -> int:
+    def fail_write(
+        _root: Path, _text: str, *, allow_dirty: bool = False, out: io.StringIO | None = None
+    ) -> int:
         del allow_dirty
-        sys.stdout.write("record: refused in test\n")
+        print("record: refused in test", file=out)
         return 1
 
     monkeypatch.setattr(gatelib, "write_record", fail_write)
