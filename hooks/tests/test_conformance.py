@@ -1733,3 +1733,90 @@ def test_a_fault_an_upgrade_owes_stays_owed_while_later_changes_move_why_it_fail
         " it now: 'line2\\n'"
     )
     assert still_red(root) == ([says], [says])
+
+
+def test_duplicate_adr_diagnosis_identifies_default_branch_and_prints_renumber_command(
+    tmp_path: Path,
+) -> None:
+    files = {
+        str(path.relative_to(pristine())): path.read_text(encoding="utf-8")
+        for path in pristine().rglob("*")
+        if path.is_file() and ".git" not in path.parts
+    }
+    files["docs/adr/0003-on-main.md"] = f"# On main\n\n## Refutation criterion\n\n{REFUTATION}\n"
+    root = repository(tmp_path / "repo", files)
+    repos.branch(root, "feat/collision")
+    write(
+        "docs/adr/0003-on-branch.md",
+        f"# On branch\n\n## Refutation criterion\n\n{REFUTATION}\n",
+    )(root)
+    found = red(root)
+    assert any(
+        "docs/adr: numbering has gaps or duplicates: [1, 2, 3, 3]; "
+        "0003 was taken on the default branch (docs/adr/0003-on-main.md); "
+        "move docs/adr/0003-on-branch.md to 0004 with "
+        'python3 "$RATCHET_PLUGIN/scripts/adr_renumber.py" 0003 0004' in line
+        for line in found
+    ), found
+
+
+def test_duplicate_adr_without_base_names_files_and_file_flag(repo: Path) -> None:
+    write("docs/adr/0003-first.md", f"# First\n\n## Refutation criterion\n\n{REFUTATION}\n")(repo)
+    write("docs/adr/0003-second.md", f"# Second\n\n## Refutation criterion\n\n{REFUTATION}\n")(repo)
+    found = red(repo)
+    assert any(
+        "docs/adr: numbering has gaps or duplicates: [1, 2, 3, 3]; "
+        "0003 is shared by docs/adr/0003-first.md, docs/adr/0003-second.md"
+        in line
+        and "adr_renumber.py" in line
+        and "--file " in line
+        and "0003 0004" in line
+        for line in found
+    ), found
+
+
+def test_adr_citation_checks_catch_missing_superseded_by_and_broken_links(repo: Path) -> None:
+    header = "---\nstatus: superseded\nsuperseded-by: 0002\n---"
+    write(
+        ADR,
+        f"{header}\n# The Ratchet method\n\n## Refutation criterion\n\n{REFUTATION}\n",
+    )(repo)
+    assert red(repo) == []
+
+    replace(ADR, "superseded-by: 0002", "superseded-by: 0099")(repo)
+    assert any("0001-adopt-the-ratchet-method.md" in line and "0099" in line for line in red(repo))
+    replace(ADR, "superseded-by: 0099", "superseded-by: 0002")(repo)
+
+    replace(
+        BINDING,
+        "- Default branch: `main`",
+        "- Default branch: `main`\nSee docs/adr/0099-missing.md.",
+    )(repo)
+    assert any(
+        line == f"{BINDING}: references missing ADR docs/adr/0099-missing.md" for line in red(repo)
+    )
+    replace(BINDING, "\nSee docs/adr/0099-missing.md.", "")(repo)
+
+    replace(
+        conformance.SELF_TEST_RECORD,
+        "Wrong if",
+        "See docs/adr/0098-gone.md. Wrong if",
+    )(repo)
+    assert any(
+        line == f"{conformance.SELF_TEST_RECORD}: references missing ADR docs/adr/0098-gone.md"
+        for line in red(repo)
+    )
+    replace(conformance.SELF_TEST_RECORD, "See docs/adr/0098-gone.md. ", "")(repo)
+
+    thresholds = "quality/thresholds.toml"
+    write(
+        thresholds,
+        (repo / thresholds).read_text(encoding="utf-8")
+        + "\n# Under ADR 0001 and ADR 0097 and docs/adr/0096-nope.md\n",
+    )(repo)
+    found = red(repo)
+    assert any(
+        line == f"{thresholds}: references missing ADR docs/adr/0096-nope.md" for line in found
+    )
+    assert any("quality/thresholds.toml" in line and "0097" in line for line in found)
+    assert not any("0001" in line for line in found)
