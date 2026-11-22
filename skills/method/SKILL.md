@@ -56,13 +56,14 @@ Use these words in code, tests, records and prose.
   - The hook checks ordinary writes. It is not a boundary against an agent that sets out to get round it.
 - **merge judge**: the shipped script that decides who merges a change.
   - It passes one whose gates are green, whose review approves with no finding open, and that changes no guard path.
+  - In any change, changing a labelled ticket (save a build closing its own ticket to `resolved`, or rewriting link paths to the same files in records alone) or what it reads, or changing whether a blocker a labelled ticket waits on is open, sends the merge to the owner.
   - Records alone (a spec, a ticket, a change description, a glossary term, each in the shape a skill writes it) need no review unless they do one of these:
     - give a ticket the agent-ready label;
     - change a labelled ticket (other than the paths of its links, to the same files) or what it reads;
     - close a ticket;
     - bring an ADR, which the owner agrees to.
   - The adoption is judged by the gates it brings.
-  - Once the project is `deployed` it also leaves to the owner a change that goes through a one-way door or adds surface without a flag. Once it holds `irreplaceable-data`, it leaves a one-way door to the owner.
+  - Before `deployed`, in a project asked about flags, the flag registry's doors hold from the first commit, a ticket whose `Flag:` line is a yes requires that key off in `flags.toml` with a `remove-by` date, and new surface with no flag goes to the owner unless the change's own ticket carries the owner's no and no open labelled ticket reads a yes. Once the project is `deployed`, a change through a one-way door or adding surface without a flag goes to the owner. Once it holds `irreplaceable-data`, a one-way door goes to the owner.
   - Read [guards.md](guards.md) for how the judge decides each case.
 - **one-way door**: a change that cannot be taken back once it ships: a migration, stored data rewritten, a contract line removed, a flag turned on for everyone. The manifest lists the paths. Before others can reach the project or it holds data the owner could not recreate, nothing is lost by walking back through one.
 - **dispute**: the record an agent writes when it believes a gate, not the code, is wrong. The owner decides.
@@ -175,7 +176,7 @@ A part of the architecture, a dependency, a representation, a tool, a rule. Writ
 - **The change brings the first of a kind of code** (the first route, outbound call, setting read, listener or migration), in one file or several: it is not red for it. Say in the pull request which rows it made owed, and whether it reopened the architecture.
 - **A gate is red because the change adds another instance while a row is still owed:** bind the row first, in a change of its own, or take the instance out of this change. Never bind the row `none` to get past it.
 - **You see a sign of a life event** (a deploy file, a migrations directory, a ticket about users): tell the owner. Declaring it is theirs.
-- **The change adds behaviour a user could meet, in a project that is `deployed`:** declare its flag in `flags.toml` with `default = false`, read it through the flag seam, and test the behaviour with the flag off. Before the project is deployed nobody meets it, and a flag is the owner's choice. A fix or a refactoring ships with no flag and says so.
+- **The change adds behaviour a user could meet:** before the project is `deployed`, follow the ticket's `Flag:` line (where `/ratchet:conjecture` asked the owner whether it stays hidden behind a switch or appears as soon as it is finished); when it names a switch, or once the project is `deployed`, declare its flag in `flags.toml` with `default = false` and a `remove-by` date, read it through the flag seam, and test the behaviour with the flag off. A fix, a refactoring or the owner's choice to have it appear before deployment ships with no flag and says so.
 - **The change adds or alters code of the `entry-point` kind** (a route, a job, a command) **once `telemetry emitted` is bound:** register it through the telemetry seam, and write the test that reads its span from the in-memory exporter.
 - **The owner reports an incident:** write the incident record with them, and the fault in `quality/bites.toml` that reproduces it. Read [records.md](records.md#incident-record-docsincidentsnnnn-slugmd) for the record's sections.
 - **A mutant survives:** kill it with a test, or register it as equivalent with a reason of twenty characters or more.

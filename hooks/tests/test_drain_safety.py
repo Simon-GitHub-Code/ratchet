@@ -898,7 +898,8 @@ def test_an_update_killed_after_the_rebase_by_a_real_kill_drops_the_record_on_th
 
 def judged(root: Path, *, resolved: bool = True) -> Path:
     run(root, "open", ALPHA)
-    done = {ALPHA: ticket(1, "Alpha", status="resolved")} if resolved else {}
+    closed = (root / ALPHA).read_text(encoding="utf-8").replace("ready-for-agent", "resolved", 1)
+    done = {ALPHA: closed} if resolved else {}
     return build(root, BRANCH_A, {"src/b.py": "B = 1\n", **done}, record=approval("alpha"))
 
 

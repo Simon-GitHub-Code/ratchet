@@ -147,7 +147,7 @@ The `guard-diff` entry point (tier 1) lists every changed path that matches the 
 
 A change reaches the default branch in one of two ways: the merge judge passes it and it merges itself, or the owner merges it. The judge is `scripts/merge_ready.py`, behind the `merge-ready` entry point.
 
-The owner merges when any of these holds, each under its own heading below: a guard path changed, a one-way door once the project is `deployed` or holds `irreplaceable-data`, new surface with no flag once it is `deployed`, a dispute, no clean approval, or the setting.
+The owner merges when any of these holds, each under its own heading below: a guard path changed, a one-way door (from the first commit for an asked project's flag registry, and once `deployed` or holding `irreplaceable-data` for the rest), new surface with no flag (from the first commit in an asked project unless the ticket carries the owner's no with no open yes, or a `yes` ticket whose key is missing or on), a labelled ticket or its spec changed in any change (save a build closing its own ticket), a dispute, no clean approval, or the setting.
 
 ### A guard path changed
 
@@ -163,7 +163,7 @@ An instruction file is a guard path wherever it sits, whatever the manifest says
 
 ### A one-way door
 
-A door sends the merge to the owner only once the project is `deployed` or holds `irreplaceable-data`. Before either is declared, nothing is lost by walking back through a door.
+A door in the manifest sends the merge to the owner only once the project is `deployed` or holds `irreplaceable-data`. Before either is declared, nothing is lost by walking back through one.
 
 A door is a path in a `[[door]]` table of the manifest:
 
@@ -171,17 +171,19 @@ A door is a path in a `[[door]]` table of the manifest:
 - `on = "rewrite"` is for fixtures of stored data: a new file passes, a changed or deleted one does not.
 - `on = "removal"` is for contract artefacts and public-surface snapshots: an addition passes, a removed or changed line does not.
 
-A door is no guard path, so the hook never asks on it and an agent builds the change. The flag registry is always a door: a flag that turns on by default, becomes permanent, or leaves the registry while off waits for the owner.
+A door is no guard path, so the hook never asks on it and an agent builds the change. The flag registry is always a door, and in a project whose binding declares an asked type and whose `changed flags off and on` row is not bound `none`, its doors hold from the first commit: a flag that turns on by default, becomes permanent, moves its `remove-by` date later, or leaves the registry while off waits for the owner. A library's registry (or one whose row is bound `none`) keeps waiting for a life event.
 
 ### New surface with no flag
 
-New surface sends the merge to the owner only once the project is `deployed`. Before that nobody meets the surface.
+Once the project is `deployed`, new surface with no flag that is off sends the merge to the owner. Before `deployed`, in an asked project whose `changed flags off and on` row is not bound `none`, `unflagged` is let through with a note only when the judge finds the change's unique labelled local ticket by its verdict record's slug, its `Flag:` line is the owner's no (`none: the owner chose to have it appear as soon as it is finished, while the project is not deployed`), and no open labelled ticket at the merge base or tip reads a yes. Every other change with new surface (a plain `none`, no ticket found, a forge ticket, or another open yes in flight) goes to the owner. When the row is bound `none`, or for a library, it is let through before `deployed`.
 
-The change adds to a file behind an `on = "removal"` door (a route, a command or an exported symbol in a contract artefact or public-surface snapshot) and no flag hides it: `flags.toml` gains no flag that is off, and no line the change adds outside `docs/`, the registry and those files names one that is off. The judge prints `unflagged` and the owner sees what ships. It is asked of the application types the method asks the flag questions of, read from the binding on the default branch, so a library is exempt.
+When the found ticket's `Flag:` line is a yes naming `<key>`, `flags.toml` at the head must exist, parse with zero errors, declare `<key>` once with a `remove-by` date (not `permanent`), and have `default = false` (unless the merge base already declared `<key>` with `default = true`). The test that the change ships dark (`dark_flag`) is asked of `<key>` alone when not already on at the merge base: the change newly declares `<key>` with `default = false`, or adds a line outside `docs/` and the surface files naming `<key>` while it is off; another off flag does not pass it. This holds whatever the life events and even when no `on = "removal"` door lists new surface.
+
+The surface check reads the `on = "removal"` doors (a route, a command or an exported symbol in a contract artefact or public-surface snapshot): `flags.toml` gains no flag that is off, and no line the change adds outside `docs/`, the registry and those files names one that is off. The judge prints `unflagged` and the owner sees what ships. After `deployed`, it is asked of the application types the method asks the flag questions of (and unknown or missing types), read from the binding on the default branch, so a library is exempt.
 
 ### Before a life event is declared
 
-When a door or new surface is let through because no event is declared yet, the judge prints a `note:` line saying what it let through and why, so the owner sees it. The judge reads the binding's `- Life events:` line at the merge base and at the default branch's tip, never at the head, so a change that declares an event, or drops one, is not judged by its own line. The binding is a guard path, so declaring an event is itself a change the owner merges. Guard paths, disputes and the clean-approval rule below hold from the first commit whatever the events.
+When a door or new surface is let through because no event is declared yet, the judge prints a `note:` line saying what it let through and why, so the owner sees it. The judge reads the binding's `- Life events:` line at the merge base and at the default branch's tip, never at the head, so a change that declares an event, or drops one, is not judged by its own line. The binding is a guard path, so declaring an event is itself a change the owner merges. Guard paths, disputes, agreement on labelled tickets and their specs, a `yes` ticket's flag check, an asked project's flag registry doors, before-deployment `unflagged`, and the clean-approval rule below hold from the first commit whatever the events.
 
 ### A dispute
 
@@ -197,6 +199,8 @@ The pipeline's verdict record, `docs/features/<slug>/verdict.json`:
 - or certifies another tree
 
 The record holds the tree the review saw, so a commit made after the review sends the merge to the owner. A minor finding does not.
+
+In every change, whether or not it carries a verdict record, the owner merges any edit to a labelled ticket, the spec it inherits from, or whether a ticket it is blocked by is open. The single exception is a change carrying a verdict record whose path slug uniquely matches a labelled local ticket: it may move only that ticket's `Status:` line from the agent-ready label to `resolved` while keeping every other line identical to the merge base, and that close is not counted as closing a blocker for a ticket waiting on it.
 
 **Records alone** are asked for no verdict record. A record is a file in the whole shape a skill writes it:
 
@@ -246,11 +250,13 @@ Tier 2 with no forge is what `merge.py --deep` records. It proves the default br
 
 ### What the judge cannot know
 
-- The verdict record is written by an agent, so an agent can forge it. It says the pipeline ran and what it concluded, and every other reason above is read from the diff and holds against a forged record. What records alone are refused is not: a change that carries a verdict record is judged as the pipeline's, so the label, a labelled ticket, a closed ticket and an ADR in it meet only the guard rules and the hook's ask on the label.
+- The verdict record is written by an agent, so an agent can forge it. It says the pipeline ran and what it concluded, and every other reason above (agreement on labelled tickets and their specs included, save closing the found ticket) is read from the diff and holds against a forged record. What records alone refuse outside agreement (an unagreed ticket closed, or a new ADR in a change with a verdict record) still meets only the guard rules and the hook's ask on the label.
 - The review's independence rests on the pipeline's sight lines, which an agent runs.
 - Tests are not guard paths, so a change that weakens its own tests meets only the count, coverage and mutation gates.
 - A flag whose default is set outside `flags.toml` is not seen.
-- `unflagged` shows that a flag was declared or named beside new surface, not that the surface sits behind it. It sees only the surface the `on = "removal"` doors list: a helper exported in a refactoring reaches the owner, and a new screen no snapshot records does not.
+- Whether the behaviour actually sits behind the switch, which the review holds.
+- Surface no `on = "removal"` door lists, such as a screen no snapshot records: `unflagged` sees only the surface those doors list (and a `yes` ticket's key check in `flags.toml`).
+- A verdict record an agent wrote under another ticket's slug, since the record is the agent's; because the close is bound to the found ticket, such a change can close only the other ticket unbuilt and leaves its own open and labelled.
 
 ## What only the owner does
 
@@ -260,8 +266,9 @@ Tier 2 with no forge is what `merge.py --deep` records. It proves the default br
 - Runs a denied command in their own shell.
 - Merges what the merge judge leaves to them:
   - a guard path changed
-  - a one-way door, once the project is `deployed` or holds `irreplaceable-data`
-  - new surface with no flag, once it is `deployed`
+  - a one-way door, once the project is `deployed` or holds `irreplaceable-data`, and the flag registry's doors from the first commit in an asked project
+  - new surface with no flag once `deployed`, or before `deployed` when not under the owner's no with no open yes in flight, and any `yes` ticket whose key is missing, on, permanent, or unused
+  - any change to a labelled ticket, the spec it inherits from, or a blocker's open state (save a build closing its own found ticket to `resolved`)
   - a dispute
   - a verdict that is not a clean approval
   - records that give a ticket the agent-ready label

@@ -61,7 +61,7 @@ def test_a_change_that_resolves_the_last_ticket_and_keeps_the_unit_is_red(tmp_pa
     root = unit(tmp_path)
     write(root, BETA, ticket(2, "Beta", "resolved"))
     commit(root, "feat: the second ticket")
-    stamp(root)
+    stamp(root, {**_verdict(), "slug": "beta"})
     assert judged(root) == [LEFT]
 
 
@@ -83,7 +83,7 @@ def test_the_fix_the_judge_names_is_the_command_that_deletes_it(tmp_path: Path) 
     root = unit(tmp_path)
     write(root, BETA, ticket(2, "Beta", "resolved"))
     commit(root, "feat: the second ticket")
-    stamp(root)
+    stamp(root, {**_verdict(), "slug": "beta"})
     (reason,) = merge_ready.judge(root, "main", "HEAD")
     assert (reason.code, "run `documents.py expire`" in reason.text) == ("expired", True)
 
