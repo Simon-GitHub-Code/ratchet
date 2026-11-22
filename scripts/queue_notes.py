@@ -79,11 +79,15 @@ def note_path(root: Path, branch: str) -> Path:
     return gatelib.state_dir(root) / QUEUE / "tickets" / f"{branch.replace('/', '-')}.json"
 
 
+def feature_start_name(branch: str) -> str:
+    return f"{FEATURE_STARTS}/{branch.replace('/', '-')}.json"
+
+
 def feature_start_path(root: Path, branch: str) -> Path | None:
     common = gatelib.git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
     if not common:
         return None
-    return Path(common) / FEATURE_STARTS / f"{branch.replace('/', '-')}.json"
+    return Path(common) / feature_start_name(branch)
 
 
 def record_feature_start(root: Path, branch: str, start: dict[str, object]) -> None:
@@ -96,6 +100,21 @@ def pass_feature_start(root: Path, branch: str) -> None:
     path = feature_start_path(root, branch)
     if path is not None and path.is_file():
         write_note(path, {**loaded(gatelib.read_text(path)), "passed": True})
+
+
+def gate_feature_start(root: Path, branch: str, tree: Path, *, passed: bool) -> bool:
+    path = feature_start_path(root, branch)
+    if path is None or not path.is_file():
+        return False
+    note = loaded(gatelib.read_text(path))
+    where = note.get("worktree")
+    if not isinstance(where, str) or (note.get("passed") is True) == passed:
+        return False
+    if Path(where).resolve() != tree.resolve():
+        return False
+    kept = {k: v for k, v in note.items() if k != "passed"}
+    write_note(path, {**kept, "passed": True} if passed else kept)
+    return True
 
 
 def read_note(root: Path, branch: str) -> dict[str, object]:

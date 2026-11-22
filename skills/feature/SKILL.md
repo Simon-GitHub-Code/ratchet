@@ -116,7 +116,7 @@ Run every command below from the repository's own checkout, on the default branc
    Done when `blocked` is empty and you have said what the drain will do, or you have reported each line and stopped.
 
 3. **Start the pipelines.**
-   - For each ticket in `start`, run `D open <ticket> --root .`. Exit 0 prints its `branch`, `worktree`, `base` and `named_gates`. Exit 1 means the plan does not start it.
+   - For each ticket in `start`, run `D open <ticket> --root .`. Exit 0 prints its `branch`, `worktree`, `base` and `named_gates`. Exit 1 means the plan does not start it. Exit 1 with a line that says `cannot be written` means stop the drain: report that line to the owner word for word, and do not retry or commit.
    - `open` is the gate on the order and the cap, so make every branch and work tree through it, none by hand.
    - Call the Workflow tool once per ticket opened, every call in one message so the runs are concurrent:
 
@@ -172,7 +172,7 @@ Run every command below from the repository's own checkout, on the default branc
 
    **Exit 3 from `update`, `close` or `split`:** a landing of that ticket is still running (for example a `land` the shell gave up waiting on), or only its merge is (its line says "a merge"). Leave the ticket: do not close, reconcile or split it. Wait for that landing to end, and go on at step 5 (`D plan`). The landing records the outcome itself; with only a merge running, a `report` or an `update` records it afterwards.
 
-   **Exit 2 from `update`, `close` or `split` with a `drain:` or `merge:` line and no JSON:** the command refused before any work on the ticket. Report the line, leave the ticket as it is, and go on at step 5 (`D plan`). The line says why, for example: no such ticket, or a number more than one local ticket starts with; a fast-forward that was cut off and cannot be put back yet; the drain lock, not free in time.
+   **Exit 2 from `update`, `close` or `split` with a `drain:` or `merge:` line and no JSON:** the command refused before any work on the ticket. Report the line, leave the ticket as it is, and go on at step 5 (`D plan`). A line that says `cannot be written` means stop the drain instead: report that line to the owner word for word, and do not retry or commit. The line says why, for example: no such ticket, or a number more than one local ticket starts with; a fast-forward that was cut off and cannot be put back yet; the drain lock, not free in time.
 
    **A close refused with `<ref> merged, and a merge is not unsaid by closing it as <outcome>`:** the close has recorded that merge and removed a work tree its landing left. The ticket has landed: do not close it again, and go on at step 5 (`D plan`).
 
@@ -206,7 +206,8 @@ Pass `--final` only on the check just before a commit.
 
 - **Exit 0:** nothing moved. Go on.
 - **Exit 1:** a role committed, pushed or opened a pull request, or the orchestrator committed before the final check. The check has parked the ticket, kept what was uncommitted as a stash, and holds the ticket until its text changes. Commit nothing and land nothing. Go on at step 5 (`D plan`), and the report names it. When the line is `check: <ref> is merged and is not checked`, the ticket has landed instead: go on at step 5.
-- **Exit 2:** the note holds no start, which `open` records. Report the line, leave the ticket, and go on at step 5.
+- **Exit 2 with a line that says `cannot be written`:** stop the drain. Report that line to the owner word for word. Do not retry, and commit nothing.
+- **Any other exit 2:** the note holds no start, which `open` records. Report the line, leave the ticket, and go on at step 5.
 - **Exit 3:** either the check found a rebase left unfinished or a state it cannot read, and has closed the ticket as waiting for a later drain to retry; or it refused before checking, since the ticket is held or its branch has no commit of its own and no work tree. Report the line and go on at step 5.
 
 ## The records of an approved change
@@ -251,7 +252,7 @@ A ticket that passes the product ceilings (the preflight's `size` failure, the s
 
    Done when the check has passed the plan, or the ticket is parked as too large: after a second refusal, or at once for a part.
 
-3. **File it.** In the repository's own checkout, on the default branch, run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py" split <ticket> --plan <file> --root .`, only with a plan the check passed. With local tickets and no forge it also lands the parts on the default branch, as records alone.
+3. **File it.** In the repository's own checkout, on the default branch, run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py" split <ticket> --plan <file> --root .`, only with a plan the check passed. With local tickets and no forge it also lands the parts on the default branch, as records alone. Relay to the owner in the hand-over each `split:` line it prints that a part does not carry its ticket's answers and `Parent:` line.
    - **Exit 0 with a `next:` line:** local tickets and a forge. Do what it says: commit the parts it names on a branch of their own, push it, open the pull request, and switch back to the default branch.
    - **Exit 1:** it refused the plan and has already parked the ticket as too large: it prints `closed: <ref>: parked`, and the report gives the reason. The ticket is the owner's. Do not run it again.
    - **Exit 2:** the checkout is in the middle of a merge or a rebase, or its index holds a conflict, and nothing was filed. Relay its `split:` line to the owner in the hand-over.
