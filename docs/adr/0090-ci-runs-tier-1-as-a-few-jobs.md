@@ -56,7 +56,7 @@ A project that groups gates by hand can still group two that share state. `paral
 
 One adopted project, with a job per gate, started 34 tier 1 jobs, each spending about 36 s on setup before its gate began. They held 213 s of gates in 1,336 s of job time. A `none:` or `later:` gate cost 34 to 46 s of runner time. Tier 1 waited 84 s for tier 0, and a run billed 46 to 75 minutes. Grouped by hand into a few jobs, the same project went from 36 jobs to 6 and from 67 to 24 billed minutes, with every gate green. Another project, adopted on 0.13.5, started 35 jobs on its first records-only pull request, 22 of them `later:` gates.
 
-A fresh project adopted from v0.13.5 and upgraded here: the shape step started 31 tier 1 jobs and 2 long jobs before, and `bite` and `rest` after, with one gate (`doc-coverage`, `none: not a library`) named as getting no runner. The same held from v0.13.3. A second upgrade wrote nothing, and conformance was green. These counts come from running the shape step, not from a CI run.
+A fresh project adopted from v0.13.5 and upgraded here: the shape step started 31 tier 1 jobs and 2 long jobs before, and `bite` and `rest` after. No gate was named as getting no runner: `doc-coverage`, bound `none: not a library`, has a recipe that exits 1, so it runs in `rest`. The same held from v0.13.3. A second upgrade wrote nothing, and conformance was green. A clone of the project with its own job list of four recipes kept its matrix of four jobs exactly, its `ci.yml` changed only in the pinned `ref`, and conformance was green with one offered line. These counts come from running the shape step, not from a CI run.
 
 Arithmetic, not a measured run: at 36 s of setup per job, 31 fewer tier 1 jobs save about 18 minutes of runner time a pull request.
 
