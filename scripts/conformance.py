@@ -174,6 +174,14 @@ EXEMPT_STEPS = (
         "contents: read",
         "every workflow reads its own checkout, and a project without it fails at the checkout",
     ),
+    (
+        "actions: read",
+        "the proven check reads completed pull request runs and their artifacts on a push",
+    ),
+    (
+        "already_proven.py",
+        "skips default-branch push CI when a pull request run already settled tree and base",
+    ),
 )
 DOOR_MEANINGS = {
     "change": "a path whose every change is final, such as a migration or infrastructure code",
@@ -2284,11 +2292,32 @@ def regroup_hunks() -> tuple[Hunk, ...]:
     end = next(i for i in range(at + 1, len(lines)) if not lines[i].startswith(STEP_BODY))
     run = next(line for line in lines if line.endswith(NEW_RUN))
     guard = next(line for line in lines if line.startswith("    if: needs.shape.outputs.tier1 "))
+    proven_at = lines.index("  proven:")
+    tier0_at = lines.index("  tier0:")
+    tier0_runs_at = lines.index("    runs-on: ubuntu-latest", tier0_at)
+    timing_at = next(i for i in range(tier0_at, len(lines)) if "timing-tier0" in lines[i])
+    shape_at = lines.index("  shape:")
+    shape_runs_at = lines.index("    runs-on: ubuntu-latest", shape_at)
     return (
         ("the shape job's steps", OLD_SHAPE_STEP, tuple(lines[at - 2 : end])),
         ("the `tier1:` line", ("  tier1:",), ("  tier1:", guard)),
         ("the tier 1 jobs' `needs:` lines", (OLD_NEEDS,), (NEW_NEEDS,)),
         ("the budget calls' run lines", (run.removesuffix(NEW_RUN) + OLD_RUN,), (run,)),
+        (
+            "the `proven:` job and `tier0:` guard",
+            ("  tier0:",),
+            tuple(lines[proven_at:tier0_runs_at]),
+        ),
+        (
+            "the `tier0` proven artifact steps",
+            tuple(lines[timing_at - 2 : timing_at + 1]),
+            tuple(lines[timing_at - 2 : shape_at]),
+        ),
+        (
+            "the `shape:` guard",
+            ("  shape:",),
+            tuple(lines[shape_at:shape_runs_at]),
+        ),
     )
 
 
