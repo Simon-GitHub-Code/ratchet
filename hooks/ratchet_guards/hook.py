@@ -532,7 +532,7 @@ def _log(root: Path, payload: object, verdict: Verdict) -> None:
         detail=verdict.detail,
         branch=_head(root, max(deadline - time.monotonic(), 0)),
     )
-    events.append(common / events.LOG_NAME, event.line())
+    events.append(common / events.LOG_NAME, event)
 
 
 def repository_root(path: Path) -> Path:
