@@ -679,9 +679,9 @@ def test_every_runner_keeps_what_each_template_recipe_passes_and_nothing_is_said
         if "{{parallel}}" in "\n".join(lines[block.head + 1 : block.end])
     ]
     assert {"check", "check-deep", "tier1", "weekly"} <= set(names)
-    passed, unread = schedule.recipes(JUSTFILE)
+    passed, unread, assumed = schedule.recipes(JUSTFILE)
     proof = schedule.stated(BINDING).joined(passed)
-    assert unread == []
+    assert (unread, assumed) == ([], [])
     for name in names:
         argv = runner_argv(name)
         apart = kept_apart(argv)
