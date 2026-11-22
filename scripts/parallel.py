@@ -204,6 +204,7 @@ class Live:
     tool: bool
     lane: int = 0
     offset: float = 0.0
+    cpu: float | None = None
 
 
 def say(text: str) -> None:
@@ -393,12 +394,12 @@ class Scheduler:
 
     def settle_exited(self) -> None:
         for name, gate in list(self.live.items()):
-            cpu = machine.process_cpu(gate.process.pid)
+            gate.cpu = machine.process_cpu(gate.process.pid)
             code = gate.process.poll()
             if code is not None:
                 self.monitor.unregister(gate.process.pid)
                 del self.live[name]
-                self.settle(collect(gate, code, cpu))
+                self.settle(collect(gate, code))
 
     def settle(self, result: Finished) -> None:
         alone = not self.board.done(result.name)
@@ -432,18 +433,20 @@ class Scheduler:
         gates = list(self.live.values())
         self.live.clear()
         for gate in gates:
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(gate.process.pid, signal.SIGTERM)
+            if gate.process.pid > 0:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(gate.process.pid, signal.SIGTERM)
         for gate in gates:
-            gatelib.stop_group(gate.process)
+            if gate.process.pid > 0:
+                gatelib.stop_group(gate.process)
             self.monitor.unregister(gate.process.pid)
             gate.log.close()
             self.stopped.append(gate.name)
 
 
-def collect(gate: Live, code: int, cpu: float | None = None) -> Finished:
+def collect(gate: Live, code: int) -> Finished:
     seconds = time.monotonic() - gate.started
-    left = gatelib.end_group(gate.process.pid)
+    left = gate.process.pid > 0 and gatelib.end_group(gate.process.pid)
     gate.log.seek(0)
     output = gate.log.read().decode("utf-8", errors="replace")
     gate.log.close()
@@ -457,7 +460,7 @@ def collect(gate: Live, code: int, cpu: float | None = None) -> Finished:
         gate.tool,
         gate.lane,
         gate.offset,
-        cpu,
+        gate.cpu,
     )
 
 

@@ -5,6 +5,8 @@ import ctypes
 import hashlib
 import os
 import resource
+import select
+import signal
 import statistics
 import sys
 import threading
@@ -16,6 +18,7 @@ from typing import TYPE_CHECKING, Protocol, Self
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
     from collections.abc import Set as AbstractSet
+    from types import FrameType
 
 PROC = Path("/proc")
 CGROUP = Path("/sys/fs/cgroup")
@@ -28,6 +31,7 @@ MIN_STAT_FIELDS = 4
 MIN_PROC_FIELDS = 15
 MAX_CALIBRATE_STEPS = 1_000_000
 MIN_CALIBRATE_CPU = 0.002
+WAKE_CHUNK = 4096
 CLK_TCK = getattr(os, "sysconf", lambda _name: 100)("SC_CLK_TCK")
 
 
@@ -259,6 +263,19 @@ def orphan_pids(
     return [pid for pid, ppid, _ticks in rows if ppid == my_pid and pid not in tracked]
 
 
+def direct_children(proc: Path, my_pid: int) -> list[int] | None:
+    task_dir = proc / str(my_pid) / "task"
+    try:
+        entries = list(os.scandir(task_dir))
+        pids: list[int] = []
+        for entry in entries:
+            text = (task_dir / entry.name / "children").read_text(encoding="utf-8")
+            pids.extend(int(token) for token in text.split())
+    except OSError:
+        return None
+    return pids
+
+
 def set_child_subreaper(*, enabled: bool) -> bool:
     if sys.platform != "linux":
         return False
@@ -350,6 +367,8 @@ class Monitor:
         self._start_snap: Snapshot | None = None
         self._thread: threading.Thread | None = None
         self._result: Machine | None = None
+        self._wake_fds: list[int] = []
+        self._prev_sigchld: Callable[[int, FrameType | None], object] | int | None = None
 
     @contextlib.contextmanager
     def spawning(self) -> Iterator[None]:
@@ -365,19 +384,56 @@ class Monitor:
 
     def reap_orphans(self) -> None:
         with self._lock:
-            rows = proc_table(self._env.proc)
-            if rows is None:
-                return
-            for pid in orphan_pids(rows, self._pid, self._tracked):
+            children = direct_children(self._env.proc, self._pid)
+            if children is None:
+                rows = proc_table(self._env.proc)
+                if rows is None:
+                    return
+                to_reap = orphan_pids(rows, self._pid, self._tracked)
+            else:
+                to_reap = [pid for pid in children if pid not in self._tracked]
+            for pid in to_reap:
                 self._env.reap(pid)
 
-    def _loop(self) -> None:
+    def _install_sigchld(self, wake_w: int) -> None:
+        if threading.current_thread() is not threading.main_thread() or not hasattr(
+            signal, "SIGCHLD"
+        ):
+            return
+        previous: Callable[[int, FrameType | None], object] | int | None = None
+
+        def on_sigchld(signum: int, frame: FrameType | None) -> None:
+            with contextlib.suppress(OSError):
+                os.write(wake_w, b"\x00")
+            if callable(previous):
+                previous(signum, frame)
+
+        previous = signal.signal(signal.SIGCHLD, on_sigchld)
+        self._prev_sigchld = previous
+
+    def _restore_sigchld(self) -> None:
+        if self._prev_sigchld is not None:
+            signal.signal(signal.SIGCHLD, self._prev_sigchld)
+            self._prev_sigchld = None
+
+    def _loop(self, wake_r: int) -> None:
         steps: int | None = None
-        while not self._stop_event.wait(self._interval):
-            if steps is None:
-                steps = self._env.calibrate(self._probe_cpu)
-            self._samples.append(self._env.probe(steps))
-            self.reap_orphans()
+        next_probe = time.monotonic() + self._interval
+        while True:
+            timeout = max(0.0, next_probe - time.monotonic())
+            readable, _, _ = select.select([wake_r], [], [], timeout)
+            if self._stop_event.is_set():
+                return
+            if readable:
+                with contextlib.suppress(OSError):
+                    os.read(wake_r, WAKE_CHUNK)
+                self.reap_orphans()
+            if time.monotonic() >= next_probe:
+                if steps is None:
+                    steps = self._env.calibrate(self._probe_cpu)
+                self._samples.append(self._env.probe(steps))
+                self.reap_orphans()
+                next_probe = time.monotonic() + self._interval
 
     def start(self) -> None:
         cores, _ = self._env.host()
@@ -388,9 +444,14 @@ class Monitor:
         rows = proc_table(self._env.proc)
         if busy is None or rows is None or not self._env.set_subreaper(enabled=True):
             return
+        wake_r, wake_w = os.pipe()
+        os.set_blocking(wake_r, False)
+        os.set_blocking(wake_w, False)
+        self._wake_fds = [wake_r, wake_w]
+        self._install_sigchld(wake_w)
         self._cpus = cpus
         self._start_snap = Snapshot(busy, self._env.rusage(), descendants_cpu(rows, self._pid))
-        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread = threading.Thread(target=self._loop, args=(wake_r,), daemon=True)
         self._thread.start()
 
     def stop(self) -> Machine:
@@ -400,8 +461,19 @@ class Monitor:
         if self._thread is None or self._start_snap is None:
             self._result = unavailable(cores, load)
             return self._result
-        self._stop_event.set()
-        self._thread.join()
+        try:
+            self._stop_event.set()
+            with contextlib.suppress(OSError):
+                os.write(self._wake_fds[1], b"\x00")
+            self._thread.join()
+        finally:
+            try:
+                self._restore_sigchld()
+            finally:
+                for fd in self._wake_fds:
+                    with contextlib.suppress(OSError):
+                        os.close(fd)
+                self._wake_fds.clear()
         self.reap_orphans()
         busy = read_busy_cpu(self._cpus, self._env.proc)
         rows = proc_table(self._env.proc)

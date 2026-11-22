@@ -1,8 +1,10 @@
 import contextlib
 import ctypes
 import os
+import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -420,3 +422,91 @@ def test_prctl_failure_and_oserror_keep_reaper_off(monkeypatch: pytest.MonkeyPat
     assert machine.set_child_subreaper(enabled=True) is False
     monkeypatch.setattr(ctypes, "CDLL", lambda *_a, **_kw: (_ for _ in ()).throw(OSError("no")))
     assert machine.set_child_subreaper(enabled=True) is False
+
+
+def test_sigchld_reaps_orphan_promptly_without_stealing_tracked_exit3(tmp_path: Path) -> None:
+    orphan_pid_file = tmp_path / "orphan.pid"
+    go_file = tmp_path / "go"
+    script = (
+        "import os, pathlib, sys, time\n"
+        "if os.fork() == 0:\n"
+        "    os.setsid()\n"
+        "    pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))\n"
+        "    deadline = time.monotonic() + 5.0\n"
+        "    while not pathlib.Path(sys.argv[2]).exists() and time.monotonic() < deadline:\n"
+        "        time.sleep(0.01)\n"
+        "    os._exit(0)\n"
+        "sys.exit(3)\n"
+    )
+    started = time.monotonic()
+    with machine.Monitor(interval=10.0) as monitor:
+        with monitor.spawning():
+            proc = subprocess.Popen(  # noqa: S603 # -- this interpreter and test script
+                [sys.executable, "-c", script, str(orphan_pid_file), str(go_file)],
+            )
+            monitor.register(proc.pid)
+        try:
+            code = proc.wait()
+        finally:
+            monitor.unregister(proc.pid)
+        assert code == 3
+        deadline = time.monotonic() + 5.0
+        while not (orphan_pid_file.is_file() and orphan_pid_file.read_text().strip()):
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        orphan_pid = int(orphan_pid_file.read_text(encoding="utf-8"))
+        go_file.write_text("go", encoding="utf-8")
+        reaped = False
+        reap_deadline = time.monotonic() + 1.0
+        while time.monotonic() < reap_deadline:
+            if not (Path("/proc") / str(orphan_pid)).exists():
+                reaped = True
+                break
+            time.sleep(0.01)
+        assert reaped
+    assert time.monotonic() - started < 2.0
+
+
+def test_monitor_started_from_non_main_thread_works_cleanly() -> None:
+    results: list[machine.Machine] = []
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            with machine.Monitor(interval=10.0) as monitor:
+                time.sleep(0.02)
+            results.append(monitor.result())
+        except BaseException as exc:  # noqa: BLE001 # -- re-raise any worker failure on main thread
+            errors.append(exc)
+
+    started = time.monotonic()
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join(timeout=5.0)
+    assert not thread.is_alive()
+    assert errors == []
+    assert len(results) == 1
+    assert results[0].machine_read is True
+    assert time.monotonic() - started < 2.0
+
+
+def test_monitor_chains_and_restores_previous_sigchld_handler() -> None:
+    seen: list[int] = []
+
+    def previous_handler(signum: int, _frame: object) -> None:
+        seen.append(signum)
+
+    old = signal.signal(signal.SIGCHLD, previous_handler)
+    try:
+        with machine.Monitor(interval=10.0) as monitor:
+            with monitor.spawning():
+                proc = subprocess.Popen([sys.executable, "-c", "pass"])
+                monitor.register(proc.pid)
+            try:
+                assert proc.wait() == 0
+            finally:
+                monitor.unregister(proc.pid)
+        assert signal.SIGCHLD in seen
+        assert signal.getsignal(signal.SIGCHLD) is previous_handler
+    finally:
+        signal.signal(signal.SIGCHLD, old)

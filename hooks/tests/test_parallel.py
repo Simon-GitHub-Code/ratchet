@@ -1,5 +1,6 @@
 import argparse
 import contextlib
+import io
 import json
 import math
 import os
@@ -1102,3 +1103,44 @@ def test_gate_exit3_beside_detached_work_keeps_tier_red_with_exit3(tmp_path: Pat
         if detached.is_file():
             with contextlib.suppress(ProcessLookupError, ValueError):
                 os.kill(int(detached.read_text()), signal.SIGKILL)
+
+
+def test_collect_takes_two_arguments_and_stop_running_skips_nonpositive_pid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProcess:
+        pid = 0
+
+    gate_live = parallel.Live(
+        "fake",
+        FakeProcess(),  # type: ignore[arg-type]
+        io.BytesIO(b"hello\n"),
+        time.monotonic(),
+        tool=False,
+    )
+    gate_live.cpu = 0.25
+    finished = parallel.collect(gate_live, 0)
+    assert finished.name == "fake"
+    assert finished.exit_code == 0
+    assert finished.cpu == 0.25
+
+    options = argparse.Namespace(
+        root=Path(), jobs=1, fail_fast=False, report=None, alone=[], wide=[]
+    )
+    scheduler = parallel.Scheduler([("fake",)], [], options, kept=schedule.Schedule())
+    log = io.BytesIO()
+    scheduler.live["fake"] = parallel.Live(
+        "fake",
+        FakeProcess(),  # type: ignore[arg-type]
+        log,
+        time.monotonic(),
+        tool=False,
+    )
+    signaled: list[int] = []
+    monkeypatch.setattr(os, "killpg", lambda pid, _sig: signaled.append(pid))
+    monkeypatch.setattr(gatelib, "stop_group", lambda proc: signaled.append(proc.pid))
+    scheduler.stop_running()
+    assert signaled == []
+    assert scheduler.stopped == ["fake"]
+    assert scheduler.live == {}
+    assert log.closed
