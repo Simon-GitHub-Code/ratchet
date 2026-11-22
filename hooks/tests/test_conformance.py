@@ -906,8 +906,8 @@ TEMPLATE_WORKFLOWS = sorted((SKILLS / "adopt/templates/.github/workflows").glob(
 SHAPES = {
     "merge.yml": conformance.MERGE_SHAPE,
     "weekly.yml": conformance.WEEKLY_SHAPE,
-    "ci.yml": conformance.CI_SHAPE + conformance.TIER_STEP_SHAPE,
-    "deep.yml": conformance.CI_SHAPE + conformance.TIER_STEP_SHAPE,
+    "ci.yml": conformance.CI_SHAPE + conformance.TIER_STEP_SHAPE["ci.yml"],
+    "deep.yml": conformance.CI_SHAPE + conformance.TIER_STEP_SHAPE["deep.yml"],
 }
 
 

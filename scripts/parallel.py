@@ -2,7 +2,8 @@
 """The parallel runner: run a tier's gates at once, keep each one's output whole, name every red.
 
 A tier is a set of independent gates, so its local wall clock should be the slowest gate, not
-the sum. CI already runs one job per gate; this gives a developer's machine the same shape. It
+the sum. CI runs a tier's jobs at once and each group job through this runner; this gives a
+developer's machine the same shape. It
 knows nothing about the stack: each gate is an entry point of the repository's command runner
 (a ``just`` recipe, a ``make`` target, a package script), and the runner's command prefix is
 yours to give. Python 3.11 standard library only, Linux and macOS.

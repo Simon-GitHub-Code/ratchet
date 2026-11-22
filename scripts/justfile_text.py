@@ -409,6 +409,7 @@ def with_first_line(recipe: str, line: str) -> Want:
 VARIABLE = re.compile(r"^(?:export[ \t]+)?([A-Za-z_][\w-]*)[ \t]*:=[ \t]*(.*)$", re.MULTILINE)
 STRING = re.compile(r"\"([^\"]*)\"|'([^']*)'")
 QUOTED = re.compile(r'"([^"]*)"')
+PART = re.compile(r"\"(?P<double>[^\"]*)\"|'(?P<single>[^']*)'|(?P<name>[A-Za-z_][\w-]*)")
 
 
 @functools.lru_cache(maxsize=256)
@@ -419,14 +420,21 @@ def variables(justfile: str) -> Mapping[str, str]:
     return MappingProxyType(found)
 
 
-def listed(justfile: str, name: str, seen: frozenset[str] = frozenset()) -> set[str]:
+def listed(justfile: str, name: str) -> set[str]:
+    return set(ordered(justfile, name))
+
+
+def ordered(justfile: str, name: str, seen: frozenset[str] = frozenset()) -> tuple[str, ...]:
     value = variables(justfile).get(name)
     if value is None or name in seen:
-        return set()
-    found = {word for one, other in STRING.findall(value) for word in (one or other).split()}
-    for built in BARE_NAME.findall(STRING.sub(" ", value)):
-        found |= listed(justfile, built, seen | {name})
-    return found
+        return ()
+    found: list[str] = []
+    for part in PART.finditer(value):
+        if part["name"]:
+            found += ordered(justfile, part["name"], seen | {name})
+        else:
+            found += (part["double"] or part["single"] or "").split()
+    return tuple(dict.fromkeys(found))
 
 
 def reaches(justfile: str, recipe: str) -> set[str]:
@@ -496,14 +504,21 @@ def with_dependency(recipe: str, name: str) -> Want:
 
 
 def with_listed(name: str, word: str) -> Want:
+    return with_words(name, lambda words: words if word in words else [*words, word])
+
+
+def with_words(name: str, change: Callable[[list[str]], list[str]]) -> Want:
     def want(current: str | None) -> str:
         text = current or ""
         match = next((m for m in VARIABLE.finditer(text) if m.group(1) == name), None)
         quoted = QUOTED.fullmatch(match.group(2).strip()) if match else None
-        if match is None or quoted is None or word in quoted.group(1).split():
+        if match is None or quoted is None:
             return text
-        listed = f"{quoted.group(1)} {word}".strip()
-        return f'{text[: match.start(2)]}"{listed}"{text[match.end(2) :]}'
+        words = quoted.group(1).split()
+        changed = change(words)
+        if changed == words:
+            return text
+        return f'{text[: match.start(2)]}"{" ".join(changed)}"{text[match.end(2) :]}'
 
     return want
 

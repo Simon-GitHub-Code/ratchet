@@ -47,6 +47,7 @@ Every entry point is one command that exits non-zero on any failure. `check` is 
 | hooks-install | `just hooks-install` |
 | tier1 | `just tier1` |
 | tier2 | `just tier2` |
+| ci-job | `just ci-job` |
 | check | `just check` |
 | check-fast | `just check-fast` |
 | check-deep | `just check-deep` |
@@ -312,12 +313,13 @@ What the change-size gate reads to count tests apart from product code (ADR 0045
 
 How this repository stays fast, from the first commit (the Speed section of `skills/method/tiers.md` in the `ratchet` plugin). One line per concept, each saying how this stack meets it; the conformance gate is red while a line is missing or unfilled. The `Shards` line holds a whole number and nothing else: the CI workflows read it and run each long gate as that many jobs, so adding runners is this one number.
 
-The `justfile`'s `serial` and `alone` variables say which gates never run at once and which run with nothing beside them, and the bite proof reads them from the recipes as `parallel.py` does (ADR 0086). The `Apart`, `Alone` and `Wide` lines add to them, for a gate a recipe cannot pass as plain text: each code span of `Apart` is a group of gates that never run at once, such as two that write one file or bind one port; `Alone` names the gates that run with nothing beside them, such as one that judges elapsed time; `Wide` names the gates that are themselves parallel, which a tier run tells their share of its jobs in `RATCHET_JOBS`. Every runner keeps everything the recipes and these lines say. Each proof lane is told its share of the cores in `RATCHET_JOBS`, and an `Alone` gate the whole of it.
+The `justfile`'s `serial` and `alone` variables say which gates never run at once and which run with nothing beside them, and the bite proof reads them from the recipes as `parallel.py` does (ADR 0086). The `Apart`, `Alone` and `Wide` lines add to them, for a gate a recipe cannot pass as plain text: each code span of `Apart` is a group of gates that never run at once, such as two that write one file or bind one port; `Alone` names the gates that run with nothing beside them, such as one that judges elapsed time; `Wide` names the gates that are themselves parallel, which a tier run tells their share of its jobs in `RATCHET_JOBS`. Every runner keeps everything the recipes and these lines say. Each proof lane is told its share of the cores in `RATCHET_JOBS`, and an `Alone` gate the whole of it. CI runs tier 1 as the jobs the `justfile`'s `tier1_jobs` names: the proof `bite` alone, alone each gate with a reason the conformance check can read (its own seconds ceiling, a shard count over 1, a step the workflow sets up for it alone, or a code span of the `Own jobs` line), and `rest`, every other gate.
 
 - Parallel: <how the suite uses every core on a developer's machine and in CI, what keeps the tests isolated enough for that, and how the suite takes its worker count from `RATCHET_JOBS` when a runner sets it>
 - Apart: <each group of gates that never run at once and that no recipe passes as `--serial`, as a code span; leave this placeholder while none is>
 - Alone: <each gate that runs with nothing beside it and that no recipe passes as `--alone`, as a code span; leave this placeholder while none is>
 - Wide: <each gate that is itself parallel, such as the suite, as a code span; leave this placeholder while none is>
+- Own jobs: <each tier 1 gate that runs in a CI job of its own for a reason no ceiling, shard count or workflow step shows, as a code span, with the reason; leave this placeholder while none is>
 - One pipeline: <CI calls the entry points above and nothing else, so a red job is reproduced by its one command; or the pipeline engine that runs the same definition in both places>
 - Shards: 1
 - Cache: <the lockfiles and tool configs each CI cache is keyed on, the tool caches it restores, and the caches the tools keep locally>
