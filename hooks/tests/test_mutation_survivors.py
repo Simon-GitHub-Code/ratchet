@@ -483,3 +483,234 @@ def test_help_prints_the_neutral_record_format_a_tools_converter_writes(capsys: 
     for field in ("``file``", "``mutator``", "``status``", "``start``", "``unit``"):
         assert field in shown
     assert '{"file": ' in shown
+
+
+def test_changed_ranges_emits_added_and_edited_ranges_and_skips_deletions_binary_and_missing(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = repository(
+        tmp_path,
+        {
+            "src/a.rs": "l1\nl2\nl3\nl4\nl5\nl6\nl7\n",
+            "src/del.rs": "a\nb\nc\n",
+            "src/gone.rs": "x\ny\n",
+            "src/same.rs": "unchanged\n",
+            "src/my file.rs": "m1\nm2\nm3\n",
+        },
+    )
+    (root / "assets").mkdir()
+    (root / "assets/bin.dat").write_bytes(b"\x00\x01\x02")
+    commit(root, "chore(assets): add binary")
+    branch(root, "feature/ranges")
+    write(root, "src/a.rs", "l1\nl2x\nl3\nl4\nl5x\nl6x\n++ b/fake.rs\nl7\n")
+    write(root, "src/del.rs", "a\n")
+    (root / "src/gone.rs").unlink()
+    write(root, "src/my file.rs", "m1\nm2x\nm3x\n")
+    (root / "assets/bin.dat").write_bytes(b"\x00\x01\x03")
+    write(root, "src/new.rs", "fn n1() {}\nfn n2() {}\n")
+    write(root, "src/empty.rs", "")
+    commit(root, "feat(core): edit ranges")
+    write(root, "src/untracked.rs", "u1\nu2\nu3\n")
+    write(root, "src/empty_untracked.rs", "")
+    (root / "assets/untracked.bin").write_bytes(b"\x00\x02")
+    assert run(root, "--tool", "cargo-mutants", "--changed", "--ranges", "--base", "main") == 0
+    assert capsys.readouterr().out == (
+        "src/a.rs:2-2\nsrc/a.rs:5-7\nsrc/my file.rs:2-3\nsrc/new.rs:1-2\nsrc/untracked.rs:1-3\n"
+    )
+    assert run(root, "--tool", "cargo-mutants", "--changed", "--base", "main") == 0
+    assert capsys.readouterr().out == (
+        "assets/bin.dat\n"
+        "assets/untracked.bin\n"
+        "src/a.rs\n"
+        "src/del.rs\n"
+        "src/empty.rs\n"
+        "src/empty_untracked.rs\n"
+        "src/my file.rs\n"
+        "src/new.rs\n"
+        "src/untracked.rs\n"
+    )
+
+
+def test_changed_ranges_without_base_commit_emits_nonempty_text_files(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = repository(tmp_path, {"src/a.src": "line1\nline2\n", "src/empty.src": ""})
+    (root / "bin.dat").write_bytes(b"\x00\x01")
+    commit(root, "chore(core): add bin")
+    root_single = tmp_path / "single"
+    root_single.mkdir()
+    single = repository(root_single, {"src/a.src": "line1\nline2\n", "src/empty.src": ""})
+    (single / "bin.dat").write_bytes(b"\x00\x01")
+    assert run(single, "--tool", "any-tool", "--changed", "--ranges") == 0
+    assert capsys.readouterr().out == "src/a.src:1-2\n"
+    assert run(root, "--tool", "any-tool", "--changed", "--ranges") == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_changed_ranges_with_nothing_changed_prints_nothing(tmp_path: Path, capsys: Out) -> None:
+    root = repository(tmp_path, {RUST: "fn a() {}\n"})
+    branch(root, "feature/x")
+    assert run(root, "--tool", "cargo-mutants", "--changed", "--ranges", "--base", "main") == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_ranges_without_changed_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit):
+        run(tmp_path, "--tool", "any-tool", "--ranges")
+
+
+def test_only_with_line_ranges_scopes_register_judging_to_overlapping_units(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = tmp_path
+    add_surv, mul_surv = twin_report(root, [(4, 12, "survived"), (8, 14, "survived")])
+    register(
+        root,
+        entry("any-tool", add_surv.identity, add_surv.function_hash),
+        entry("any-tool", mul_surv.identity, mul_surv.function_hash),
+    )
+    twin_report(root, [(8, 14, "survived")])
+    assert any_tool(root, "--only", "src/a.src:7-8,src/a.src:8-9") == 0
+    out = capsys.readouterr().out
+    assert "any-tool: 0/1 killed, 1 live, 1 registered in scope" in out
+    assert add_surv.identity not in out
+
+    twin_report(root, [(8, 14, "survived"), (8, 16, "survived")])
+    assert any_tool(root, "--only", "src/a.src:7-9") == 1
+    out = capsys.readouterr().out
+    assert "ConditionalExpression:true@2:16-2:21: survived and not in" in out
+    assert "register entry is stale" not in out
+
+    write(root, "src/a.src", SOURCE_TEXT.replace("a * b", "a * b + 0"))
+    write(
+        root,
+        "mutants.jsonl",
+        json.dumps(
+            {
+                "file": "src/a.src",
+                "mutator": "BinaryOperator",
+                "replacement": "-",
+                "status": "killed",
+                "start": [8, 16],
+                "end": [8, 17],
+            }
+        )
+        + "\n",
+    )
+    assert any_tool(root, "--only", "src/a.src:8-8") == 1
+    out = capsys.readouterr().out
+    assert f"{mul_surv.identity}: register entry is stale" in out
+    assert add_surv.identity not in out
+
+    write(root, "src/b.src", "export function sub(a, b) {\n  return a - b;\n}\n")
+    write(
+        root,
+        "mutants.jsonl",
+        json.dumps(
+            {
+                "file": "src/b.src",
+                "mutator": "BinaryOperator",
+                "replacement": "+",
+                "status": "killed",
+                "start": [2, 11],
+                "end": [2, 12],
+            }
+        )
+        + "\n",
+    )
+    assert any_tool(root, "--only", "src/a.src:8-8", "src/b.src:1-3") == 1
+    out = capsys.readouterr().out
+    assert f"{mul_surv.identity}: register entry is stale" in out
+    assert add_surv.identity not in out
+
+    write(root, "mutants.jsonl", "")
+    assert any_tool(root, "--only", "src/a.src:8-8") == 1
+    out = capsys.readouterr().out
+    assert f"{mul_surv.identity}: register entry is stale" in out
+    assert add_surv.identity not in out
+
+
+def test_only_with_line_range_and_zero_mutants_on_unchanged_rest_is_green(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = tmp_path
+    (add_surv,) = twin_report(root, [(4, 12, "survived")])
+    register(root, entry("any-tool", add_surv.identity, add_surv.function_hash))
+    write(root, "src/a.src", SOURCE_TEXT + "\n// trailing note\n")
+    write(root, "mutants.jsonl", "")
+    assert any_tool(root, "--only", "src/a.src:10-11") == 0
+    assert "any-tool: no mutant in the files it was given; nothing to mutate yet" in (
+        capsys.readouterr().out
+    )
+
+
+def test_only_whole_file_and_mixed_scopes_preserve_whole_file_judging(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = tmp_path
+    add_surv, mul_surv = twin_report(root, [(4, 12, "survived"), (8, 14, "survived")])
+    register(
+        root,
+        entry("any-tool", add_surv.identity, add_surv.function_hash),
+        entry("any-tool", mul_surv.identity, mul_surv.function_hash),
+    )
+    twin_report(root, [(8, 14, "survived")])
+    assert any_tool(root, "--only", "src/a.src") == 1
+    assert f"{add_surv.identity}: register entry is stale" in capsys.readouterr().out
+
+    assert any_tool(root, "--only", "src/a.src:7-9,src/a.src") == 1
+    assert f"{add_surv.identity}: register entry is stale" in capsys.readouterr().out
+
+    assert any_tool(root, "--only", "src/a.src,src/a.src:7-9") == 1
+    assert f"{add_surv.identity}: register entry is stale" in capsys.readouterr().out
+
+    write(root, "src/b.src", "export function sub(a, b) {\n  return a - b;\n}\n")
+    write(
+        root,
+        "mutants.jsonl",
+        json.dumps(
+            {
+                "file": "src/b.src",
+                "mutator": "BinaryOperator",
+                "replacement": "+",
+                "status": "killed",
+                "start": [2, 11],
+                "end": [2, 12],
+            }
+        )
+        + "\n",
+    )
+    assert any_tool(root, "--only", "src/a.src:8-8") == 1
+    out = capsys.readouterr().out
+    assert f"{mul_surv.identity}: register entry is stale" in out
+    assert add_surv.identity not in out
+
+
+@pytest.mark.parametrize(
+    "bad_scope",
+    [
+        "src/a.src:0-5",
+        "src/a.src:5-3",
+        "src/a.src:a-b",
+        "src/a.src:1-b",
+        "src/a.src:10",
+        "src/a.src:",
+        ":1-2",
+    ],
+)
+def test_only_malformed_range_is_named_and_red(tmp_path: Path, capsys: Out, bad_scope: str) -> None:
+    crate(tmp_path)
+    assert cargo(tmp_path, "--only", bad_scope) == 1
+    out = capsys.readouterr().out
+    assert f"{bad_scope}: invalid line range" in out
+    assert "mutation: red" in out
+
+
+def test_only_allows_colon_in_directory_name_without_range_suffix(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = tmp_path
+    write(root, "dir:1/a.src", SOURCE_TEXT)
+    write(root, "mutants.jsonl", "")
+    assert any_tool(root, "--only", "dir:1/a.src") == 0
+    assert "any-tool: no mutant in the files it was given" in capsys.readouterr().out
