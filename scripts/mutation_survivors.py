@@ -51,15 +51,20 @@ lists the live mutants it matched. The function hash is the SHA-256 of the unit'
 trailing space cut. For every unregistered survivor the gate prints the entry to paste, hash
 included.
 
-A partial run judges only its scope: the files its mutants are in. A run that made no mutant is
-red, with one exception: a run that says which files it was given (``--only``), all of which
-exist, read them and found nothing to mutate. ``--changed`` prints every changed file that still
-exists, one per line, for the recipe to filter and hand to its tool.
+A partial run judges only its scope: the files its mutants are in, or the files and line
+ranges passed to ``--only``. When ``--only`` gives line ranges (``FILE:START-END``), an
+unchanged register entry whose unit does not overlap any range is out of scope, while an
+entry whose function hash no longer matches any unit in that file stays in scope. A run
+that made no mutant is red, with one exception: a run that says which files or ranges it
+was given (``--only``), all of whose files exist, read them and found nothing to mutate
+(and has no stale register entry in scope). ``--changed`` prints every changed file that
+still exists, one per line, for the recipe to filter and hand to its tool; ``--changed
+--ranges`` prints 1-based inclusive ``FILE:START-END`` added or edited line ranges instead.
 
 Usage::
 
-    mutation_survivors.py [--root DIR] --tool NAME --mutants FILE [--only FILE...]
-    mutation_survivors.py [--root DIR] --tool NAME --changed [--base REF]
+    mutation_survivors.py [--root DIR] --tool NAME --mutants FILE [--only FILE[:START-END]...]
+    mutation_survivors.py [--root DIR] --tool NAME --changed [--ranges] [--base REF]
 
 ``--mutants -`` reads stdin.
 """
@@ -76,8 +81,12 @@ import tomllib
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import gatelib
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
 
 REGISTER = Path("quality/mutation-register.toml")
 MIN_REASON = 20
@@ -86,8 +95,13 @@ KILLED, SURVIVED, UNCOVERED, TIMEOUT, UNDECIDED, UNVIABLE, SKIPPED = STATES
 LIVE = frozenset({SURVIVED, UNCOVERED})
 TESTED = LIVE | {KILLED, TIMEOUT}
 POSITION = re.compile(r"@(?:\d+:\d+-\d+:\d+|\?)$")
+HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+RANGE_SUFFIX = re.compile(r"^(.+):(\d+)-(\d+)$")
+BAD_RANGE_SUFFIX = re.compile(r":(?:[^/]*-[^/]*|\d*)$")
 REPLACEMENT_WIDTH = 60
 TEXTS = ("file", "mutator", "replacement", "status")
+Range = tuple[int, int]
+ScopeMap = dict[str, list[Range] | None]
 
 
 @dataclass(frozen=True)
@@ -273,12 +287,95 @@ def changed_files(root: Path, base: str | None) -> list[str]:
     return [path for path in changed if (root / path).is_file()]
 
 
-def judge(tool: str, mutants: list[Mutant], found: list[Entry]) -> list[str]:
+def _merge_ranges(ranges: list[Range]) -> list[Range]:
+    merged: list[Range] = []
+    for start, end in sorted(ranges):
+        if merged and start <= merged[-1][1] + 1:
+            prev_start, prev_end = merged[-1]
+            merged[-1] = (prev_start, max(prev_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _whole_file_ranges(root: Path, paths: list[str]) -> dict[str, list[Range]]:
+    found: dict[str, list[Range]] = {}
+    for path in paths:
+        if text := gatelib.read_text(root / path):
+            found[path] = [(1, len(text.splitlines()))]
+    return found
+
+
+def _parse_diff_ranges(diff: str) -> dict[str, list[Range]]:
+    found: dict[str, list[Range]] = {}
+    current: str | None = None
+    in_header = False
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            current, in_header = None, True
+        elif in_header and line.startswith("+++ b/"):
+            current = line[6:].removesuffix("\t")
+        elif match := HUNK.match(line):
+            in_header = False
+            new_start = int(match.group(1))
+            new_count = int(match.group(2)) if match.group(2) is not None else 1
+            if current and new_count > 0:
+                found.setdefault(current, []).append((new_start, new_start + new_count - 1))
+    return found
+
+
+def changed_ranges(root: Path, base: str | None) -> list[str]:
+    before = gatelib.base_commit(root, base)
+    if before is None:
+        by_file = _whole_file_ranges(root, gatelib.tracked_paths(root))
+    else:
+        diff = gatelib.git(
+            root,
+            "-c",
+            "core.quotepath=false",
+            "diff",
+            "-U0",
+            "--no-renames",
+            "--diff-filter=AMCR",
+            before,
+        )
+        by_file = _parse_diff_ranges(diff or "")
+        untracked_raw = (
+            gatelib.git(
+                root,
+                "ls-files",
+                "--others",
+                "--exclude-standard",
+                "--full-name",
+                "-z",
+                ":/",
+            )
+            or ""
+        )
+        untracked = [path for path in untracked_raw.split("\0") if path]
+        for path, ranges in _whole_file_ranges(root, untracked).items():
+            by_file.setdefault(path, []).extend(ranges)
+    return [
+        f"{path}:{start}-{end}"
+        for path in sorted(by_file)
+        if (root / path).is_file()
+        for start, end in _merge_ranges(by_file[path])
+    ]
+
+
+def judge(
+    tool: str,
+    mutants: list[Mutant],
+    found: list[Entry],
+    *,
+    scopes: ScopeMap | None = None,
+    root: Path = Path(),
+) -> list[str]:
     if not mutants:
         return [f"{tool}: no mutant reported; the run did not happen or its results were not read"]
     problems = []
     live = [m for m in mutants if m.state in LIVE]
-    mine = [e for e in found if e.tool == tool and in_scope(e.identity, mutants=mutants)]
+    mine = _in_scope_entries(tool, mutants, found, scopes=scopes, root=root)
     unclaimed = Counter(_key(e) for e in mine)
     for mutant in mutants:
         if mutant.state == UNDECIDED:
@@ -346,9 +443,101 @@ def _stale(entry: Entry, live: list[Mutant]) -> str:
     )
 
 
-def in_scope(identity: str, *, mutants: list[Mutant]) -> bool:
-    files = {m.identity.split(":", 1)[0] for m in mutants}
-    return identity.split(":", 1)[0] in files
+def _file_units(lines: list[str]) -> list[tuple[int, int, str]]:
+    units: list[tuple[int, int, str]] = []
+    seen: set[tuple[int, int]] = set()
+    for line_no in range(1, len(lines) + 1):
+        start, end = unit_bounds(lines, line_no)
+        if (start, end) in seen:
+            continue
+        seen.add((start, end))
+        text = "\n".join(line.rstrip() for line in lines[start:end])
+        digest = "sha256:" + hashlib.sha256(text.encode()).hexdigest()
+        units.append((start + 1, end, digest))
+    return units
+
+
+def _entry_in_scope(
+    entry: Entry,
+    *,
+    mutant_files: set[str],
+    mutant_keys: set[tuple[str, str]],
+    scopes: ScopeMap | None,
+    units_for: Callable[[str], list[tuple[int, int, str]]],
+) -> bool:
+    file = entry.identity.split(":", 1)[0]
+    if not scopes or file not in scopes:
+        return file in mutant_files
+    ranges = scopes[file]
+    if ranges is None or _key(entry) in mutant_keys:
+        return True
+    matching = [
+        (start, end) for start, end, digest in units_for(file) if digest == entry.function_hash
+    ]
+    if not matching:
+        return True
+    return any(
+        u_start <= r_end and r_start <= u_end
+        for u_start, u_end in matching
+        for r_start, r_end in ranges
+    )
+
+
+def _in_scope_entries(
+    tool: str,
+    mutants: list[Mutant],
+    registered: Sequence[Entry],
+    *,
+    scopes: ScopeMap | None,
+    root: Path,
+) -> list[Entry]:
+    mutant_files = {m.identity.split(":", 1)[0] for m in mutants}
+    mutant_keys = {_key(m) for m in mutants}
+    unit_cache: dict[str, list[tuple[int, int, str]]] = {}
+
+    def units_for(file: str) -> list[tuple[int, int, str]]:
+        if file not in unit_cache:
+            unit_cache[file] = _file_units((gatelib.read_text(root / file) or "").splitlines())
+        return unit_cache[file]
+
+    return [
+        entry
+        for entry in registered
+        if entry.tool == tool
+        and _entry_in_scope(
+            entry,
+            mutant_files=mutant_files,
+            mutant_keys=mutant_keys,
+            scopes=scopes,
+            units_for=units_for,
+        )
+    ]
+
+
+def parse_scopes(targets: list[str]) -> tuple[ScopeMap, list[str]]:
+    scopes: ScopeMap = {}
+    problems: list[str] = []
+    for target in targets:
+        if match := RANGE_SUFFIX.match(target):
+            path, start, end = match.group(1), int(match.group(2)), int(match.group(3))
+            if start <= 0 or end < start:
+                problems.append(
+                    f"{target}: invalid line range; expected PATH:START-END with 1 <= START <= END"
+                )
+            elif path not in scopes:
+                scopes[path] = [(start, end)]
+            elif (existing := scopes[path]) is not None:
+                existing.append((start, end))
+        elif BAD_RANGE_SUFFIX.search(target):
+            problems.append(
+                f"{target}: invalid line range; expected PATH:START-END with 1 <= START <= END"
+            )
+        else:
+            scopes[target] = None
+    merged = {
+        path: None if ranges is None else _merge_ranges(ranges) for path, ranges in scopes.items()
+    }
+    return merged, problems
 
 
 Run = tuple[list[Mutant] | None, list[str]]
@@ -356,27 +545,42 @@ Run = tuple[list[Mutant] | None, list[str]]
 
 def check(options: argparse.Namespace, root: Path) -> list[str]:
     found, problems = entries(root)
+    scopes, scope_problems = parse_scopes(given_files(options))
+    problems += scope_problems
     if options.mutants is None:
         needed = f"--mutants is required for {options.tool}: JSON lines, one object per mutant"
         return [*problems, needed]
-    mutants, unread = records_run(options, root)
+    if scope_problems:
+        return problems
+    mutants, unread = records_run(options, root, scopes=scopes, registered=found)
     problems += unread
     if mutants is None:
         return problems
-    return problems + judge(options.tool, mutants, found)
+    return problems + judge(options.tool, mutants, found, scopes=scopes, root=root)
 
 
 def given_files(options: argparse.Namespace) -> list[str]:
     return [name for files in options.only or [] for name in files.split(",") if name]
 
 
-def records_run(options: argparse.Namespace, root: Path) -> Run:
+def records_run(
+    options: argparse.Namespace,
+    root: Path,
+    *,
+    scopes: ScopeMap | None = None,
+    registered: Sequence[Entry] = (),
+) -> Run:
     text = sys.stdin.read() if options.mutants == "-" else _read(root, options.mutants)
     if text is None:
         return None, [f"{options.mutants}: missing; convert the tool's report to it first"]
     mutants, unread = neutral_mutants(text, root)
-    given = given_files(options)
-    if not mutants and not unread and given and all((root / name).is_file() for name in given):
+    if not mutants and not unread and scopes and all((root / path).is_file() for path in scopes):
+        stale = [
+            _stale(entry, [])
+            for entry in _in_scope_entries(options.tool, [], registered, scopes=scopes, root=root)
+        ]
+        if stale:
+            return None, stale
         print(f"{options.tool}: no mutant in the files it was given; nothing to mutate yet")
         return None, []
     return mutants, unread
@@ -398,15 +602,29 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--root", default=".")
     parser.add_argument("--tool", required=True, help="the register's `tool` key")
     parser.add_argument("--mutants", help="the run's mutants: JSON lines, `-` for stdin")
-    parser.add_argument("--only", nargs="+", help="the files the run was given")
+    parser.add_argument(
+        "--only", nargs="+", help="the files or FILE:START-END ranges the run was given"
+    )
     parser.add_argument(
         "--changed", action="store_true", help="print the scope of a changed-code run"
     )
+    parser.add_argument(
+        "--ranges",
+        action="store_true",
+        help="with --changed, print 1-based inclusive PATH:START-END line ranges",
+    )
     parser.add_argument("--base", help="the merge base to compare with")
     options = parser.parse_args(argv[1:])
+    if options.ranges and not options.changed:
+        parser.error("--ranges requires --changed")
     root = Path(options.root).resolve()
     if options.changed:
-        scope = "\n".join(changed_files(root, options.base))
+        items = (
+            changed_ranges(root, options.base)
+            if options.ranges
+            else changed_files(root, options.base)
+        )
+        scope = "\n".join(items)
         if scope:
             print(scope)
         return 0
