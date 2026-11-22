@@ -53,7 +53,7 @@ Every comparison against history uses the merge base with the default branch (`H
 
 | Question | What commonly answers it |
 | --- | --- |
-| Is every file in one canonical form? | a formatter in check mode |
+| Is every file in one canonical form? | a formatter in check mode, leaving `docs/features/*/verdict.json` out so it accepts the verdict record `merge_ready.py record` writes |
 | Does the code break any rule a linter can state? | a linter with near-all rules on; each opt-out carries a written reason |
 | Is every type as strict as the language allows? | the strictest static checking the language offers; its dynamic escape hatch is banned |
 | Do dependencies point only the way the design says? | a dependency tool over the imports, and a fitness test that checks it again |
@@ -271,6 +271,7 @@ A tool is chosen per repository, so no recipe is shipped for it. These hold for 
 - **A tool that walks the tree is pointed at the source.** `quality/snapshots/` holds copies of the tool configs, a dependency manifest among them, which reads as a second package to a tool that searches for manifests.
 - **A snapshot of the product's own contract lives beside the tests.** A command's `--help`, a public API report or a schema changes with the feature that changes the contract. Under `quality/`, a guard path for what only rises, it could land neither ahead of its feature nor with it.
 - **A prose gate that flags the owner's own text is answered in the text.** When the `prose` gate flags a word on a glossary *Avoid* list, the text is reworded; an *Avoid* list is never shortened to turn a gate green.
+- **The format gate leaves `docs/features/*/verdict.json` out.** `merge_ready.py record` writes those verdict records with Python's `json.dumps` (`indent=2, sort_keys=True`), which places short lists such as `forcedBy` on multiple lines that a formatter can reject on commit. `scripts/project_bite.py` proves this when the `format` gate is proved by writing a sample verdict record as `merge_ready.py record` does and running the gate whole-tree.
 - **A gate red in parallel and green alone shares state with another.** Separate their outputs (a report path, a cache directory, a work tree of its own per gate); only when that is not possible, declare the group in that tier's `serial` variable (`--serial A B`). Two gates whose tools each start a worker for every core can starve the tests inside one until they time out. Group them when a run shows that, or when a timed run of the tier is faster with the group: a group runs its gates one after another, so once its chain outlasts the slowest gate outside it, the group sets the run's wall clock. A group acts only where a tier's gates run in one process, as in a local `check` or `check-deep`, or a CI job that runs a group of gates. Where CI gives a gate a job of its own, a group changes nothing for it there, so time a local `check` before and after. A gate that takes every core in a run that joins tiers is measured alone (`--alone`), since a group holds the gates of one tier.
 
 ## Every bound gate is shown to bite

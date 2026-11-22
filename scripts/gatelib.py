@@ -16,6 +16,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 from collections.abc import Callable
@@ -31,6 +32,7 @@ import unproven
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
     from types import FrameType
+    from typing import TextIO
 
 FALLBACK_BRANCHES = ("main", "master")
 BINDING = Path("docs/process/binding.md")
@@ -45,6 +47,9 @@ UNPRIVILEGED = 1024
 THRESHOLDS = Path("quality/thresholds.toml")
 STATE = Path(".ratchet")
 DEFAULT_BRANCH_LINE = re.compile(r"^- Default branch: `([^`]+)`$", re.MULTILINE)
+SCHEMA = 1
+SLUG = r"[a-z0-9]+(?:-[a-z0-9]+)*"
+APPROVE = "approve"
 
 REPOSITORY_VARIABLES = frozenset(
     {
@@ -779,3 +784,69 @@ def http_status(
         return response.status
     finally:
         connection.close()
+
+
+def git_raw(root: Path, *args: str, env: dict[str, str] | None = None) -> str | None:
+    done = subprocess.run(
+        ["git", "-C", str(root), *args],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        check=False,
+        env=env,
+    )
+    return done.stdout if done.returncode == 0 else None
+
+
+def reviewed_tree(root: Path, ref: str, record: str) -> str | None:
+    with tempfile.TemporaryDirectory() as scratch:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
+        steps = (
+            ("read-tree", ref),
+            ("update-index", "--force-remove", "--", record),
+            ("write-tree",),
+        )
+        results = [git_raw(root, *step, env=env) for step in steps]
+    tree = results[-1]
+    return tree.strip() if tree and None not in results else None
+
+
+def uncommitted(root: Path) -> list[str]:
+    status = git_raw(root, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all")
+    return sorted({entry[3:] for entry in (status or "").split("\0") if entry})
+
+
+def dirty(root: Path, record: str) -> list[str]:
+    return [path for path in uncommitted(root) if path != record]
+
+
+def write_record(
+    root: Path, text: str, *, allow_dirty: bool = False, out: TextIO | None = None
+) -> int:
+    try:
+        data: object = json.loads(text)
+    except ValueError:
+        data = None
+    slug = data.get("slug") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or not isinstance(slug, str) or not re.fullmatch(SLUG, slug):
+        print(
+            "record: stdin is not the pipeline's verdictRecord: a JSON object with its slug",
+            file=out,
+        )
+        return 1
+    record = f"docs/features/{slug}/verdict.json"
+    pending = [] if allow_dirty else dirty(root, record)
+    tree = reviewed_tree(root, "HEAD", record)
+    if pending or tree is None:
+        print(
+            "record: commit the change first, so the record names the tree that was reviewed:"
+            f" {', '.join(pending) or 'HEAD cannot be read'}",
+            file=out,
+        )
+        return 1
+    target = root / record
+    target.parent.mkdir(parents=True, exist_ok=True)
+    stamped = {**data, "schema": SCHEMA, "tree": tree}
+    target.write_text(json.dumps(stamped, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"record: {record} certifies tree {tree[:12]}; commit it alone, last", file=out)
+    return 0

@@ -6,7 +6,6 @@ import contextlib
 import datetime as dt
 import functools
 import json
-import os
 import posixpath
 import re
 import subprocess
@@ -55,18 +54,18 @@ AGENT = "merge: agent"
 OWNER = "merge: owner"
 WAIT = "merge: wait"
 MARKER = "<!-- ratchet:merge -->"
-SCHEMA = 1
+SCHEMA = gatelib.SCHEMA
 THRESHOLDS = gatelib.THRESHOLDS.as_posix()
 LEDGER = owed.LEDGER.as_posix()
 BINDING = gatelib.BINDING.as_posix()
-SLUG = r"[a-z0-9]+(?:-[a-z0-9]+)*"
+SLUG = gatelib.SLUG
 RECORD = re.compile(rf"^docs/features/({SLUG})/verdict\.json$")
 DISPUTES = "docs/disputes"
 DISPUTE = re.compile(rf"^{DISPUTES}/\d{{4}}-[a-z0-9-]+\.md$")
 STATUS = re.compile(r"^- Status:[ \t]*(\S+)[ \t]*$", re.MULTILINE)
 DECIDED = frozenset({"upheld", "rejected"})
 TREE = re.compile(r"[0-9a-f]{40,64}")
-APPROVE = "approve"
+APPROVE = gatelib.APPROVE
 TIER_STATES = ("green", "red", "none")
 RED = "red"
 DOOR_EVENTS = frozenset({"deployed", "irreplaceable-data"})
@@ -1284,17 +1283,7 @@ def not_records(
     return [path for path in listed_paths if not shaped(seen, manifest, path)]
 
 
-def reviewed_tree(root: Path, ref: str, record: str) -> str | None:
-    with tempfile.TemporaryDirectory() as scratch:
-        env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
-        steps = (
-            ("read-tree", ref),
-            ("update-index", "--force-remove", "--", record),
-            ("write-tree",),
-        )
-        results = [git(root, *step, env=env) for step in steps]
-    tree = results[-1]
-    return tree.strip() if tree and None not in results else None
+reviewed_tree = gatelib.reviewed_tree
 
 
 def listed(value: object) -> list[str] | None:
@@ -1607,39 +1596,9 @@ def report(reasons: list[Reason], head: str) -> str:
     return f"{MARKER}\n**{said}** at `{head[:12]}`. {lead}:\n\n{rows}"
 
 
-def uncommitted(root: Path) -> list[str]:
-    status = git(root, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all")
-    return sorted({entry[3:] for entry in (status or "").split("\0") if entry})
-
-
-def dirty(root: Path, record: str) -> list[str]:
-    return [path for path in uncommitted(root) if path != record]
-
-
-def write_record(root: Path, text: str) -> int:
-    try:
-        data: object = json.loads(text)
-    except ValueError:
-        data = None
-    slug = data.get("slug") if isinstance(data, dict) else None
-    if not isinstance(data, dict) or not isinstance(slug, str) or not re.fullmatch(SLUG, slug):
-        print("record: stdin is not the pipeline's verdictRecord: a JSON object with its slug")
-        return 1
-    record = f"docs/features/{slug}/verdict.json"
-    uncommitted = dirty(root, record)
-    tree = reviewed_tree(root, "HEAD", record)
-    if uncommitted or tree is None:
-        print(
-            "record: commit the change first, so the record names the tree that was reviewed:"
-            f" {', '.join(uncommitted) or 'HEAD cannot be read'}"
-        )
-        return 1
-    target = root / record
-    target.parent.mkdir(parents=True, exist_ok=True)
-    stamped = {**data, "schema": SCHEMA, "tree": tree}
-    target.write_text(json.dumps(stamped, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(f"record: {record} certifies tree {tree[:12]}; commit it alone, last")
-    return 0
+uncommitted = gatelib.uncommitted
+dirty = gatelib.dirty
+write_record = gatelib.write_record
 
 
 def main(argv: list[str]) -> int:
