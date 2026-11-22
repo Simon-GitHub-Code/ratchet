@@ -4485,6 +4485,67 @@ def test_a_moved_plugin_pin_with_binding_prose_still_forces_every_tier0_and_tier
     assert proved(out) == ["lint", "tests"]
 
 
+@pytest.mark.parametrize("with_prose", [False, True], ids=["pin alone", "pin with binding prose"])
+def test_a_moved_plugin_pin_writes_forced_on_every_fault_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, with_prose: bool
+) -> None:
+    monkeypatch.setenv("RATCHET_RUN", "run-forced")
+    registry = (
+        bite("lint", "first") + bite("lint", "second") + bite("tests", WORD) + bite("slow", WORD)
+    )
+    root = targeted(tmp_path, registry=registry, inserts=f"{PIN}\n")
+    replaced(root, BINDING, PIN, PIN.replace("0.1.0", "0.2.0"))
+    if with_prose:
+        replaced(root, BINDING, "| a | b |", "| a | c |")
+    assert prove(root, "--changed") == 0
+    found = recorded(root)
+    assert sorted((r["gate"], r["bite"]) for r in found) == [
+        ("lint", "first"),
+        ("lint", "second"),
+        ("tests", WORD),
+    ]
+    assert all(r["forced"] == {"cause": "plugin-pin", "record": "ADR 0069"} for r in found)
+    assert {r["run"] for r in found} == {"run-forced"}
+    assert all(r["tree"] for r in found)
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["prose and row", "targeted fault", "full proof"],
+    ids=["binding prose with pin unchanged", "targeted fault", "non-changed full proof"],
+)
+def test_non_forced_proofs_omit_forced_from_fault_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    monkeypatch.setenv("RATCHET_RUN", "run-plain")
+    replace_fault = 'replace = { path = "src/code.txt", old = "clean", new = "planted" }'
+    registry = bite("lint", WORD, replace_fault) + bite("tests", WORD)
+    if case == "full proof":
+        root = project(tmp_path / "repo", {"lint": LINT, "tests": LINT}, registry)
+        flags: tuple[str, ...] = ()
+    else:
+        root = targeted(tmp_path, registry=registry + bite("slow", WORD), inserts=f"{PIN}\n")
+        if case == "prose and row":
+            replaced(root, BINDING, "| a | b |", "| a | c |")
+            replaced(root, BINDING, "| lint | a tool | 0 |", "| lint | a tool | 1 |")
+        else:
+            replaced(root, "src/code.txt", "clean\n", "clean\nmore\n")
+        flags = ("--changed",)
+    assert prove(root, *flags) == 0
+    found = recorded(root)
+    assert found
+    assert all("forced" not in r for r in found)
+    assert {r["run"] for r in found} == {"run-plain"}
+    assert all(r["tree"] for r in found)
+
+
+def test_a_binding_prose_edit_alone_writes_no_timing_record(tmp_path: Path) -> None:
+    root = targeted(tmp_path, inserts=f"{PIN}\n")
+    replaced(root, BINDING, "| a | b |", "| a | c |")
+    assert prove(root, "--changed") == 0
+    assert not (root / runrecord.TIMING).exists()
+
+
 def test_faults_of_one_gate_share_lanes_and_keep_schedule_and_green_checks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
