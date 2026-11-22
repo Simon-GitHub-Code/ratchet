@@ -212,7 +212,7 @@ def test_an_upgrade_of_the_last_release_passes_the_default_branchs_tier_1_to_the
     line = next(line for line in template.splitlines() if line.lstrip().startswith("tier1="))
     assert line in done.splitlines()
     assert '--tier1 "$tier1"' in done
-    assert done.index("tier1=") < done.index("tier2=")
+    assert done.index("tier1=") < done.index("answer=")
     assert "--tier1" not in "\n".join(e.problem for e in owed.read(root).entries)
     assert not [f for f in conformance.findings(root) if "'--tier1' absent" in f.problem]
 
@@ -656,7 +656,16 @@ def test_a_merge_workflow_from_before_it_closed_issues_is_owed_every_marker_sinc
     wanted = [
         f"nothing {meaning} ('{marker}' absent)"
         for marker, meaning in conformance.MERGE_SHAPE
-        if marker in {"--tier1", "issues: write", "closingIssuesReferences", KEPT}
+        if marker
+        in {
+            "--tier1",
+            "issues: write",
+            "closingIssuesReferences",
+            KEPT,
+            conformance.DEEP_TRIGGER,
+            conformance.DEEP_DISPATCH,
+            conformance.DEEP_FLAG,
+        }
     ]
     assert len(found) == len(wanted)
     assert all(problem.startswith(want) for problem, want in zip(found, wanted, strict=True))
@@ -686,7 +695,8 @@ def test_a_merge_workflow_from_before_it_kept_a_targeted_branch_is_given_the_tem
     old = adopted.history("show", f"{BEFORE_KEPT_BRANCH}:skills/adopt/templates/{MERGE}")
     (root / MERGE).write_text(old.replace("<ratchet-sha>", commit.group(1)) + "\n")
     found = [f.problem for f in conformance.findings(root) if f.path == MERGE]
-    assert found == [f"{KEPT_PROBLEM}; {TAKE_THE_STEP} {conformance.ADOPT_TEMPLATES / MERGE}"]
+    assert f"{KEPT_PROBLEM}; {TAKE_THE_STEP} {conformance.ADOPT_TEMPLATES / MERGE}" in found
+    assert len(found) == 1 + len(conformance.DEEP_MERGE_MARKERS)
     upgrade.apply(root, planned(root).changes)
     done = (root / MERGE).read_text(encoding="utf-8")
     template = conformance.template_file(MERGE).replace("<ratchet-sha>", commit.group(1))
@@ -756,7 +766,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert first.startswith(f"upgrade: {root} from 0.8.2 at {adopted.RELEASES['0.8.2'][:12]} (CI")
     assert f"to {plugin_pin.in_use(PLUGIN_ROOT)}." in first
     assert "Would write 13 files (run with --apply):" in out
-    assert "  quality/owed.toml\n    - write down 108 things owed since" in out
+    assert "  quality/owed.toml\n    - write down 109 things owed since" in out
     assert "  .claude/settings.json\n    - regenerate the permission rules" in out
     assert f"    - pinned: {plugin_pin.line_for(PLUGIN_ROOT)}" in out
     assert out.index("\n  docs/process/binding.md\n") > out.index("\n  justfile\n")
@@ -768,7 +778,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert "        settled by the owner's answer to: Which of these has already happened" in out
     assert "        seen: no file in the tree is a sign of a life event" in out
     assert "        then: `deployed` owes the Gates rows " in out
-    assert verdict(out).startswith("upgrade: would write 83 edits in 13 files. 108 items are owed")
+    assert verdict(out).startswith("upgrade: would write 84 edits in 13 files. 109 items are owed")
     assert "and 0 red; 5 of them hold an assumption" in verdict(out)
     assert "The change touches guard paths" in verdict(out)
     assert plain(out) == "\n".join(
@@ -776,8 +786,8 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
             "In plain words:",
             (
                 "This project would move from Ratchet 0.8.2 to"
-                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 83 changes in 13"
-                " files. The project owes 108 things since the upgrade. None of them turns a check"
+                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 84 changes in 13"
+                " files. The project owes 109 things since the upgrade. None of them turns a check"
                 " red or stops a merge, and between upgrades the list only gets shorter. Nothing"
                 " fixes them by itself: ask an agent to. Each is in a guard path: an agent can"
                 " make all the fixes in one change on a branch, and you decide at that one merge."

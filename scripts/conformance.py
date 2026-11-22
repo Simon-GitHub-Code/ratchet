@@ -112,6 +112,13 @@ MERGE_WORKFLOW = "merge.yml"
 TIER1_FLAG = "--tier1"
 TIER1_ARGUMENT = '--tier1 "$tier1"'
 TIER2_FLAG = '--tier2 "$tier2"'
+DEEP_ARGUMENT = '--deep "$answer"'
+DEEP_FINISH_MARKER = "cancel-in-progress: false"
+DEEP_SPEAKS_MARKER = 'forge_runs.py" speaks'
+DEEP_TRIGGER = "workflows: [ci, deep]"
+DEEP_DISPATCH = "workflow_dispatch:"
+DEEP_FLAG = "--deep"
+DEEP_MERGE_MARKERS = frozenset({DEEP_TRIGGER, DEEP_DISPATCH, DEEP_FLAG})
 KEPT_BRANCH = "base=$branch"
 RUN_VARIABLE = "RATCHET_RUN"
 RUN_UNEXPORTED = re.compile(rf"{RUN_VARIABLE}[ \t]*:=")
@@ -124,6 +131,9 @@ MERGE_SHAPE = (
         "leaves every merge to the owner while `ci` is red on the default branch (ADR 0069)",
     ),
     (KEPT_BRANCH, "keeps a merged branch while an open pull request targets it (ADR 0083)"),
+    (DEEP_TRIGGER, "runs the merge job when a deep run finishes as well as `ci` (ADR 0077)"),
+    (DEEP_DISPATCH, "lets the deep workflow wake the merge job when a deep run ends (ADR 0077)"),
+    (DEEP_FLAG, "reads every deep run and holds on a declared bound or red (ADR 0077)"),
     ("issues: write", "may close the issues a merged change says it closes"),
     ("closingIssuesReferences", "closes the issues a merged change says it closes"),
     ("contents: write", "may merge what the judge passes"),
@@ -140,7 +150,14 @@ WEEKLY_SHAPE = (
 JOB_LIST_SHAPE = ("ci_jobs.py", "turns the justfile's job list into the jobs tier 1 runs")
 TIER_STEP_SHAPE = {
     "ci.yml": (JOB_LIST_SHAPE,),
-    "deep.yml": (("just --evaluate", "turns the justfile's tier lists into the jobs a tier runs"),),
+    "deep.yml": (
+        ("just --evaluate", "turns the justfile's tier lists into the jobs a tier runs"),
+        (DEEP_FINISH_MARKER, "lets a deep run that started finish instead of cancelling it"),
+        (
+            DEEP_SPEAKS_MARKER,
+            "says which default-branch merges each deep run speaks for and wakes the merge job",
+        ),
+    ),
 }
 OLD_SHAPE_STEP = (
     "      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4",
@@ -182,6 +199,10 @@ EXEMPT_STEPS = (
     (
         "already_proven.py",
         "skips default-branch push CI when a pull request run already settled tree and base",
+    ),
+    (
+        "actions: write",
+        "the deep workflow dispatches the merge workflow when it finishes",
     ),
 )
 DOOR_MEANINGS = {
@@ -2263,6 +2284,9 @@ def forge_workflow(
             step = f"replace the step that deletes the merged branch with the one in {template}"
             fix = Edit(does, with_kept_branch(name), Agent())
             yield Finding(path, f"{problem}; {step}", fix, identity=problem)
+        elif name == MERGE_WORKFLOW and marker in DEEP_MERGE_MARKERS:
+            does = "read every deep run and wake on deep runs, as the template does"
+            yield Finding(path, problem, Edit(does, with_deep_merge(name), Agent()))
         else:
             yield agent(f"{path}: {problem}")
 
@@ -2274,16 +2298,154 @@ def with_tier1(name: str) -> gatelib.Want:
     def want(current: str | None) -> str:
         text = current or ""
         lines = text.split("\n")
-        at = next((i for i, line in enumerate(lines) if line.lstrip().startswith("tier2=")), None)
-        call = next(
-            (i for i, line in enumerate(lines) if "--target" in line and TIER2_FLAG in line), None
+        at = next(
+            (i for i, line in enumerate(lines) if line.lstrip().startswith(("tier2=", "answer="))),
+            None,
         )
-        if read_line is None or TIER1_FLAG in text or at is None or call is None:
+        deep_flag = next((flag for flag in (TIER2_FLAG, DEEP_ARGUMENT) if flag in text), None)
+        call = (
+            None
+            if deep_flag is None
+            else next(
+                (i for i, line in enumerate(lines) if "--target" in line and deep_flag in line),
+                None,
+            )
+        )
+        if (
+            read_line is None
+            or TIER1_FLAG in text
+            or at is None
+            or call is None
+            or deep_flag is None
+        ):
             return text
-        lines[call] = lines[call].replace(TIER2_FLAG, f"{TIER1_ARGUMENT} {TIER2_FLAG}", 1)
+        lines[call] = lines[call].replace(deep_flag, f"{TIER1_ARGUMENT} {deep_flag}", 1)
         anchor = lines[at]
         lines[at:at] = [anchor[: len(anchor) - len(anchor.lstrip())] + read_line.lstrip()]
         return "\n".join(lines)
+
+    return want
+
+
+@functools.cache
+def with_deep_merge(name: str) -> gatelib.Want:
+    template = template_file(f".github/workflows/{name}")
+    hunks = (
+        (
+            "on:\n  workflow_run:\n    workflows: [ci]\n    types: [completed]",
+            template[template.index("on:\n") : template.index("\npermissions:\n")],
+        ),
+        (
+            (
+                "    if: >-\n"
+                "      github.event.workflow_run.event == 'pull_request'\n"
+                "      && github.event.workflow_run.conclusion == 'success'\n"
+                "      && github.event.workflow_run.path == '.github/workflows/ci.yml'\n"
+                "      && github.event.workflow_run.head_repository.full_name == github.repository"
+            ),
+            template[template.index("    if: >-\n") : template.index("\n    runs-on:")],
+        ),
+        (
+            (
+                '          tier2="$(runs deep.yml -f "branch=$DEFAULT_BRANCH" -f status=completed'
+                ' | counted deep --tip "origin/$DEFAULT_BRANCH")"'
+            ),
+            template[
+                template.index('          answer="$RUNNER_TEMP/deep.json"\n') : template.index(
+                    "\n          gh pr list"
+                )
+            ],
+        ),
+        (
+            (
+                "            verdict=owner\n"
+                '            if python3 "$RATCHET_PLUGIN/scripts/merge_ready.py"'
+                ' --base "origin/$DEFAULT_BRANCH" --head "$sha" \\\n'
+                '              --target "$target" --current --tier1 "$tier1" --tier2 "$tier2"'
+                ' --report "$report"; then verdict=agent; fi\n'
+                '            if [ ! -s "$report" ]; then'
+                ' echo "#$number: the judge wrote no report";'
+                " failed=1; continue; fi\n"
+                '            comment "$number" "$report"\n'
+                '            echo "#$number: merge: $verdict"'
+            ),
+            template[
+                template.index(
+                    '            judged="$RUNNER_TEMP/judged-$number.txt"\n'
+                ) : template.index('\n            if [ "$verdict" = agent ]; then')
+            ],
+        ),
+        (
+            (
+                '          if [ "$merged" = 1 ]; then'
+                ' gh workflow run deep.yml --ref "$DEFAULT_BRANCH"; fi'
+            ),
+            template[
+                template.index('          if [ "$merged" = 1 ]; then') : template.index(
+                    '\n          exit "$failed"'
+                )
+            ],
+        ),
+    )
+
+    def want(current: str | None) -> str:
+        text = current or ""
+        eol = "\r\n" if "\r\n" in text else "\n"
+        body = text.replace("\r\n", "\n")
+        changed = False
+        for old, new in hunks:
+            if body.count(new) == 1:
+                continue
+            if body.count(old) != 1:
+                return text
+            body = body.replace(old, new, 1)
+            changed = True
+        return body.replace("\n", eol) if changed else text
+
+    return want
+
+
+@functools.cache
+def with_deep_finish() -> gatelib.Want:
+    def want(current: str | None) -> str:
+        text = current or ""
+        eol = "\r\n" if "\r\n" in text else "\n"
+        lines = text.replace("\r\n", "\n").split("\n")
+        if lines.count("  cancel-in-progress: true") != 1:
+            return text
+        at = lines.index("  cancel-in-progress: true")
+        above = len(("concurrency:", "  group:"))
+        if at < above or lines[at - above] != "concurrency:":
+            return text
+        lines[at] = "  cancel-in-progress: false"
+        return eol.join(lines)
+
+    return want
+
+
+@functools.cache
+def with_deep_speaks(name: str) -> gatelib.Want:
+    template = template_file(f".github/workflows/{name}")
+    job = template[template.index("\n  speaks:\n") + 1 :].rstrip("\n")
+
+    def want(current: str | None) -> str:
+        text = current or ""
+        eol = "\r\n" if "\r\n" in text else "\n"
+        lines = text.replace("\r\n", "\n").split("\n")
+        if "jobs:" not in lines:
+            return text
+        heads = job_heads(lines)
+        if set(heads.values()) != {"shape", "tier2", "tier2-long"}:
+            return text
+        after_jobs = lines.index("jobs:") + 1
+        if any(line[:1] not in ("", " ", "#") for line in lines[after_jobs:]):
+            return text
+        refs = plugin_pin.refs(text)
+        if len(refs) != 1:
+            return text
+        added = job.replace(PLUGIN_CHECKOUT_PLACEHOLDER, next(iter(refs)))
+        body = "\n".join(lines).rstrip("\n") + "\n" + added
+        return (body + ("\n" if text.endswith(("\n", "\r\n")) else "")).replace("\n", eol)
 
     return want
 
@@ -2313,7 +2475,16 @@ def tier_step_findings(root: Path, path: Path, content: str) -> Iterable[Finding
         problem = f"nothing {meaning} ('{marker}' absent)"
         if marker in content:
             continue
-        if marker != JOB_LIST_SHAPE[0]:
+        if marker == DEEP_FINISH_MARKER:
+            does = "let a deep run that started finish, as the template does"
+            yield Finding(name, problem, Edit(does, with_deep_finish(), Agent()))
+        elif marker == DEEP_SPEAKS_MARKER:
+            does = (
+                "add the job that reports which merges each deep run speaks for,"
+                " as the template does"
+            )
+            yield Finding(name, problem, Edit(does, with_deep_speaks(path.name), Agent()))
+        elif marker != JOB_LIST_SHAPE[0]:
             yield agent(f"{name}: {problem}")
         elif ci_jobs.JOBS not in content:
             justfile = read_justfile(root) or ""

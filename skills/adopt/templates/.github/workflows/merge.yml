@@ -1,8 +1,9 @@
 name: merge
 on:
   workflow_run:
-    workflows: [ci]
+    workflows: [ci, deep]
     types: [completed]
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
@@ -13,10 +14,13 @@ env:
 jobs:
   merge:
     if: >-
-      github.event.workflow_run.event == 'pull_request'
+      github.event_name == 'workflow_dispatch'
+      || (github.event.workflow_run.head_repository.full_name == github.repository
+      && ((github.event.workflow_run.event == 'pull_request'
       && github.event.workflow_run.conclusion == 'success'
-      && github.event.workflow_run.path == '.github/workflows/ci.yml'
-      && github.event.workflow_run.head_repository.full_name == github.repository
+      && github.event.workflow_run.path == '.github/workflows/ci.yml')
+      || (github.event.workflow_run.path == '.github/workflows/deep.yml'
+      && github.event.workflow_run.head_branch == github.event.repository.default_branch)))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -48,7 +52,24 @@ jobs:
           }
           fetch
           tier1="$(runs ci.yml -f "branch=$DEFAULT_BRANCH" -f event=push -f status=completed | counted tier1 --tip "origin/$DEFAULT_BRANCH")"
-          tier2="$(runs deep.yml -f "branch=$DEFAULT_BRANCH" -f status=completed | counted deep --tip "origin/$DEFAULT_BRANCH")"
+          answer="$RUNNER_TEMP/deep.json"
+          need="$(runs deep.yml -f "branch=$DEFAULT_BRANCH" | counted deep --tip "origin/$DEFAULT_BRANCH" --answer "$answer")"
+          if [ "$need" = start ]; then
+            if ! err="$(gh workflow run deep.yml --ref "$DEFAULT_BRANCH" 2>&1)"; then
+              echo "::warning::deep.yml could not be dispatched: $err"
+              RATCHET_DISPATCH_ERR="$err" python3 - "$answer" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          p = Path(sys.argv[1])
+          d = json.loads(p.read_text(encoding="utf-8"))
+          raw = os.fsencode(os.environ.get("RATCHET_DISPATCH_ERR", "")).decode("utf-8", "replace")
+          first = next((line.strip() for line in raw.splitlines() if line.strip()), "unknown error")
+          clean = "".join(ch if ch.isprintable() else " " for ch in first)[:200]
+          d["start"] = f"starting a deep run failed ({clean})"
+          p.write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
+          PY
+            fi
+          fi
           gh pr list --state open --limit 100 --json number,headRefOid,headRefName,baseRefName,isCrossRepository \
             --jq '.[] | select(.isCrossRepository | not) | "\(.number) \(.headRefOid) \(.headRefName) \(.baseRefName)"' > "$RUNNER_TEMP/open.txt"
           failed=0; merged=0
@@ -65,10 +86,18 @@ jobs:
             fi
             fetch "$sha"
             report="$RUNNER_TEMP/merge-$number.md"
-            verdict=owner
-            if python3 "$RATCHET_PLUGIN/scripts/merge_ready.py" --base "origin/$DEFAULT_BRANCH" --head "$sha" \
-              --target "$target" --current --tier1 "$tier1" --tier2 "$tier2" --report "$report"; then verdict=agent; fi
+            judged="$RUNNER_TEMP/judged-$number.txt"
+            code=0
+            python3 "$RATCHET_PLUGIN/scripts/merge_ready.py" --base "origin/$DEFAULT_BRANCH" --head "$sha" \
+              --target "$target" --current --tier1 "$tier1" --deep "$answer" --report "$report" > "$judged" || code=$?
+            cat "$judged"
             if [ ! -s "$report" ]; then echo "#$number: the judge wrote no report"; failed=1; continue; fi
+            first="$(head -n 1 "$judged")"
+            case "$code:$first" in
+              "0:merge: agent") verdict=agent ;;
+              "1:merge: owner"|"1:merge: wait") verdict="${first#merge: }" ;;
+              *) echo "#$number: the judge failed ($code): $first"; failed=1; continue ;;
+            esac
             comment "$number" "$report"
             echo "#$number: merge: $verdict"
             if [ "$verdict" = agent ]; then
@@ -101,5 +130,5 @@ jobs:
               fi
             fi
           done < "$RUNNER_TEMP/open.txt"
-          if [ "$merged" = 1 ]; then gh workflow run deep.yml --ref "$DEFAULT_BRANCH"; fi
+          if [ "$merged" = 1 ]; then gh workflow run deep.yml --ref "$DEFAULT_BRANCH" || echo "::warning::deep.yml could not be dispatched"; fi
           exit "$failed"
