@@ -186,8 +186,8 @@ RUNNER = '"$RATCHET_PLUGIN_DIR/scripts/parallel.py" --runner'
         ("tier0-staged", ["tier0_staged_gates"], ""),
         ("tier1", ["tier1_gates"], ""),
         ("tier2", ["tier2_gates"], ""),
-        ("check", ["tier0_gates", "tier1_gates"], ""),
-        ("check-fast", ["tier0_gates", "tier1_gates"], "--fail-fast"),
+        ("check", ["tier0_gates", "tier1_gates"], "--budget loop"),
+        ("check-fast", ["tier0_gates", "tier1_gates"], "--budget loop --fail-fast"),
         ("check-deep", ["tier0_gates", "tier1_gates", "tier2_gates"], ""),
     ],
 )
@@ -199,7 +199,8 @@ def test_every_tier_runs_its_gates_at_once_through_the_runner(
     said = runner + gates
     assert PIN_CALL.search(pin), "the pin is judged before any gate"
     assert runner
-    assert ("--fail-fast" in said) is bool(flag)
+    assert ("--fail-fast" in said) is ("--fail-fast" in flag)
+    assert ("--budget loop" in said) is ("--budget loop" in flag)
     assert "--report .ratchet/timing.jsonl" in said
     assert said.endswith(" -- " + " ".join(gate for item in lists for gate in gate_list(item)))
 

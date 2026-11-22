@@ -812,3 +812,39 @@ def test_a_justfile_with_no_run_id_and_no_plugin_line_is_left_for_an_agent_to_ex
     [found] = [f for f in conformance.findings(repo) if "RATCHET_RUN" in f.problem]
     renamed = text(repo, JUSTFILE).replace("ratchet_plugin :=", "ratchet_plugin  :=")
     assert found.fix.want(renamed) == renamed
+
+
+def test_a_justfile_check_and_check_fast_in_the_previous_form_gain_budget_loop(
+    repo: Path,
+) -> None:
+    before = text(repo, JUSTFILE)
+    replace(JUSTFILE, " --budget loop", "")(repo)
+    found = conformance.findings(repo)
+    assert [(f.path, type(f.fix)) for f in found] == [
+        (JUSTFILE, conformance.Auto),
+        (JUSTFILE, conformance.Auto),
+    ]
+    assert settle(repo) == []
+    assert text(repo, JUSTFILE) == before
+    assert conformance.with_loop_budget("check")(None) == ""
+    assert conformance.with_loop_budget("check")("other:\n    true\n") == "other:\n    true\n"
+    assert conformance.with_loop_budget("nonexistent")("check:\n    true\n") == "check:\n    true\n"
+
+
+def test_a_hand_edited_justfile_check_without_budget_loop_is_left_for_an_agent(
+    repo: Path,
+) -> None:
+    replace(
+        JUSTFILE, "{{parallel}} --budget loop {{serial0}}", "{{parallel}} --jobs 2 {{serial0}}"
+    )(repo)
+    written = text(repo, JUSTFILE)
+    [found] = settle(repo)
+    assert found.path == JUSTFILE
+    assert "--budget loop" in found.problem
+    assert isinstance(found.fix, conformance.Agent)
+    assert text(repo, JUSTFILE) == written
+
+
+def test_a_missing_loop_budget_ceiling_is_not_a_conformance_finding(repo: Path) -> None:
+    assert "[ceilings.loop]" not in text(repo, THRESHOLDS)
+    assert conformance.findings(repo) == []
