@@ -1,5 +1,8 @@
+import contextlib
 import json
+import os
 import re
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -276,6 +279,73 @@ def test_parse_requires_the_separator_and_a_command() -> None:
     with pytest.raises(SystemExit):
         budget.parse(["budget", "tier0"])
     assert budget.main(["budget", "tier0", "--"]) == 2
+
+
+def test_budget_records_machine_and_keeps_exit3_beside_detached_work(tmp_path: Path) -> None:
+    detached = tmp_path / "detached.pid"
+    script = (
+        "import os, pathlib, sys, time\n"
+        "if os.fork() == 0:\n"
+        "    os.setsid()\n"
+        "    pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))\n"
+        "    time.sleep(0.2)\n"
+        "    os._exit(0)\n"
+        "time.sleep(0.05)\n"
+        "sys.exit(3)\n"
+    )
+    argv = [
+        "budget",
+        "lint",
+        "--root",
+        str(tmp_path),
+        "--report",
+        "t.jsonl",
+        "--",
+        sys.executable,
+        "-c",
+        script,
+        str(detached),
+    ]
+    try:
+        assert budget.main(argv) == 3
+        [record] = [json.loads(line) for line in (tmp_path / "t.jsonl").read_text().splitlines()]
+        assert (record["exit"], record["status"]) == (3, "failed")
+        assert {"cores", "load", "k", "share", "m", "machine_read"} <= set(record)
+        assert isinstance(record["machine_read"], bool)
+    finally:
+        if detached.is_file():
+            with contextlib.suppress(ProcessLookupError, ValueError):
+                os.kill(int(detached.read_text()), 9)
+
+
+def test_budget_timed_direct_and_interrupt_handling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seconds, code = budget.timed([sys.executable, "-c", "pass"], tmp_path)
+    assert seconds >= 0.0
+    assert code == 0
+
+    monkeypatch.setattr(budget, "timed", lambda _command, _cwd: (0.1, 0))
+    argv = ["budget", "lint", "--root", str(tmp_path), "--report", "m.jsonl", "--", "x"]
+    assert budget.main(argv) == 0
+    [mocked] = [json.loads(line) for line in (tmp_path / "m.jsonl").read_text().splitlines()]
+    assert mocked["machine_read"] is False
+
+    monkeypatch.undo()
+    orig_popen = subprocess.Popen
+
+    class InterruptedPopen(orig_popen):
+        raised = False
+
+        def wait(self, timeout: float | None = None) -> int:
+            if not self.raised:
+                self.raised = True
+                raise KeyboardInterrupt
+            return super().wait(timeout)
+
+    monkeypatch.setattr(subprocess, "Popen", InterruptedPopen)
+    with pytest.raises(KeyboardInterrupt):
+        budget.timed([sys.executable, "-c", "import time; time.sleep(30)"], tmp_path)
 
 
 def test_codex_hooks_merge_once_and_keep_what_is_there() -> None:

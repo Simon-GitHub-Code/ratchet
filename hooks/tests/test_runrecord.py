@@ -112,6 +112,8 @@ def test_a_budget_line_holds_the_three_fields_and_keeps_its_own(
     [record] = lines(work / ".ratchet/t.jsonl")
     assert record["key"] == "lint"
     assert {"seconds", "ceiling", "status", "exit"} <= set(record)
+    assert {"cores", "load", "k", "share", "m", "machine_read"} <= set(record)
+    assert isinstance(record["machine_read"], bool)
     assert AT.fullmatch(str(record["at"]))
     assert (record["run"], record["tree"]) == ("run-2", tree)
 
@@ -127,8 +129,12 @@ def test_a_gate_line_and_the_tiers_line_hold_the_three_fields(
     )
     gate, tier = lines(record)[:2]
     assert gate["key"] == PASS
+    assert {"lane", "start", "cpu", "alone"} <= set(gate)
+    assert gate["alone"] is True
     assert tier["kind"] == runrecord.TIER
     assert (tier["status"], tier["exit"], tier["gates"]) == ("green", 0, [PASS])
+    assert {"cores", "load", "k", "share", "m", "machine_read"} <= set(tier)
+    assert isinstance(tier["machine_read"], bool)
     assert isinstance(tier["seconds"], float)
     assert isinstance(gate["seconds"], float)
     assert tier["seconds"] >= gate["seconds"]
