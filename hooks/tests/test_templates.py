@@ -11,6 +11,7 @@ import subprocess
 import sys
 import textwrap
 import tomllib
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -1319,3 +1320,124 @@ def test_a_comment_planted_in_a_template_is_found_and_a_pin_note_is_not() -> Non
     lines = len(JUSTFILE.splitlines())
     assert prose_comment_lines(planted) == [lines + 1, lines + 3]
     assert prose_comment_lines("#!/bin/sh\n" + pinned) == []
+
+
+PROVEN_STEP = re.compile(
+    r"  proven:\n[\s\S]*?      - id: check\n"
+    r"(?:        env:\n(?:          .*\n)+)?        run: \|\n((?:          .*\n)+)"
+)
+FAKE_PROVEN_GH = """#!__PYTHON__ -S
+import json, os, pathlib, sys
+args = sys.argv[1:]
+mode = os.environ["GH_MODE"]
+if mode == "fail":
+    sys.exit(1)
+runs_q = (
+    f"repos/owner/repo/actions/workflows/ci.yml/runs"
+    f"?head_sha={os.environ['HEAD_SHA']}&event=pull_request&status=completed&per_page=100"
+)
+if args[:2] == ["api", runs_q]:
+    print(os.environ["RUNS_JSON"])
+elif args[:2] == ["api", "repos/owner/repo/actions/runs/101"]:
+    print(os.environ["RUN_JSON"])
+elif args[:3] == ["run", "download", "101"]:
+    target = pathlib.Path(args[args.index("--dir") + 1])
+    if "--name" in args and args[args.index("--name") + 1] == "proven":
+        (target / "proven.json").write_text(os.environ["PROVEN_JSON"], encoding="utf-8")
+    elif "--pattern" in args and args[args.index("--pattern") + 1] == "timing-*":
+        for name, content in json.loads(os.environ["TIMINGS_JSON"]).items():
+            sub = target / name
+            sub.mkdir(parents=True, exist_ok=True)
+            (sub / "timing.jsonl").write_text(content, encoding="utf-8")
+"""
+
+
+def test_ci_wires_already_proven_skip_with_least_privilege_actions_read() -> None:
+    ci = WORKFLOWS["ci.yml"]
+    assert "\npermissions:\n  contents: read\n" in ci
+    proven = ci.split("\n  proven:\n", 1)[1].split("\n  tier0:\n", 1)[0]
+    assert "if: github.event_name == 'push'" in proven
+    assert "actions: read" in proven
+    rest = ci.split("\n  tier0:\n", 1)[1]
+    assert "actions:" not in rest
+    for job_name, next_job in (("tier0", "shape"), ("shape", "tier1")):
+        job = ci.split(f"\n  {job_name}:\n", 1)[1].split(f"\n  {next_job}:\n", 1)[0]
+        assert "needs: proven" in job
+        assert "needs.proven.result == 'skipped' || needs.proven.outputs.skip != 'true'" in job
+    tier0 = ci.split("\n  tier0:\n", 1)[1].split("\n  shape:\n", 1)[0]
+    assert "already_proven.py" in tier0
+    assert "proven.json" in tier0
+    assert "name: proven" in tier0
+
+
+def test_the_proven_check_step_decides_skip_safely_end_to_end(tmp_path: Path) -> None:
+    step = PROVEN_STEP.search(WORKFLOWS["ci.yml"])
+    bash = shutil.which("bash")
+    assert step
+    assert bash
+    repo = tmp_path / "repo"
+    repos.repository(repo)
+    base_sha = repos.git(repo, "rev-parse", "HEAD")
+    repos.git(repo, "switch", "-q", "-c", "feat")
+    repos.write(repo, "app.txt", "ok\n")
+    head_sha = repos.commit(repo, "feat(app): change")
+    repos.git(repo, "switch", "-q", "main")
+    repos.git(repo, "merge", "--no-ff", "--no-commit", "feat")
+    repos.git(repo, "commit", "-q", "-m", "feat(app): merge")
+    tree_sha = repos.git(repo, "rev-parse", "HEAD^{tree}")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text(FAKE_PROVEN_GH.replace("__PYTHON__", sys.executable), encoding="utf-8")
+    gh.chmod(0o755)
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    run_obj = {
+        "id": 101,
+        "repository": {"full_name": "owner/repo"},
+        "path": ".github/workflows/ci.yml",
+        "event": "pull_request",
+        "status": "completed",
+        "conclusion": "success",
+        "head_sha": head_sha,
+        "created_at": now,
+        "pull_requests": [{"number": 1, "base": {"ref": "main"}}],
+    }
+    timings = {
+        "timing-tier0": json.dumps({"key": "tier0", "seconds": 1.0, "status": "green", "exit": 0})
+        + "\n"
+    }
+    proven_obj = {"schema": 1, "base": base_sha, "head": head_sha, "tree": tree_sha}
+
+    def run_step(*, attempt: str = "1", gh_mode: str = "ok") -> dict[str, str]:
+        output = tmp_path / f"output-{attempt}-{gh_mode}"
+        output.write_text("", encoding="utf-8")
+        done = subprocess.run(  # noqa: S603 # -- fixed argv; script is the template's own
+            [bash, "-e", "-c", textwrap.dedent(step.group(1))],
+            cwd=repo,
+            env={
+                **os.environ,
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "GITHUB_OUTPUT": str(output),
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_REF_NAME": "main",
+                "GITHUB_RUN_ATTEMPT": attempt,
+                "RATCHET_PLUGIN": str(PLUGIN_ROOT),
+                "HEAD_SHA": head_sha,
+                "GH_MODE": gh_mode,
+                "RUNS_JSON": json.dumps({"workflow_runs": [run_obj]}),
+                "RUN_JSON": json.dumps(run_obj),
+                "PROVEN_JSON": json.dumps(proven_obj),
+                "TIMINGS_JSON": json.dumps(timings),
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert done.returncode == 0, done.stderr
+        lines = output.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        return dict(line.split("=", 1) for line in lines)
+
+    assert run_step()["skip"] == "true"
+    assert run_step(attempt="2")["skip"] == "false"
+    assert run_step(gh_mode="fail")["skip"] == "false"
