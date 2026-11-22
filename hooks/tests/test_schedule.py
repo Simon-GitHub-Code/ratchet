@@ -127,6 +127,26 @@ def test_an_alone_gate_waits_for_the_lanes_to_empty_and_runs_after_the_rest() ->
     assert plan.take() is None
 
 
+def test_a_per_task_alone_predicate_runs_only_that_task_alone() -> None:
+    tasks = [("lint", "fast"), ("lint", "solo"), ("tests", "unit")]
+    plan = schedule.Board(
+        tasks,
+        schedule.Schedule(),
+        lambda task: task[0],
+        alone=lambda task: task[1] == "solo",
+    )
+    assert plan.pending == [("lint", "fast"), ("tests", "unit"), ("lint", "solo")]
+    assert plan.take() == ("lint", "fast")
+    assert plan.take() == ("tests", "unit")
+    assert plan.take() is None
+    assert plan.done(("lint", "fast")) == ("tests",)
+    assert plan.take() is None
+    assert plan.done(("tests", "unit")) == ("lint",)
+    assert plan.take() == ("lint", "solo")
+    assert plan.take() is None
+    assert plan.done(("lint", "solo")) == ()
+
+
 SPEED = (
     "# Binding\n\n## Speed\n\n- Parallel: every core\n"
     "- Apart: `e2e a11y` `coverage mutation-changed`\n"
