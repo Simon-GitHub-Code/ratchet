@@ -218,8 +218,8 @@ Each group says why its questions wait for that trigger and no later. A row's ap
 
 Some behaviour of the merge judge and the pipeline protects people other than the owner, so it starts when they exist. Guard paths, disputes and the ratchet hold from the first commit: they protect the method itself, and they cost nothing until something touches them.
 
-- New surface with no flag that is off goes to the owner only once the project is `deployed`. Before that, nobody meets the surface. ([guards.md](guards.md#the-merge-judge))
-- A one-way door goes to the owner only once the project is `deployed` or holds `irreplaceable-data`. Before that, nothing is lost by walking back through it.
+- New surface with no flag that is off goes to the owner once the project is `deployed`, and before `deployed` in an asked project except when the change's unique labelled ticket carries the owner's no and no open labelled ticket reads a yes (or the flag row is bound `none`). A ticket whose `Flag:` line is a yes holds its key in `flags.toml` from the first commit, even with no surface door. ([guards.md](guards.md#the-merge-judge))
+- A one-way door goes to the owner only once the project is `deployed` or holds `irreplaceable-data`, save the flag registry (`flags.toml`), whose doors hold from the first commit in an asked project whose flag row is not bound `none`. Before then, nothing is lost by walking back through a manifest door.
 - The pipeline's critic and its fix loop run only once the project is `depended-on`. Before that, a ticket is built by spec, the ticket check, implement and review, and a finding the review opens is still open. ([pipeline.md](pipeline.md))
 
 ### How each concern splits across the tiers

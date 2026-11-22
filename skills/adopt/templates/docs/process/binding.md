@@ -307,7 +307,7 @@ What the change-size gate reads to count tests apart from product code (ADR 0045
 
 ## Feature flags
 
-<The registry is `flags.toml`. Name the one module through which a flag is read (a feature-flag library behind it, if the stack has one), the override it honours so the `flag-states` gate can force a flag off and on and the gates that request routes can boot with every flag due for removal on (an environment variable that lists the flags to force), and who may turn a flag on in production. New behaviour ships behind a flag that defaults to off; a spec that ships none says why.>
+<The registry is `flags.toml`. Name the one module through which a flag is read (a feature-flag library behind it, if the stack has one), the override it honours so the `flag-states` gate can force a flag off and on and the gates that request routes can boot with every flag due for removal on (an environment variable that lists the flags to force), and who may turn a flag on in production. Once the project is `deployed`, new behaviour ships behind a flag that defaults to off; before then, follow what the owner answered for each behaviour on its ticket or spec. A spec that ships no flag says why.>
 
 ## Speed
 
