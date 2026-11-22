@@ -6,14 +6,22 @@ from tests.servers import gone, pid_of
 
 CONFTEST = Path(__file__).resolve().parents[2] / "conftest.py"
 SLEEPER = '[sys.executable, "-c", "import time; time.sleep(60)", "{name}"]'
+DAEMON = (
+    '[sys.executable, "-c", '
+    "\"import pathlib; pathlib.Path('daemon.ready').touch(); import time; time.sleep(60)\", "
+    '"{name}"]'
+)
 PLANTED = f"""
-import subprocess, sys
+import pathlib, subprocess, sys, time
 
 def test_forgets_a_sleeper(spawn):
     subprocess.Popen({SLEEPER.format(name="forgotten-sleeper")})
 
 def test_forgets_a_daemon(spawn):
-    subprocess.run(["sh", "-c", 'setsid "$0" "$@" &', *{SLEEPER.format(name="forgotten-daemon")}])
+    subprocess.run(["sh", "-c", 'setsid "$0" "$@" &', *{DAEMON.format(name="forgotten-daemon")}])
+    deadline = time.monotonic() + 10
+    while not pathlib.Path("daemon.ready").exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
 
 def test_ends_the_sleeper_it_starts(spawn):
     sleeper = subprocess.Popen({SLEEPER.format(name="ended-sleeper")})
