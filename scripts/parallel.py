@@ -2,7 +2,8 @@
 """The parallel runner: run a tier's gates at once, keep each one's output whole, name every red.
 
 A tier is a set of independent gates, so its local wall clock should be the slowest gate, not
-the sum. CI already runs one job per gate; this gives a developer's machine the same shape. It
+the sum. CI runs a tier's jobs at once and each group job through this runner; this gives a
+developer's machine the same shape. It
 knows nothing about the stack: each gate is an entry point of the repository's command runner
 (a ``just`` recipe, a ``make`` target, a package script), and the runner's command prefix is
 yours to give. Python 3.11 standard library only, Linux and macOS.
@@ -154,6 +155,13 @@ def tools(root: Path) -> frozenset[str]:
     )
 
 
+def standing_of(output: str, *, tool: bool) -> Standing:
+    waiting = WAITING.fullmatch(output.strip())
+    if waiting is None or (waiting["standing"] == "none" and tool):
+        return Standing.GREEN
+    return Standing[waiting["standing"].upper()]
+
+
 @dataclass(frozen=True, slots=True)
 class Finished:
     name: str
@@ -168,12 +176,7 @@ class Finished:
 
     @property
     def standing(self) -> Standing:
-        if not self.green:
-            return Standing.RED
-        waiting = WAITING.fullmatch(self.output.strip())
-        if waiting is None or (waiting["standing"] == "none" and self.tool):
-            return Standing.GREEN
-        return Standing[waiting["standing"].upper()]
+        return standing_of(self.output, tool=self.tool) if self.green else Standing.RED
 
     def line(self) -> str:
         match self.standing:

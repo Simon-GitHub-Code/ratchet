@@ -12,7 +12,7 @@ The templates are the `just` and GitHub examples. Step 7 of the adopt skill send
 ## A forge other than GitHub
 
 1. Move the pull request template to the path the forge reads and name it on the Forge section's template line.
-2. Replace `.github/workflows/` with the forge's CI, running the same entry points in the same shape: tier 0 first, one job per gate, the long gates as one job per shard of the count the binding's `- Shards:` line holds, superseded runs cancelled, caches keyed on the lockfiles.
+2. Replace `.github/workflows/` with the forge's CI, running the same entry points in the same shape: tier 0 and tier 1 at once, tier 1 as the jobs the job list names with every gate in exactly one of them, the long gates as one job per shard of the count the binding's `- Shards:` line holds, superseded runs cancelled, caches keyed on the lockfiles.
 3. Schedule `weekly` there once a week, and have a red run open or update one issue.
 4. Put those paths in the manifest's `ci` group.
 5. The `merge` workflow has no counterpart in another forge's templates.

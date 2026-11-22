@@ -219,7 +219,9 @@ def test_a_later_tier_suite_with_nothing_set_up_in_the_job_that_runs_it_is_red(
         (
             f"{CI}: a suite of the suites table has its gate in a later tier, and no step of the"
             " job that runs `tests-changed` sets up what it needs; add the steps under"
-            " `if: matrix.gate == 'tests-changed'`, as `deep.yml` sets up the whole suite"
+            " `if: matrix.gate == 'tests-changed'`, as `deep.yml` sets up the whole suite, and"
+            " give `tests-changed` a job of its own in the justfile's `tier1_jobs`, since a job of"
+            " several gates skips a step set up for one"
         )
     ]
     replace(
@@ -228,6 +230,11 @@ def test_a_later_tier_suite_with_nothing_set_up_in_the_job_that_runs_it_is_red(
         "      - if: matrix.gate == 'tests-changed'\n        run: ./scripts/install-browsers\n"
         + BUDGET,
     )(repo)
+    [grouped] = red(repo)
+    assert grouped.startswith("justfile: `tests-changed` runs in the group `rest`, but the")
+    replace("justfile", 'tier1_jobs := "bite rest"', 'tier1_jobs := "bite tests-changed rest"')(
+        repo
+    )
     assert red(repo) == []
 
 

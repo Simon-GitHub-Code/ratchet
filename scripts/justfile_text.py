@@ -409,6 +409,11 @@ def with_first_line(recipe: str, line: str) -> Want:
 VARIABLE = re.compile(r"^(?:export[ \t]+)?([A-Za-z_][\w-]*)[ \t]*:=[ \t]*(.*)$", re.MULTILINE)
 STRING = re.compile(r"\"([^\"]*)\"|'([^']*)'")
 QUOTED = re.compile(r'"([^"]*)"')
+TERM = re.compile(
+    r"""[ \t]*(?:"(?P<double>[^"\\]*)"|'(?P<single>[^']*)'|(?P<name>[A-Za-z_][\w-]*))[ \t]*"""
+)
+END = re.compile(r"(?:#.*)?")
+ECHO = re.compile(r'@echo "([^"\\]*)"')
 
 
 @functools.lru_cache(maxsize=256)
@@ -427,6 +432,49 @@ def listed(justfile: str, name: str, seen: frozenset[str] = frozenset()) -> set[
     for built in BARE_NAME.findall(STRING.sub(" ", value)):
         found |= listed(justfile, built, seen | {name})
     return found
+
+
+def exact(justfile: str, name: str, seen: frozenset[str] = frozenset()) -> str | None:
+    value = variables(justfile).get(name)
+    if value is None or name in seen:
+        return None
+    parts: list[str] = []
+    at = 0
+    while term := TERM.match(value, at):
+        part = term["double"] if term["double"] is not None else term["single"]
+        if term["name"]:
+            part = exact(justfile, term["name"], seen | {name})
+        if part is None:
+            return None
+        parts.append(part)
+        at = term.end()
+        if END.fullmatch(value, at):
+            return "".join(parts)
+        if value[at] != "+":
+            return None
+        at += 1
+    return None
+
+
+def ordered(justfile: str, name: str) -> tuple[str, ...] | None:
+    value = exact(justfile, name)
+    return None if value is None else tuple(dict.fromkeys(value.split()))
+
+
+def echoed(justfile: str, recipe: str) -> str | None:
+    lines = justfile.split("\n")
+    block = next((b for b in blocks(lines) if b.name == recipe), None)
+    head = block.parsed if block else None
+    if block is None or head is None or head.params or head.before or head.after:
+        return None
+    body = [line.strip() for line in uncommented(lines[block.head + 1 : block.end]) if line.strip()]
+    said = ECHO.fullmatch(body[0]) if len(body) == 1 else None
+    return said[1] if said else None
+
+
+def plain(justfile: str, name: str) -> bool:
+    value = variables(justfile).get(name)
+    return value is not None and QUOTED.fullmatch(value.strip()) is not None
 
 
 def reaches(justfile: str, recipe: str) -> set[str]:
@@ -496,14 +544,21 @@ def with_dependency(recipe: str, name: str) -> Want:
 
 
 def with_listed(name: str, word: str) -> Want:
+    return with_words(name, lambda words: words if word in words else [*words, word])
+
+
+def with_words(name: str, change: Callable[[list[str]], list[str]]) -> Want:
     def want(current: str | None) -> str:
         text = current or ""
         match = next((m for m in VARIABLE.finditer(text) if m.group(1) == name), None)
         quoted = QUOTED.fullmatch(match.group(2).strip()) if match else None
-        if match is None or quoted is None or word in quoted.group(1).split():
+        if match is None or quoted is None:
             return text
-        listed = f"{quoted.group(1)} {word}".strip()
-        return f'{text[: match.start(2)]}"{listed}"{text[match.end(2) :]}'
+        words = quoted.group(1).split()
+        changed = change(words)
+        if changed == words:
+            return text
+        return f'{text[: match.start(2)]}"{" ".join(changed)}"{text[match.end(2) :]}'
 
     return want
 

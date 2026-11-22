@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import difflib
 import functools
 import json
 import os
@@ -22,6 +23,7 @@ import architecture
 import budget
 import change_size
 import changed_tests
+import ci_jobs
 import comments
 import documents
 import formal_model
@@ -56,6 +58,7 @@ ENTRY_POINTS = (
     "hooks-install",
     "tier1",
     "tier2",
+    "ci-job",
     "check",
     "check-fast",
     "check-deep",
@@ -97,6 +100,7 @@ TIER_LISTS = {
     "ci.yml": (
         ("tier1_gates", "every gate your `tier1` recipe runs"),
         ("tier1_sharded", 'the gates of tier 1 whose tool can run one `SHARD` of `SHARDS`, or ""'),
+        ("tier1_jobs", "the jobs CI runs tier 1 as, with `rest` for every gate no other job names"),
     ),
     "deep.yml": (
         ("tier2_gates", "every gate your `tier2` recipe runs"),
@@ -132,9 +136,39 @@ WEEKLY_SHAPE = (
     ("just weekly", "runs the weekly gates"),
     ("gh issue create", "opens the issue a finding gets"),
 )
-TIER_STEP_SHAPE = (
-    ("just --evaluate", "turns the justfile's tier lists into the jobs a tier runs"),
+JOB_LIST_SHAPE = ("ci_jobs.py", "turns the justfile's job list into the jobs tier 1 runs")
+TIER_STEP_SHAPE = {
+    "ci.yml": (JOB_LIST_SHAPE,),
+    "deep.yml": (("just --evaluate", "turns the justfile's tier lists into the jobs a tier runs"),),
+}
+OLD_SHAPE_STEP = (
+    "      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4",
+    "      - id: shards",
+    "        run: |",
+    (
+        "          count=\"$(sed -n 's/^- Shards: *\\([1-9][0-9]*\\) *$/\\1/p'"
+        ' docs/process/binding.md)"'
+    ),
+    (
+        '          if [ -z "$count" ]; then echo "docs/process/binding.md:'
+        " no '- Shards: N' line\"; exit 1; fi"
+    ),
+    '          echo "count=$count" >> "$GITHUB_OUTPUT"',
+    '          echo "list=[$(seq -s, 1 "$count")]" >> "$GITHUB_OUTPUT"',
+    (
+        '          json() { out=""; for item in $1; do out="$out,\\"$item\\"";'
+        ' done; echo "[${out#,}]"; }'
+    ),
+    '          long="$(just --evaluate tier1_sharded)"; short=""',
+    "          for gate in $(just --evaluate tier1_gates); do",
+    '            case " $long " in *" $gate "*) ;; *) short="$short $gate" ;; esac',
+    "          done",
+    '          echo "tier1=$(json "$short")" >> "$GITHUB_OUTPUT"',
+    '          echo "tier1_long=$(json "$long")" >> "$GITHUB_OUTPUT"',
 )
+OLD_NEEDS = "    needs: [tier0, shape]"
+NEW_NEEDS = "    needs: shape"
+OLD_RUN, NEW_RUN = ' -- just "${{ matrix.gate }}"', ' -- just ci-job "${{ matrix.gate }}"'
 EXEMPT_STEPS = (
     (
         "contents: read",
@@ -1709,7 +1743,8 @@ def later_tier_setup(root: Path, binding: str, found: list[suites.Suite]) -> Ite
             f"{WORKFLOWS / 'ci.yml'}: a suite of the suites table has its gate in a later tier,"
             " and no step of the job that runs `tests-changed` sets up what it needs; add the"
             " steps under `if: matrix.gate == 'tests-changed'`, as `deep.yml` sets up the whole"
-            " suite"
+            f" suite, and give `tests-changed` a job of its own in the justfile's `{ci_jobs.JOBS}`,"
+            " since a job of several gates skips a step set up for one"
         )
 
 
@@ -2198,17 +2233,201 @@ def with_kept_branch(name: str) -> gatelib.Want:
 
 
 def tier_step_findings(root: Path, path: Path, content: str) -> Iterable[Finding]:
-    if path.name in TIER_WORKFLOWS:
-        for marker, meaning in TIER_STEP_SHAPE:
-            if marker not in content:
-                yield agent(f"{path.relative_to(root)}: nothing {meaning} ('{marker}' absent)")
+    for marker, meaning in TIER_STEP_SHAPE.get(path.name, ()):
+        name = str(path.relative_to(root))
+        problem = f"nothing {meaning} ('{marker}' absent)"
+        if marker in content:
+            continue
+        if marker != JOB_LIST_SHAPE[0]:
+            yield agent(f"{name}: {problem}")
+        elif ci_jobs.JOBS not in content:
+            justfile = read_justfile(root) or ""
+            yield regroup_finding(name, problem, content=content, justfile=justfile)
+
+
+def regroup_finding(name: str, problem: str, *, content: str, justfile: str) -> Finding:
+    shaped = regroup(content)
+    found = ci_jobs.lists(justfile)
+    if isinstance(shaped, Kept):
+        why = shaped.reason
+    elif not isinstance(found, ci_jobs.Lists) or ci_jobs.refused(found):
+        why = f"the justfile has no `{ci_jobs.JOBS}` the shape step would read as its own"
+    elif not justfile_text.defines_recipe(justfile, ci_jobs.RECIPE):
+        why = f"the justfile has no `{ci_jobs.RECIPE}` recipe to run each job by its name"
+    else:
+        does = f"run tier 1 as the jobs `{ci_jobs.JOBS}` names, as the template does"
+        start = (f"{name} takes the template's change:", *regroup_difference())
+        return Finding(name, problem, Edit(does, regrouped, Agent(start=start)))
+    lead = f"{name} is kept as it is, because {why}; the template's change, to make by hand:"
+    return Finding(name, problem, Agent(start=(lead, *regroup_difference())))
+
+
+Hunk = tuple[str, tuple[str, ...], tuple[str, ...]]
+JOB_HEAD = re.compile(r"^  ([A-Za-z_][\w-]*):\s*$")
+JOB_KEY = re.compile(r"^    ([A-Za-z_][\w-]*):")
+STEP_ID = re.compile(r"^ +(?:- )?id: ([\w-]+)\s*$")
+NEEDS_LINE = re.compile(r"^    needs: (.*)$")
+SHAPE_READS = ("needs.shape.outputs.", "matrix.gate")
+STEP_BODY = " " * 8
+WORD = re.compile(r"[\w-]+")
+
+
+@dataclass(frozen=True)
+class Kept:
+    reason: str
+
+
+@functools.cache
+def regroup_hunks() -> tuple[Hunk, ...]:
+    lines = template_file(".github/workflows/ci.yml").split("\n")
+    at = lines.index("      - id: shards")
+    end = next(i for i in range(at + 1, len(lines)) if not lines[i].startswith(STEP_BODY))
+    run = next(line for line in lines if line.endswith(NEW_RUN))
+    guard = next(line for line in lines if line.startswith("    if: needs.shape.outputs.tier1 "))
+    return (
+        ("the shape job's steps", OLD_SHAPE_STEP, tuple(lines[at - 2 : end])),
+        ("the `tier1:` line", ("  tier1:",), ("  tier1:", guard)),
+        ("the tier 1 jobs' `needs:` lines", (OLD_NEEDS,), (NEW_NEEDS,)),
+        ("the budget calls' run lines", (run.removesuffix(NEW_RUN) + OLD_RUN,), (run,)),
+    )
+
+
+@functools.cache
+def released() -> tuple[str, ...]:
+    old = template_file(".github/workflows/ci.yml").split("\n")
+    for _, before, after in reversed(regroup_hunks()):
+        for at in reversed(blocks_at(old, after)):
+            old[at : at + len(after)] = before
+    return tuple(old)
+
+
+def words_of(blocks: Iterable[str], pattern: re.Pattern[str]) -> set[str]:
+    return {word for line in blocks if (m := pattern.match(line)) for word in WORD.findall(m[1])}
+
+
+@functools.cache
+def changed_reads() -> tuple[str, ...]:
+    old = [line for _, before, _ in regroup_hunks() for line in before]
+    new = [line for _, _, after in regroup_hunks() for line in after]
+    gone = {
+        f"{kind}.{word}."
+        for kind, pattern in (("steps", STEP_ID), ("needs", JOB_HEAD), ("needs", NEEDS_LINE))
+        for word in words_of(old, pattern) - words_of(new, pattern)
+    }
+    return (*SHAPE_READS, *sorted(gone))
+
+
+def blocks_at(lines: Sequence[str], block: tuple[str, ...]) -> list[int]:
+    size = len(block)
+    return [at for at in range(len(lines) - size + 1) if tuple(lines[at : at + size]) == block]
+
+
+def job_heads(lines: Sequence[str]) -> dict[int, str]:
+    start = lines.index("jobs:") if "jobs:" in lines else 0
+    return {at: m[1] for at in range(start, len(lines)) if (m := JOB_HEAD.match(lines[at]))}
+
+
+def job_at(heads: dict[int, str], at: int) -> str:
+    return next((heads[head] for head in sorted(heads, reverse=True) if head <= at), "")
+
+
+def job_keys(lines: Sequence[str], heads: dict[int, str], job: str) -> list[str]:
+    head = next(at for at, name in heads.items() if name == job)
+    keys = []
+    for line in lines[head + 1 :]:
+        if line.strip() and not line.startswith("    ") and not line.lstrip().startswith("#"):
+            break
+        keys += [m[1] for m in [JOB_KEY.match(line)] if m]
+    return keys
+
+
+def checkout_line() -> re.Pattern[str]:
+    template = next(line for line in regroup_hunks()[0][2] if PLUGIN_CHECKOUT_PLACEHOLDER in line)
+    return re.compile(re.escape(template).replace(re.escape(PLUGIN_CHECKOUT_PLACEHOLDER), '[^"]*'))
+
+
+def regroup(text: str) -> str | Kept:
+    lines = text.replace("\r\n", "\n").split("\n")
+    checkout = checkout_line()
+    plugin = next((line for line in lines if checkout.fullmatch(line)), None)
+    if plugin is None:
+        return Kept("no line checks the plugin out as the template's does")
+    template = released()
+    placeholder = next(line for line in template if checkout.fullmatch(line))
+    own = [placeholder if checkout.fullmatch(line) else line for line in lines]
+    spans = replaced(own, template)
+    if isinstance(spans, Kept):
+        return spans
+    read = changed_read(own, template, spans)
+    if read is not None:
+        return read
+    for at, old, new, _ in sorted(spans, key=lambda span: span[0], reverse=True):
+        lines[at : at + len(old)] = [plugin if line == placeholder else line for line in new]
+    return "\n".join(lines)
+
+
+Span = tuple[int, tuple[str, ...], tuple[str, ...], str]
+
+
+def replaced(own: list[str], template: tuple[str, ...]) -> list[Span] | Kept:
+    heads, wrote = job_heads(own), job_heads(template)
+    spans: list[Span] = []
+    for what, old, new in regroup_hunks():
+        found = blocks_at(own, old)
+        placed = [job_at(heads, at) for at in found]
+        if placed != [job_at(wrote, at) for at in blocks_at(template, old)]:
+            return Kept(f"{what} are not as a released template wrote them")
+        after = [next((one for one in own[at + len(old) :] if one.strip()), "") for at in found]
+        if old[-1].startswith(STEP_BODY) and any(one.startswith(STEP_BODY) for one in after):
+            return Kept(f"a line the plugin did not write runs on from {what}")
+        spans += [(at, old, new, job) for at, job in zip(found, placed, strict=True)]
+    for job in dict.fromkeys(job for *_, job in spans):
+        lacks = set(job_keys(template, wrote, job))
+        extra = [key for key in job_keys(own, heads, job) if key not in lacks]
+        if extra:
+            return Kept(f"the job `{job}` has the key `{extra[0]}`, which the template's job lacks")
+    return spans
+
+
+def changed_read(own: list[str], template: tuple[str, ...], spans: list[Span]) -> Kept | None:
+    inside = {at + step for at, old, _, _ in spans for step in range(len(old))}
+    matched = difflib.SequenceMatcher(None, template, own, autojunk=False)
+    for tag, _, _, first, last in matched.get_opcodes():
+        for line in [own[at] for at in range(first, last) if tag != "equal" and at not in inside]:
+            read = next((read for read in changed_reads() if read in line), None)
+            if read is not None:
+                return Kept(
+                    f"the line `{line.strip()}`, which the plugin did not write, reads `{read}`,"
+                    " which the new shape changes"
+                )
+    return None
+
+
+def regrouped(current: str | None) -> str:
+    shaped = regroup(current or "")
+    return current or "" if isinstance(shaped, Kept) else shaped
+
+
+@functools.cache
+def regroup_difference() -> tuple[str, ...]:
+    new = template_file(".github/workflows/ci.yml").split("\n")
+    return tuple(
+        difflib.unified_diff(
+            list(released()),
+            new,
+            "the previous template's ci.yml",
+            "the template's ci.yml",
+            n=1,
+            lineterm="",
+        )
+    )
 
 
 def workflow_markers(name: str) -> tuple[str, ...]:
     shapes = {MERGE_WORKFLOW: MERGE_SHAPE, WEEKLY_WORKFLOW: WEEKLY_SHAPE}
     held = [*(() if name == MERGE_WORKFLOW else CI_SHAPE), *shapes.get(name, ())]
     if name in TIER_WORKFLOWS:
-        held += [*TIER_STEP_SHAPE, *((m, w) for n, m, w in CEILING_SHAPE if n == name)]
+        held += [*TIER_STEP_SHAPE[name], *((m, w) for n, m, w in CEILING_SHAPE if n == name)]
         held.append((SHARD_MATRIX, ""))
     return tuple(marker for marker, _ in held)
 
@@ -2333,7 +2552,7 @@ def check_toolchain(root: Path) -> Iterable[Finding]:
                     f"in job `{job_of(lines, number)}` still says '{marker}',"
                     " so no step sets up the project's toolchain"
                 )
-            elif following in unbound or is_marker(following):
+            elif following.replace(OLD_RUN, NEW_RUN) in unbound or is_marker(following):
                 unset = (
                     f"in job `{job_of(lines, number)}` still says '# {marker}' and the"
                     " next line is the template's, so no step sets up the project's toolchain"
@@ -2878,13 +3097,22 @@ def check_tier_lists(root: Path, justfile: str) -> Iterable[Finding]:
         for name, meaning in lists:
             if justfile_text.defines_variable(justfile, name):
                 continue
+            how = (
+                f"with `just --evaluate {name}`"
+                if workflow == "deep.yml"
+                else "through `ci_jobs.py`"
+            )
             problem = (
                 f"has no `{name}` variable, which the template's `shape` job of `{workflow}`"
-                f" reads with `just --evaluate {name}`; add the template's, naming {meaning}"
+                f" reads {how}; add the template's, naming {meaning}"
             )
             fix = Agent(start=template_definition(name))
             tier = name.split("_")[0]
-            if name.endswith("_sharded"):
+            if name == ci_jobs.JOBS:
+                does = f"add `{name}`: the proof and each gate with a reason alone, then `rest`"
+                edit = Edit(does, justfile_text.with_variable(name, default_jobs(root)), fix)
+                yield Finding("justfile", problem, edit if readable(justfile) else fix)
+            elif name.endswith("_sharded"):
                 does = f"add `{name}`, naming no gate to shard"
                 edit = Edit(does, justfile_text.with_variable(name, lambda _: '""'), fix)
                 yield Finding("justfile", problem, edit)
@@ -2894,6 +3122,75 @@ def check_tier_lists(root: Path, justfile: str) -> Iterable[Finding]:
                 yield Finding("justfile", problem, edit)
             else:
                 yield Finding("justfile", problem, fix)
+
+    found = ci_jobs.lists(justfile)
+    ci = read(root / WORKFLOWS / "ci.yml")
+    if found is not None and ci is not None:
+        yield from job_list_findings(found, ci_jobs.facts(root), justfile=justfile, workflow=ci)
+
+
+def readable(justfile: str) -> bool:
+    return all(
+        justfile_text.ordered(justfile, name) is not None
+        or not justfile_text.defines_variable(justfile, name)
+        for name in (ci_jobs.GATES, ci_jobs.SHARDED)
+    )
+
+
+def default_jobs(root: Path) -> Callable[[str], str]:
+    known = ci_jobs.facts(root)
+
+    def value(justfile: str) -> str:
+        gates = justfile_text.ordered(justfile, ci_jobs.GATES) or ()
+        sharded = frozenset(justfile_text.ordered(justfile, ci_jobs.SHARDED) or ())
+        return '"' + " ".join(ci_jobs.default(gates, sharded, known)) + '"'
+
+    return value
+
+
+JOB_FIXES: dict[ci_jobs.Kind, Callable[[str], tuple[str, Callable[[list[str]], list[str]]]]] = {
+    ci_jobs.Kind.DROPPED: lambda _: (
+        f"add `{ci_jobs.REST}` to `{ci_jobs.JOBS}`",
+        ci_jobs.with_rest,
+    ),
+    ci_jobs.Kind.GROUPED: lambda gate: (f"give `{gate}` a job of its own", ci_jobs.given_own(gate)),
+    ci_jobs.Kind.DRIFT: lambda gate: (
+        f"move `{gate}` into `{ci_jobs.REST}`",
+        ci_jobs.into_rest(gate),
+    ),
+}
+
+
+OWN_JOB_LIST = "the project's own job list"
+OFFERED = frozenset({OWN_JOB_LIST})
+
+
+def job_list_findings(
+    found: ci_jobs.Lists | ci_jobs.Own, known: ci_jobs.Facts, *, justfile: str, workflow: str
+) -> Iterable[Finding]:
+    if isinstance(found, ci_jobs.Own) and ci_jobs.SCRIPT in workflow:
+        refused = (
+            f"{found.reason}, and `{ci_jobs.SCRIPT}` in `{WORKFLOWS / 'ci.yml'}` reads it, so the"
+            f" shape job refuses it; write `{ci_jobs.JOBS}` as one plain string of gates of"
+            f" `{ci_jobs.GATES}`, `{ci_jobs.REST}` and `NAME=gate,gate` groups"
+        )
+        yield Finding("justfile", refused, Agent())
+        return
+    if isinstance(found, ci_jobs.Own):
+        left = f"{found.reason}, so the plugin left {OWN_JOB_LIST} as it is"
+        start = (f"the template's form of `{ci_jobs.JOBS}` and its CI:", *regroup_difference())
+        yield Finding("justfile", left, Agent(start=start), identity=OWN_JOB_LIST)
+        return
+    read_in_ci = ci_jobs.SCRIPT in workflow or ci_jobs.JOBS in workflow
+    writes = not read_in_ci or ci_jobs.routed(workflow, justfile)
+    for problem in ci_jobs.problems(found, known):
+        made = JOB_FIXES.get(problem.kind)
+        if made is None or not writes:
+            yield Finding("justfile", problem.text, Agent())
+            continue
+        does, change = made(problem.gate)
+        edit = Edit(does, justfile_text.with_words(ci_jobs.JOBS, change), Agent())
+        yield Finding("justfile", problem.text, edit)
 
 
 def gates_of(recipe: str) -> Callable[[str], str]:
@@ -3564,8 +3861,9 @@ def failures(root: Path) -> list[str]:
 
 def owed_split(root: Path, found: list[Finding]) -> tuple[list[Finding], list[Finding]]:
     excused, _ = owed.excused([finding.key() for finding in found], owed.read(root).entries)
-    red = [finding for finding, hit in zip(found, excused, strict=True) if not hit]
-    return red, [finding for finding, hit in zip(found, excused, strict=True) if hit]
+    held = [hit or finding.identity in OFFERED for finding, hit in zip(found, excused, strict=True)]
+    red = [finding for finding, hit in zip(found, held, strict=True) if not hit]
+    return red, [finding for finding, hit in zip(found, held, strict=True) if hit]
 
 
 def not_running(root: Path, found: Sequence[Finding]) -> list[str]:
@@ -3590,13 +3888,17 @@ def run(root: Path) -> int:
     with runrecord.read_once():
         found = findings(root, bites=bites)
         slows = project_bite.recorded_slow(root)
-    red, owing = owed_split(root, found)
+    red, held = owed_split(root, found)
+    owing = [finding for finding in held if finding.identity not in OFFERED]
     for finding in red:
         print(finding)
         for line in then_lines(finding.fix):
             print(f"  then: {line}")
     for finding in owing:
         print(f"owed: {finding}")
+    for finding in held:
+        if finding.identity in OFFERED:
+            print(f"offered: {finding}")
     for unchecked in bites.unchecked:
         print(f"not checked: {project_bite.REGISTRY}: {unchecked}")
     for slow in slows:
@@ -3938,6 +4240,16 @@ def bite_mutations() -> list[Mutation]:
     ]
 
 
+TIER1_JOBS_LINE = 'tier1_jobs := "bite rest"'
+BARE_PROOF = 'tier1_jobs := "bite"'
+ALONE_AUDIT = 'tier1_jobs := "bite audit rest"'
+AUDIT_CEILING = (
+    "quality/thresholds.toml",
+    "[ceilings.change]",
+    "[ceilings.seconds]\naudit = 60\n\n[ceilings.change]",
+)
+
+
 def speed_mutations() -> list[Mutation]:
     stated = "stated for this stack"
     ci, deep = str(WORKFLOWS / "ci.yml"), str(WORKFLOWS / "deep.yml")
@@ -3963,6 +4275,16 @@ def speed_mutations() -> list[Mutation]:
             rewrite(ci, "-${{ github.sha }}", "", count=1),
         ),
         ("CI workflow without a shard matrix", rewrite(ci, SHARD_MATRIX, "matrix.part")),
+        ("CI that reads no job list for tier 1", rewrite(ci, JOB_LIST_SHAPE[0], "jobs.py")),
+        (
+            "job list that drops the gates no job names",
+            rewrite("justfile", TIER1_JOBS_LINE, BARE_PROOF),
+        ),
+        (
+            "job list with a gate alone for no reason",
+            rewrite("justfile", TIER1_JOBS_LINE, ALONE_AUDIT),
+        ),
+        ("group that holds a gate with a ceiling of its own", rewrite(*AUDIT_CEILING)),
     ]
 
 

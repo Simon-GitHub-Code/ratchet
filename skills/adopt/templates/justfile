@@ -112,6 +112,8 @@ tier2_gates := "mutation api-deep symbolic fuzz e2e test-stability reproducible 
 tier1_sharded := "test mutation-changed"
 tier2_sharded := "mutation e2e test-stability"
 
+tier1_jobs := "bite rest"
+
 serial0 := ""
 serial1 := "--serial coverage mutation-changed"
 serial2 := ""
@@ -161,6 +163,9 @@ tier1: plugin-pin
 
 tier2: plugin-pin
     {{parallel}} {{serial2}} -- {{tier2_gates}}
+
+ci-job name: _plugin
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/ci_jobs.py" --run {{name}} --jobs {{jobs}} --report .ratchet/timing.jsonl
 
 check: plugin-pin
     {{parallel}} {{serial0}} {{serial1}} -- {{tier0_gates}} {{tier1_gates}}

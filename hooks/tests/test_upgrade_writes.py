@@ -49,6 +49,7 @@ def text(root: Path, path: str) -> str:
 def test_a_budget_call_an_older_template_wrote_gains_the_flags_the_template_passes(
     repo: Path,
 ) -> None:
+    replace(CI, ' -- just ci-job "', ' -- just "')(repo)
     before = {path: text(repo, path) for path in (CI, DEEP)}
     replace(CI, OVER_LINES, "")(repo)
     replace(CI, f" --tier tier1{OVER} --report", " --report")(repo)

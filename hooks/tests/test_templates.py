@@ -81,7 +81,7 @@ def shards(
     done = subprocess.run(  # noqa: S603 # -- a fixed argv; the script is the template's own
         [bash, "-e", "-c", textwrap.dedent(step.group(1))],
         cwd=tmp_path,
-        env={**os.environ, "GITHUB_OUTPUT": str(output)},
+        env={**os.environ, "GITHUB_OUTPUT": str(output), "RATCHET_PLUGIN": str(PLUGIN_ROOT)},
         capture_output=True,
         text=True,
         check=False,
@@ -95,7 +95,21 @@ def needs_just() -> None:
         pytest.skip("just is not installed")
 
 
-@pytest.mark.parametrize(("workflow", "tier"), [("ci.yml", "tier1"), ("deep.yml", "tier2")])
+def test_ci_runs_tier_1_as_the_proof_and_one_job_for_every_other_gate(tmp_path: Path) -> None:
+    needs_just()
+    code, outputs, _ = shards(BINDING, tmp_path, "ci.yml")
+    assert code == 0
+    assert (json.loads(outputs["tier1"]), json.loads(outputs["tier1_long"])) == (
+        ["bite", "rest"],
+        [],
+    )
+    assert gate_list("tier1_jobs") == ["bite", "rest"]
+    assert "gate: ${{ fromJSON(needs.shape.outputs.tier1) }}" in WORKFLOWS["ci.yml"]
+    assert 'just ci-job "${{ matrix.gate }}"' in WORKFLOWS["ci.yml"]
+    assert "needs: [tier0" not in WORKFLOWS["ci.yml"], "tier 1 starts beside tier 0"
+
+
+@pytest.mark.parametrize(("workflow", "tier"), [("deep.yml", "tier2")])
 def test_ci_runs_every_gate_of_its_tier_once(workflow: str, tier: str, tmp_path: Path) -> None:
     needs_just()
     code, outputs, _ = shards(BINDING, tmp_path, workflow)
