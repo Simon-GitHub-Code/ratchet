@@ -4156,3 +4156,66 @@ def test_ignored_parent_replaced_by_file_or_symlink_refuses_with_blocking_path(
     assert ("file" if kind == "file" else "symbolic link") in out
     assert "standing where a directory is needed" in out
     assert (outside / "kept.txt").read_text(encoding="utf-8") == "outside\n"
+
+
+def test_git_fallback_when_proc_fd_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(project_bite, "PROC_FD", tmp_path / "missing-proc-fd")
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "a planted word"))
+    assert prove(root) == 0
+    assert "bite: lint: a planted word: bites" in shown(capsys)
+
+
+def test_tree_pin_repo_cleanup_and_descriptor_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    with pytest.raises(FileNotFoundError):
+        project_bite.Tree.pin_repo(plain)
+    tree = project_bite.Tree.pin(plain)
+    tree.close()
+    monkeypatch.setattr(project_bite, "DESCRIPTORS", False)
+    with pytest.raises(project_bite.Unprovable, match="without following a link"):
+        tree.read("x.txt")
+
+
+def test_environment_strips_all_repository_variables(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in project_bite.gatelib.REPOSITORY_VARIABLES:
+        monkeypatch.setenv(var, "/somewhere/foreign-repo")
+    env = project_bite.environment()
+    assert not any(var in env for var in project_bite.gatelib.REPOSITORY_VARIABLES)
+
+
+def test_deleted_tracked_link_is_restored(tmp_path: Path) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, None)
+    (root / "src/link").symlink_to("code.txt")
+    commit(root, "feat(core): a tracked link")
+    copy = project_bite.make_copy(
+        root, tmp_path / "copy", registry=project_bite.Registry(), shell=project_bite.Shell()
+    )
+    (copy.path / "src/link").unlink()
+    copy.restore()
+    assert (copy.path / "src/link").is_symlink()
+    assert str((copy.path / "src/link").readlink()) == "code.txt"
+    copy.close()
+
+
+def test_plants_outside_git_read_reads_stray_and_stopped_prove(tmp_path: Path) -> None:
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert project_bite.plants(plain, project_bite.Registry()) == ([], [])
+    _, strays = project_bite.read_reads("\n## What each gate reads\n- lint: a.py\nstray line\n")
+    assert strays == ["stray line"]
+
+    root = project(tmp_path / "repo", {"lint": LINT}, None)
+    copy = project_bite.make_copy(
+        root, tmp_path / "copy", registry=project_bite.Registry(), shell=project_bite.Shell()
+    )
+    row = project_bite.Row("q", "tool", "0", "sh gate lint")
+    bite_spec = project_bite.Bite("lint", "first", "L001", project_bite.Write("src/x.txt", "p"))
+    copy.shell.stopped = True
+    assert list(copy.prove(row, [bite_spec])) == []
+    assert list(copy.prove(row, [])) == []
+    copy.close()
