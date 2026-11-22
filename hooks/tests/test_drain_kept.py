@@ -1,8 +1,11 @@
 import contextlib
+import itertools
 import os
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
+from datetime import timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -18,6 +21,7 @@ from tests.test_drain import (
     BRANCH_C,
     GAMMA,
     HALVES,
+    STAMP,
     WHOLE,
     Out,
     plan_file,
@@ -427,6 +431,73 @@ def test_a_close_killed_outright_while_it_proves_leaves_nothing_a_rerun_waits_on
     assert MARKER in (restored(root, BRANCH_C) / "src/untracked.py").read_text(encoding="utf-8")
 
 
+def ticking() -> contextlib.AbstractContextManager[object]:
+    clock = itertools.count()
+    return mock.patch.object(drain, "now", lambda: STAMP + timedelta(seconds=next(clock)))
+
+
+REAL_WRITE_BYTES = Path.write_bytes
+
+
+def cut_short(path: Path, data: bytes) -> int:
+    if not path.name.endswith(".partial"):
+        return REAL_WRITE_BYTES(path, data)
+    REAL_WRITE_BYTES(path, data[: len(data) // 2])
+    raise Killed
+
+
+def killed(*_args: object) -> None:
+    raise Killed
+
+
+PARTIAL_KILLS: dict[str, Callable[[], contextlib.AbstractContextManager[object]]] = {
+    "while it writes": lambda: mock.patch.object(Path, "write_bytes", cut_short),
+    "once it is written": lambda: cut(Path, "write_bytes", ending(".partial")),
+    "while it proves": lambda: mock.patch.object(drain, "proven", killed),
+}
+
+
+@pytest.mark.parametrize("kill", list(PARTIAL_KILLS))
+def test_a_partial_a_kill_leaves_is_taken_in_by_the_rerun_whatever_the_clock_says(
+    tmp_path: Path, kill: str
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", GAMMA)
+    tree = drain.tree_of(root, BRANCH_C)
+    unfinished_work(tree)
+    wanted = snapshot(tree)
+    home = drain.kept_home(root, BRANCH_C)
+    with ticking():
+        with PARTIAL_KILLS[kill](), pytest.raises(Killed):
+            close_parked(root)
+        assert any(home.glob(".*.partial")), "the kill left a partial"
+        assert run(root, "clean", "--all") == 0
+        assert run(root, "clean", "--all") == 0
+    [unit] = kept_files(root, BRANCH_C)
+    assert list(home.iterdir()) == [unit], "no partial stays beside the unit"
+    assert not tree.exists()
+    assert snapshot(restored(root, BRANCH_C)) == wanted
+
+
+def test_a_partial_holding_work_the_tree_no_longer_holds_gives_it_to_the_unit(
+    tmp_path: Path,
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", GAMMA)
+    tree = drain.tree_of(root, BRANCH_C)
+    unfinished_work(tree)
+    with ticking():
+        with mock.patch.object(drain, "proven", killed), pytest.raises(Killed):
+            close_parked(root)
+        (tree / "src/untracked.py").unlink()
+        assert run(root, "clean", "--all") == 0
+    [unit] = kept_files(root, BRANCH_C)
+    assert list(drain.kept_home(root, BRANCH_C).iterdir()) == [unit]
+    back = restored(root, BRANCH_C)
+    assert (back / "src/untracked.py").read_text(encoding="utf-8") == f"UNTRACKED = '{MARKER}'\n"
+    assert MARKER in (back / "src/a.py").read_text(encoding="utf-8")
+
+
 def no_diff(real: Callable[..., bytes | None]) -> Callable[..., bytes | None]:
     def patched(store: drain.Scratch, *args: str, given: bytes = b"") -> bytes | None:
         return None if args[0] == "diff-tree" else real(store, *args, given=given)
@@ -551,6 +622,7 @@ def test_the_drains_old_stashes_move_to_kept_files_and_no_other_stash_is_touched
     run(root, "open", GAMMA)
     tree = drain.tree_of(root, BRANCH_C)
     old_drain_stash(tree, f"{BRANCH_C}: unapproved run")
+    assert run(root, "close", GAMMA, "--outcome", "waits", "--reason", "x") == 0
     write(root, "src/a.py", "A = 'mine'\n")
     git(root, "stash", "push", "-q", "-m", f"{BRANCH_C}: unapproved run")
     write(root, "src/a.py", "A = 'mine too'\n")
@@ -581,15 +653,73 @@ def test_the_drains_old_stashes_move_to_kept_files_and_no_other_stash_is_touched
     assert git(root, "diff", "--cached", "--name-only") == "src/staged.py"
 
 
-def test_an_old_drain_stash_on_a_detached_head_moves_too(tmp_path: Path) -> None:
+def detached_in_another_tree(root: Path) -> str:
+    run(root, "open", ALPHA)
+    tree = drain.tree_of(root, BRANCH_C)
+    git(tree, "switch", "-q", "--detach")
+    old_drain_stash(tree, f"{BRANCH_A}: interrupted run")
+    return BRANCH_A
+
+
+def users_own(root: Path, label: str, *, committed: bool) -> str:
+    assert run(root, "close", GAMMA, "--outcome", "waits", "--reason", "x") == 0
+    git(root, "switch", "-q", BRANCH_C)
+    if committed:
+        write(root, "src/mine.py", "MINE = 1\n")
+        commit(root, "feat(core): the owner's own commit")
+    write(root, "src/a.py", "A = 'mine'\n")
+    git(root, "stash", "push", "-q", "-m", f"{BRANCH_C}: {label} run")
+    git(root, "switch", "-q", "main")
+    return BRANCH_C
+
+
+UNPROVEN: dict[str, Callable[[Path], str]] = {
+    "made detached in another ticket's tree": detached_in_another_tree,
+    "the owner's, with the word of a run the note does not record": lambda root: users_own(
+        root, "interrupted", committed=False
+    ),
+    "the owner's, on a commit the note does not record": lambda root: users_own(
+        root, "unapproved", committed=True
+    ),
+}
+
+
+@pytest.mark.parametrize("stash", list(UNPROVEN))
+def test_a_stash_with_the_drains_words_the_note_does_not_prove_stays_and_is_named(
+    tmp_path: Path, capsys: Out, stash: str
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", GAMMA)
+    branch = UNPROVEN[stash](root)
+    sha, _, subject = git(root, "stash", "list", "--format=%H %gs").partition(" ")
+    capsys.readouterr()
+    assert run(root, "clean") == 0
+    assert (
+        f"kept: stash {sha} (`{subject}`) stays: nothing the drain recorded proves the drain made"
+        f" it; to move it by hand, run `git stash pop --index stash@{{0}}` in a clean checkout of"
+        f" `{branch}`"
+    ) in capsys.readouterr().out.splitlines()
+    assert git(root, "rev-parse", "refs/stash") == sha
+    assert kept_files(root, branch) == []
+
+
+def test_a_rerun_after_the_tree_went_between_two_passes_names_the_unit(
+    tmp_path: Path, capsys: Out
+) -> None:
     root = project(tmp_path)
     run(root, "open", GAMMA)
     tree = drain.tree_of(root, BRANCH_C)
-    git(tree, "switch", "-q", "--detach")
-    old_drain_stash(tree, f"{BRANCH_C}: interrupted run")
-    assert run(root, "clean") == 0
-    assert git(root, "stash", "list") == ""
-    assert len(kept_files(root, BRANCH_C)) == 1
+    unfinished_work(tree)
+    wanted = snapshot(tree)
+    with mock.patch.object(gatelib, "end_running_from", killed), pytest.raises(Killed):
+        close_parked(root)
+    shutil.rmtree(tree)
+    git(root, "worktree", "prune")
+    capsys.readouterr()
+    assert run(root, "clean", "--all") == 0
+    [unit] = kept_files(root, BRANCH_C)
+    assert drain.kept_line(BRANCH_C, unit) in capsys.readouterr().out.splitlines()
+    assert snapshot(restored(root, BRANCH_C)) == wanted
 
 
 def test_a_kept_file_that_does_not_apply_stays_and_the_line_says_so(
@@ -703,13 +833,13 @@ def test_an_old_drain_stash_whose_file_cannot_be_written_stays_and_says_why(
 ) -> None:
     root = project(tmp_path)
     run(root, "open", GAMMA)
-    old_drain_stash(drain.tree_of(root, BRANCH_C), f"{BRANCH_C}: unapproved run")
+    old_drain_stash(drain.tree_of(root, BRANCH_C), f"{BRANCH_C}: interrupted run")
     sha = git(root, "rev-parse", "refs/stash")
     capsys.readouterr()
     with mock.patch.object(Path, "write_bytes", unwritable):
         assert run(root, "clean") == 0
     assert capsys.readouterr().out.splitlines()[0] == (
-        f"kept: stash {sha} (`On {BRANCH_C}: {BRANCH_C}: unapproved run`) stays: it could not be"
+        f"kept: stash {sha} (`On {BRANCH_C}: {BRANCH_C}: interrupted run`) stays: it could not be"
         f" set aside under {drain.kept_home(root, BRANCH_C)}: Permission denied"
     )
     assert git(root, "rev-parse", "refs/stash") == sha
@@ -721,9 +851,9 @@ def test_the_drains_old_stashes_of_one_branch_come_back_in_the_order_they_were_m
     root = project(tmp_path)
     run(root, "open", GAMMA)
     tree = drain.tree_of(root, BRANCH_C)
-    for word, run_word in (("older", "interrupted"), ("newer", "split")):
+    for word in ("older", "newer"):
         write(tree, "src/a.py", f"A = '{word}'\n")
-        git(tree, "stash", "push", "-q", "-m", f"{BRANCH_C}: {run_word} run")
+        git(tree, "stash", "push", "-q", "-m", f"{BRANCH_C}: interrupted run")
     assert run(root, "clean") == 0
     assert git(root, "stash", "list") == ""
     assert (restored(root, BRANCH_C) / "src/a.py").read_text(encoding="utf-8") == "A = 'older'\n"
