@@ -489,6 +489,10 @@ def every(why: str) -> str:
     return f"bite: fallback: {why}; proving every gate"
 
 
+def deferred_msg(why: str) -> str:
+    return f"bite: deferred: {why}; leaving the whole proof to bite-all"
+
+
 def registry_of(*extra: str) -> str:
     return "".join(bite(name, WORD) for name in GATES) + "".join(extra)
 
@@ -560,15 +564,17 @@ def test_a_removed_bite_names_its_gate(tmp_path: Path, capsys: pytest.CaptureFix
     assert proved(out) == ["tests"]
 
 
-def test_a_change_to_setup_goes_to_every_gate(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_a_change_to_setup_is_deferred_and_proves_nothing(
+    tmp_path: Path, scratch: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = targeted(tmp_path)
     write(root, REGISTRY, 'setup = ["true"]\n\n' + (root / REGISTRY).read_text())
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()
-    assert out[1] == every(f"{REGISTRY} changed `setup` or `include`, which every copy holds")
-    assert proved(out) == ["lint", "tests"]
+    why = f"{REGISTRY} changed `setup` or `include`, which every copy holds"
+    assert out[1] == deferred_msg(why)
+    assert proved(out) == []
+    assert list(scratch.iterdir()) == []
 
 
 def patched(tmp_path: Path) -> Path:
@@ -589,7 +595,7 @@ def test_a_patch_a_bite_names_proves_that_bites_gate(
     assert proved(out) == ["tests"]
 
 
-def test_a_file_under_the_bites_directory_no_bite_names_goes_to_every_gate(
+def test_a_file_under_the_bites_directory_no_bite_names_is_deferred(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = patched(tmp_path)
@@ -597,8 +603,8 @@ def test_a_file_under_the_bites_directory_no_bite_names_goes_to_every_gate(
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()
     why = "quality/bites/helper.sh is under quality/bites/ and no bite names it as its patch, so"
-    assert out[1] == every(f"{why} setup may run it")
-    assert proved(out) == ["lint", "tests"]
+    assert out[1] == deferred_msg(f"{why} setup may run it")
+    assert proved(out) == []
 
 
 def test_a_binding_row_that_changed_proves_its_gate(
@@ -675,14 +681,15 @@ def test_a_padded_suites_table_changes_no_row(tmp_path: Path) -> None:
     assert project_bite.binding_causes(root, gatelib.base_commit(root)) == []
 
 
-def test_a_binding_change_beside_the_suites_table_still_goes_to_every_gate(
+def test_a_binding_change_beside_the_suites_table_is_deferred(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = suited(tmp_path)
     replaced(root, BINDING, "## Tests\n", "## Tests\n\nA word more.\n")
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()
-    assert out[1] == every(f"{BINDING} changed outside its gate rows, which a gate may read")
+    assert out[1] == deferred_msg(f"{BINDING} changed outside its gate rows, which a gate may read")
+    assert proved(out) == []
 
 
 def test_a_binding_without_a_suites_table_has_no_suites_cause(tmp_path: Path) -> None:
@@ -692,15 +699,15 @@ def test_a_binding_without_a_suites_table_has_no_suites_cause(tmp_path: Path) ->
     assert {c.gate for c in causes} == {"tests"}
 
 
-def test_a_binding_change_outside_the_rows_goes_to_every_gate(
+def test_a_binding_change_outside_the_rows_is_deferred(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = targeted(tmp_path)
     replaced(root, BINDING, "| a | b |", "| a | c |")
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()
-    assert out[1] == every(f"{BINDING} changed outside its gate rows, which a gate may read")
-    assert proved(out) == ["lint", "tests"]
+    assert out[1] == deferred_msg(f"{BINDING} changed outside its gate rows, which a gate may read")
+    assert proved(out) == []
 
 
 TREE = " tree " + "1" * 40
@@ -731,7 +738,7 @@ def test_a_change_to_the_plugin_pin_line_alone_proves_every_gate(
 @pytest.mark.parametrize(
     "path", ["scripts/check.sh", "lint.cfg"], ids=["gate-commands", "tool-config"]
 )
-def test_a_path_that_names_no_gate_goes_to_every_gate(
+def test_a_path_that_names_no_gate_is_deferred(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], path: str
 ) -> None:
     verb = "runs" if path.startswith("scripts") else "reads"
@@ -740,11 +747,11 @@ def test_a_path_that_names_no_gate_goes_to_every_gate(
     write(root, path, "changed\n")
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()
-    assert out[1] == every(why)
-    assert proved(out) == ["lint", "tests"]
+    assert out[1] == deferred_msg(why)
+    assert proved(out) == []
 
 
-def test_a_path_in_tool_config_and_fitness_goes_to_every_gate_whatever_the_bullets_say(
+def test_a_path_in_tool_config_and_fitness_is_deferred_whatever_the_bullets_say(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     fitness = '[[group]]\nname = "fitness"\nreason = "A fitness test."\npaths = ["lint.cfg"]\n'
@@ -755,9 +762,9 @@ def test_a_path_in_tool_config_and_fitness_goes_to_every_gate_whatever_the_bulle
     write(root, "lint.cfg", "changed\n")
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()
-    assert proved(out) == ["lint", "tests"]
-    assert out[1].startswith("bite: fallback: lint.cfg")
-    assert out[1].endswith("proving every gate")
+    assert proved(out) == []
+    assert out[1].startswith("bite: deferred: lint.cfg")
+    assert out[1].endswith("leaving the whole proof to bite-all")
 
 
 def test_a_path_no_row_names_proves_the_gates_whose_bullet_reads_it_and_those_with_none(
@@ -787,7 +794,7 @@ def test_a_gate_whose_bullet_names_none_of_the_changed_paths_is_left_out(
     assert not any(line.startswith("bite: fallback") for line in out)
 
 
-def test_a_path_that_is_not_tool_config_ignores_the_bullets_and_goes_to_every_gate(
+def test_a_path_that_is_not_tool_config_ignores_the_bullets_and_is_deferred(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = targeted(tmp_path, inserts=with_reads("- lint: scripts/lint.sh\n- tests: src/**\n"))
@@ -795,11 +802,11 @@ def test_a_path_that_is_not_tool_config_ignores_the_bullets_and_goes_to_every_ga
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()
     why = "scripts/check.sh changed, and no record says which gate runs it"
-    assert out[1] == every(why)
-    assert proved(out) == ["lint", "tests"]
+    assert out[1] == deferred_msg(why)
+    assert proved(out) == []
 
 
-def test_a_question_in_two_rows_sends_a_binding_change_to_every_gate(
+def test_a_question_in_two_rows_defers_a_binding_change(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     twin = row("lint", "1", tool="none").replace("`sh gate lint`", "`sh gate other`")
@@ -808,19 +815,19 @@ def test_a_question_in_two_rows_sends_a_binding_change_to_every_gate(
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()
     why = f"{BINDING} has two gate rows for one question, so one could hide behind the other"
-    assert out[1] == every(why)
-    assert proved(out) == ["lint", "tests"]
+    assert out[1] == deferred_msg(why)
+    assert proved(out) == []
 
 
-def test_a_changed_row_that_names_no_gate_goes_to_every_gate(
+def test_a_changed_row_that_names_no_gate_is_deferred(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = targeted(tmp_path, rows=GATE_ROWS + row("extra", tool="none"))
     replaced(root, BINDING, "`sh gate extra`", "")
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()
-    assert out[1] == every("the binding's row `extra` changed and names no gate")
-    assert proved(out) == ["lint", "tests"]
+    assert out[1] == deferred_msg("the binding's row `extra` changed and names no gate")
+    assert proved(out) == []
 
 
 def test_a_change_that_affects_only_a_tier_2_gate_says_so_and_proves_nothing(
@@ -1104,7 +1111,7 @@ def test_a_changed_file_a_write_fault_plants_proves_that_bites_gate(
     assert proved(out) == ["tests"]
 
 
-def test_a_path_in_two_groups_takes_the_wider_one(
+def test_a_path_in_two_groups_takes_the_wider_one_and_defers(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     wide = COMMANDS_MANIFEST.replace('"scripts/lint.sh"]', '"scripts/lint.sh", "lint.cfg"]')
@@ -1113,8 +1120,8 @@ def test_a_path_in_two_groups_takes_the_wider_one(
     write(root, "lint.cfg", "changed\n")
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()
-    assert out[1] == every("lint.cfg changed, and no record says which gate runs it")
-    assert proved(out) == ["lint", "tests"]
+    assert out[1] == deferred_msg("lint.cfg changed, and no record says which gate runs it")
+    assert proved(out) == []
 
 
 def test_a_bullet_that_wraps_onto_a_second_line_reads_both_lines(
@@ -1170,7 +1177,7 @@ def test_a_gate_chosen_outside_the_affected_set_is_green_under_changed(
     )
 
 
-def test_a_change_to_the_justfile_goes_to_every_gate(
+def test_a_change_to_the_justfile_is_deferred(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = targeted(tmp_path, rows=JUST_ROWS, files={"justfile": JUSTFILE})
@@ -1178,11 +1185,13 @@ def test_a_change_to_the_justfile_goes_to_every_gate(
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()
     assert out[0] == "bite: a gate may have changed (justfile)"
-    assert out[1] == every("the justfile changed, and its recipes are code the proof cannot read")
-    assert proved(out) == ["lint", "tests"]
+    assert out[1] == deferred_msg(
+        "the justfile changed, and its recipes are code the proof cannot read"
+    )
+    assert proved(out) == []
 
 
-def test_a_justfile_in_two_gate_groups_goes_to_every_gate(
+def test_a_justfile_in_two_gate_groups_is_deferred(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     fitness = '[[group]]\nname = "fitness"\nreason = "A fitness test."\npaths = ["justfile"]\n'
@@ -1191,8 +1200,10 @@ def test_a_justfile_in_two_gate_groups_goes_to_every_gate(
     replaced(root, "justfile", "echo finish", "echo finished")
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()
-    assert out[1] == every("the justfile changed, and its recipes are code the proof cannot read")
-    assert proved(out) == ["lint", "tests"]
+    assert out[1] == deferred_msg(
+        "the justfile changed, and its recipes are code the proof cannot read"
+    )
+    assert proved(out) == []
 
 
 def test_a_file_a_patch_fault_edits_proves_that_bites_gate(tmp_path: Path) -> None:
@@ -1267,17 +1278,17 @@ def test_a_fault_target_with_glob_characters_in_its_name_is_matched_literally(
 
 
 @pytest.mark.parametrize("path", [".gitignore", "src/.gitattributes"])
-def test_a_change_to_an_ignore_file_at_any_depth_goes_to_every_gate(
+def test_a_change_to_an_ignore_file_at_any_depth_is_deferred(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], path: str
 ) -> None:
     root = targeted(tmp_path)
     write(root, path, "ignored/\n*.secret\n" + "build/\n")
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()
-    assert out[1] == every(
+    assert out[1] == deferred_msg(
         f"{path} changed, and the proof reads the ignore rules when it plants a fault"
     )
-    assert proved(out) == ["lint", "tests"]
+    assert proved(out) == []
 
 
 def test_a_patch_git_cannot_read_adds_its_gate_to_any_change(tmp_path: Path) -> None:
@@ -1288,15 +1299,15 @@ def test_a_patch_git_cannot_read_adds_its_gate_to_any_change(tmp_path: Path) -> 
     assert project_bite.targeted_by(targets, "anything/at/all.txt") == {("tests", "by patch")}
 
 
-def test_a_tool_config_path_no_bullet_names_goes_to_every_gate(
+def test_a_tool_config_path_no_bullet_names_is_deferred(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = targeted(tmp_path, inserts=with_reads("- lint: src/**\n- tests: src/**\n"))
     write(root, "lint.cfg", "changed\n")
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()
-    assert out[1] == every("lint.cfg changed, and no bullet names it")
-    assert proved(out) == ["lint", "tests"]
+    assert out[1] == deferred_msg("lint.cfg changed, and no bullet names it")
+    assert proved(out) == []
 
 
 def test_a_file_a_replace_fault_edits_proves_that_bites_gate(tmp_path: Path) -> None:
@@ -1308,7 +1319,7 @@ def test_a_file_a_replace_fault_edits_proves_that_bites_gate(tmp_path: Path) -> 
     assert project_bite.targeted_by(targets, "src/code.txt") == {("tests", "swapped")}
 
 
-def test_a_registry_added_by_the_change_goes_to_every_gate(
+def test_a_registry_added_by_the_change_is_deferred(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = project(tmp_path / "repo", GATES, None, rows=GATE_ROWS)
@@ -1318,8 +1329,8 @@ def test_a_registry_added_by_the_change_goes_to_every_gate(
     write(root, REGISTRY, registry_of())
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()
-    assert out[1] == every(f"{REGISTRY} was added, removed or does not parse")
-    assert proved(out) == ["lint", "tests"]
+    assert out[1] == deferred_msg(f"{REGISTRY} was added, removed or does not parse")
+    assert proved(out) == []
 
 
 def test_a_patch_fault_whose_file_is_absent_names_no_path(tmp_path: Path) -> None:
@@ -1418,14 +1429,15 @@ def test_a_ledger_that_does_not_parse_is_not_red_in_a_bite_gate_with_nothing_to_
     assert "does not parse" not in shown(capsys)
 
 
-def test_a_pull_request_with_nothing_to_compare_with_proves_the_gates(
+def test_a_pull_request_with_nothing_to_compare_with_is_deferred(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", WORD))
     assert prove(root, "--changed") == 0
     out = shown(capsys)
     assert "bite: a gate may have changed (no merge base)\n" in out
-    assert every("there is no merge base to compare with") + "\n" in out
+    assert deferred_msg("there is no merge base to compare with") + "\n" in out
+    assert out.endswith(NOTHING)
 
 
 def test_the_flag_proves_every_gate_of_tiers_0_and_1_on_a_branch_with_no_gate_change(
@@ -2187,6 +2199,8 @@ def recorded(root: Path) -> list[dict[str, object]]:
 
 
 def lint_config_changed(root: Path) -> None:
+    reads = with_reads("- lint: lint.cfg\n- format: lint.cfg\n")
+    replaced(root, BINDING, "## Speed", f"{reads}\n## Speed")
     changed(root)
     write(root, "lint.cfg", "rules = fewer\n")
     commit(root, "feat(core): a rule changed")
@@ -3710,7 +3724,24 @@ def test_the_closing_run_runs_once_for_each_set_of_args_among_the_bites_that_bit
     root = project(tmp_path / "repo", {"lint": gate}, registry)
     assert prove(root) == 1
     assert "bite: lint: c, blind: DOES NOT BITE" in shown(capsys)
-    assert log.read_text(encoding="utf-8").split() == [*"aabbaacc", "a", "b"]
+    assert log.read_text(encoding="utf-8").split() == [*"aaabbbaaa", "c", "c"]
+    log.unlink()
+    copy = project_bite.make_copy(
+        root, tmp_path / "copy", registry=project_bite.Registry(), shell=project_bite.Shell()
+    )
+    try:
+        row_spec = project_bite.gate_rows((root / BINDING).read_text(encoding="utf-8"))[0]
+        parsed, _ = project_bite.read_registry(registry)
+        outcomes = list(copy.prove(row_spec, parsed.bites))
+        assert [o.verdict for o in outcomes] == [
+            project_bite.Verdict.BITES,
+            project_bite.Verdict.BITES,
+            project_bite.Verdict.BITES,
+            project_bite.Verdict.GREEN,
+        ]
+        assert log.read_text(encoding="utf-8").split() == [*"aabbaacc", "a", "b"]
+    finally:
+        copy.close()
 
 
 def test_a_gate_stopped_during_its_closing_run_prints_no_verdict(
@@ -3929,6 +3960,7 @@ def test_a_format_gate_that_rejects_a_verdict_record_is_red_on_changed(
         {"format": FORMAT_GATE_REJECTS_RECORD},
         bite("format", "a planted word"),
     )
+    replaced(root, BINDING, "## Speed", "## What each gate reads\n\n- format: lint.cfg\n\n## Speed")
     write(root, "guards/manifest.toml", MANIFEST)
     write(root, "lint.cfg", "rules = all\n")
     commit(root, "feat(core): a manifest")
@@ -4219,3 +4251,298 @@ def test_plants_outside_git_read_reads_stray_and_stopped_prove(tmp_path: Path) -
     assert list(copy.prove(row, [bite_spec])) == []
     assert list(copy.prove(row, [])) == []
     copy.close()
+
+
+def test_an_edited_file_targeted_by_one_fault_proves_only_that_fault(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = (
+        bite("lint", "first", 'replace = { path = "src/code.txt", old = "clean", new = "planted" }')
+        + bite(
+            "lint",
+            "second",
+            'replace = { path = "src/other.txt", old = "clean", new = "planted" }',
+        )
+        + bite("tests", "other")
+        + bite("slow", WORD)
+    )
+    root = targeted(tmp_path, registry=registry, files={"src/other.txt": "clean\n"})
+    replaced(root, "src/code.txt", "clean\n", "clean\nmore\n")
+    assert prove(root, "--changed") == 0
+    out = shown(capsys).splitlines()
+    assert out[0] == "bite: a gate may have changed (src/code.txt)"
+    assert out[1] == "bite: lint: src/code.txt is changed by bite `first`"
+    assert [line for line in out if line.endswith(": bites")] == ["bite: lint: first: bites"]
+    assert out[-1].startswith("bite: green: 1 of 1 faults bit, over 1 gates in ")
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["gate row", "suites row", "registry entry", "patch", "mapped tool config"],
+)
+def test_a_gate_definition_change_proves_all_faults_of_that_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], kind: str
+) -> None:
+    if kind == "suites row":
+        gates = {**GATES, "tests-changed": LINT}
+        rows = GATE_ROWS + row("tests-changed", "1")
+        second = 'write = { path = "src/b.txt", content = "planted\\n" }'
+        registry = (
+            registry_of() + bite("tests-changed", "first") + bite("tests-changed", "second", second)
+        )
+        root = project(tmp_path / "repo", gates, registry, rows=rows)
+        replaced(root, BINDING, "## Speed", f"{SUITES}\n## Speed")
+        write(root, "guards/manifest.toml", COMMANDS_MANIFEST)
+        commit(root, "feat(core): suites")
+        branch(root)
+        replaced(root, BINDING, "`tests/**`", "`t/**`")
+        target_gate = "tests-changed"
+    else:
+        first = (
+            bite("lint", "first", 'patch = "quality/bites/p.patch"')
+            if kind == "patch"
+            else bite("lint", "first")
+        )
+        registry = (
+            first
+            + bite("lint", "second", 'write = { path = "src/b.txt", content = "planted\\n" }')
+            + bite("tests", WORD)
+            + bite("slow", WORD)
+        )
+        inserts = with_reads("- lint: lint.cfg\n- tests: src/**\n")
+        root = targeted(
+            tmp_path,
+            registry=registry,
+            inserts=inserts,
+            files={"quality/bites/p.patch": PATCH_FILE},
+        )
+        if kind == "gate row":
+            replaced(root, BINDING, "| lint | a tool | 0 |", "| lint | a tool | 1 |")
+        elif kind == "registry entry":
+            replaced(root, REGISTRY, 'expect = "L001"', 'expect = "L001 a planted"')
+        elif kind == "patch":
+            write(root, "quality/bites/p.patch", PATCH_FILE.replace("+planted", "+planted again"))
+        else:
+            write(root, "lint.cfg", "changed\n")
+        target_gate = "lint"
+    assert prove(root, "--changed") == 0
+    out = shown(capsys).splitlines()
+    ran = sorted(line.split(": bites")[0] for line in out if line.endswith(": bites"))
+    assert ran == [f"bite: {target_gate}: first", f"bite: {target_gate}: second"]
+    assert out[-1].startswith("bite: green: 2 of 2 faults bit, over 1 gates in ")
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        ("binding prose", f"{BINDING} changed outside its gate rows, which a gate may read"),
+        ("unmapped tool config", "lint.cfg changed, and no bullet names it"),
+        ("justfile", "the justfile changed, and its recipes are code the proof cannot read"),
+        ("guard path", "scripts/check.sh changed, and no record says which gate runs it"),
+        ("fitness path", "lint.cfg changed, and no record says which gate reads it"),
+        ("setup", f"{REGISTRY} changed `setup` or `include`, which every copy holds"),
+        (
+            "unnamed patch",
+            (
+                "quality/bites/helper.sh is under quality/bites/ and no bite names it as its"
+                " patch, so setup may run it"
+            ),
+        ),
+        (
+            "ignore rules",
+            ".gitignore changed, and the proof reads the ignore rules when it plants a fault",
+        ),
+    ],
+)
+def test_unmapped_causes_print_deferred_and_prove_nothing(
+    tmp_path: Path, scratch: Path, *, capsys: pytest.CaptureFixture[str], case: tuple[str, str]
+) -> None:
+    kind, why = case
+    fitness = '[[group]]\nname = "fitness"\nreason = "A fitness test."\npaths = ["lint.cfg"]\n'
+    files = {
+        "justfile": JUSTFILE,
+        "quality/bites/helper.sh": "echo setup\n",
+        **({"guards/manifest.toml": COMMANDS_MANIFEST + fitness} if kind == "fitness path" else {}),
+    }
+    inserts = with_reads("- lint: src/**\n- tests: src/**\n")
+    root = targeted(tmp_path, inserts=inserts, files=files)
+    if kind == "binding prose":
+        replaced(root, BINDING, "| a | b |", "| a | c |")
+    elif kind in ("unmapped tool config", "fitness path"):
+        write(root, "lint.cfg", "changed\n")
+    elif kind == "justfile":
+        replaced(root, "justfile", "echo prepare", "echo prepared")
+    elif kind == "guard path":
+        write(root, "scripts/check.sh", "changed\n")
+    elif kind == "setup":
+        write(root, REGISTRY, 'setup = ["true"]\n\n' + (root / REGISTRY).read_text())
+    elif kind == "unnamed patch":
+        write(root, "quality/bites/helper.sh", "echo changed\n")
+    else:
+        write(root, ".gitignore", "ignored/\n*.secret\nbuild/\n")
+    assert prove(root, "--changed") == 0
+    out = shown(capsys)
+    assert f"bite: deferred: {why}; leaving the whole proof to bite-all\n" in out
+    assert out.endswith(NOTHING)
+    assert "bite: fallback" not in out
+    assert ": bites" not in out
+    assert list(scratch.iterdir()) == []
+
+
+def test_a_mixed_change_proves_only_targeted_faults_and_defers_unmapped_causes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gates = {**GATES, "extra": LINT}
+    rows = GATE_ROWS + row("extra", "1")
+    registry = (
+        bite("lint", "j1", 'replace = { path = "justfile", old = "prep1", new = "planted1" }')
+        + bite("lint", "j2", 'replace = { path = "justfile", old = "prep2", new = "planted2" }')
+        + bite("lint", "other lint")
+        + bite("tests", "j3", 'replace = { path = "justfile", old = "prep3", new = "planted3" }')
+        + bite("tests", "other tests")
+        + bite("slow", "j4", 'replace = { path = "justfile", old = "prep4", new = "planted4" }')
+        + bite("extra", "other extra")
+    )
+    just = (
+        "lint:\n    sh gate lint\n"
+        "tests:\n    sh gate tests\n"
+        "slow:\n    sh gate slow\n"
+        "extra:\n    sh gate extra\n"
+        "prepare:\n    echo prep1\n    echo prep2\n    echo prep3\n    echo prep4\n    echo tail\n"
+    )
+    gates_with_just = {
+        name: f'if grep -q planted justfile; then echo "L001 a planted fault"; exit 1; fi\n{body}'
+        for name, body in gates.items()
+    }
+    root = project(tmp_path / "repo", gates_with_just, registry, rows=rows)
+    write(root, "guards/manifest.toml", COMMANDS_MANIFEST)
+    write(root, "justfile", just)
+    commit(root, "feat(core): justfile and faults")
+    branch(root)
+    replaced(root, "justfile", "echo tail", "echo tailed")
+    assert prove(root, "--changed") == 0
+    out = shown(capsys)
+    ran = sorted(line.split(": bites")[0] for line in out.splitlines() if line.endswith(": bites"))
+    assert ran == ["bite: lint: j1", "bite: lint: j2", "bite: tests: j3"]
+    deferred_why = "the justfile changed, and its recipes are code the proof cannot read"
+    assert f"bite: deferred: {deferred_why}" in out
+    assert "bite: slow: justfile is changed by bite `j4`; a gate of tier 2" in out
+    assert "bite: fallback" not in out
+    assert "bite: green: 3 of 3 faults bit, over 2 gates in " in out
+
+
+def test_a_mixed_binding_or_setup_edit_proves_changed_gate_and_defers_unmapped(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = (
+        bite("lint", "first")
+        + bite("lint", "second", 'write = { path = "src/b.txt", content = "planted\\n" }')
+        + bite("tests", WORD)
+        + bite("slow", WORD)
+    )
+    root = targeted(tmp_path, registry=registry)
+    replaced(root, BINDING, "| a | b |", "| a | c |")
+    replaced(root, BINDING, "| lint | a tool | 0 |", "| lint | a tool | 1 |")
+    assert prove(root, "--changed") == 0
+    out = shown(capsys)
+    ran = sorted(line.split(": bites")[0] for line in out.splitlines() if line.endswith(": bites"))
+    assert ran == ["bite: lint: first", "bite: lint: second"]
+    assert (
+        f"bite: deferred: {BINDING} changed outside its gate rows, which a gate may read;"
+        " leaving the whole proof to bite-all\n" in out
+    )
+    assert "bite: fallback" not in out
+
+    (tmp_path / "r2").mkdir()
+    root2 = targeted(tmp_path / "r2", registry=registry)
+    write(
+        root2,
+        REGISTRY,
+        'setup = ["true"]\n\n'
+        + (root2 / REGISTRY).read_text().replace('expect = "L001"', 'expect = "L001 a planted"', 1),
+    )
+    assert prove(root2, "--changed") == 0
+    out2 = shown(capsys)
+    ran2 = sorted(
+        line.split(": bites")[0] for line in out2.splitlines() if line.endswith(": bites")
+    )
+    assert ran2 == ["bite: lint: first", "bite: lint: second"]
+    setup_why = f"{REGISTRY} changed `setup` or `include`, which every copy holds"
+    assert f"bite: deferred: {setup_why}" in out2
+    assert "bite: fallback" not in out2
+
+
+def test_a_moved_plugin_pin_with_binding_prose_still_forces_every_tier0_and_tier1_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = targeted(tmp_path, inserts=f"{PIN}\n")
+    replaced(root, BINDING, PIN, PIN.replace("0.1.0", "0.2.0"))
+    replaced(root, BINDING, "| a | b |", "| a | c |")
+    assert prove(root, "--changed") == 0
+    out = shown(capsys).splitlines()
+    assert out[1] == every("the plugin pin changed, and the plugin supplies gates")
+    assert "bite: deferred:" not in "\n".join(out)
+    assert proved(out) == ["lint", "tests"]
+
+
+def test_faults_of_one_gate_share_lanes_and_keep_schedule_and_green_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    log, mark = tmp_path / "log", tmp_path / "mark"
+    mark.mkdir()
+    monkeypatch.setenv("LOG", str(log))
+    monkeypatch.setenv("MARK", str(mark))
+    concurrent_free = (
+        'printf "+ free %s\\n" "${RATCHET_JOBS:-unset}" >> "$LOG"\n'
+        'if [ ! -e "$MARK/free-a" ]; then touch "$MARK/free-a"; n=0;'
+        ' while [ ! -e "$MARK/free-b" ] && [ "$n" -lt 40 ];'
+        " do sleep 0.05; n=$((n+1)); done;"
+        ' else touch "$MARK/free-b"; sleep 0.1; fi\n'
+        'printf "%s\\n" "- free" >> "$LOG"\n' + LINT
+    )
+    gates = {
+        "free": concurrent_free,
+        "timed": logged("timed"),
+        "first": logged("first"),
+        "second": logged("second"),
+    }
+    registry = (
+        bite("free", "f1")
+        + bite("free", "f2", 'write = { path = "src/b.txt", content = "planted\\n" }')
+        + bite("timed", "t1")
+        + bite("timed", "t2", 'write = { path = "src/c.txt", content = "planted\\n" }')
+        + bite("first", "a1")
+        + bite("first", "a2", 'write = { path = "src/d.txt", content = "planted\\n" }')
+        + bite("second", "s1")
+    )
+    root = project(tmp_path / "repo", gates, registry, speed=SCHEDULE)
+    assert project_bite.main(["project_bite.py", "--root", str(root), "--jobs", "2"]) == 0
+    out = shown(capsys)
+    assert "bite: green: 7 of 7 faults bit, over 4 gates in " in out
+    met, _ = ran_with(log)
+    assert frozenset({"free"}) in met
+    assert frozenset({"timed"}) not in met
+    assert frozenset({"first"}) not in met
+
+    leaky = (
+        "test -f ignored/seen && { echo L001 still red; exit 1; }\n"
+        "grep -rl planted src && { mkdir -p ignored; touch ignored/seen; echo L001; exit 1; }\n"
+        "exit 0"
+    )
+    leaky_reg = bite(
+        "lint", "clean", 'write = { path = "tests/x.txt", content = "x\\n" }', expect="x"
+    ) + bite("lint", "leaky")
+    leaky_root = project(tmp_path / "leaky", {"lint": leaky}, leaky_reg)
+    assert project_bite.main(["project_bite.py", "--root", str(leaky_root), "--jobs", "2"]) == 1
+    assert "bite: lint: leaky: NOT PROVEN" in shown(capsys)
+
+    fmt_reg = (
+        bite("format", "one")
+        + bite("format", "two", 'write = { path = "src/b.txt", content = "planted\\n" }')
+        + 'args = ["src"]\n'
+    )
+    fmt_root = project(tmp_path / "fmt", {"format": FORMAT_GATE_SKIPS_RECORD}, fmt_reg)
+    assert project_bite.main(["project_bite.py", "--root", str(fmt_root), "--jobs", "2"]) == 0
+    fmt_out = shown(capsys)
+    assert fmt_out.count("accepts verdict record: accepts verdict record") == 1
+    assert "bite: green: 2 of 2 faults bit, over 1 gates in " in fmt_out
