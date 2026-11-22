@@ -19,6 +19,7 @@ WARN_SHARE = 75.0
 FULL_PROOF = "bite-all"
 PROOF = "bite"
 TIER_BUDGETS = {"tier0": 60.0, "tier1": 900.0}
+GROUP = "group"
 _TABLE_HEADER = re.compile(r"^\[ceilings\.seconds\]\s*$", re.MULTILINE)
 _ANY_HEADER = re.compile(r"^\[", re.MULTILINE)
 
@@ -121,6 +122,68 @@ def timed(command: list[str], cwd: Path) -> tuple[float, int]:
     return time.monotonic() - started, completed.returncode
 
 
+Timed = tuple[float, int]
+
+
+def records(path: Path | None) -> list[dict[str, object]]:
+    return [] if path is None else list(runrecord.read(path))
+
+
+def timing(record: dict[str, object]) -> Timed | None:
+    seconds, code = record.get("seconds"), record.get("exit")
+    if isinstance(seconds, bool) or not isinstance(seconds, int | float):
+        return None
+    return (float(seconds), code) if 0 <= seconds < math.inf and isinstance(code, int) else None
+
+
+def grouped(this_run: list[dict[str, object]], job: str) -> list[tuple[str, Timed | None]] | None:
+    ran = [
+        gates
+        for record in this_run
+        if record.get("kind") == GROUP
+        and record.get("job") == job
+        and isinstance(gates := record.get("gates"), list)
+    ]
+    if not ran:
+        return None
+    times = {
+        key: timing(record)
+        for record in this_run
+        if "kind" not in record and isinstance(key := record.get("key"), str)
+    }
+    return [(gate, times.get(gate)) for gate in map(str, ran[-1])]
+
+
+def judged(
+    job: Outcome, gates: list[tuple[str, Timed | None]], *, text: str, tier: str | None
+) -> list[Outcome]:
+    outcomes = []
+    for gate, seconds in gates:
+        if seconds is None:
+            line = (
+                f"ratchet-budget: {gate} ran in {job.key}, and this run's record holds no time"
+                " of it: not judged"
+            )
+            print(line)
+            print(f"::warning title=ratchet-budget::{line}")
+            continue
+        ceiling, whose = held(text, gate, tier)
+        outcomes.append(Outcome(gate, seconds[0], ceiling, seconds[1], whose, job.blocks))
+    return outcomes
+
+
+def said(outcome: Outcome) -> None:
+    print(outcome.line())
+    if outcome.status == "red" and not outcome.blocks:
+        print(f"::warning title=ratchet-budget::{outcome.line()}")
+    if outcome.near:
+        print(
+            f"::warning title=ratchet-budget::ratchet-budget: {outcome.key} used"
+            f" {outcome.share:.0f}% of its ceiling, over the {WARN_SHARE:g}% a green run may take"
+            " before runner variance turns it red"
+        )
+
+
 def report(path: Path, outcome: Outcome, stamp: dict[str, str], *, root: Path) -> None:
     record: dict[str, object] = {
         "key": outcome.key,
@@ -156,21 +219,19 @@ def main(argv: list[str]) -> int:
     root = Path(options.root).resolve()
     thresholds = root / options.file
     text = thresholds.read_text(encoding="utf-8") if thresholds.is_file() else ""
-    tree = runrecord.tree_id(root) if options.report else None
+    report_to = root / options.report if options.report else None
+    tree = runrecord.tree_id(root) if report_to else None
+    earlier = len(records(report_to))
     seconds, exit_code = timed(command, root)
-    ceiling, tier = held(text, options.key, options.tier)
+    gates = grouped(records(report_to)[earlier:], options.key)
+    ceiling, tier = held(text, options.key, None if gates is not None else options.tier)
     outcome = Outcome(options.key, seconds, ceiling, exit_code, tier, options.over == "block")
-    print(outcome.line())
-    if outcome.status == "red" and not outcome.blocks:
-        print(f"::warning title=ratchet-budget::{outcome.line()}")
-    if outcome.near:
-        print(
-            f"::warning title=ratchet-budget::ratchet-budget: {outcome.key} used"
-            f" {outcome.share:.0f}% of its ceiling, over the {WARN_SHARE:g}% a green run may take"
-            " before runner variance turns it red"
-        )
-    if options.report:
-        report(root / options.report, outcome, runrecord.stamp(root, tree), root=root)
+    said(outcome)
+    each_gate = judged(outcome, gates or [], text=text, tier=options.tier)
+    for each in each_gate:
+        said(each)
+    if report_to:
+        report(report_to, outcome, runrecord.stamp(root, tree), root=root)
     if options.headroom is not None and options.key == PROOF:
         print(f"ratchet-budget: the owner records {CEILINGS_TABLE}.{PROOF} by hand; --set skips it")
     elif options.headroom is not None and exit_code == 0:
@@ -181,7 +242,7 @@ def main(argv: list[str]) -> int:
             thresholds.parent.mkdir(parents=True, exist_ok=True)
             thresholds.write_text(with_ceiling(text, options.key, new), encoding="utf-8")
             print(f"ratchet-budget: {CEILINGS_TABLE}.{options.key} set to {new:g}")
-    return outcome.verdict
+    return next((each.verdict for each in (outcome, *each_gate) if each.verdict), 0)
 
 
 if __name__ == "__main__":

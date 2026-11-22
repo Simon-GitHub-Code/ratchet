@@ -364,7 +364,9 @@ def test_a_gate_in_the_sharded_list_runs_alone_in_the_long_job_whatever_its_shar
     assert ci_jobs.problems(own, ci_jobs.facts(tmp_path / "own")) == []
     assert jobs(tmp_path / "own")["rest"] == ("beta", "gamma", "delta")
     output = tmp_path / "output"
-    assert ci_jobs.main(["ci_jobs.py", "--root", str(tmp_path / "own"), "--output", str(output)]) == 0
+    assert (
+        ci_jobs.main(["ci_jobs.py", "--root", str(tmp_path / "own"), "--output", str(output)]) == 0
+    )
     capsys.readouterr()
     outputs = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
     assert (outputs["tier1"], outputs["tier1_long"], outputs["list"]) == (
@@ -423,7 +425,9 @@ RECORD = ".ratchet/timing.jsonl"
 
 def grouped_project(root: Path, thresholds: str) -> Path:
     project(root, '"bite rest"', "", recipes="", speed="- Shards: 1\n")
-    lists = 'tier1_gates := "bite alpha beta gamma"\ntier1_sharded := ""\ntier1_jobs := "bite rest"\n'
+    lists = (
+        'tier1_gates := "bite alpha beta gamma"\ntier1_sharded := ""\ntier1_jobs := "bite rest"\n'
+    )
     (root / JUSTFILE).write_text(lists, encoding="utf-8")
     (root / "quality").mkdir()
     (root / THRESHOLDS).write_text(thresholds, encoding="utf-8")
@@ -433,6 +437,7 @@ def grouped_project(root: Path, thresholds: str) -> Path:
 def judged_in_ci(
     root: Path,
     sleeps: dict[str, float],
+    *,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     command: list[str] | None = None,
@@ -464,7 +469,7 @@ def test_a_group_whose_gates_each_finish_under_the_tier_ceiling_is_green_however
 ) -> None:
     root = grouped_project(tmp_path / "repo", TIER_CEILING)
     sleeps = {"alpha": 0.6, "beta": 0.6, "gamma": 0.6}
-    code, lines = judged_in_ci(root, sleeps, monkeypatch, capsys)
+    code, lines = judged_in_ci(root, sleeps, monkeypatch=monkeypatch, capsys=capsys)
     assert code == 0, lines
     for gate in sleeps:
         assert re.fullmatch(
@@ -482,7 +487,7 @@ def test_a_gate_over_the_tier_ceiling_inside_a_group_is_red_and_its_line_names_i
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = grouped_project(tmp_path / "repo", TIER_CEILING)
-    code, lines = judged_in_ci(root, {"beta": 1.6}, monkeypatch, capsys)
+    code, lines = judged_in_ci(root, {"beta": 1.6}, monkeypatch=monkeypatch, capsys=capsys)
     assert code == 1
     assert judged_gate(lines, "beta").endswith("(ceiling 1.5s of tier1): red")
     assert judged_gate(lines, "alpha").endswith(": green")
@@ -493,7 +498,7 @@ def test_a_gate_with_its_own_key_below_the_tier_s_is_held_to_it_inside_a_group(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = grouped_project(tmp_path / "repo", "[ceilings.seconds]\ntier1 = 900\nalpha = 0.5\n")
-    code, lines = judged_in_ci(root, {"alpha": 0.6}, monkeypatch, capsys)
+    code, lines = judged_in_ci(root, {"alpha": 0.6}, monkeypatch=monkeypatch, capsys=capsys)
     assert code == 1
     assert judged_gate(lines, "alpha").endswith("(ceiling 0.5s): red")
     assert "(ceiling 900s of tier1" in judged_gate(lines, "beta")
@@ -504,7 +509,7 @@ def test_a_group_with_a_key_of_its_own_under_its_job_name_is_held_to_it(
 ) -> None:
     root = grouped_project(tmp_path / "repo", "[ceilings.seconds]\ntier1 = 900\nrest = 0.5\n")
     sleeps = {"alpha": 0.3, "beta": 0.3}
-    code, lines = judged_in_ci(root, sleeps, monkeypatch, capsys)
+    code, lines = judged_in_ci(root, sleeps, monkeypatch=monkeypatch, capsys=capsys)
     assert code == 1
     assert judged_gate(lines, "rest").endswith("(ceiling 0.5s): red")
     assert all(judged_gate(lines, gate).endswith(": green") for gate in sleeps)
@@ -514,10 +519,10 @@ def test_an_earlier_run_s_lines_in_the_record_are_not_read_as_this_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = grouped_project(tmp_path / "repo", TIER_CEILING)
-    code, lines = judged_in_ci(root, {"alpha": 1.6}, monkeypatch, capsys)
+    code, lines = judged_in_ci(root, {"alpha": 1.6}, monkeypatch=monkeypatch, capsys=capsys)
     assert (code, judged_gate(lines, "alpha").endswith(": red")) == (1, True)
     nothing = [sys.executable, "-c", "pass"]
-    code, lines = judged_in_ci(root, {}, monkeypatch, capsys, command=nothing)
+    code, lines = judged_in_ci(root, {}, monkeypatch=monkeypatch, capsys=capsys, command=nothing)
     assert code == 0, lines
     assert [line.split(" took ")[0] for line in lines] == ["ratchet-budget: rest"]
     assert re.search(r"\(ceiling 1\.5s of tier1, \d+% used\): green$", lines[0])
@@ -545,7 +550,7 @@ def test_a_gate_whose_time_this_run_s_record_does_not_hold_is_named_and_not_judg
     writer.write_text(GROUP_ONLY, encoding="utf-8")
     command = [sys.executable, str(writer), str(root / RECORD)]
     (root / RECORD).parent.mkdir()
-    code, lines = judged_in_ci(root, {}, monkeypatch, capsys, command=command)
+    code, lines = judged_in_ci(root, {}, monkeypatch=monkeypatch, capsys=capsys, command=command)
     assert code == 0, lines
     for gate in ("alpha", "beta"):
         assert judged_gate(lines, gate) == (

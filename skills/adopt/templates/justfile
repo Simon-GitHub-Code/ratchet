@@ -112,7 +112,7 @@ tier2_gates := "mutation api-deep symbolic fuzz e2e test-stability reproducible 
 tier1_sharded := "test mutation-changed"
 tier2_sharded := "mutation e2e test-stability"
 
-tier1_jobs := "bite rest"
+tier1_jobs := "test mutation-changed bite rest"
 
 serial0 := ""
 serial1 := "--serial coverage mutation-changed"

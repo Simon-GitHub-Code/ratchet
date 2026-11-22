@@ -101,9 +101,9 @@ def test_ci_runs_tier_1_as_the_proof_and_one_job_for_every_other_gate(tmp_path: 
     assert code == 0
     assert (json.loads(outputs["tier1"]), json.loads(outputs["tier1_long"])) == (
         ["bite", "rest"],
-        [],
+        gate_list("tier1_sharded"),
     )
-    assert gate_list("tier1_jobs") == ["bite", "rest"]
+    assert gate_list("tier1_jobs") == [*gate_list("tier1_sharded"), "bite", "rest"]
     assert "gate: ${{ fromJSON(needs.shape.outputs.tier1) }}" in WORKFLOWS["ci.yml"]
     assert 'just ci-job "${{ matrix.gate }}"' in WORKFLOWS["ci.yml"]
     assert "needs: [tier0" not in WORKFLOWS["ci.yml"], "tier 1 starts beside tier 0"
