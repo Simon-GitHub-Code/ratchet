@@ -21,13 +21,14 @@ from hypothesis import strategies as st
 
 import drain
 import hooks_installed
+import merge
 import merge_ready
 import owed
 import queue_notes
 import triggers
 from tests import servers
 from tests.repos import commit, git, hook_script, repository, write
-from tests.test_merge_ready import GLOSSARY, MANIFEST
+from tests.test_merge_ready import FUZZ, GATES, GLOSSARY, MANIFEST
 
 Out = pytest.CaptureFixture[str]
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
@@ -592,6 +593,31 @@ def test_land_leaves_the_branch_to_the_owner_with_the_judges_reasons(
     assert states(root)[BRANCH_A] == "held", (
         "a ticket left to the owner is held until its text changes, not landed again"
     )
+
+
+def test_land_waits_on_an_unproven_tip_and_lands_once_merge_deep_proved_it(
+    tmp_path: Path, capsys: Out
+) -> None:
+    proved = binding(MERGE) + "| check-deep | `true` |\n" + GATES + FUZZ
+    bound = "[ceilings.deep]\nunproven = 0\n"
+    root = project(
+        tmp_path, **{"docs/process/binding.md": proved, "quality/thresholds.toml": bound}
+    )
+    run(root, "open", ALPHA)
+    change = {"src/b.py": "B = 1\n", ALPHA: ticket(1, "Alpha", status="resolved")}
+    build(root, BRANCH_A, change, record=approval("alpha"))
+    capsys.readouterr()
+    assert run(root, "land", ALPHA) == 1
+    out = capsys.readouterr().out
+    assert "merge: wait\nunproven: no finished deep run covers" in out
+    assert "the owner types" not in out
+    kept = note(root, BRANCH_A)
+    assert kept["outcome"] == "waits"
+    assert [queue_notes.code_of(reason) for reason in kept["reasons"]] == ["unproven"]
+    assert states(root)[BRANCH_A] != "held", "a wait is retried, not left to the owner"
+    assert merge.main(["merge", "--deep", "--root", str(root)]) == 0
+    assert run(root, "land", ALPHA) == 0
+    assert note(root, BRANCH_A)["outcome"] == "merged"
 
 
 def test_land_needs_the_merge_entry_point_and_no_forge(tmp_path: Path, capsys: Out) -> None:
@@ -2189,7 +2215,8 @@ def test_a_split_killed_between_its_parts_and_a_part_edited_lands_each_part_once
         with pytest.raises(Killed):
             run(root, "split", ALPHA, "--plan", plan)
     first = root / ISSUES / "04-save.md"
-    first.write_text(first.read_text(encoding="utf-8") + "\nThe owner's note.\n", encoding="utf-8")
+    noted = first.read_text(encoding="utf-8") + "\n## Notes\n\nThe owner's note.\n"
+    first.write_text(noted, encoding="utf-8")
     assert run(root, "split", ALPHA, "--plan", plan) == 0
     landed_parts(root, [f"{ISSUES}/04-save.md", f"{ISSUES}/05-list.md"])
     assert "The owner's note." in git(root, "show", f"main:{ISSUES}/04-save.md")
@@ -2631,7 +2658,9 @@ HOOK_ACTIONS = {
     "refuses": "exit 1",
     "stages": f"printf x > {HOOKED} && git add -- {HOOKED}",
     "writes": f"printf x > {HOOKED}",
-    "edits a part": f"for f in {ISSUES}/*-save.md; do printf 'edited\\n' >> \"$f\"; done",
+    "edits a part": (
+        f"for f in {ISSUES}/*-save.md; do printf '\\n## Notes\\n\\nedited\\n' >> \"$f\"; done"
+    ),
 }
 COMMITS = (
     '[ -n "$HOOKED" ] && exit 0\n'
@@ -2760,7 +2789,9 @@ def one_exit(
         for part in (root / ISSUES).glob("*.md"):
             name = part.relative_to(root).as_posix()
             if PART_PATH.fullmatch(name) and not raw(root, "ls-files", "--", name):
-                part.write_text(part.read_text(encoding="utf-8") + "The owner's edit.\n")
+                part.write_text(
+                    part.read_text(encoding="utf-8") + "\n## Notes\n\nThe owner's edit.\n"
+                )
     kept = hooks_made(root)
     again = run(root, "split", ALPHA, "--plan", plan)
     printed = capsys.readouterr().out

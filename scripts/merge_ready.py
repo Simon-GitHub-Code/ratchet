@@ -28,6 +28,7 @@ import owed
 import plugin_pin
 import project_bite
 import queue_notes
+import split
 import unproven
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
@@ -780,13 +781,14 @@ def closes(change: Change, path: str) -> str | None:
     return None
 
 
-def part_of_a_split(change: Change, path: str) -> bool:
+def part_of_a_split(change: Change, path: str) -> preflight.Ticket | None:
     text = change.after(path) or ""
     ref = splits.split_from(text)
     if ref is None:
-        return False
+        return None
     folder = PurePosixPath(path).parent
-    parent = change.tip(ref if "/" in ref else (folder / ref).as_posix())
+    ticket = ref if "/" in ref else (folder / ref).as_posix()
+    parent = change.tip(ticket)
     listed = git(change.root, "ls-tree", "--name-only", "-z", change.head, "--", f"{folder}/")
     others = [name for name in (listed or "").split("\0") if name not in ("", path)]
     siblings = [
@@ -794,7 +796,7 @@ def part_of_a_split(change: Change, path: str) -> bool:
         for name in others
         if (found := change.after(name)) is not None and splits.split_from(found) == ref
     ]
-    return (
+    part = (
         parent is not None
         and not splits.scope_problems(parent, [text, *siblings])
         and any(
@@ -802,15 +804,54 @@ def part_of_a_split(change: Change, path: str) -> bool:
             for label in spellings(change)
         )
     )
+    return preflight.local_ticket(ticket, parent) if part and parent is not None else None
+
+
+def inheritance(change: Change, path: str, ticket: preflight.Ticket, *, label: str) -> str | None:
+    text = change.after(path) or ""
+    read = preflight.local_ticket(ticket.ref, text)
+    part = split.Part(read.title, tuple(preflight.criteria(text)), "", ())
+    body, why = split.child_body(ticket, part, waits=list(read.blockers), label=label)
+    wanted, held = split.inherited(body), split.inherited(ticket.body)
+    for piece, value in split.inherited(text).items():
+        if value == wanted[piece]:
+            continue
+        if not value:
+            return f"it has no {piece} and {ticket.ref} has one on the default branch"
+        if wanted[piece]:
+            return f"its {piece} is not the one {ticket.ref} has on the default branch"
+        if held[piece] and why:
+            return (
+                f"it has a {piece} and the split writes none from {ticket.ref} on the default"
+                f" branch, because {why}"
+            )
+        return f"it has a {piece} and {ticket.ref} has none on the default branch"
+    filed = (PurePosixPath(ticket.ref).parent / PurePosixPath(path).name).as_posix()
+    with tracker_names(change, change.head) as names:
+        reads, meant = (
+            preflight.parent_of(preflight.local_ticket(where, words), names) or "no spec"
+            for where, words in ((path, text), (filed, body))
+        )
+    if reads == meant:
+        return None
+    return (
+        f"it reads {reads} as its spec and the part the split writes from {ticket.ref} on the"
+        f" default branch reads {meant}"
+    )
 
 
 def label_given(change: Change, path: str) -> str | None:
-    if part_of_a_split(change, path):
-        return None
     before, after = (change.before(path) or "").casefold(), (change.after(path) or "").casefold()
     for label in spellings(change):
         if after.count(label.casefold()) > before.count(label.casefold()):
-            return f"gives a ticket the agent-ready label `{label}`, which is the owner's act"
+            ticket = part_of_a_split(change, path)
+            if ticket is None:
+                return f"gives a ticket the agent-ready label `{label}`, which is the owner's act"
+            differs = inheritance(change, path, ticket, label=label)
+            return differs and (
+                f"gives a part the agent-ready label `{label}`, which is the owner's act when"
+                f" {differs}"
+            )
     return None
 
 

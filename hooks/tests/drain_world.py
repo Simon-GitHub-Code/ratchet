@@ -116,9 +116,9 @@ def die(*_args, **_kwargs):
     os.kill(os.getpid(), signal.SIGKILL)
 
 
-def cut_off(where, *args):
+def cut_off(where, *args, **options):
     if args[:2] != ("merge", "--ff-only"):
-        return real_git(where, *args)
+        return real_git(where, *args, **options)
     old = real_git(where, "rev-parse", "HEAD")
     rows = [row for row in merge.blobs(where, old, args[-1]) if row[0] != "D"]
     for at, (_status, path, _was, blob) in enumerate(rows):
@@ -284,9 +284,9 @@ class World:
         )
 
         def git_until(stop: tuple[str, str]) -> Callable[..., str | None]:
-            def run(root: Path, *args: str) -> str | None:
+            def run(root: Path, *args: str, **options: str) -> str | None:
                 if args[:2] != stop:
-                    return real_git(root, *args)
+                    return real_git(root, *args, **options)
                 if stop[0] == "rebase":
                     git(root, "-c", "sequence.editor=sed -i 1ibreak", "rebase", "-i", *args[1:])
                 raise Killed
