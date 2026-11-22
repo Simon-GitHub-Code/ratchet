@@ -136,8 +136,8 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` from what the o
      - **The repository has no forge:** run the `merge` entry point with `--records` (`just merge --records`) in one Bash call.
      - **The repository has a forge:** commit the file on a branch of its own and open the pull request. Its merge job merges it.
      - A ticket that already carries the agent-ready label, and the spec such a ticket inherits from, change only by the owner's merge, with or without a forge.
-       - **No forge:** the run prints `merge: owner` and their command, which you relay as it is.
-       - **A forge:** the merge job leaves the pull request to the owner and comments why on it. Hand over without waiting for that job, as step 5 says.
+       - **No forge:** the run prints `merge: owner` (or `merge: wait`) and any command, which you relay as it is.
+       - **A forge:** the merge job leaves the pull request to the owner and comments why on it (or comments `merge: wait` when a deep run holds it). Hand over with the verdict line and without waiting for that job, as step 5 says.
      - Never commit on the default branch itself.
 
    Done when each section you appended or replaced is where this step puts it, `## Conjecture` ending with its `- Criteria:` line when the body has a criteria heading, in the issue body or in the file, merged, waiting on the owner's merge, or in an open pull request. When they are on the spec, you have said that its tickets inherit them. When the merge is the owner's, you have relayed why, or, with a forge, you have gone on to step 5 without waiting for the merge job.

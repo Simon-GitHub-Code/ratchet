@@ -35,7 +35,7 @@ A row is never dropped. One that applies names a tool or is an accepted gap, as 
 | --- | --- | --- | --- | --- |
 | 0 | every commit | `tier0`; the commit hooks split it, `pre-commit` on the tree before the commit and `commit-msg` on the message being written, since `commits` over history would judge the commit an amend replaces | about a minute | the commit, and the pull request |
 | 1 | every pull request | `tier1` | under fifteen minutes, so nobody is tempted to skip it | the pull request; on the default branch, as tier 2: a red tier 1 there is fixed before anything else merges, and while it is red the merge judge leaves every merge to the owner |
-| 2 | merge to the default branch, nightly, on demand | `tier2` | unbounded; time-boxed where a tool runs forever | the next piece of work: a red tier 2 on the default branch is fixed before anything else merges, and while it is red the merge judge leaves every merge to the owner |
+| 2 | merge to the default branch, nightly, on demand | `tier2` | unbounded; time-boxed where a tool runs forever | the next piece of work: a red tier 2 on the default branch is fixed before anything else merges, names every merge since the last green, and leaves every merge to the owner; an unfinished run holds (`merge: wait`) when `ceilings.deep.unproven` is declared in `quality/thresholds.toml` |
 | weekly | scheduled | `audit-all`, `licenses`, `drift`, `load-soak`, and once their events are declared the backup restore and the production check | | nothing; the finding is visible and gets its own pull request |
 | advisory | on demand | `reports` | | nothing, ever; read before a refactor to pick targets |
 
@@ -46,6 +46,8 @@ The feature preflight, the route and the `ratchet` recipe ask it, and each print
 `check` is tier 0 plus tier 1. `check-deep` adds tier 2. `check-fast` is `check` stopped at the first red, for the inner loop. Each tier is a list of small entry points, so a failure names the one that went red and that one reruns alone until green.
 
 With no forge, tier 2 after a merge is the `merge` entry point with `--deep`, which an agent runs in the background and waits on. It runs `check-deep` on the default branch's tip and records the result in `ratchet-deep.jsonl`, and the next merge reads that record: a red that no later green covers holds it, as a red deep run does on a forge. A proof that could not judge the tree, a failed `setup` or a signal among them, is unrun: it covers nothing and is not red.
+
+On a forge, `deep.yml` sets `cancel-in-progress: false` so a started run finishes, and its `speaks` job writes the merges it speaks for and dispatches `merge.yml` on the default branch when it ends. `merge.yml` reads `deep.yml` runs in every status, dispatches `deep.yml` when the tip is unproven and nothing runs nearer it, and hands the answer to `merge_ready.py --deep`. A red tier 2 holds every project (`merge: owner`) and names every merge back to the last green; an unfinished run holds (`merge: wait`) only when `quality/thresholds.toml` declares `unproven` under `[ceilings.deep]`, which defaults to unset so adopted queues keep their rate until they opt in.
 
 Every comparison against history uses the merge base with the default branch (`HEAD~1` on the default branch itself), so a loosening made in an earlier commit of the same branch is still seen. CI checks out full history.
 

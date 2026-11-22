@@ -215,7 +215,7 @@ The orchestrator is the `/ratchet:feature` skill's session. It runs the prefligh
    - With no forge (the binding's Forge section names a change template instead of a pull request template), the filled template is `.scratch/changes/<branch>.md` (the branch's `/` written as `-`). Commit it on the branch with the local ticket's `Status:` line set to `resolved`, the local form of `Closes #N`, so the merge resolves it.
 5. **Write the verdict record.** Put the result's `verdictRecord` on stdin of the `merge-ready` entry point's `record` form (`just merge-ready record`), and commit the `docs/features/<slug>/verdict.json` it writes alone, as the last commit. The record names the tree the review saw, so any commit after it sends the merge to the owner.
 6. **Publish.** Push, and open the pull request with every section of the repository's template filled ([records.md](records.md)), every entry of `recordNotes` (each added term, *Avoid* item and ADR) listed in the Decisions section. When the critic did not run, the pull request says so and why, from the result's `critic`. With no forge nothing is pushed.
-7. **Leave the merge to the judge.** The merge judge decides who merges, never the orchestrator ([guards.md](guards.md)). Run the `merge-ready` entry point and report its lines: `merge: agent`, or `merge: owner` with every reason.
+7. **Leave the merge to the judge.** The merge judge decides who merges, never the orchestrator ([guards.md](guards.md)). Run the `merge-ready` entry point and report its lines: `merge: agent`, `merge: wait` with every reason, or `merge: owner` with every reason.
    - With no forge, run the `merge` entry point with the branch (`just merge <branch>`).
 
    Merge nothing by hand.
@@ -226,7 +226,7 @@ The orchestrator is the `/ratchet:feature` skill's session. It runs the prefligh
 
 - **Merging is serial.** One result is settled at a time.
 - **The judge merges.** With a forge, the skill opens the pull request and watches it.
-- **A ticket that cannot go on is parked.** An open question, a guard edit, a dispute, a verdict that is not an approval or a `merge: owner` closes the ticket with the reasons as given, and the others go on. A too-large result is not parked, though its verdict is `blocked`: the agent splits it, as [Too large](../feature/SKILL.md#too-large-the-agent-splits-it) says, unless the ticket is itself a part.
+- **A ticket that cannot go on is parked.** An open question, a guard edit, a dispute, a verdict that is not an approval or a `merge: owner` closes the ticket with the reasons as given, and the others go on. `merge: wait` closes the ticket as `waits` with its reasons; when every reason is mechanical (such as `unproven`), a later drain retries it up to the retry limit. A too-large result is not parked, though its verdict is `blocked`: the agent splits it, as [Too large](../feature/SKILL.md#too-large-the-agent-splits-it) says, unless the ticket is itself a part.
   - A `triggers` red, another instance of a kind whose safeguard or architecture review is owed, parks it with a reason naming `/ratchet:safeguard` or `/ratchet:architecture`.
   - No role writes the review: it is the owner's next command, and a decision record written in the same change as the instance would not count.
 - **One report.** `drain.py report` writes `.ratchet/queue/<date>-<time>.md`. The owner's questions come after it.
