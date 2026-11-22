@@ -274,6 +274,10 @@ name = "static security analysis"
 trigger = "code:source"
 
 [[question]]
+name = "changed tests order-independent"
+trigger = "code:source"
+
+[[question]]
 name = "suite order-independent and repeatable"
 trigger = "code:source"
 

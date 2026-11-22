@@ -182,7 +182,9 @@ def test_a_justfile_without_the_recipe_gets_the_templates(repo: Path) -> None:
 
 def test_a_bound_changed_tests_gate_no_tier_runs_is_carried_into_tier_one(repo: Path) -> None:
     replace(
-        "justfile", "test-counts tests-changed mutation-changed", "test-counts mutation-changed"
+        "justfile",
+        "test-counts tests-changed test-stability-changed",
+        "test-counts test-stability-changed",
     )(repo)
     found = [f for f in conformance.findings(repo) if "tests-changed" in f.problem]
     assert [f.problem for f in found] == [
@@ -200,7 +202,9 @@ def test_a_bound_changed_tests_gate_no_tier_runs_is_carried_into_tier_one(repo: 
 
 def test_a_changed_tests_row_that_waits_on_its_trigger_is_not_carried(repo: Path) -> None:
     replace(
-        "justfile", "test-counts tests-changed mutation-changed", "test-counts mutation-changed"
+        "justfile",
+        "test-counts tests-changed test-stability-changed",
+        "test-counts test-stability-changed",
     )(repo)
     replace(
         BINDING,
