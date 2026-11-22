@@ -661,8 +661,8 @@ def detached_in_another_tree(root: Path) -> str:
     return BRANCH_A
 
 
-def users_own(root: Path, label: str, *, committed: bool) -> str:
-    assert run(root, "close", GAMMA, "--outcome", "waits", "--reason", "x") == 0
+def users_own(root: Path, label: str, *, committed: bool, outcome: str = "waits") -> str:
+    assert run(root, "close", GAMMA, "--outcome", outcome, "--reason", "x") == 0
     git(root, "switch", "-q", BRANCH_C)
     if committed:
         write(root, "src/mine.py", "MINE = 1\n")
@@ -680,6 +680,9 @@ UNPROVEN: dict[str, Callable[[Path], str]] = {
     ),
     "the owner's, on a commit the note does not record": lambda root: users_own(
         root, "unapproved", committed=True
+    ),
+    "a blocked run, on a ticket the drain parked": lambda root: users_own(
+        root, "blocked", committed=False, outcome="parked"
     ),
 }
 
