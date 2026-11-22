@@ -371,3 +371,12 @@ def test_the_justfile_is_read_with_what_it_imports(tmp_path: Path) -> None:
     read = schedule.justfile(tmp_path)
     assert read.count("a := '1'") == 1
     assert read.count("b := '2'") == 1
+
+
+def test_budget_flag_is_parsed_as_a_valued_option() -> None:
+    text = (
+        "check:\n    python3 scripts/parallel.py --budget loop -- lint test\n"
+        "fast:\n    python3 scripts/parallel.py --budget=loop --fail-fast -- lint\n"
+    )
+    assert schedule.recipes(text) == (EMPTY, [], [])
+    assert "--budget" in schedule.VALUED
