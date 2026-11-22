@@ -604,12 +604,76 @@ def test_a_kept_file_that_does_not_apply_stays_and_the_line_says_so(
     kept.write_bytes(kept.read_bytes().replace(base.encode(), b"0" * len(base), 1))
     capsys.readouterr()
     assert run(root, "restore", BRANCH_C) == 1
-    assert capsys.readouterr().out == (
-        f"restore: {kept} does not apply on {'0' * len(base)} in the checkout, so it stays and"
-        " the checkout is as it was\n"
+    assert capsys.readouterr().out == not_taken(
+        kept, f"does not apply on {'0' * len(base)} in the checkout"
     )
     assert kept_files(root, BRANCH_C) == [kept]
     assert git(root, "branch", "--show-current") == "main"
+
+
+def not_taken(unit: Path, why: str) -> str:
+    return (
+        f"restore: {unit} {why}, so it stays and the checkout is as it was: once the checkout can"
+        f" take it, run `drain.py restore {BRANCH_C}` again\n"
+    )
+
+
+def test_a_restore_a_read_only_folder_refuses_keeps_the_unit_and_the_checkout_as_it_was(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", GAMMA)
+    unfinished_work(drain.tree_of(root, BRANCH_C))
+    assert close_parked(root) == 0
+    [unit] = kept_files(root, BRANCH_C)
+    git(root, "switch", "-q", BRANCH_C)
+    was = snapshot(root)
+    (root / "src").chmod(0o555)
+    capsys.readouterr()
+    try:
+        assert run(root, "restore", BRANCH_C) == 1
+    finally:
+        (root / "src").chmod(0o755)
+    assert capsys.readouterr().out == not_taken(unit, "could not be written into the checkout")
+    assert kept_files(root, BRANCH_C) == [unit]
+    assert snapshot(root) == was
+    assert git(root, "branch", "--show-current") == BRANCH_C
+    assert MARKER in (restored(root, BRANCH_C) / "src/untracked.py").read_text(encoding="utf-8")
+
+
+APPLIED = {
+    "refused": (None, "could not be written into the checkout"),
+    "said yes and wrote nothing": (
+        b"",
+        "was applied, yet the checkout does not hold what it set aside",
+    ),
+}
+
+
+@pytest.mark.parametrize("answer", list(APPLIED))
+def test_a_restore_whose_apply_to_the_files_fails_keeps_the_unit_and_the_checkout_as_it_was(
+    tmp_path: Path, capsys: Out, answer: str
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", GAMMA)
+    unfinished_work(drain.tree_of(root, BRANCH_C))
+    assert close_parked(root) == 0
+    [unit] = kept_files(root, BRANCH_C)
+    was = snapshot(root)
+    given, why = APPLIED[answer]
+    real = drain.plumb
+
+    def plumb(where: Path, *args: str, **named: object) -> bytes | None:
+        return given if args == (*drain.APPLY, "-") else real(where, *args, **named)  # type: ignore[arg-type]
+
+    capsys.readouterr()
+    with mock.patch.object(drain, "plumb", plumb):
+        assert run(root, "restore", BRANCH_C) == 1
+    assert capsys.readouterr().out == not_taken(unit, why)
+    assert kept_files(root, BRANCH_C) == [unit]
+    assert snapshot(root) == was
+    assert git(root, "branch", "--show-current") == "main"
+    assert MARKER in (restored(root, BRANCH_C) / "src/a.py").read_text(encoding="utf-8")
 
 
 def test_a_unit_that_meets_a_file_in_the_checkout_restores_nothing(
@@ -625,12 +689,13 @@ def test_a_unit_that_meets_a_file_in_the_checkout_restores_nothing(
     write(root, "src/untracked.py", "ignored\n")
     capsys.readouterr()
     assert run(root, "restore", BRANCH_C) == 1
-    assert capsys.readouterr().out.endswith("so it stays and the checkout is as it was\n")
+    [unit] = kept_files(root, BRANCH_C)
+    applies = f"does not apply on {git(root, 'rev-parse', BRANCH_C)} in the checkout"
+    assert capsys.readouterr().out.endswith(not_taken(unit, applies))
     assert git(root, "branch", "--show-current") == "main"
     assert git(root, "status", "--porcelain") == ""
     assert git(root, "diff", "--cached", "--name-only") == "", "the index is as it was"
     assert (root / "src/untracked.py").read_text(encoding="utf-8") == "ignored\n"
-    assert len(kept_files(root, BRANCH_C)) == 1
 
 
 def test_an_old_drain_stash_whose_file_cannot_be_written_stays_and_says_why(
