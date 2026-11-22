@@ -22,6 +22,8 @@ STANDARD = parse(
     (PLUGIN_ROOT / "skills/adopt/templates/guards/manifest.toml").read_text(encoding="utf-8")
 )
 JUSTFILE = (PLUGIN_ROOT / "skills/adopt/templates/justfile").read_text(encoding="utf-8")
+MERGE_JOB = ".github/workflows/merge.yml"
+MERGE_WORKFLOW = (PLUGIN_ROOT / "skills/adopt/templates" / MERGE_JOB).read_text(encoding="utf-8")
 PLUGIN = Path("/plugin")
 ROOT = Path("/repo")
 WORKTREE = ROOT / ".claude/worktrees/agent-1"
@@ -116,7 +118,9 @@ class FakeRepo:
     pushed: bool | None = False
     asked: list[str] = field(default_factory=list)
     names: dict[str, str] = field(default_factory=lambda: dict(NAMES))
-    default_files: dict[str, str] = field(default_factory=lambda: {"justfile": JUSTFILE})
+    default_files: dict[str, str] = field(
+        default_factory=lambda: {"justfile": JUSTFILE, MERGE_JOB: MERGE_WORKFLOW}
+    )
 
     def awaiting_final(self, cwd: Path) -> str | None:
         del cwd

@@ -7,7 +7,7 @@ from typing import Protocol
 from ratchet_guards.environment import TRACKED
 from ratchet_guards.paths import Hit, Locator
 from ratchet_guards.refs import MAIN_BRANCHES
-from ratchet_guards.verdict import ACTING_RULES, UNADOPTED, Verdict
+from ratchet_guards.verdict import ACTING_RULES, MERGE_JOB, NO_MERGE_JOB, UNADOPTED, Verdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import justfile_text
@@ -41,6 +41,7 @@ class Context:
     exported: frozenset[str] = frozenset()
     unread: bool = False
     unsettled: bool = False
+    repointed: bool = False
     lost: bool = False
     unspelled: bool = False
     hidden_switch: bool = False
@@ -72,6 +73,9 @@ class Context:
 
     def unsettling(self) -> "Context":
         return replace(self, unsettled=True)
+
+    def repointing(self) -> "Context":
+        return replace(self, repointed=True)
 
     def switching_unseen(self) -> "Context":
         return replace(self, hidden_switch=True)
@@ -137,10 +141,16 @@ class Guard:
         filesystem = self.locator.filesystem
         checkout = filesystem.guarded_checkout(filesystem.canonical(cwd))
         recipes = None if checkout is None else self.repo.default_file(checkout.root, RECIPES)
-        refused = recipes is not None and all(
-            justfile_text.defines_recipe(recipes, name) for name in MERGES_BY_ITSELF
-        )
-        return Verdict(rule if refused else UNADOPTED[rule], detail)
+        if (
+            checkout is None
+            or recipes is None
+            or not all(justfile_text.defines_recipe(recipes, name) for name in MERGES_BY_ITSELF)
+        ):
+            return Verdict(UNADOPTED[rule], detail)
+        if rule not in NO_MERGE_JOB:
+            return Verdict(rule, detail)
+        job = self.repo.default_file(checkout.root, MERGE_JOB)
+        return Verdict(NO_MERGE_JOB[rule] if job is None else rule, detail)
 
     def acting(self, paths: Iterable[Path]) -> list[Verdict]:
         found = (self.locator.acting(path) for path in paths)

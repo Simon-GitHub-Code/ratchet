@@ -4,7 +4,18 @@ import pytest
 
 from ratchet_guards.context import Guard
 from ratchet_guards.manifest import EMPTY
-from tests.support import NAMES, ROOT, WORKTREE, FakeFilesystem, FakeRepo, make_guard, rules
+from ratchet_guards.verdict import Decision
+from tests.support import (
+    JUSTFILE,
+    NAMES,
+    ROOT,
+    WORKTREE,
+    FakeFilesystem,
+    FakeRepo,
+    make_guard,
+    rules,
+    verdicts,
+)
 from tests.test_units import Heads
 
 W = "guard-path-write"
@@ -12,6 +23,7 @@ P = "guard-path-default"
 U = "unresolved-directory"
 D = "default-ref"
 M = "merge-default"
+S = "sync-default"
 A = "instructions-write"
 F = "workflow-write"
 
@@ -950,6 +962,17 @@ ASKED: list[tuple[str, list[str]]] = [
     ("echo \"${x:-'`git push -f`'}\"", ["force-push", "unreadable"]),
 ]
 
+QUERIES_FROM_A_FILE = [
+    "gh api graphql --input q.json",
+    "gh api graphql --input=q.json",
+    "gh api graphql -F query=@q.graphql",
+    "gh api graphql -Fquery=@q.graphql",
+    "gh api graphql --field query=@q.graphql",
+    "gh api graphql --field=query=@q.graphql",
+    "gh api /graphql --input q.json",
+    "gh api https://api.github.com/graphql -F query=@q.graphql",
+    "gh api graphql --input - <<'EOF'\n{}\nEOF",
+]
 MERGED = [("gh pr merge 5", ["merge-pr"]), *(row for row in ASKED if row[1] == ["merge-pr"])]
 
 UNRESOLVED = U
@@ -1194,6 +1217,13 @@ ALLOWED: list[str] = [
     "gh api repos/o/r/pulls/3",
     "gh api repos/o/r/pulls/3/merge",
     "gh api repos/o/r/merges",
+    "gh api graphql -f query='query { viewer { login } }'",
+    "gh api graphql -F n=3 -f query='query { viewer { login } }'",
+    "gh api graphql -f query=@literal -f q='{ viewer { login } }'",
+    "gh api graphql -f query='query { search(query: \"--input x\", type: ISSUE) { issueCount } }'",
+    "gh api graphql -f query='query { viewer { login } }' -f note='-F a=@b'",
+    "gh api repos/o/r/issues/3/comments -F body=@notes.md",
+    "gh api repos/o/r/pulls/3 --input body.json",
     "gh api repos/o/r/git/refs/heads/main",
     "gh api repos/o/r/git/refs -f ref=refs/heads/feature/x -f sha=abc",
     "gh api -X DELETE repos/o/r/git/refs/heads/feature/main",
@@ -1517,6 +1547,30 @@ def test_a_merge_where_nothing_is_adopted_still_asks_the_owner(
     assert rules(command, unadopted(FakeRepo(branch="main"))) == ["merge-pr-unadopted"]
 
 
+@pytest.mark.parametrize("command", QUERIES_FROM_A_FILE)
+def test_a_forge_query_read_from_a_file_is_a_line_the_guard_cannot_read_not_a_merge(
+    command: str,
+) -> None:
+    assert rules(command) == ["unread-query"]
+    assert rules(command, unadopted()) == ["unread-query"]
+    (verdict,) = verdicts(command)
+    assert "`gh api graphql -f query='…'`" in verdict.detail
+
+
+@pytest.mark.parametrize(("command", "expected"), MERGED)
+def test_a_merge_where_no_merge_job_is_committed_is_refused_without_naming_one(
+    command: str, expected: list[str]
+) -> None:
+    assert expected == ["merge-pr"]
+    jobless = make_guard(FakeRepo(default_files={"justfile": JUSTFILE}))
+    (verdict,) = verdicts(command, jobless)
+    assert verdict.decision is Decision.DENY
+    assert "merge job merges" not in verdict.way_out
+    assert "Leave it to the merge job" not in verdict.way_out
+    (jobbed,) = verdicts(command)
+    assert "Leave it to the merge job" in jobbed.way_out
+
+
 @pytest.mark.parametrize(
     "command", [command for command, expected in DENIED + ASKED if P in expected]
 )
@@ -1673,28 +1727,154 @@ ON_MAIN: list[tuple[str, list[str]]] = [
     ("git stash -u && git pull && git stash pop", []),
     ("git status; git pull", []),
     ("cd . && git pull", []),
-    ("git branch -u feature/x && git merge --ff-only @{u}", [M]),
-    ("git branch --set-upstream-to=feature/x; git pull", [M]),
-    ("git config branch.main.merge refs/heads/feature/x && git pull", [M]),
-    ("git fetch --set-upstream origin feature/x && git pull", [M]),
-    ("git fetch origin feature/x && git pull", [M]),
-    ("git push -u . main:feature/z; git pull", [M]),
-    ("git branch origin/main feature/x && git merge --ff-only origin/main", [M]),
-    ("git tag origin/main feature/x; git merge --ff-only origin/main", [M]),
-    ("git update-ref refs/origin/main feature/x && git merge --ff-only origin/main", [M]),
-    ("mkdir .git/origin; cp x .git/origin/main; git merge --ff-only origin/main", [M]),
-    ("sh -c 'git branch -u feature/x'; git pull", [M]),
-    ("echo hi && git pull", [M]),
-    ("git -c pull.rebase=true fetch && git pull", [M]),
-    ("git --git-dir=/r/.git fetch; git pull origin", [M]),
-    ("git stash branch x && git pull", [M]),
-    ("git checkout -b origin/main x && git checkout main && git merge --ff-only origin/main", [M]),
-    ("git switch -c x && git switch main && git pull", [M]),
-    ("sudo git fetch && git pull", [M]),
-    ("git --git-dir=/r/.git pull", [M]),
-    ("GIT_DIR=/r/.git git merge --ff-only origin/main", [M]),
-    ("git --git-dir=/r/.git pull origin main", []),
+    ("git branch -u feature/x && git merge --ff-only @{u}", [S]),
+    ("git branch --set-upstream-to=feature/x; git pull", [S]),
+    ("git config branch.main.merge refs/heads/feature/x && git pull", [S]),
+    ("git fetch --set-upstream origin feature/x && git pull", [S]),
+    ("git fetch origin feature/x && git pull", [S]),
+    ("git push -u . main:feature/z; git pull", [S]),
+    ("git branch origin/main feature/x && git merge --ff-only origin/main", [S]),
+    ("git tag origin/main feature/x; git merge --ff-only origin/main", [S]),
+    ("git update-ref refs/origin/main feature/x && git merge --ff-only origin/main", [S]),
+    ("git tag x feature/x && git merge --ff-only refs/remotes/origin/main", [S]),
+    ("git tag x feature/x && git merge --ff-only remotes/origin/main", [S]),
+    ("git tag x feature/x && git merge --ff-only origin/main feature/x", [M]),
+    ("git tag x feature/x && git merge --ff-only FETCH_HEAD", [M]),
+    ("mkdir .git/origin; cp x .git/origin/main; git merge --ff-only origin/main", [S]),
+    ("sh -c 'git branch -u feature/x'; git pull", [S]),
+    ("echo hi && git pull", [S]),
+    ("git -c pull.rebase=true fetch && git pull", [S]),
+    ("git --git-dir=/r/.git fetch; git pull origin", [S]),
+    ("git stash branch x && git pull", [S]),
+    ("git checkout -b origin/main x && git checkout main && git merge --ff-only origin/main", [S]),
+    ("git switch -c x && git switch main && git pull", [S]),
+    ("sudo git fetch && git pull", [S]),
+    ("git --git-dir=/r/.git pull", [S]),
+    ("GIT_DIR=/r/.git git merge --ff-only origin/main", [S]),
+    ("git --git-dir=/r/.git pull origin main", [S]),
+    ("GIT_DIR=/r/.git git pull origin main", [S]),
+    ("export GIT_WORK_TREE=/r; git pull --ff-only origin main", [S]),
+    ("git --git-dir=/r/.git pull origin feature/x", [M]),
     ("echo hi && git pull origin main", []),
+    ("true || git pull origin main", []),
+    (": && git pull --ff-only origin main", []),
+    ("B=origin/feature/x; git pull origin main", []),
+    ("git fetch origin feature/x && git pull origin main", []),
+    ("git config branch.main.merge refs/heads/feature/x && git pull origin main", []),
+    ("git config branch.main.remote up && git pull origin main", []),
+    ("git branch -u origin/feature/x && git pull --rebase origin main", []),
+    ("git tag origin/main feature/x && git pull origin main", []),
+    ("git branch origin/main feature/x && git pull origin main", []),
+    ("git remote add up ../other && git fetch up && git pull origin main", []),
+    ("git switch --detach && git pull origin main", []),
+    ("git checkout -q main && git pull origin main", []),
+    ("git stash && git status && git pull origin main", []),
+    ("echo x > /dev/null && git pull origin main", []),
+    ("(true) && git pull origin main", []),
+    ("git config core.sshCommand ssh && git pull origin main", [S]),
+    ("git config set branch.main.merge x && git pull origin main", [S]),
+    ("git config --global branch.main.merge x && git pull origin main", [S]),
+    ("git config branch.main.mergeOptions -s && git pull origin main", [S]),
+    ("git remote update && git pull origin main", [S]),
+    ("git fetch --upload-pack=x origin && git pull origin main", [S]),
+    ("git -c core.pager=cat fetch && git pull origin main", [S]),
+    ("git --git-dir=/r/.git fetch && git pull origin main", [S]),
+    ("git gc && git pull origin main", [S]),
+    ("git fetch $X && git pull origin main", [S]),
+    ("git remote add $N ../other && git pull origin main", [S]),
+    ("make && git pull origin main", []),
+    ("env true && git pull origin main", []),
+    ("just test && git pull --rebase origin main", []),
+    ("pytest tests/test_git.py && git pull origin main", []),
+    ("gh pr view 7 && git pull origin main", []),
+    ("gh -R o/r pr checks 7 && git pull origin main", []),
+    ("git commit -am x && git pull --rebase origin main", []),
+    ("git add -A && git commit -m 'fix $x' && git pull origin main", []),
+    ("git log -3 && git pull origin main", []),
+    ("git log --oneline main..HEAD && git pull origin main", []),
+    ("git diff && git pull origin main", []),
+    ("git diff --stat HEAD~1 | cat && git pull origin main", []),
+    ("git show HEAD && git pull origin main", []),
+    ("git rev-parse HEAD && git pull origin main", []),
+    ("git -C sub log -1 && git pull origin main", []),
+    ("git diff --output=.git/config && git pull origin main", [W, S]),
+    ("git log $X && git pull origin main", [S]),
+    ("git -c core.pager=x log && git pull origin main", [S]),
+    ("git --git-dir=/r/.git commit -m x && git pull origin main", [S]),
+    ('git commit -m "$(make)" && git pull origin main', []),
+    ("git remote set-url origin ../other && git pull origin main", [D, S]),
+    ("git config remote.origin.url ../other && git pull origin main", [D, S]),
+    ("sudo git remote set-url origin x && git pull origin main", [D, S]),
+    ("/usr/bin/git remote set-url origin x && git pull origin main", [D, S]),
+    ("bash -c 'git remote set-url origin x' && git pull origin main", [D, S]),
+    ("sudo git config core.sshCommand ssh && git pull origin main", [S]),
+    ("/usr/bin/git config core.sshCommand ssh && git pull origin main", [S]),
+    ("bash -c 'git config core.sshCommand ssh' && git pull origin main", [S]),
+    ("find . -exec git remote add x y \\; && git pull origin main", [S]),
+    ("git-lfs install && git pull origin main", [S]),
+    ("cat .github/workflows/x.yml .gitignore && git pull origin main", []),
+    ("make $T && git pull origin main", [S]),
+    ("gh repo fork --remote && git pull origin main", [S]),
+    ("gh pr checkout 7 && git pull origin main", [S]),
+    ("source env.sh && git pull origin main", [S]),
+    ("set -a && git pull origin main", [S]),
+    ("command export GIT_DIR=/r/.git && git pull origin main", [S]),
+    ("printf -v GIT_DIR /r/.git && git pull origin main", [S]),
+    ("install -m 644 x .git/config && git pull origin main", [W, S]),
+    ("rsync x ~/.gitconfig && git pull origin main", [S]),
+    ("dd if=x of=.git/HEAD && git pull origin main", [W, S]),
+    ("cd .git && make; cd /repo && git pull origin main", [S]),
+    ("X=1 true && git pull origin main", [S]),
+    ("echo $(make) && git pull origin main", []),
+    ("B=$(make); git pull origin main", []),
+    ("echo `make` && git pull origin main", []),
+    ("git commit -m \"$(cat <<'EOF'\nfix: x\n\nbody\nEOF\n)\" && git pull origin main", []),
+    ("git commit -m \"$(printf 'x')\" && git pull origin main", []),
+    ('git commit -m "fix $(date)" && git pull origin main', []),
+    (
+        (
+            "git commit -m \"$(cat <<'EOF'\n$(git remote set-url origin y)\nEOF\n)\" && "
+            "git pull origin main"
+        ),
+        [],
+    ),
+    ('git commit -m "$(cat <<EOF\nfix $X `date`\nEOF\n)" && git pull origin main', []),
+    ("git commit -F - <<'EOF' && git pull origin main\nfix: x\nEOF", []),
+    (
+        (
+            'git commit -m "$(cat <<EOF\n$(git remote set-url origin y)\nEOF\n)" && '
+            "git pull origin main"
+        ),
+        [D, S],
+    ),
+    ("bash <<'EOF' && git pull origin main\ngit remote set-url origin y\nEOF", [D, S]),
+    ("bash <<'EOF' && git pull origin main\nmake\nEOF", [S]),
+    ("x=$(git config remote.origin.url) && git pull origin main", [S]),
+    ('git commit -m "$(git remote set-url origin y)" && git pull origin main', [D, S]),
+    ("git commit -m \"$(bash -c 'git config core.sshCommand ssh')\" && git pull origin main", [S]),
+    ('git commit -m "$(cd .git && make)" && git pull origin main', [S]),
+    ('git log "$(printf x)" && git pull origin main', [S]),
+    ("$(printf git) remote set-url origin y && git pull origin main", [S]),
+    ("echo ${ git config core.sshCommand ssh; } && git pull origin main", [S]),
+    ("echo ${ date; } && git pull origin main", []),
+    ("$TOOL && git pull origin main", [S]),
+    ("${TOOL} && git pull origin main", [S]),
+    ("echo x > $F && git pull origin main", [S]),
+    ("(make) && git pull origin main", []),
+    ("git fetch origin && git pull origin main", []),
+    ("cd sub && git pull origin main", []),
+    ("git -c color.ui=false pull", []),
+    ("git -ccolor.ui=never pull --ff-only origin main", []),
+    ("git -c Color.Branch.Current=red merge --ff-only origin/main", []),
+    ("git -c advice.detachedHead=false -c color.ui=always merge @{u}", []),
+    ("git --config-env=color.ui=HOME pull", []),
+    ("git --config-env color.ui=HOME pull origin main", []),
+    ("git -c color.ui pull", []),
+    ("git -c color.ui=false -c branch.main.merge=refs/heads/feature/x pull", [S]),
+    ("git -c color.ui=false merge feature/4-x", [M]),
+    ("git -c colors.ui=false pull", [S]),
+    ("git -c core.pager=cat pull", [S]),
+    ("git -c user.name=x pull origin main", [S]),
     ("git cherry-pick --abort", []),
     ("git cherry-pick --cont", []),
     ("just merge feature/4-x", []),
@@ -1716,11 +1896,11 @@ ON_MAIN: list[tuple[str, list[str]]] = [
     ("git merge origin", [M]),
     ("git merge --no-ff release/0.13.4", [M]),
     ("git merge -q --ff-only origin/fix/x", [M]),
-    ("git -c branch.main.merge=refs/heads/feature/x merge --ff-only", [M]),
-    ("git -c branch.main.merge=refs/heads/feature/x merge", [M]),
-    ("git -c branch.main.merge=refs/heads/feature/x pull", [M]),
-    ("git -c branch.main.remote=../other pull --ff-only", [M]),
-    ("git -c merge.defaultToUpstream=true merge origin/main", [M]),
+    ("git -c branch.main.merge=refs/heads/feature/x merge --ff-only", [S]),
+    ("git -c branch.main.merge=refs/heads/feature/x merge", [S]),
+    ("git -c branch.main.merge=refs/heads/feature/x pull", [S]),
+    ("git -c branch.main.remote=../other pull --ff-only", [S]),
+    ("git -c merge.defaultToUpstream=true merge origin/main", [S]),
     ("git merge --squash feature/4-x", [M]),
     ("git merge origin/feature/4-x", [M]),
     ("git merge -s ours --ff-only feature/4-x", [M]),
@@ -1762,12 +1942,41 @@ def test_rules_on_main(command: str, expected: list[str]) -> None:
 
 @pytest.mark.parametrize(
     ("command", "expected"),
-    [(command, expected) for command, expected in ON_MAIN if expected in ([], [M])],
+    [(command, expected) for command, expected in ON_MAIN if expected in ([], [M], [S])],
 )
 def test_a_merge_on_main_where_nothing_is_adopted_asks_the_owner_and_a_sync_passes(
     command: str, expected: list[str]
 ) -> None:
-    asked = ["merge-default-unadopted"] if expected else []
+    asked = [f"{rule}-unadopted" for rule in expected]
+    assert rules(command, unadopted(FakeRepo(branch="main"))) == asked
+
+
+WRITES_INTO_GIT = [
+    ("printf x > .git/config.tmp && git pull origin main", []),
+    ("echo x > .git/config && git pull origin main", [S]),
+    ("echo x > .git/config.worktree && git pull origin main", [S]),
+    ("echo x > ~/.gitconfig && git pull origin main", [S]),
+    ("echo x > ~/.config/git/config && git pull origin main", [S]),
+    ("echo x > .git && git pull origin main", [S]),
+    ("echo x > sub/.git && cd sub && git pull origin main", [S]),
+    ("echo x > .git/info/attributes && git pull origin main", [S]),
+    ("echo x > .git/commondir && git pull origin main", [S]),
+    ("echo x > .git/FETCH_HEAD && git pull origin main", [S]),
+    ("echo x >> .git/hooks/post-merge && git pull origin main", [S]),
+    ("git status > .git/config && git pull", [S]),
+    ("git status > .git/config && git merge --ff-only origin/main", [S]),
+    ("cd .git && echo x > config; cd /repo && git pull origin main", [S]),
+    ("cp ../g .git/config && git pull origin main", [S]),
+    ("(cp ../g .git/config) && git pull origin main", [S]),
+    ("echo $(cp ../g .git/config) && git pull origin main", [S]),
+]
+
+
+@pytest.mark.parametrize(("command", "expected"), WRITES_INTO_GIT)
+def test_a_named_pull_after_a_write_that_may_repoint_its_remote_is_a_sync_the_guard_cannot_read(
+    command: str, expected: list[str]
+) -> None:
+    asked = [f"{rule}-unadopted" for rule in expected]
     assert rules(command, unadopted(FakeRepo(branch="main"))) == asked
 
 

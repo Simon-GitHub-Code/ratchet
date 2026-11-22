@@ -86,7 +86,7 @@ def test_a_denied_merge_writes_one_line(adopted: Path) -> None:
     printed = answer(adopted, bash(adopted, "gh pr merge 7"))
     assert decision(printed) == "deny"
     [line] = lines(log_of(adopted))
-    assert (line["decision"], line["tool"], line["rule"]) == ("deny", "Bash", "merge-pr")
+    assert (line["decision"], line["tool"], line["rule"]) == ("deny", "Bash", "merge-pr-no-job")
     assert line["detail"] == "gh pr merge"
     assert line["branch"] == "main"
 
