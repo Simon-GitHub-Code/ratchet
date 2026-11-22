@@ -4064,3 +4064,158 @@ def test_a_format_verdict_record_check_that_cannot_plant_reports_not_planted(
     out = shown(capsys)
     assert "bite: format: accepts verdict record: THE FAULT WAS NOT PLANTED\n" in out
     assert "  record: refused in test\n" in out
+
+
+def test_swapping_copy_git_dir_for_symlink_never_writes_to_real_repository(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "a planted word"))
+    before_head = git(root, "rev-parse", "HEAD")
+    before_root = fingerprint(root)
+    copy = project_bite.make_copy(
+        root, tmp_path / "copy", registry=project_bite.Registry(), shell=project_bite.Shell()
+    )
+    aside_git = tmp_path / "aside_git"
+    (copy.path / ".git").rename(aside_git)
+    (copy.path / ".git").symlink_to(root / ".git", target_is_directory=True)
+    bite_spec = project_bite.Bite(
+        "lint",
+        "committed",
+        "L001",
+        project_bite.Write("src/_bite.txt", "planted\n"),
+        commit=True,
+    )
+    bite_spec.plant(copy.tree)
+    assert git(root, "rev-parse", "HEAD") == before_head
+    assert fingerprint(root) == before_root
+    assert git(tmp_path, "--git-dir", str(aside_git), "log", "-1", "--format=%s") == (
+        "test(bite): committed"
+    )
+
+    swap = f"mv .git ../{aside_git.name}2 && ln -s {shlex.quote(str(root / '.git'))} .git"
+    (root / "quality/bites.toml").write_text(
+        f"setup = [{json.dumps('sh -c ' + shlex.quote(swap))}]\n" + bite("lint", "a planted word"),
+        encoding="utf-8",
+    )
+    commit(root, "swap git dir in setup")
+    expected_head = git(root, "rev-parse", "HEAD")
+    assert prove(root) == 1
+    assert not (root / ".git/bite-index").exists()
+    assert git(root, "rev-parse", "HEAD") == expected_head
+    assert "reached through a symbolic link" in shown(capsys)
+
+
+def test_rewrite_with_same_size_and_mtime_between_clear_and_diff_is_still_restored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, None)
+    old = (int(time.time()) - 10) * 10**9
+    os.utime(root / "src/code.txt", ns=(old, old))
+    copy = project_bite.make_copy(
+        root, tmp_path / "copy", registry=project_bite.Registry(), shell=project_bite.Shell()
+    )
+    (copy.path / "junk.txt").write_text("untracked\n", encoding="utf-8")
+    real_clear = project_bite.Tree.clear
+
+    def tamper_during_clear(self: project_bite.Tree, path: str) -> None:
+        real_clear(self, path)
+        if path == "junk.txt":
+            target = copy.path / "src/code.txt"
+            target.write_text("dirty\n", encoding="utf-8")
+            os.utime(target, ns=(old, old))
+
+    monkeypatch.setattr(project_bite.Tree, "clear", tamper_during_clear)
+    while time.time() % 1 > 0.5:
+        time.sleep(0.05)
+    os.utime(copy.path / "src/code.txt", ns=(old, old))
+    copy.restore()
+    assert (copy.path / "src/code.txt").read_text(encoding="utf-8") == "clean\n"
+
+
+@pytest.mark.parametrize("kind", ["file", "symlink"])
+def test_ignored_parent_replaced_by_file_or_symlink_refuses_with_blocking_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], kind: str
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "kept.txt").write_text("outside\n", encoding="utf-8")
+    replace_dir = (
+        "echo blocker > dir.secret"
+        if kind == "file"
+        else f"ln -s {shlex.quote(str(outside))} dir.secret"
+    )
+    gate = f"rm -rf dir.secret && {replace_dir}\n{LINT}"
+    root = project(tmp_path / "repo", {"lint": gate}, bite("lint", "a planted word"))
+    write(root, "dir.secret/kept.txt", "tracked\n")
+    git(root, "add", "--force", "dir.secret/kept.txt")
+    commit(root, "feat(core): tracked file in ignored directory")
+    assert prove(root) == 1
+    out = shown(capsys)
+    assert "dir.secret" in out
+    assert "dir.secret/kept.txt" in out
+    assert ("file" if kind == "file" else "symbolic link") in out
+    assert "standing where a directory is needed" in out
+    assert (outside / "kept.txt").read_text(encoding="utf-8") == "outside\n"
+
+
+def test_git_fallback_when_proc_fd_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(project_bite, "PROC_FD", tmp_path / "missing-proc-fd")
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "a planted word"))
+    assert prove(root) == 0
+    assert "bite: lint: a planted word: bites" in shown(capsys)
+
+
+def test_tree_pin_repo_cleanup_and_descriptor_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    with pytest.raises(FileNotFoundError):
+        project_bite.Tree.pin_repo(plain)
+    tree = project_bite.Tree.pin(plain)
+    tree.close()
+    monkeypatch.setattr(project_bite, "DESCRIPTORS", False)
+    with pytest.raises(project_bite.Unprovable, match="without following a link"):
+        tree.read("x.txt")
+
+
+def test_environment_strips_all_repository_variables(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in project_bite.gatelib.REPOSITORY_VARIABLES:
+        monkeypatch.setenv(var, "/somewhere/foreign-repo")
+    env = project_bite.environment()
+    assert not any(var in env for var in project_bite.gatelib.REPOSITORY_VARIABLES)
+
+
+def test_deleted_tracked_link_is_restored(tmp_path: Path) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, None)
+    (root / "src/link").symlink_to("code.txt")
+    commit(root, "feat(core): a tracked link")
+    copy = project_bite.make_copy(
+        root, tmp_path / "copy", registry=project_bite.Registry(), shell=project_bite.Shell()
+    )
+    (copy.path / "src/link").unlink()
+    copy.restore()
+    assert (copy.path / "src/link").is_symlink()
+    assert str((copy.path / "src/link").readlink()) == "code.txt"
+    copy.close()
+
+
+def test_plants_outside_git_read_reads_stray_and_stopped_prove(tmp_path: Path) -> None:
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert project_bite.plants(plain, project_bite.Registry()) == ([], [])
+    _, strays = project_bite.read_reads("\n## What each gate reads\n- lint: a.py\nstray line\n")
+    assert strays == ["stray line"]
+
+    root = project(tmp_path / "repo", {"lint": LINT}, None)
+    copy = project_bite.make_copy(
+        root, tmp_path / "copy", registry=project_bite.Registry(), shell=project_bite.Shell()
+    )
+    row = project_bite.Row("q", "tool", "0", "sh gate lint")
+    bite_spec = project_bite.Bite("lint", "first", "L001", project_bite.Write("src/x.txt", "p"))
+    copy.shell.stopped = True
+    assert list(copy.prove(row, [bite_spec])) == []
+    assert list(copy.prove(row, [])) == []
+    copy.close()
