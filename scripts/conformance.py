@@ -40,6 +40,7 @@ import settings_rules
 import suites
 import suppressions
 import triggers
+import unproven
 from ratchet_guards import committed
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
@@ -156,6 +157,12 @@ NO_DOOR = (
     " Until one is, an agent can merge a change to such a part without you. To mark one, ask an"
     " agent which files hold it: it adds them to guards/manifest.toml on a branch, and you decide"
     " at that merge."
+)
+OPEN_RECORD = (
+    "The record of the slow checks run after each merge is not yet closed to agents. Until it"
+    " is, an agent could write a passing result into it, as it could already move the default"
+    " branch itself. To close it, an agent adds it to guards/manifest.toml on a branch, and you"
+    " decide at that merge."
 )
 WEEKLY_CHECKS = "the weekly checks"
 SHARD_MATRIX = "matrix.shard"
@@ -287,6 +294,7 @@ PR_SECTIONS = (
 )
 LOCKED_PATTERNS = {".claude/settings.json", ".claude/hooks/**"}
 GUARDED_PATTERNS = {"guards/**"}
+DEEP_RECORD = f".git/{unproven.RECORD}"
 PR_TEMPLATE_LINE = re.compile(r"^- (?:Pull request|Change) template: `([^`]+)`", re.MULTILINE)
 DEFAULT_PR_TEMPLATE = ".github/pull_request_template.md"
 NUMBERED = re.compile(r"^(\d{4})-[a-z0-9-]+\.md$")
@@ -2060,6 +2068,18 @@ def check_manifest(root: Path) -> Iterable[Finding]:
         yield agent(f"guards/manifest.toml: '{pattern}' is not in an edit = \"deny\" group")
     for pattern in sorted(GUARDED_PATTERNS - guarded):
         yield agent(f"guards/manifest.toml: '{pattern}' is in no group")
+    yield from deep_record_locked(locked)
+
+
+def deep_record_locked(locked: set[str]) -> Iterable[Finding]:
+    if not gatelib.matches(DEEP_RECORD, sorted(locked)):
+        yield owner(
+            f"guards/manifest.toml: '{DEEP_RECORD}' is not in an edit = \"deny\" group",
+            f"Add '{DEEP_RECORD}' to the `local-git` group, as the template has it? With no forge"
+            " the merge reads tier 2 from that record; an agent adds the line on a branch, and"
+            " you decide at that merge.",
+            assumed=OPEN_RECORD,
+        )
 
 
 def check_default_branch(root: Path) -> Iterable[Finding]:
@@ -3998,6 +4018,10 @@ def guard_mutations() -> list[Mutation]:
         (
             "manifest with a group still unbound",
             rewrite(manifest, 'paths = [\n    "quality/**",\n]', "paths = []"),
+        ),
+        (
+            "manifest letting an agent write the deep record",
+            rewrite(manifest, f'    "{DEEP_RECORD}",\n', ""),
         ),
         (
             "settings denying what the hook allows",

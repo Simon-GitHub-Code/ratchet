@@ -18,6 +18,7 @@ import conformance
 import lowered
 import owed
 import plugin_pin
+import settings_rules
 import upgrade
 from tests import adopted
 from tests.repos import branch, commit, git
@@ -195,6 +196,16 @@ def test_an_upgrade_records_what_it_leaves_and_conformance_counts_it_green(
     assert f"conformance: green (0 failures; {len(entries)} owed since an upgrade" in out
     assert out.count("\nowed: ") + out.startswith("owed: ") == len(entries)
     assert gate(repo, capsys)[0] == 0
+
+
+def test_an_upgraded_project_owes_the_deep_record_s_guard_and_its_settings_deny_its_edit(
+    repo: Path,
+) -> None:
+    problem = "'.git/ratchet-deep.jsonl' is not in an edit = \"deny\" group"
+    entry = owed.Entry("guards/manifest.toml", "manifest", problem, VERSION)
+    assert entry in owed.read(repo).entries
+    assert settings_rules.drift(repo) == []
+    assert '"Edit(/.git/ratchet-deep.jsonl)"' in (repo / ".claude/settings.json").read_text()
 
 
 def test_an_upgrade_run_again_on_the_merged_change_writes_nothing(repo: Path) -> None:
