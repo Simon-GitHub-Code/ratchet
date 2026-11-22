@@ -50,7 +50,17 @@ NOT_FOUND = (
     "port where this system shows it"
 )
 Address = ipaddress.IPv4Address | ipaddress.IPv6Address
-Table = dict[str, tuple[Address, int]]
+End = tuple[Address, int]
+Table = dict[str, End]
+TAKEN_ELSEWHERE = (
+    "it left the listener's queue, but no process of the service holds it, as when a process "
+    "outside the boot command's group accepts connections for the service"
+)
+ABSENT = (
+    "the gate found the service's end of that connection nowhere in this system's TCP table, "
+    "as when the service runs in another network namespace, such as a container's"
+)
+NO_TABLE = "this system shows no TCP table the gate can read"
 
 
 @dataclass(frozen=True)
@@ -157,6 +167,41 @@ def points(descriptor: Path, link: str) -> bool:
         return str(descriptor.readlink()) == link
     except OSError:
         return False
+
+
+def end(address: tuple[object, ...]) -> End:
+    host, port = gatelib.end(address)
+    return ipaddress.ip_address(host), port
+
+
+def rows() -> Iterator[tuple[End, End, str]]:
+    for kind in ("tcp", "tcp6"):
+        with (
+            contextlib.suppress(OSError),
+            Path(f"{PROC}/{os.getpid()}/net/{kind}").open(errors="replace") as lines,
+        ):
+            for line in lines:
+                fields = line.split()
+                try:
+                    row = (bound_at(fields[1]), bound_at(fields[2]), f"socket:[{fields[9]}]")
+                except (IndexError, ValueError):
+                    continue
+                yield row
+
+
+def accepted(service: Service, at: End, client: End) -> bool | str:
+    seen = list(rows())
+    if not seen:
+        return NO_TABLE
+    link = next((link for local, remote, link in seen if (local, remote) == (at, client)), None)
+    if link is None:
+        return ABSENT
+    if link == "socket:[0]":
+        return False
+    sockets, unseen = service.scan(everyone=False)
+    if unseen:
+        return unseen[0]
+    return link in sockets or TAKEN_ELSEWHERE
 
 
 def unmapped(found: Address) -> Address:
@@ -276,6 +321,8 @@ def listens(sock: socket.socket) -> bool:
 def grab(group: int) -> list[Listener] | str:
     if sys.platform != "linux" or not hasattr(os, "pidfd_open"):
         return NOT_LINUX
+    if not Path(PROC).is_dir():
+        return UNREADABLE
     service = Service(group, {group})
     sockets, unseen = service.scan(everyone=False)
     if unseen:
@@ -342,5 +389,7 @@ def take(held: list[Listener] | str, marker: Path, ended: threading.Event) -> No
                 connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, RESET)
                 connection.close()
     finally:
+        last = gatelib.Stopping(ports, first.elsewhere, frozenset(taken), answered=True)
+        gatelib.write_stopping(marker, last)
         for listener in copies:
             listener.copy.close()

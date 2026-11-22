@@ -58,6 +58,7 @@ SERVICE = (
     "    if line == 'close\\n': listener.close()\n"
     "    if line == 'shut\\n': listener.shutdown(socket.SHUT_RDWR)\n"
     "    if line == 'hide\\n': hide()\n"
+    "    if line == 'accept\\n': taken = listener.accept()\n"
     "    print('done', flush=True)\n"
 )
 
@@ -368,6 +369,28 @@ def test_the_gate_says_why_it_holds_nothing(monkeypatch: pytest.MonkeyPatch) -> 
     assert listeners.grab(os.getpid()) == (
         "the gate can copy a service's listener only on Linux 5.6 or later"
     )
+
+
+def test_where_the_gate_holds_no_listener_the_smoke_judges_every_port_the_older_way() -> None:
+    told = listeners.told("the host is not Linux")
+    assert told == gatelib.Stopping({}, "the host is not Linux", frozenset())
+    assert told.inexact(8000) == "the host is not Linux"
+
+
+def test_a_connection_is_seen_queued_then_accepted_by_whoever_holds_it_or_nowhere(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    nobody = listeners.Service(-1, set())
+    with service() as running, socket.create_connection(("127.0.0.1", running.port)) as client:
+        ours = listeners.Service(running.process.pid, {running.process.pid})
+        at, me = listeners.end(client.getpeername()), listeners.end(client.getsockname())
+        assert listeners.accepted(ours, at, me) is False, "still in the listener's queue"
+        assert running.tell("accept") == "done"
+        assert listeners.accepted(ours, at, me) is True
+        assert listeners.accepted(nobody, at, me) == listeners.TAKEN_ELSEWHERE
+        assert listeners.accepted(ours, at, (me[0], 1)) == listeners.ABSENT
+        monkeypatch.setattr(listeners, "PROC", str(tmp_path / "none"))
+        assert listeners.accepted(ours, at, me) == listeners.NO_TABLE
 
 
 @pytest.mark.parametrize(
