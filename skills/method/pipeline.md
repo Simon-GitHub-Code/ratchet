@@ -12,7 +12,7 @@ Each role does its work with the other plugins' skills. The method fixes what a 
 ### Spec
 
 - **Works with:** `mattpocock-skills:tdd` for what a good test is and the seams under test; `mattpocock-skills:codebase-design` for placement, seams, and deep modules over shallow wrappers.
-- **Sees:** the ticket with its comments, the glossary, the design brief, the relevant ADRs, the architecture ADR and the declared layers, and code only as far as placing the feature needs.
+- **Sees:** the ticket with its comments, its parent's `## Conjecture`, `## Operability` and `## Answers`, whether the project is deployed as the preflight read it, the glossary, the design brief, the relevant ADRs, the architecture ADR and the declared layers, and code only as far as placing the feature needs.
 
 **What `docs/features/<slug>/spec.md` holds:**
 
@@ -51,8 +51,8 @@ Done when `spec.md` holds every part listed above, the failing tests exist and e
 
 ### Ticket check
 
-- **Works with:** no skill. It reads two documents.
-- **Sees:** the ticket as the base branch holds it, with its comments and `## Answers`; `spec.md`.
+- **Works with:** no skill. It reads the ticket, its parent's three sections and `spec.md`.
+- **Sees:** the ticket as the base branch holds it, with its comments and `## Answers`; its parent's `## Conjecture`, `## Operability` and `## Answers`; whether the project is deployed as the preflight read it; `spec.md`.
 - **Never sees:** the code, the tests, every other record.
 - **Returns `ticketPromises`:** each promise of the ticket, in its words, read as `covered` by the criteria that carry it, or as `dropped`, `bent` or `assumed` with the spec line. A sentence about how the method treats the work (what a gate charges) is no promise.
 - **Returns `acceptedInputs`:** for each thing the change lets users or other systems send the running product, its plain name (what a person who cannot read code calls it, such as "the link you paste") and the criterion that decides an empty, an oversized and a hostile value, or none. A header the change checks to guard itself is no input.
@@ -91,7 +91,7 @@ Done when every attack above is done, every finding carries the command and outp
 ### Review
 
 - **Works with:** `mattpocock-skills:code-review`, its Spec and Standards axes and smell baseline; `mattpocock-skills:codebase-design` for the design axis.
-- **Sees:** the ticket with its comments and `## Answers`, the readings the ticket check settled, the spec, the uncommitted diff, `AGENTS.md`, the glossary, `docs/adr/`, the binding, `docs/disputes/`, `DESIGN.md`, generated contract artefacts.
+- **Sees:** the ticket with its comments and `## Answers`, its parent's `## Conjecture`, `## Operability` and `## Answers`, whether the project is deployed as the preflight read it, the readings the ticket check settled, the spec, the uncommitted diff, `AGENTS.md`, the glossary, `docs/adr/`, the binding, `docs/disputes/`, `DESIGN.md`, generated contract artefacts.
 - **Never sees:** the implementer's notes, the critic's findings.
 - **Judges:**
   - axis A, the spec: criteria narrowed, tests weakened, behaviour added;
@@ -105,7 +105,7 @@ Done when axes A to F are judged and the verdict approves only under that rule.
 
 ### The roles that read the ticket
 
-Three roles read the ticket: the spec role, which writes the spec from it; the ticket check, which reads only the ticket and `spec.md` before anything is built; and the review, which reads the change against the readings the check settled. Every other role works from the spec alone, so a spec that drops or bends a promise of the ticket would be built to the letter and pass every other check.
+Three roles read the ticket: the spec role, which writes the spec from it; the ticket check, which reads only the ticket, its parent's three sections and `spec.md` before anything is built; and the review, which reads the change against the readings the check settled. Every other role works from the spec alone, so a spec that drops or bends a promise of the ticket would be built to the letter and pass every other check.
 
 - Each of the three reads a local ticket file as the base branch holds it (`git show <base>:<path>`), not the copy in the working tree that an agent of the run could have edited.
 

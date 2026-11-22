@@ -16,6 +16,7 @@ import owed
 import publish_check
 import route
 import run_time
+import split
 from tests.repos import git, install_hooks, repository, snapshot, write
 
 Out = pytest.CaptureFixture[str]
@@ -962,6 +963,171 @@ def test_the_report_says_whether_the_project_is_deployed(tmp_path: Path) -> None
         assert report.deployed is deployed, name
         assert json.loads(json.dumps(asdict(report)))["deployed"] is deployed, name
     assert run(repository(tmp_path / "bare"), "4", gh_returning(issue())).deployed is False
+
+
+YES = "- Flag: `notes`, off until the owner switches it on\n"
+NO = (
+    "- Flag: none: the owner chose to have it appear as soon as it is finished, while the"
+    " project is not deployed\n"
+)
+HIDDEN = {"form": "hidden", "key": "notes"}
+APPEARS = {"form": "appears", "key": None}
+UNASKED = {"form": "unasked", "key": None}
+LONG = "k" * 80
+
+
+def flag_of(report: preflight.Report) -> object:
+    return json.loads(json.dumps(asdict(report)))["flag"]
+
+
+@pytest.mark.parametrize(
+    ("line", "flag"),
+    [
+        (YES, HIDDEN),
+        ("- **Flag:** **`notes`**, off until the owner switches it on.\n", HIDDEN),
+        (NO, APPEARS),
+        (NO.replace("none:", "`none`:"), APPEARS),
+        ("- Flag: none: the command only reads\n", UNASKED),
+        ("- Flag: `notes`, default off\n", UNASKED),
+        ("- Flag: `notes`, off until the owner says so\n", UNASKED),
+        (NO.replace("deployed\n", "deployed yet\n"), UNASKED),
+        (YES + YES, HIDDEN),
+        (f"```\n{NO}```\n{YES}", HIDDEN),
+        (f"~~~~\n{NO}~~~~~\n{YES}", HIDDEN),
+        (YES.replace("notes", LONG), {"form": "hidden", "key": LONG}),
+    ],
+)
+def test_the_report_says_which_form_the_flag_line_takes(
+    tmp_path: Path, line: str, flag: dict[str, object]
+) -> None:
+    for name, extra in (
+        ("young", events("none")),
+        ("live", events("deployed")),
+        ("unlined", ("", "")),
+    ):
+        report = adopted(tmp_path / name, "cli", BODY + f"\n## Operability\n\n{line}", extra=extra)
+        assert report.ok, report.failures
+        assert flag_of(report) == flag, name
+
+
+def test_the_flag_line_the_report_reads_is_the_tickets_else_its_parents(tmp_path: Path) -> None:
+    rest = SIGNAL + LOAD + SECURITY
+    assert flag_of(operated(tmp_path / "inherited", rest, YES)) == HIDDEN
+    assert flag_of(operated(tmp_path / "own", NO + rest, YES)) == APPEARS
+    library = adopted(tmp_path / "library", "library", BODY + f"\n## Operability\n\n{YES}")
+    assert flag_of(library) == UNASKED, "a library is never asked"
+    assert flag_of(run(repository(tmp_path / "bare"), "4", gh_returning(issue()))) == UNASKED
+    refused = adopted(tmp_path / "silent", "cli", BODY)
+    assert (checks(refused), flag_of(refused)) == (["operability"], UNASKED)
+    fenced = adopted(tmp_path / "fenced", "cli", BODY + f"\n## Operability\n\n```\n{YES}```\n")
+    assert (checks(fenced), flag_of(fenced)) == (["operability"], UNASKED)
+    assert fenced.failures[0].detail.startswith("4: `## Operability` lacks `Flag:`")
+
+
+@pytest.mark.parametrize(
+    ("own", "inherited"),
+    [
+        (YES + NO, ""),
+        (NO + YES, ""),
+        (f"{NO}- Flag: none: the command only reads\n", ""),
+        ("", YES + NO),
+        (YES + YES.replace("notes", "lists"), ""),
+    ],
+)
+def test_flag_lines_that_disagree_read_as_unasked_and_are_named(
+    tmp_path: Path, own: str, inherited: str
+) -> None:
+    rest = SIGNAL + LOAD + SECURITY
+    report = operated(tmp_path, own + rest, inherited)
+    assert (checks(report), flag_of(report)) == (["operability"], UNASKED)
+    said = report.failures[0].detail
+    assert "has `Flag:` lines that disagree" in said, said
+    for line in (own or inherited).splitlines():
+        assert f'"{line.removeprefix("- Flag: ")}"' in said, said
+
+
+def test_a_flag_key_longer_than_eighty_characters_is_refused(tmp_path: Path) -> None:
+    line = "- Flag: `" + "k" * 81 + "`, off until the owner switches it on\n"
+    report = adopted(tmp_path, "cli", BODY + f"\n## Operability\n\n{line}", extra=events("none"))
+    assert (checks(report), flag_of(report)) == (["operability"], UNASKED)
+    said = report.failures[0].detail
+    assert said == (
+        "4: `## Operability` has `Flag:` with a key of 81 characters, and a key is at most 80;"
+        " write each, or `none` and why"
+    )
+
+
+@pytest.mark.parametrize(
+    "value", ["deployed (since March)", "Deployed", "deployed.", "none: still young", "launched"]
+)
+def test_a_life_events_value_the_preflight_cannot_read_is_refused(
+    tmp_path: Path, value: str
+) -> None:
+    report = adopted(tmp_path, "cli", BODY + f"\n## Operability\n\n{NO}", extra=events(value))
+    assert checks(report) == ["life-events"]
+    said = report.failures[0].detail
+    assert said == (
+        f"the binding's `- Life events:` line reads `{value}`, which the preflight cannot read:"
+        " it takes `none`, or one or more of `deployed`, `irreplaceable-data`, `depended-on`"
+        " joined by commas"
+    )
+    for name, fine in (("ticked", "`deployed`"), ("two", "deployed, depended-on")):
+        body = BODY + f"\n## Operability\n\n{NO}"
+        report = adopted(tmp_path / name, "cli", body, extra=events(fine))
+        assert report.ok, (name, report.failures)
+
+
+SPLIT_SPEC = (
+    "# Notes\n\n## Solution\n\nX.\n\n## Operability\n\n"
+    f"{YES}- Signal: a span per request\n- Load: the list route joins the load smoke\n"
+    "- Security: one read route and no new input\n"
+)
+
+
+def split_part(tmp_path: Path, origin: str | None) -> preflight.Report:
+    binding = "# Binding\n\n- Life events: none\n\n## Gates\n\n- Application types: service\n"
+    root = repository(tmp_path, {"docs/process/binding.md": binding})
+    install_hooks(root)
+    ticket = f"{origin or ''}\n\n## What to build\n\nThe list.{CONJECTURE}\n"
+    ticket += "## Acceptance criteria\n\n- [ ] a\n- [ ] b\n"
+    whole = preflight.local_ticket("#13", f"# The list\n\n{ticket}")
+    part = split.Part("The list, part 2", ("b",), "The list, part 2.", ())
+    body = split.written(whole, part, waits=[], label="ready-for-agent", carry=False)
+    bodies = {"12": SPLIT_SPEC, "13": ticket, "21": body} if origin else {"21": body}
+
+    def gh(args: Sequence[str]) -> str | None:
+        if args[2] not in bodies:
+            return None
+        return json.dumps(
+            {
+                "number": int(args[2]),
+                "title": f"Issue {args[2]}",
+                "body": bodies[args[2]],
+                "labels": [{"name": "ready-for-agent"}],
+                "state": "OPEN",
+            }
+        )
+
+    return preflight.preflight("21", root, base="main", branch=None, gh=gh)
+
+
+def test_a_part_that_names_no_parent_is_told_to_add_its_tickets_parent_line(
+    tmp_path: Path,
+) -> None:
+    report = split_part(tmp_path / "linked", "Parent: #12")
+    assert (report.ok, checks(report)) == (False, ["operability"])
+    said = report.failures[0].detail
+    assert said.startswith("21: the part names no parent, and the ticket it was split from, #13,")
+    assert 'names #12; add its line "Parent: #12" to the part' in said
+    assert "or run `/ratchet:conjecture 21`, which writes it" in said
+    assert "lacks" not in said
+    for name, line in (("bold", "**Parent:** `#12`"), ("noted", "Parent: #12 (the list spec)")):
+        said = split_part(tmp_path / name, line).failures[0].detail
+        assert f'names #12; add its line "{line}" to the part' in said, name
+    for name, origin in (("unlinked", "Blocked by: none"), ("gone", None)):
+        report = split_part(tmp_path / name, origin)
+        assert checks(report) == ["operability"], name
+        assert report.failures[0].detail.startswith("21: `## Operability` lacks `Flag:`"), name
 
 
 def test_the_critic_runs_only_for_a_project_that_is_depended_on(tmp_path: Path) -> None:
