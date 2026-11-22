@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import json
 import math
 import os
@@ -467,13 +468,18 @@ def test_the_report_has_the_records_budget_writes(tmp_path: Path) -> None:
         json.loads(line) for line in ours.read_text().splitlines() if "key" in json.loads(line)
     ]
     assert {record["key"] for record in records} == {green, red}
-    assert all(set(record) == set(template) for record in records)
+    expected_keys = set(template) | {"lane", "start", "cpu", "alone"}
+    assert all(set(record) == expected_keys for record in records)
     by_key = {record["key"]: record for record in records}
     assert by_key[green]["status"] == "unbounded"
     assert by_key[green]["exit"] == 0
     assert by_key[red]["status"] == "failed"
     assert by_key[red]["exit"] == 2
     assert all(record["ceiling"] is None and record["seconds"] >= 0 for record in records)
+    rows = [json.loads(line) for line in ours.read_text().splitlines()]
+    tiers = [row for row in rows if row.get("kind") == "tier"]
+    assert len(tiers) == 1
+    assert {"cores", "load", "k", "share", "m", "machine_read"} <= set(tiers[0])
 
 
 def test_a_runner_that_cannot_start_is_a_red_gate(capsys: pytest.CaptureFixture[str]) -> None:
@@ -1052,3 +1058,47 @@ def test_the_script_run_for_real_stops_its_gates_on_sigterm(tmp_path: Path) -> N
     assert process.returncode == 128 + signal.SIGTERM
     assert "interrupted by signal 15" in out
     assert gone(pid)
+
+
+def test_parallel_records_lane_start_cpu_and_alone_for_each_gate(tmp_path: Path) -> None:
+    record = tmp_path / "timing.jsonl"
+    a, b = tmp_path / "a", tmp_path / "b"
+    g1, g2 = gate(MEET, a, b), gate(MEET, b, a)
+    solo = gate(EXIT, 0)
+    assert run("--jobs", "2", "--alone", solo, "--report", str(record), "--", g1, g2, solo) == 0
+    rows = [json.loads(line) for line in record.read_text().splitlines()]
+    by_key = {row["key"]: row for row in rows if "key" in row}
+    assert {by_key[g1]["lane"], by_key[g2]["lane"]} == {0, 1}
+    assert by_key[g1]["alone"] is False
+    assert by_key[g2]["alone"] is False
+    assert by_key[solo]["alone"] is True
+    assert by_key[solo]["lane"] == 0
+    assert all(isinstance(by_key[k]["start"], float) and by_key[k]["start"] >= 0.0 for k in by_key)
+    assert all(by_key[k]["cpu"] is None or by_key[k]["cpu"] >= 0.0 for k in by_key)
+
+
+def test_gate_exit3_beside_detached_work_keeps_tier_red_with_exit3(tmp_path: Path) -> None:
+    record = tmp_path / "timing.jsonl"
+    detached = tmp_path / "detached.pid"
+    detach_gate = gate(
+        "import os, pathlib, sys, time\n"
+        "if os.fork() == 0:\n"
+        "    os.setsid()\n"
+        "    pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))\n"
+        "    time.sleep(0.2)\n"
+        "    os._exit(0)\n",
+        detached,
+    )
+    red_gate = gate("import time; time.sleep(0.05); raise SystemExit(3)")
+    try:
+        assert run("--jobs", "2", "--report", str(record), "--", detach_gate, red_gate) == 1
+        rows = [json.loads(line) for line in record.read_text().splitlines()]
+        by_key = {row["key"]: row for row in rows if "key" in row}
+        assert by_key[red_gate]["exit"] == 3
+        assert by_key[red_gate]["status"] == "failed"
+        [tier] = [row for row in rows if row.get("kind") == "tier"]
+        assert (tier["status"], tier["exit"]) == ("red", 1)
+    finally:
+        if detached.is_file():
+            with contextlib.suppress(ProcessLookupError, ValueError):
+                os.kill(int(detached.read_text()), signal.SIGKILL)
