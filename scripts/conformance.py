@@ -14,6 +14,7 @@ import tempfile
 import tomllib
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
@@ -260,6 +261,8 @@ ADR_FRONT_MATTER = re.compile(
     r"\A(?:---\nstatus: (?P<status>[^\n]+)\n(?:superseded-by: (?P<by>\d{4})\n)?---\n+)?# \S"
 )
 ADR_STATUS_WORDS = "proposed|accepted|deprecated|rejected|superseded"
+ADR_PATH_REF = re.compile(r"docs/adr/(\d{4}-[a-z0-9-]+\.md)\b")
+ADR_NUMBER_REF = re.compile(r"\bADR(?:\s+|-)(\d{4})\b")
 GLOSSARY_PLACEHOLDER = "<project>"
 PLUGIN_PIN_PLACEHOLDER = "<X.Y.Z> at <ratchet-sha> tree <ratchet-tree-id>"
 PLUGIN_CHECKOUT_PLACEHOLDER = "<ratchet-sha>"
@@ -721,6 +724,66 @@ def numbered_files(directory: Path) -> list[tuple[int, Path]]:
     return found
 
 
+def base_adr_paths(root: Path, base: str | None) -> set[str]:
+    if base is None:
+        return set()
+    listed = gatelib.git(root, "ls-tree", "-r", "--name-only", "-z", base, "--", "docs/adr")
+    return {path for path in (listed or "").split("\0") if path}
+
+
+def duplicate_adr_hint(
+    num: int, target: int, *, root: Path, files: list[tuple[int, Path]], base_files: set[str]
+) -> str:
+    dups = [path.relative_to(root).as_posix() for number, path in files if number == num]
+    existing = [rel for rel in dups if rel in base_files]
+    new_files = [rel for rel in dups if rel not in base_files]
+    if len(existing) == 1 and len(new_files) == 1:
+        return (
+            f"{num:04d} was taken on the default branch ({existing[0]}); "
+            f"move {new_files[0]} to {target:04d} with "
+            f'python3 "$RATCHET_PLUGIN/scripts/adr_renumber.py" {num:04d} {target:04d}'
+        )
+    pick = new_files[0] if new_files else dups[-1]
+    return (
+        f"{num:04d} is shared by {', '.join(dups)}; move one to {target:04d} with "
+        f'python3 "$RATCHET_PLUGIN/scripts/adr_renumber.py" --file {pick} {num:04d} {target:04d}'
+    )
+
+
+def adr_numbering_finding(root: Path, files: list[tuple[int, Path]], numbers: list[int]) -> Finding:
+    base_message = f"docs/adr: numbering has gaps or duplicates: {numbers}"
+    duplicates = sorted(num for num, count in Counter(numbers).items() if count > 1)
+    if not duplicates:
+        return agent(base_message)
+    base_files = base_adr_paths(root, gatelib.base_commit(root))
+    next_free = max(numbers) + 1
+    hints = [
+        duplicate_adr_hint(num, next_free + offset, root=root, files=files, base_files=base_files)
+        for offset, num in enumerate(duplicates)
+    ]
+    return agent(f"{base_message}; {'; '.join(hints)}")
+
+
+def check_adr_citations(
+    root: Path, adrs: AbstractSet[int], adr_names: AbstractSet[str]
+) -> Iterable[Finding]:
+    targets = [BINDING_PATH, str(gatelib.THRESHOLDS)]
+    targets.extend(
+        path.relative_to(root).as_posix() for path in sorted((root / "docs/adr").glob("*.md"))
+    )
+    for rel in targets:
+        text = read(root / rel)
+        if text is None:
+            continue
+        for name in dict.fromkeys(ADR_PATH_REF.findall(text)):
+            if name not in adr_names:
+                yield agent(f"{rel}: references missing ADR docs/adr/{name}")
+        if rel == str(gatelib.THRESHOLDS):
+            for num_str in dict.fromkeys(ADR_NUMBER_REF.findall(text)):
+                if int(num_str) not in adrs:
+                    yield agent(f"{rel}: cites ADR {num_str}, which docs/adr does not hold")
+
+
 def check_adrs(root: Path) -> Iterable[Finding]:
     directory = root / "docs/adr"
     if not directory.is_dir():
@@ -731,13 +794,15 @@ def check_adrs(root: Path) -> Iterable[Finding]:
         yield agent("docs/adr: no NNNN-<slug>.md record")
         return
     numbers = [number for number, _ in files]
+    adrs = set(numbers)
     if numbers != list(range(1, len(numbers) + 1)):
-        yield agent(f"docs/adr: numbering has gaps or duplicates: {numbers}")
+        yield adr_numbering_finding(root, files, numbers)
     for number, path in files:
-        yield from check_adr(number, path, path.relative_to(root))
+        yield from check_adr(number, path, path.relative_to(root), adrs=adrs)
+    yield from check_adr_citations(root, adrs, {path.name for _, path in files})
 
 
-def check_adr(number: int, path: Path, rel: Path) -> Iterable[Finding]:
+def check_adr(number: int, path: Path, rel: Path, *, adrs: AbstractSet[int]) -> Iterable[Finding]:
     text = path.read_text(encoding="utf-8")
     match = ADR_FRONT_MATTER.match(text)
     if match is None:
@@ -748,6 +813,8 @@ def check_adr(number: int, path: Path, rel: Path) -> Iterable[Finding]:
         yield agent(f"{rel}: status '{status}' is not {ADR_STATUS_WORDS}")
     if status == "superseded" and superseded_by is None:
         yield agent(f"{rel}: a superseded ADR names its successor: 'superseded-by: NNNN'")
+    if superseded_by is not None and int(superseded_by) not in adrs:
+        yield agent(f"{rel}: superseded-by: {superseded_by} names no ADR in docs/adr")
     if not markdown_text.has_section(text, REFUTATION_SECTION):
         yield agent(f"{rel}: has no '{REFUTATION_SECTION}' section")
     elif markdown_text.empty_body(text, REFUTATION_SECTION):
