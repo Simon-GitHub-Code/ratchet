@@ -1743,7 +1743,8 @@ def later_tier_setup(root: Path, binding: str, found: list[suites.Suite]) -> Ite
             f"{WORKFLOWS / 'ci.yml'}: a suite of the suites table has its gate in a later tier,"
             " and no step of the job that runs `tests-changed` sets up what it needs; add the"
             " steps under `if: matrix.gate == 'tests-changed'`, as `deep.yml` sets up the whole"
-            " suite"
+            f" suite, and give `tests-changed` a job of its own in the justfile's `{ci_jobs.JOBS}`,"
+            " since a job of several gates skips a step set up for one"
         )
 
 

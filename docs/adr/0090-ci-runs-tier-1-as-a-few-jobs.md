@@ -32,7 +32,7 @@ The shape job runs the same check before it starts a runner and refuses a list w
 
 ## What a project sees
 
-The shape job prints one line naming each gate with no runner. A pull request starts the tier 0 jobs, the shape job, `bite`, `rest` and one long job per shard of each sharded gate that has a job of its own. A red group job prints `parallel: <gate>: red`, so the gate is still named, and `just <gate>` reproduces it. The binding's Entry points table gains `ci-job`.
+The shape job prints one line naming each gate with no runner. A pull request starts the tier 0 jobs, the shape job, `bite`, `rest` and one long job per shard of each sharded gate that has a job of its own. A project with a later-tier suite sets up that suite's tools in tier 1 under `if: matrix.gate == 'tests-changed'`, so the finding that asks for that step now also asks for `tests-changed` to have a job of its own, and the upgrade's computed list gives it one where the step is already there. A red group job prints `parallel: <gate>: red`, so the gate is still named, and `just <gate>` reproduces it. The binding's Entry points table gains `ci-job`.
 
 ## What the upgrade does
 
