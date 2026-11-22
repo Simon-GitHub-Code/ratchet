@@ -232,9 +232,7 @@ def test_a_later_tier_suite_with_nothing_set_up_in_the_job_that_runs_it_is_red(
     )(repo)
     [grouped] = red(repo)
     assert grouped.startswith("justfile: `tests-changed` runs in the group `rest`, but the")
-    replace("justfile", 'tier1_jobs := "bite rest"', 'tier1_jobs := "bite tests-changed rest"')(
-        repo
-    )
+    replace("justfile", ' bite rest"', ' bite tests-changed rest"')(repo)
     assert red(repo) == []
 
 
