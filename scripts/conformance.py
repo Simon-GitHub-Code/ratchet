@@ -2594,7 +2594,8 @@ def tier_recipes(binding: str, justfile: str) -> dict[str, str]:
     rows = template_rows()
     named = {}
     for tier in justfile_text.first_dependents(template_file("justfile"), PIN_RECIPE):
-        recipe = RUNS_JUST.match((commands.get(tier) or rows[tier][1]).strip("`"))
+        default = rows[tier][1] if tier in rows else f"just {tier}"
+        recipe = RUNS_JUST.match((commands.get(tier) or default).strip("`"))
         if recipe is not None and justfile_text.defines_recipe(justfile, recipe.group(1)):
             named[tier] = recipe.group(1)
     return named
@@ -2825,25 +2826,32 @@ def check_pre_commit_recipe(root: Path) -> Iterable[Finding]:
     justfile = read_justfile(root)
     template = template_file("justfile")
     name = "pre-commit"
+    has_staged = justfile is not None and justfile_text.defines_recipe(justfile, "tier0-staged")
+    has_tree = justfile is not None and justfile_text.defines_recipe(justfile, "tier0-tree")
     if (
         justfile is None
         or not justfile_text.defines_recipe(justfile, name)
-        or not justfile_text.defines_recipe(justfile, "tier0-tree")
+        or not (has_staged or has_tree)
         or justfile_text.template_recipe(template, name) is None
     ):
         return
     quiet = NO_EXIT_MESSAGE in justfile_text.definition(justfile, name)
     if quiet and justfile_text.runs(justfile, name, PIN_SCRIPT):
         return
-    yield Finding(
-        "justfile",
-        f"`{name}` neither runs {PIN_SCRIPT} first nor carries `{NO_EXIT_MESSAGE}`, so the commit"
-        " hook can run a plugin no check held to the release",
+    fix: Fix = (
         Edit(
             f"make `{name}` the template's recipe",
             justfile_text.with_template_recipe(template, name),
             Agent(),
-        ),
+        )
+        if has_staged
+        else Agent(start=template_definition(name))
+    )
+    yield Finding(
+        "justfile",
+        f"`{name}` neither runs {PIN_SCRIPT} first nor carries `{NO_EXIT_MESSAGE}`, so the commit"
+        " hook can run a plugin no check held to the release",
+        fix,
         identity="pre-commit recipe is not the template's",
     )
 
