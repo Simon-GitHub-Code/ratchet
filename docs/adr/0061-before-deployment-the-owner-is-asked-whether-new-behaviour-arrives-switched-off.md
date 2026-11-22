@@ -137,7 +137,6 @@ Evaluations: a first-hour run on an asked type meets one more question per spec.
 
 ### What already contradicts the decision
 
-- `workflows/pipeline.js`: the spec role requires a switch for every behaviour, whatever the life events. Its three ticket readers are given the ticket alone, and the rejudge has no parent.
 - `skills/adopt/templates/docs/process/binding.md:254`: the placeholder requires a flag without condition.
 - `scripts/feature_preflight.py`: `FLAG_EVENT` holds the line back until deployment, which the method page never said. The operability block is read whole, and `Ticket.parent` is not normalised.
 - `scripts/merge_ready.py`: the registry's doors wait for an event, and `agreement` runs only for records alone.
