@@ -458,12 +458,12 @@ def test_the_writer_says_each_reason_once_in_a_process(
 ) -> None:
     path = tmp_path / runrecord.TIMING
     read_only_record(path, tmp_path)
-    runrecord.append(path, FAULT, root=tmp_path)
-    runrecord.append(path, FAULT, root=tmp_path)
+    assert runrecord.append(path, FAULT, root=tmp_path) is False
+    assert runrecord.append(path, FAULT, root=tmp_path) is False
     path.unlink()
     path.mkdir()
-    runrecord.append(path, FAULT, root=tmp_path)
-    runrecord.append(path, FAULT, root=tmp_path)
+    assert runrecord.append(path, FAULT, root=tmp_path) is False
+    assert runrecord.append(path, FAULT, root=tmp_path) is False
     assert capsys.readouterr().out.splitlines() == [
         f"ratchet: not recorded: .ratchet/timing.jsonl: {NOT_WRITABLE}",
         "ratchet: not recorded: .ratchet/timing.jsonl: it is a directory; remove it",
@@ -490,9 +490,20 @@ def test_the_writer_refuses_a_fifo_another_process_reads(
 
 def test_the_writer_makes_the_state_folder_and_the_record(tmp_path: Path) -> None:
     path = tmp_path / runrecord.TIMING
-    runrecord.append(path, FAULT, root=tmp_path)
-    runrecord.append(path, {"kind": "tier"}, root=tmp_path)
+    assert runrecord.append(path, FAULT, root=tmp_path) is True
+    assert runrecord.append(path, {"kind": "tier"}, root=tmp_path) is True
     assert lines(path) == [FAULT, {"kind": "tier"}]
+
+
+def test_read_once_caches_facts_for_a_path(tmp_path: Path) -> None:
+    path = tmp_path / runrecord.TIMING
+    assert runrecord.append(path, {"key": "lint", "seconds": 1.0}, root=tmp_path) is True
+    with runrecord.read_once():
+        first = runrecord.facts(path)
+        assert runrecord.append(path, {"key": "lint", "seconds": 2.0}, root=tmp_path) is True
+        second = runrecord.facts(path)
+    assert first is second
+    assert first.seconds == {"lint": 1.0}
 
 
 def test_the_writer_never_appends_onto_an_unfinished_line(tmp_path: Path) -> None:
