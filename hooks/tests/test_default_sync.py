@@ -255,6 +255,11 @@ UNREAD_PULLS = [
     "git config core.sshCommand ssh && git pull -q origin main",
     "echo $(git config core.sshCommand ssh) && git pull -q origin main",
     "git status > .git/config && git pull -q origin main",
+    "export GIT_DIR=.git && git pull -q origin main",
+    "cp .git/config .git/config.old && cp .git/config.old .git/config && git pull -q origin main",
+    "git diff --output=.git/config && git pull -q origin main",
+    "bash -c 'git config core.sshCommand ssh' && git pull -q origin main",
+    "gh repo fork --remote && git pull -q origin main",
 ]
 
 
@@ -292,6 +297,12 @@ LEADS_THAT_KEEP_THE_REMOTE = [
     "git remote add up ../source && git fetch -q up && ",
     "printf x > .git/config.tmp && ",
     "git switch -q --detach && ",
+    "git add -A && ",
+    "git log -1 && ",
+    "git diff && ",
+    "git show -s && ",
+    "git rev-parse HEAD && ",
+    "ls && ",
 ]
 
 
@@ -309,6 +320,29 @@ def test_a_pull_that_names_the_remote_and_branch_reads_through_what_cannot_repoi
     run(root, command)
     assert "work.txt" not in git(root, "ls-tree", "--name-only", "main")
     assert "work.txt" not in git(root, "ls-tree", "--name-only", "HEAD")
+
+
+LEADS_THAT_ONLY_READ_OR_RECORD = [
+    "git commit -am x && ",
+    "git add -A && git commit -m x && ",
+    "git log -3 && ",
+    "git diff && ",
+    "git show HEAD && ",
+    "git rev-parse --abbrev-ref HEAD && ",
+    "gh pr view 7 && ",
+    "just test && ",
+]
+
+
+@pytest.mark.parametrize("adopted", [False, True])
+@pytest.mark.parametrize("pull", ["git pull origin main", "git pull --rebase origin main"])
+@pytest.mark.parametrize("lead", LEADS_THAT_ONLY_READ_OR_RECORD)
+def test_a_named_pull_after_a_lead_that_only_reads_or_records_gets_its_own_verdict(
+    tmp_path: Path, *, lead: str, pull: str, adopted: bool
+) -> None:
+    root = cloned(tmp_path, adopted=adopted)
+    alone = decision(root, "Bash", {"command": pull})
+    assert decision(root, "Bash", {"command": f"{lead}{pull}"}) == alone
 
 
 INERT = [
