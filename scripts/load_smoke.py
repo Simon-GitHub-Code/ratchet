@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import collections
 import http.client
+import json
 import os
 import re
 import sys
@@ -19,6 +20,9 @@ METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 SPEC = re.compile(rf"(?:({'|'.join(METHODS)}) )?(\S+)(?: (\d{{3}})(?: (.+))?)?", re.DOTALL)
 FAILED = 400
 LISTED = 5
+HELD_POLL = 0.01
+HELD = "held"
+GATE_MARGIN = 1.0
 
 
 @dataclass(frozen=True)
@@ -51,6 +55,64 @@ def target(text: str) -> Target:
     return Target(
         method or "GET", url, int(status) if status else None, body.encode() if body else None
     )
+
+
+def holding(sending: Path) -> Path:
+    return sending.with_name(f"{sending.name}.held")
+
+
+def announce(sending: Path, targets: list[Target]) -> None:
+    data = [
+        [goal.method, goal.url, goal.status, None if goal.body is None else goal.body.decode()]
+        for goal in targets
+    ]
+    pending = sending.with_name(f"{sending.name}.pending")
+    pending.write_text(json.dumps(data), encoding="utf-8")
+    pending.replace(sending)
+
+
+def announced(sending: Path) -> list[Target]:
+    try:
+        return [
+            Target(method, url, status, body and body.encode())
+            for method, url, status, body in json.loads(sending.read_text(encoding="utf-8"))
+        ]
+    except (OSError, ValueError, TypeError, AttributeError):
+        return []
+
+
+def wait_for(path: Path, within: float) -> bool:
+    deadline = time.monotonic() + within
+    while not path.exists():
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(HELD_POLL)
+    return True
+
+
+def released(sending: Path, targets: list[Target], within: float) -> str | None:
+    announce(sending, targets)
+    if wait_for(holding(sending), within):
+        return None
+    return (
+        f"the gate did not say within {within:g}s whether it holds a request across the stop signal"
+    )
+
+
+def seconds(text: str | None) -> float | None:
+    try:
+        return float(text) if text else None
+    except ValueError:
+        return None
+
+
+def is_held(sending: Path) -> bool:
+    return holding(sending).read_text(encoding="utf-8") == HELD
+
+
+def described(error: BaseException) -> str:
+    said = str(error)
+    return f"{type(error).__name__}: {said}" if said else type(error).__name__
 
 
 def same_place(url: str, ready: str) -> bool:
@@ -101,6 +163,10 @@ class Cutoff(Exception):  # noqa: N818 # -- carries a failure to judge, not a fa
         self.cut = cut
 
 
+def slow(timeout: float) -> str:
+    return f"timed out after {timeout:g}s"
+
+
 def attempt(
     goal: Target, timeout: float, stopping: Path | None = None
 ) -> tuple[float | None, str | None]:
@@ -116,15 +182,15 @@ def attempt(
             connecting=clients.append,
         )
     except TimeoutError:
-        return None, f"{goal.label()}: timed out after {timeout:g}s"
+        return None, f"{goal.label()}: {slow(timeout)}"
     except (OSError, http.client.HTTPException) as error:
         if stopping is None or not stopping.exists() or not clients:
-            return None, f"{goal.label()}: {type(error).__name__}"
+            return None, f"{goal.label()}: {described(error)}"
         if isinstance(error, ConnectionRefusedError):
             raise Closed from error
         named = clients[-1] in gatelib.read_stopping(stopping).taken
         lost = isinstance(error, ConnectionError)
-        cut = Cut(goal.label(), type(error).__name__, clients[-1].port, named, late, lost)
+        cut = Cut(goal.label(), described(error), clients[-1].port, named, late, lost)
         raise Cutoff(cut) from error
     wrong = None if goal.accepts(status) else f"{goal.label()}: HTTP {status}"
     return time.perf_counter() - started, wrong
@@ -194,6 +260,34 @@ def judge(
     return errors, notes
 
 
+def told_cut(
+    marker: Path | None, cuts: list[Cut], targets: list[Target], *, within: float
+) -> tuple[collections.Counter[str], list[str]]:
+    if marker is None or not marker.exists():
+        return collections.Counter(), []
+    told = gatelib.ask(marker, within)
+    if told is None:
+        unsaid = (
+            f"the gate did not say within {within:g}s which connections it took after the stop "
+            "signal"
+        )
+        return collections.Counter(), [unsaid]
+    cut, notes = judge(cuts, told, [goal.port() for goal in targets])
+    for note in notes:
+        print(note)
+    return cut, []
+
+
+def counted(
+    errors: collections.Counter[str], timeout: float, *, held: bool
+) -> collections.Counter[str]:
+    if not held:
+        return errors
+    return collections.Counter(
+        {what: n for what, n in errors.items() if not what.endswith(slow(timeout))}
+    )
+
+
 def percentile(sorted_values: list[float], fraction: float) -> float:
     return sorted_values[min(len(sorted_values) - 1, int(fraction * len(sorted_values)))]
 
@@ -246,37 +340,38 @@ def main(argv: list[str]) -> int:
     stopping, sending = (
         os.environ.get(name) for name in (gatelib.STOPPING_ENV, gatelib.SENDING_ENV)
     )
-    if options.until_stopped and not (stopping and sending):
+    hold_within = seconds(os.environ.get(gatelib.HOLD_WITHIN_ENV))
+    if options.until_stopped and not (stopping and sending and hold_within is not None):
         parser.error(
-            f"--until-stopped needs {gatelib.STOPPING_ENV} and {gatelib.SENDING_ENV}, set by "
-            "with_service.py --graceful"
+            f"--until-stopped needs {gatelib.STOPPING_ENV}, {gatelib.SENDING_ENV} and "
+            f"{gatelib.HOLD_WITHIN_ENV} in seconds, set by with_service.py --graceful"
         )
     targets = targets_of(parser, options)
     if isinstance(targets, str):
         return gatelib.report("load-smoke", [targets])
+    gate_within = (hold_within or 0.0) + GATE_MARGIN
     if options.until_stopped and sending:
-        Path(sending).touch()
+        silent = released(Path(sending), targets, gate_within)
+        if silent:
+            return gatelib.report("load-smoke", [silent])
     marker = Path(stopping) if options.until_stopped and stopping else None
     worked = hammer(
         targets, options.concurrency, options.seconds, timeout=options.timeout, stopping=marker
     )
-    latencies, errors = worked.latencies, worked.errors
-    if marker and marker.exists():
-        told = gatelib.ask(marker, options.timeout)
-        cut, notes = judge(worked.cuts, told, [goal.port() for goal in targets])
-        errors.update(cut)
-        for note in notes:
-            print(note)
+    held = bool(options.until_stopped and sending and is_held(Path(sending)))
+    latencies, errors = worked.latencies, counted(worked.errors, options.timeout, held=held)
+    cut, unsaid = told_cut(marker, worked.cuts, targets, within=gate_within)
+    errors.update(cut)
     if latencies:
         p50, p95, p99, worst = (percentile(latencies, f) * 1000 for f in (0.5, 0.95, 0.99, 1.0))
         print(
             f"load-smoke: {len(latencies)} answered; latency ms p50 {p50:.0f} p95 {p95:.0f} "
             f"p99 {p99:.0f} max {worst:.0f} (printed, not judged)"
         )
-    problems = [f"{count} x {what}" for what, count in errors.most_common(LISTED)]
+    problems = [*unsaid, *(f"{count} x {what}" for what, count in errors.most_common(LISTED))]
     if len(errors) > LISTED:
         problems.append(f"and {len(errors) - LISTED} more kinds of error")
-    if len(latencies) < options.min_requests:
+    if len(latencies) < options.min_requests and not held:
         problems.append(
             f"{len(latencies)} requests answered, under the floor of {options.min_requests}: "
             "the service hangs or is too slow for this window"
