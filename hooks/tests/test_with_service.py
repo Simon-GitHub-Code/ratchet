@@ -1123,12 +1123,13 @@ def smoke(
     reaches_late: bool = False,
     concurrency: str = "4",
     url: str = f"POST {HOLDS} 200 {{}}",
+    timeout: str = "5",
 ) -> list[str]:
     late = f'touch "${gatelib.SENDING_ENV}" && sleep 1 && ' if reaches_late else ""
     return [
         *("sh", "-c", f'{late}sleep {starts_after} && exec "$@"', "late", sys.executable),
         *(str(LOAD), "--url", url, *BUSY),
-        *("--concurrency", concurrency),
+        *("--concurrency", concurrency, "--timeout", timeout),
     ]
 
 
@@ -1432,31 +1433,46 @@ def test_a_clean_service_whose_first_request_arrives_after_the_signal_is_green(
     assert (code, out.endswith("with_service: green\n")) == (0, True)
 
 
-def test_a_clean_service_however_slow_to_accept_is_signalled_only_once_it_has_accepted(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def accepting_after(
+    delay: float, load: list[str], *, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> tuple[int, str]:
     waiting, accept = tmp_path / "waiting", tmp_path / "accept"
 
     def slow() -> None:
         try:
-            while not waiting.exists():
+            while not waiting.exists() and not accept.exists():
                 time.sleep(0.01)
-            time.sleep(1)
+            time.sleep(delay)
         finally:
             accept.touch()
 
     releasing = threading.Thread(target=slow, daemon=True)
     releasing.start()
     try:
-        code, out = run(
+        return run(
             *("--boot", f"exec {python(SLOW_TO_ACCEPT)} {waiting} {accept}"),
             *("--ready", "http://127.0.0.1:{port}/ready", "--graceful", "60"),
-            *("--signal-after", "0.5", "--", *smoke(concurrency="1")),
+            *("--signal-after", "0.5", "--", *load),
             capsys=capsys,
         )
     finally:
         accept.touch()
         releasing.join()
+
+
+def test_a_clean_service_however_slow_to_accept_is_signalled_only_once_it_has_accepted(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, out = accepting_after(1, smoke(concurrency="1"), tmp_path=tmp_path, capsys=capsys)
+    assert ANSWERED_HELD.search(out), out
+    assert (code, out.endswith("with_service: green\n")) == (0, True)
+
+
+def test_a_smoke_timeout_below_the_time_the_gate_takes_to_answer_leaves_a_clean_run_green(
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    code, out = graceful("slow", capsys=capfd, command=smoke(timeout="0.001"))
+    assert "the gate did not say" not in out, out
     assert ANSWERED_HELD.search(out), out
     assert (code, out.endswith("with_service: green\n")) == (0, True)
 
