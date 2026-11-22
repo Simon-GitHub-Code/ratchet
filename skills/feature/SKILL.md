@@ -85,7 +85,7 @@ Pick the mode from what the owner typed:
 
 7. **Hand over.**
    - List the result's `assumptions` under **Assumed**, one plain line each with what changing it later costs and what the owner can say to change it, as the method's rule on asking describes.
-   - Say what the merge judge says (`just merge-ready`: `merge: agent`, or `merge: owner` with its reasons). The judge decides the merge: never merge by hand.
+   - Say what the merge judge says (`just merge-ready`: `merge: agent`, `merge: wait` with its reasons, or `merge: owner` with its reasons). The judge decides the merge: never merge by hand.
    - When the merge is the owner's, name the passes the change warrants before they merge, from [route.md](../method/route.md) stage 8.
    - When the change built a surface and the repository has `PRODUCT.md` but no `DESIGN.md`, say that an agent runs `impeccable document` on a branch once this merges, and that the owner merges that change, since `DESIGN.md` is a guard path.
    - The last lines are the route: run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines.
@@ -166,9 +166,10 @@ Run every command below from the repository's own checkout, on the default branc
    6. **Land it.**
       - **With no forge:** `D land <ticket> --root .` runs the binding's `merge` entry point, prints the judge's lines, removes the work tree and records merged or waiting with every reason. Exit 2 means it could not ask: report what it printed and leave the ticket.
         - **It printed `merge: wait` with a reason that names `merge --deep`:** run `just merge --deep` in the background and wait on its exit, never on a timer, then run `D land <ticket> --root .` once more.
-      - **With a forge:** push, and open the pull request as [The pull request](#the-pull-request) says. Wait for both workflows: `gh pr checks <n> --watch` for `ci`, then the `merge` run that follows it (`gh run list --workflow merge.yml --limit 1`, then `gh run watch <id>`).
+      - **With a forge:** push, and open the pull request as [The pull request](#the-pull-request) says. Wait for `ci`, then the `merge` run that follows it, polling once a minute in a background command you wait on (`gh pr checks <n>` and `gh run list --workflow merge.yml --limit 1`, then `gh run view <id> --json status,conclusion`). Never use `gh run watch` or a tighter poll, since every session on the machine shares the forge's request budget.
         - When `gh pr view <n> --json state` says `MERGED`, run `git pull --ff-only` on the default branch and `D close <ticket> --outcome merged --root .`.
-        - Otherwise run `D close <ticket> --outcome waits --root .`, with one `--reason` per line of the judge's comment on the pull request.
+        - When the judge's comment on the pull request says `merge: wait` and an `unproven` reason names a deep run, wait for that deep run (polling its status once a minute in a background command) and the `merge` run that follows it, then read the pull request's state again.
+        - Otherwise (including `merge: wait` naming no run, or `merge: owner`) run `D close <ticket> --outcome waits --root .`, with one `--reason` per line of the judge's comment on the pull request (`unproven` is mechanical, so a later drain retries it up to `RETRIES`).
 
    **Exit 3 from `update`, `close` or `split`:** a landing of that ticket is still running (for example a `land` the shell gave up waiting on), or only its merge is (its line says "a merge"). Leave the ticket: do not close, reconcile or split it. Wait for that landing to end, and go on at step 5 (`D plan`). The landing records the outcome itself; with only a merge running, a `report` or an `update` records it afterwards.
 

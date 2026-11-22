@@ -227,7 +227,8 @@ Among records alone the owner merges:
 
 - The pull request targets a branch other than the default.
 - The branch does not hold the default branch's tip, so its gates ran on an older one.
-- Tier 2 is red on the default branch.
+- Tier 2 is red on the default branch (`tier2`, naming every merge back to the last green), or its answer could not be read.
+- When `quality/thresholds.toml` at the merge base declares `[ceilings.deep] unproven` and no finished deep run covers within that bound (`unproven`, which prints `merge: wait` when alone or beside reasons the drain retries, and holds until the running deep run finishes or a new run starts).
 
 ### The adoption
 
@@ -240,10 +241,11 @@ Its manifest must instead guard at least what the template's does: every templat
 
 ### How the merge happens
 
-**On a forge** the `merge` workflow asks the judge once `ci` is green on the pull request.
+**On a forge** the `merge` workflow asks the judge on `workflow_run` of `ci` (a green pull request from this repository) or `deep` (any conclusion on the default branch), and on `workflow_dispatch` (which `deep.yml`'s `speaks` job dispatches when a deep run finishes).
 
 - A run counts as green only when it tested that pull request against the default branch, so one that was retargeted, or whose branch has had a pull request against another base, is the owner's to merge.
-- The workflow is triggered by `workflow_run`, which takes the workflow file, the judge and the manifest from the default branch, so a pull request cannot change what judges it. The job reads the pull request's commits without checking them out or running them.
+- The workflow lists `deep.yml` runs on the default branch in every status, writes the answer with `forge_runs.py deep --answer`, dispatches `deep.yml` under guard if `start` is printed (passing any dispatch failure's first line in the answer), passes `--deep` to `merge_ready.py`, and reads the judge's `merge: <verdict>` first line (`merge: agent`, `merge: wait`, or `merge: owner`).
+- The workflow takes the workflow file, the judge and the manifest from the default branch, so a pull request cannot change what judges it. The job reads the pull request's commits without checking them out or running them.
 
 **With no forge** the `merge` entry point (`scripts/merge.py <branch>`) merges the branch in a scratch work tree, asks the judge, runs `check` on the merge result, and moves the default branch only when both pass. For the adoption it runs `check-deep` there instead. `merge.py --records` lands the records a skill left uncommitted on the default branch: it commits them on a branch of their own, `records/<time>`, and merges that branch the same way, so nothing is committed on the default branch itself.
 
