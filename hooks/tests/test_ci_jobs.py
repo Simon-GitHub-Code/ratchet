@@ -411,13 +411,21 @@ def test_the_upgrade_groups_tier_1_and_keeps_every_gate_its_command_and_its_ceil
     assert {path: read(root, path) for path in written} == written
 
 
+HAND_EDITS = {
+    "shape step": (HAND_EDIT, HAND_EDIT.replace("tier1_gates)", "tier1_gates) smoke")),
+    "needs": ("    needs: [tier0, shape]", "    needs: [tier0, shape, docs]"),
+}
+
+
+@pytest.mark.parametrize("edit", list(HAND_EDITS))
 @pytest.mark.parametrize("version", RELEASES)
 def test_the_upgrade_leaves_a_hand_edited_workflow_and_owes_the_change_with_its_difference(
-    version: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], *, version: str, edit: str
 ) -> None:
     root = adopted.copy(adopted.adopted(version), tmp_path / "repo")
-    base.replace(CI, HAND_EDIT, HAND_EDIT.replace("tier1_gates)", "tier1_gates) smoke"))(root)
-    git(root, "commit", "-q", "-am", "ci: a smoke gate of the project's own")
+    old, new = HAND_EDITS[edit]
+    (root / CI).write_text(read(root, CI).replace(old, new, 1), encoding="utf-8")
+    git(root, "commit", "-q", "-am", "ci: a step of the project's own")
     edited = read(root, CI)
     upgraded(root)
     assert read(root, CI) == edited.replace(adopted.LATER[version], pinned(root))
