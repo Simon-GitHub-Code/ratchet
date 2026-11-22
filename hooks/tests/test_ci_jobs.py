@@ -1,8 +1,10 @@
 import argparse
 import json
+import os
 import re
 import shlex
 import shutil
+import signal
 import sys
 import textwrap
 from collections import Counter
@@ -558,6 +560,348 @@ def test_a_gate_whose_time_this_run_s_record_does_not_hold_is_named_and_not_judg
             " not judged"
         )
     assert judged_gate(lines, "gamma").endswith("(ceiling 1.5s of tier1, 13% used): green")
+
+
+@pytest.mark.parametrize("kind", ["directory", "read-only", "symlink"])
+def test_a_group_whose_record_cannot_be_written_is_not_judged_for_each_gate_and_not_held_to_tier(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    kind: str,
+) -> None:
+    if kind == "read-only" and os.geteuid() == 0:
+        pytest.skip("root writes through modes")
+    root = grouped_project(tmp_path / "repo", "[ceilings.seconds]\ntier1 = 0.4\n")
+    record = root / RECORD
+    if kind == "directory":
+        record.mkdir(parents=True)
+    elif kind == "read-only":
+        record.parent.mkdir(parents=True)
+        record.write_text("", encoding="utf-8")
+        record.chmod(0o444)
+    else:
+        (root / "elsewhere").mkdir()
+        record.parent.symlink_to(root / "elsewhere")
+    try:
+        sleeps = {"alpha": 0.2, "beta": 0.2, "gamma": 0.2}
+        code, lines = judged_in_ci(root, sleeps, monkeypatch=monkeypatch, capsys=capsys)
+    finally:
+        if kind == "read-only":
+            record.chmod(0o644)
+    assert code == 0, lines
+    assert judged_gate(lines, "rest").endswith("(no ceiling recorded): unbounded")
+    assert [line.split()[1] for line in lines] == ["rest", "alpha", "beta", "gamma"]
+    for gate in ("alpha", "beta", "gamma"):
+        assert judged_gate(lines, gate) == (
+            f"ratchet-budget: {gate} ran in rest, and this run's record holds no time of it:"
+            " not judged"
+        )
+
+
+def test_not_judged_emits_warning_annotations_alongside_gate_lines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = grouped_project(tmp_path / "repo", "[ceilings.seconds]\ntier1 = 5.0\n")
+    (root / RECORD).mkdir(parents=True)
+    sleeper = tmp_path / "sleeper.py"
+    sleeper.write_text(SLEEPER, encoding="utf-8")
+    monkeypatch.setenv("SLEEPS", json.dumps({"alpha": 0.0, "beta": 0.0, "gamma": 0.0}))
+    job = [
+        *(sys.executable, str(PLUGIN_ROOT / "scripts/ci_jobs.py"), "--root", str(root)),
+        *("--run", "rest", "--runner", f"{sys.executable} {sleeper}", "--jobs", "1"),
+        *("--report", RECORD),
+    ]
+    argv = ["budget.py", "rest", "--root", str(root), "--tier", "tier1", "--report", RECORD]
+    assert budget.main([*argv, "--", *job]) == 0
+    out = capsys.readouterr().out
+    for gate in ("alpha", "beta", "gamma"):
+        assert (
+            f"::warning title=ratchet-budget::ratchet-budget: {gate} ran in rest, and this run's"
+            " record holds no time of it: not judged"
+        ) in out
+
+
+TRUNCATING_RUNNER = textwrap.dedent(
+    """\
+    import json, os, pathlib, sys, time
+    time.sleep(json.loads(os.environ["SLEEPS"]).get(sys.argv[1], 0))
+    if sys.argv[1] == "beta":
+        pathlib.Path(os.environ["RECORD_PATH"]).write_text("", encoding="utf-8")
+    """
+)
+
+
+def test_a_group_whose_record_is_truncated_mid_run_is_not_held_to_tier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = grouped_project(tmp_path / "repo", TIER_CEILING)
+    record = root / RECORD
+    record.parent.mkdir(parents=True)
+    record.write_text('{"key": "old", "seconds": 0.1, "exit": 0}\n' * 10, encoding="utf-8")
+    runner = tmp_path / "truncater.py"
+    runner.write_text(TRUNCATING_RUNNER, encoding="utf-8")
+    sleeps = {"alpha": 1.6, "beta": 0.0, "gamma": 0.0}
+    monkeypatch.setenv("RECORD_PATH", str(record))
+    job = [
+        *(sys.executable, str(PLUGIN_ROOT / "scripts/ci_jobs.py"), "--root", str(root)),
+        *("--run", "rest", "--runner", f"{sys.executable} {runner}", "--jobs", "1"),
+        *("--report", RECORD),
+    ]
+    code, lines = judged_in_ci(root, sleeps, monkeypatch=monkeypatch, capsys=capsys, command=job)
+    assert code == 0, lines
+    assert judged_gate(lines, "rest").endswith("(no ceiling recorded): unbounded")
+    assert [line.split()[1] for line in lines] == ["rest", "alpha", "beta", "gamma"]
+    assert judged_gate(lines, "alpha").endswith("holds no time of it: not judged")
+    assert judged_gate(lines, "beta").endswith(": green")
+    assert judged_gate(lines, "gamma").endswith(": green")
+
+
+INTERRUPTING_RUNNER = textwrap.dedent(
+    """\
+    import json, os, sys, time
+    time.sleep(json.loads(os.environ["SLEEPS"]).get(sys.argv[1], 0))
+    if sys.argv[1] == "beta":
+        os.kill(os.getppid(), int(os.environ["STOP_SIGNAL"]))
+    """
+)
+
+
+@pytest.mark.parametrize("sig", [signal.SIGKILL, signal.SIGTERM])
+def test_an_interrupted_group_run_judges_finished_gates_and_leaves_rest_unjudged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    sig: signal.Signals,
+) -> None:
+    for key in list(os.environ):
+        if key.startswith(("COV_CORE_", "COVERAGE_")):
+            monkeypatch.delenv(key, raising=False)
+    root = grouped_project(tmp_path / "repo", TIER_CEILING)
+    runner = tmp_path / "interrupter.py"
+    runner.write_text(INTERRUPTING_RUNNER, encoding="utf-8")
+    monkeypatch.setenv("STOP_SIGNAL", str(int(sig)))
+    sleeps = {"alpha": 0.0, "beta": 0.0}
+    job = [
+        *(sys.executable, str(PLUGIN_ROOT / "scripts/ci_jobs.py"), "--root", str(root)),
+        *("--run", "rest", "--runner", f"{sys.executable} {runner}", "--jobs", "1"),
+        *("--report", RECORD),
+    ]
+    code, lines = judged_in_ci(root, sleeps, monkeypatch=monkeypatch, capsys=capsys, command=job)
+    assert code != 0
+    assert judged_gate(lines, "rest").endswith("(no ceiling recorded): failed")
+    assert [line.split()[1] for line in lines] == ["rest", "alpha", "beta", "gamma"]
+    assert judged_gate(lines, "alpha").endswith(": green")
+    assert judged_gate(lines, "beta").endswith("holds no time of it: not judged")
+    assert judged_gate(lines, "gamma").endswith("holds no time of it: not judged")
+
+
+SPOOFING_RUNNER = textwrap.dedent(
+    """\
+    import json, os, pathlib, subprocess, sys, time
+    gate = sys.argv[1]
+    assert "RATCHET_BUDGET_GROUP" not in os.environ
+    time.sleep(json.loads(os.environ["SLEEPS"]).get(gate, 0))
+    if gate == "beta":
+        record = pathlib.Path(os.environ["RECORD_PATH"])
+        parallel_py = os.environ["PARALLEL_PY"]
+        fast = f"{sys.executable} -c pass"
+        cmd = [sys.executable, parallel_py, "--runner", fast, "--report", str(record)]
+        subprocess.run([*cmd, "--", "alpha"], check=True)
+        lines = [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()]
+        first = next(line for line in lines if line.get("key") == "alpha")
+        stamp = {key: first[key] for key in ("at", "run", "tree") if key in first}
+        fakes = [
+            {"key": "alpha", "seconds": 0.01, "exit": 0},
+            {"key": "alpha", "seconds": 0.01, "ceiling": None, "status": "green", "exit": 0}
+            | stamp,
+            {"key": "gamma", "seconds": 2.4, "exit": 0},
+            {"key": "gamma", "seconds": 2.4, "ceiling": None, "status": "unbounded", "exit": 0}
+            | stamp,
+        ]
+        with record.open("a", encoding="utf-8") as handle:
+            handle.writelines(json.dumps(fake) + "\\n" for fake in fakes)
+    """
+)
+
+
+def test_a_sibling_gate_cannot_spoof_or_overwrite_another_gate_s_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = grouped_project(tmp_path / "repo", TIER_CEILING)
+    runner = tmp_path / "spoofer.py"
+    runner.write_text(SPOOFING_RUNNER, encoding="utf-8")
+    sleeps = {"alpha": 1.6, "beta": 0.0, "gamma": 0.0}
+    monkeypatch.setenv("RECORD_PATH", str(root / RECORD))
+    monkeypatch.setenv("PARALLEL_PY", str(PLUGIN_ROOT / "scripts/parallel.py"))
+    job = [
+        *(sys.executable, str(PLUGIN_ROOT / "scripts/ci_jobs.py"), "--root", str(root)),
+        *("--run", "rest", "--runner", f"{sys.executable} {runner}", "--jobs", "1"),
+        *("--report", RECORD),
+    ]
+    code, lines = judged_in_ci(root, sleeps, monkeypatch=monkeypatch, capsys=capsys, command=job)
+    assert code == 1, lines
+    assert judged_gate(lines, "alpha").endswith("(ceiling 1.5s of tier1): red")
+    assert judged_gate(lines, "beta").endswith(": green")
+    assert judged_gate(lines, "gamma").endswith(": green")
+    assert judged_gate(lines, "rest").endswith("(no ceiling recorded): unbounded")
+
+
+def test_a_sibling_gate_cannot_raise_a_fast_gate_above_the_tier_ceiling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = grouped_project(tmp_path / "repo", TIER_CEILING)
+    runner = tmp_path / "raiser.py"
+    sleeps = {"alpha": 0.0, "beta": 0.0, "gamma": 0.0}
+    monkeypatch.setenv("RECORD_PATH", str(root / RECORD))
+    raiser = textwrap.dedent(
+        """\
+        import json, os, pathlib, sys
+        gate = sys.argv[1]
+        assert "RATCHET_BUDGET_GROUP" not in os.environ
+        if gate == "beta":
+            record = pathlib.Path(os.environ["RECORD_PATH"])
+            lines = [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()]
+            first = next(line for line in lines if line.get("key") == "alpha")
+            stamp = {key: first[key] for key in ("at", "run", "tree") if key in first}
+            fakes = [
+                {"key": "alpha", "seconds": 10.0, "exit": 0},
+                {"key": "alpha", "seconds": 10.0, "ceiling": None, "status": "unbounded", "exit": 0}
+                | stamp,
+                {"key": "gamma", "seconds": 10.0, "exit": 0},
+                {"key": "gamma", "seconds": 10.0, "ceiling": None, "status": "unbounded", "exit": 0}
+                | stamp,
+            ]
+            with record.open("a", encoding="utf-8") as handle:
+                handle.writelines(json.dumps(fake) + "\\n" for fake in fakes)
+        """
+    )
+    runner.write_text(raiser, encoding="utf-8")
+    job = [
+        *(sys.executable, str(PLUGIN_ROOT / "scripts/ci_jobs.py"), "--root", str(root)),
+        *("--run", "rest", "--runner", f"{sys.executable} {runner}", "--jobs", "1"),
+        *("--report", RECORD),
+    ]
+    code, lines = judged_in_ci(root, sleeps, monkeypatch=monkeypatch, capsys=capsys, command=job)
+    assert code == 0, lines
+    for gate in ("alpha", "beta", "gamma"):
+        assert judged_gate(lines, gate).endswith(": green")
+
+
+def test_direct_ci_jobs_report_and_alone_and_direct_parallel_strip_budget_env(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = grouped_project(tmp_path / "repo", "[ceilings.seconds]\ntier1 = 60.0\n")
+    env_checker = tmp_path / "check_env.py"
+    env_checker.write_text(
+        "import os; assert 'RATCHET_BUDGET_GROUP' not in os.environ\n",
+        encoding="utf-8",
+    )
+    assert (
+        ci_jobs.main(
+            [
+                "ci_jobs.py",
+                "--root",
+                str(root),
+                "--run",
+                "rest",
+                "--runner",
+                f"{sys.executable} {env_checker}",
+                "--report",
+                RECORD,
+            ]
+        )
+        == 0
+    )
+    assert (
+        budget.main(
+            [
+                "budget.py",
+                "bite",
+                "--root",
+                str(root),
+                "--tier",
+                "tier1",
+                "--",
+                sys.executable,
+                str(PLUGIN_ROOT / "scripts/ci_jobs.py"),
+                "--root",
+                str(root),
+                "--run",
+                "bite",
+                "--runner",
+                f"{sys.executable} {env_checker}",
+            ]
+        )
+        == 0
+    )
+    assert (
+        budget.main(
+            [
+                "budget.py",
+                "direct",
+                "--root",
+                str(root),
+                "--tier",
+                "tier1",
+                "--",
+                sys.executable,
+                str(PLUGIN_ROOT / "scripts/parallel.py"),
+                "--root",
+                str(root),
+                "--runner",
+                f"{sys.executable} {env_checker}",
+                "--",
+                "alpha",
+            ]
+        )
+        == 0
+    )
+    wrong_job = [
+        sys.executable,
+        "-c",
+        (
+            "import json, os, pathlib;"
+            " pathlib.Path(os.environ['RATCHET_BUDGET_GROUP']).write_text("
+            "json.dumps({'kind': 'group', 'job': 'other', 'gates': ['alpha']}) + '\\n',"
+            " encoding='utf-8')"
+        ),
+    ]
+    assert (
+        budget.main(["budget.py", "rest", "--root", str(root), "--tier", "tier1", "--", *wrong_job])
+        == 0
+    )
+    capsys.readouterr()
+
+
+ORDERED_GROUP = textwrap.dedent(
+    """\
+    import json, sys
+    lines = [
+        {"key": "alpha", "seconds": 0.1, "exit": 0},
+        {"key": "beta", "seconds": "slow", "exit": 0},
+        {"key": "gamma", "seconds": 0.2, "exit": 0},
+        {"kind": "group", "job": "rest", "gates": ["alpha", "beta", "gamma"]},
+    ]
+    with open(sys.argv[1], "a", encoding="utf-8") as out:
+        out.writelines(json.dumps(line) + "\\n" for line in lines)
+    """
+)
+
+
+def test_not_judged_and_judged_lines_print_in_the_job_s_gate_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = grouped_project(tmp_path / "repo", TIER_CEILING)
+    writer = tmp_path / "ordered_group.py"
+    writer.write_text(ORDERED_GROUP, encoding="utf-8")
+    command = [sys.executable, str(writer), str(root / RECORD)]
+    (root / RECORD).parent.mkdir()
+    code, lines = judged_in_ci(root, {}, monkeypatch=monkeypatch, capsys=capsys, command=command)
+    assert code == 0, lines
+    assert [line.split()[1] for line in lines] == ["rest", "alpha", "beta", "gamma"]
+    assert judged_gate(lines, "beta").endswith("holds no time of it: not judged")
 
 
 def problems_of(words: str) -> list[tuple[ci_jobs.Kind, str]]:

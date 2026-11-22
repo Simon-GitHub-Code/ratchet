@@ -40,6 +40,7 @@ KEEP = dt.timedelta(days=14)
 STOP_GRACE = 30.0
 DOWN_WAIT = 60.0
 POLL = 0.05
+WATCH = 0.2
 SLUG = re.compile(r"[a-z0-9][a-z0-9-]*")
 BIND = "bind:"
 NONE = "none"
@@ -495,16 +496,22 @@ def supervise(directory: Path) -> int:
         tuple(str(pair) for pair in env) if isinstance(env, list) else (),
         str(session["listens"]) if session.get("listens") else None,
     )
+    root = Path(str(session["root"]))
     process: subprocess.Popen[bytes] | None = None
     try:
         with gatelib.signals_held():
             process = subprocess.Popen(
                 boot.argv(directory),
-                cwd=str(session["root"]),
+                cwd=root,
                 stdin=subprocess.DEVNULL,
                 start_new_session=True,
             )
-        return process.wait()
+        while True:
+            try:
+                return process.wait(timeout=WATCH)
+            except subprocess.TimeoutExpired:
+                if not root.is_dir() or not directory.is_dir():
+                    return 1
     finally:
         stop(process)
 

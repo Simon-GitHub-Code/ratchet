@@ -24,7 +24,7 @@ The format is domain-modeling's `GLOSSARY-FORMAT.md`: one concept, one name, the
 The format is domain-modeling's `ADR-FORMAT.md`, and its three-part test for when to write one holds: hard to reverse, surprising without context, a real trade-off. The method adds:
 
 - **A `## Refutation criterion` section:** the observation or measurement that would show the decision wrong, and when to look. The conformance gate requires it and rejects an empty or placeholder body.
-- **Numbering** without gaps.
+- **Numbering** without gaps. If a branch's new ADR collides with a number taken on the default branch, `scripts/adr_renumber.py <from> <to>` renames the file and rewrites every citation the branch added.
 - **The title** states the decision as a sentence.
 - **Superseding first.** A change that contradicts an ADR needs the superseding ADR first: `status: superseded` with `superseded-by: NNNN`, or domain-modeling's `superseded by ADR-NNNN`.
 - **Citations.** Every machine-enforced rule cites its ADR: a policy constant in a fitness test carries an `ADR NNNN` comment, and a fitness test checks the number exists.

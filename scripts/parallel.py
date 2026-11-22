@@ -291,6 +291,7 @@ class Scheduler:
         options: argparse.Namespace,
         *,
         kept: schedule.Schedule,
+        group_log: Path | None = None,
     ) -> None:
         grouped = [unit for unit in units if len(unit) > 1]
         self.groups = [*grouped, *(group for group in kept.apart if group not in units)]
@@ -306,6 +307,7 @@ class Scheduler:
         self.report_to: Path | None = options.report
         self.tree = runrecord.tree_id(self.root) if options.report else None
         self.tools = tools(self.root)
+        self.group_log = group_log
         self.live: dict[str, Live] = {}
         self.finished: list[Finished] = []
         self.stopped: list[str] = []
@@ -347,9 +349,9 @@ class Scheduler:
         command = [*self.runner, *shlex.split(name)]
         log = tempfile.TemporaryFile()  # noqa: SIM115 # -- held until the gate is settled
         say(f"parallel: {name}: started")
-        env = None
+        env = {key: value for key, value in os.environ.items() if key != budget.GROUP_ENV}
         if name in self.shares:
-            env = {**os.environ, "RATCHET_JOBS": str(self.shares[name])}
+            env["RATCHET_JOBS"] = str(self.shares[name])
         try:
             process = subprocess.Popen(
                 command,
@@ -382,7 +384,7 @@ class Scheduler:
         if self.report_to is not None:
             outcome = budget.Outcome(result.name, result.seconds, None, result.exit_code)
             stamp = runrecord.stamp(self.root, self.tree)
-            budget.report(self.report_to, outcome, stamp, root=self.root)
+            budget.report(self.report_to, outcome, stamp, root=self.root, group_log=self.group_log)
         if self.fail_fast and not result.green:
             self.halted = True
 
@@ -528,7 +530,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str], *, group_log: Path | None = None) -> int:
     parser = build_parser()
     rest = argv[1:]
     split = rest.index("--") if "--" in rest else len(rest)
@@ -560,7 +562,7 @@ def main(argv: list[str]) -> int:
     options.wide = [name for name in gates if name in kept.wide]
     for line in unstated(stated, given):
         say(line)
-    scheduler = Scheduler(units, runner, options, kept=kept)
+    scheduler = Scheduler(units, runner, options, kept=kept, group_log=group_log)
     started = time.monotonic()
     try:
         with gatelib.interrupts_raise():

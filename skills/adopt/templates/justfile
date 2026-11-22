@@ -105,6 +105,7 @@ test-files *files:
     {{test_runner}} {{files}}
 
 tier0_tree_gates := "fmt-check lint types imports deadcode lint-workflows secrets flags pins limits markers prose snapshots-check ratchet-lowered suppressions comments"
+tier0_staged_gates := "fmt-check lint types imports deadcode lint-workflows secrets flags pins limits markers-staged prose snapshots-check ratchet-lowered suppressions-staged comments"
 tier0_gates := tier0_tree_gates + " commits"
 tier1_gates := "test coverage diff-coverage test-counts tests-changed test-stability-changed mutation-changed contracts-check audit duplication build smoke telemetry flag-states load-smoke bite api-check data-compat doctests sast iac artefact-scan type-coverage doc-coverage change-size guard-diff settings-check conformance triggers incidents rollback dependency-faults config-refusal graceful-stop"
 tier2_gates := "mutation api-deep symbolic fuzz e2e test-stability reproducible sanitizers perf dast pentest load telemetry-e2e flags-expired a11y formal bite-all"
@@ -121,9 +122,13 @@ serial2 := ""
 configured_jobs := `git config --get ratchet.jobs 2>/dev/null || true`
 jobs := env_var_or_default("RATCHET_JOBS", if configured_jobs == "" { num_cpus() } else { configured_jobs })
 
+configured_hook_jobs := `git config --get ratchet.hook-jobs 2>/dev/null || true`
+hook_jobs := env_var_or_default("RATCHET_HOOK_JOBS", if configured_hook_jobs == "" { num_cpus() } else { configured_hook_jobs })
+
 alone := "--alone perf load mutation test-stability"
 
 parallel := plugin_py + ' "' + ratchet_plugin + '/scripts/parallel.py" --runner "' + just_executable() + '" --report .ratchet/timing.jsonl --jobs ' + jobs + ' ' + alone
+hook_parallel := plugin_py + ' "' + ratchet_plugin + '/scripts/parallel.py" --runner "' + just_executable() + '" --report .ratchet/timing.jsonl --jobs ' + hook_jobs + ' ' + alone
 
 changed := plugin_py + ' "' + ratchet_plugin + '/scripts/changed.py"'
 
@@ -150,9 +155,12 @@ tier0: plugin-pin
 tier0-tree: plugin-pin
     {{parallel}} {{serial0}} -- {{tier0_tree_gates}}
 
+tier0-staged: plugin-pin
+    {{hook_parallel}} {{serial0}} -- {{tier0_staged_gates}}
+
 [no-exit-message]
 pre-commit:
-    @if [ -n "${RATCHET_HOOK_PROBE:-}" ]; then echo pre-commit > "$RATCHET_HOOK_PROBE"; else just tier0-tree; fi
+    @if [ -n "${RATCHET_HOOK_PROBE:-}" ]; then echo pre-commit > "$RATCHET_HOOK_PROBE"; else just tier0-staged; fi
 
 [no-exit-message]
 commit-msg file:
@@ -227,6 +235,9 @@ snapshots-check: _plugin
 suppressions: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/suppressions.py"
 
+suppressions-staged: _plugin
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/suppressions.py" --staged
+
 comments *options: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/comments.py" --files | xargs -0 -r just comments-list | {{plugin_py}} "{{ratchet_plugin}}/scripts/comments.py" --changed {{options}}
 
@@ -269,6 +280,9 @@ limits:
 
 markers: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/markers.py"
+
+markers-staged: _plugin
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/markers.py" --staged
 
 prose: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/prose.py"

@@ -14,6 +14,7 @@ import tempfile
 import tomllib
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
@@ -174,6 +175,14 @@ EXEMPT_STEPS = (
         "contents: read",
         "every workflow reads its own checkout, and a project without it fails at the checkout",
     ),
+    (
+        "actions: read",
+        "the proven check reads completed pull request runs and their artifacts on a push",
+    ),
+    (
+        "already_proven.py",
+        "skips default-branch push CI when a pull request run already settled tree and base",
+    ),
 )
 DOOR_MEANINGS = {
     "change": "a path whose every change is final, such as a migration or infrastructure code",
@@ -260,6 +269,8 @@ ADR_FRONT_MATTER = re.compile(
     r"\A(?:---\nstatus: (?P<status>[^\n]+)\n(?:superseded-by: (?P<by>\d{4})\n)?---\n+)?# \S"
 )
 ADR_STATUS_WORDS = "proposed|accepted|deprecated|rejected|superseded"
+ADR_PATH_REF = re.compile(r"docs/adr/(\d{4}-[a-z0-9-]+\.md)\b")
+ADR_NUMBER_REF = re.compile(r"\bADR(?:\s+|-)(\d{4})\b")
 GLOSSARY_PLACEHOLDER = "<project>"
 PLUGIN_PIN_PLACEHOLDER = "<X.Y.Z> at <ratchet-sha> tree <ratchet-tree-id>"
 PLUGIN_CHECKOUT_PLACEHOLDER = "<ratchet-sha>"
@@ -721,6 +732,66 @@ def numbered_files(directory: Path) -> list[tuple[int, Path]]:
     return found
 
 
+def base_adr_paths(root: Path, base: str | None) -> set[str]:
+    if base is None:
+        return set()
+    listed = gatelib.git(root, "ls-tree", "-r", "--name-only", "-z", base, "--", "docs/adr")
+    return {path for path in (listed or "").split("\0") if path}
+
+
+def duplicate_adr_hint(
+    num: int, target: int, *, root: Path, files: list[tuple[int, Path]], base_files: set[str]
+) -> str:
+    dups = [path.relative_to(root).as_posix() for number, path in files if number == num]
+    existing = [rel for rel in dups if rel in base_files]
+    new_files = [rel for rel in dups if rel not in base_files]
+    if len(existing) == 1 and len(new_files) == 1:
+        return (
+            f"{num:04d} was taken on the default branch ({existing[0]}); "
+            f"move {new_files[0]} to {target:04d} with "
+            f'python3 "$RATCHET_PLUGIN/scripts/adr_renumber.py" {num:04d} {target:04d}'
+        )
+    pick = new_files[0] if new_files else dups[-1]
+    return (
+        f"{num:04d} is shared by {', '.join(dups)}; move one to {target:04d} with "
+        f'python3 "$RATCHET_PLUGIN/scripts/adr_renumber.py" --file {pick} {num:04d} {target:04d}'
+    )
+
+
+def adr_numbering_finding(root: Path, files: list[tuple[int, Path]], numbers: list[int]) -> Finding:
+    base_message = f"docs/adr: numbering has gaps or duplicates: {numbers}"
+    duplicates = sorted(num for num, count in Counter(numbers).items() if count > 1)
+    if not duplicates:
+        return agent(base_message)
+    base_files = base_adr_paths(root, gatelib.base_commit(root))
+    next_free = max(numbers) + 1
+    hints = [
+        duplicate_adr_hint(num, next_free + offset, root=root, files=files, base_files=base_files)
+        for offset, num in enumerate(duplicates)
+    ]
+    return agent(f"{base_message}; {'; '.join(hints)}")
+
+
+def check_adr_citations(
+    root: Path, adrs: AbstractSet[int], adr_names: AbstractSet[str]
+) -> Iterable[Finding]:
+    targets = [BINDING_PATH, str(gatelib.THRESHOLDS)]
+    targets.extend(
+        path.relative_to(root).as_posix() for path in sorted((root / "docs/adr").glob("*.md"))
+    )
+    for rel in targets:
+        text = read(root / rel)
+        if text is None:
+            continue
+        for name in dict.fromkeys(ADR_PATH_REF.findall(text)):
+            if name not in adr_names:
+                yield agent(f"{rel}: references missing ADR docs/adr/{name}")
+        if rel == str(gatelib.THRESHOLDS):
+            for num_str in dict.fromkeys(ADR_NUMBER_REF.findall(text)):
+                if int(num_str) not in adrs:
+                    yield agent(f"{rel}: cites ADR {num_str}, which docs/adr does not hold")
+
+
 def check_adrs(root: Path) -> Iterable[Finding]:
     directory = root / "docs/adr"
     if not directory.is_dir():
@@ -731,13 +802,15 @@ def check_adrs(root: Path) -> Iterable[Finding]:
         yield agent("docs/adr: no NNNN-<slug>.md record")
         return
     numbers = [number for number, _ in files]
+    adrs = set(numbers)
     if numbers != list(range(1, len(numbers) + 1)):
-        yield agent(f"docs/adr: numbering has gaps or duplicates: {numbers}")
+        yield adr_numbering_finding(root, files, numbers)
     for number, path in files:
-        yield from check_adr(number, path, path.relative_to(root))
+        yield from check_adr(number, path, path.relative_to(root), adrs=adrs)
+    yield from check_adr_citations(root, adrs, {path.name for _, path in files})
 
 
-def check_adr(number: int, path: Path, rel: Path) -> Iterable[Finding]:
+def check_adr(number: int, path: Path, rel: Path, *, adrs: AbstractSet[int]) -> Iterable[Finding]:
     text = path.read_text(encoding="utf-8")
     match = ADR_FRONT_MATTER.match(text)
     if match is None:
@@ -748,6 +821,8 @@ def check_adr(number: int, path: Path, rel: Path) -> Iterable[Finding]:
         yield agent(f"{rel}: status '{status}' is not {ADR_STATUS_WORDS}")
     if status == "superseded" and superseded_by is None:
         yield agent(f"{rel}: a superseded ADR names its successor: 'superseded-by: NNNN'")
+    if superseded_by is not None and int(superseded_by) not in adrs:
+        yield agent(f"{rel}: superseded-by: {superseded_by} names no ADR in docs/adr")
     if not markdown_text.has_section(text, REFUTATION_SECTION):
         yield agent(f"{rel}: has no '{REFUTATION_SECTION}' section")
     elif markdown_text.empty_body(text, REFUTATION_SECTION):
@@ -2284,11 +2359,32 @@ def regroup_hunks() -> tuple[Hunk, ...]:
     end = next(i for i in range(at + 1, len(lines)) if not lines[i].startswith(STEP_BODY))
     run = next(line for line in lines if line.endswith(NEW_RUN))
     guard = next(line for line in lines if line.startswith("    if: needs.shape.outputs.tier1 "))
+    proven_at = lines.index("  proven:")
+    tier0_at = lines.index("  tier0:")
+    tier0_runs_at = lines.index("    runs-on: ubuntu-latest", tier0_at)
+    timing_at = next(i for i in range(tier0_at, len(lines)) if "timing-tier0" in lines[i])
+    shape_at = lines.index("  shape:")
+    shape_runs_at = lines.index("    runs-on: ubuntu-latest", shape_at)
     return (
         ("the shape job's steps", OLD_SHAPE_STEP, tuple(lines[at - 2 : end])),
         ("the `tier1:` line", ("  tier1:",), ("  tier1:", guard)),
         ("the tier 1 jobs' `needs:` lines", (OLD_NEEDS,), (NEW_NEEDS,)),
         ("the budget calls' run lines", (run.removesuffix(NEW_RUN) + OLD_RUN,), (run,)),
+        (
+            "the `proven:` job and `tier0:` guard",
+            ("  tier0:",),
+            tuple(lines[proven_at:tier0_runs_at]),
+        ),
+        (
+            "the `tier0` proven artifact steps",
+            tuple(lines[timing_at - 2 : timing_at + 1]),
+            tuple(lines[timing_at - 2 : shape_at]),
+        ),
+        (
+            "the `shape:` guard",
+            ("  shape:",),
+            tuple(lines[shape_at:shape_runs_at]),
+        ),
     )
 
 
@@ -2594,7 +2690,8 @@ def tier_recipes(binding: str, justfile: str) -> dict[str, str]:
     rows = template_rows()
     named = {}
     for tier in justfile_text.first_dependents(template_file("justfile"), PIN_RECIPE):
-        recipe = RUNS_JUST.match((commands.get(tier) or rows[tier][1]).strip("`"))
+        default = rows[tier][1] if tier in rows else f"just {tier}"
+        recipe = RUNS_JUST.match((commands.get(tier) or default).strip("`"))
         if recipe is not None and justfile_text.defines_recipe(justfile, recipe.group(1)):
             named[tier] = recipe.group(1)
     return named
@@ -2825,25 +2922,32 @@ def check_pre_commit_recipe(root: Path) -> Iterable[Finding]:
     justfile = read_justfile(root)
     template = template_file("justfile")
     name = "pre-commit"
+    has_staged = justfile is not None and justfile_text.defines_recipe(justfile, "tier0-staged")
+    has_tree = justfile is not None and justfile_text.defines_recipe(justfile, "tier0-tree")
     if (
         justfile is None
         or not justfile_text.defines_recipe(justfile, name)
-        or not justfile_text.defines_recipe(justfile, "tier0-tree")
+        or not (has_staged or has_tree)
         or justfile_text.template_recipe(template, name) is None
     ):
         return
     quiet = NO_EXIT_MESSAGE in justfile_text.definition(justfile, name)
     if quiet and justfile_text.runs(justfile, name, PIN_SCRIPT):
         return
-    yield Finding(
-        "justfile",
-        f"`{name}` neither runs {PIN_SCRIPT} first nor carries `{NO_EXIT_MESSAGE}`, so the commit"
-        " hook can run a plugin no check held to the release",
+    fix: Fix = (
         Edit(
             f"make `{name}` the template's recipe",
             justfile_text.with_template_recipe(template, name),
             Agent(),
-        ),
+        )
+        if has_staged
+        else Agent(start=template_definition(name))
+    )
+    yield Finding(
+        "justfile",
+        f"`{name}` neither runs {PIN_SCRIPT} first nor carries `{NO_EXIT_MESSAGE}`, so the commit"
+        " hook can run a plugin no check held to the release",
+        fix,
         identity="pre-commit recipe is not the template's",
     )
 

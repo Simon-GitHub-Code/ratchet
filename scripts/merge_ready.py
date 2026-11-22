@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import datetime as dt
 import functools
 import json
-import os
 import posixpath
 import re
 import subprocess
@@ -54,18 +54,18 @@ AGENT = "merge: agent"
 OWNER = "merge: owner"
 WAIT = "merge: wait"
 MARKER = "<!-- ratchet:merge -->"
-SCHEMA = 1
+SCHEMA = gatelib.SCHEMA
 THRESHOLDS = gatelib.THRESHOLDS.as_posix()
 LEDGER = owed.LEDGER.as_posix()
 BINDING = gatelib.BINDING.as_posix()
-SLUG = r"[a-z0-9]+(?:-[a-z0-9]+)*"
+SLUG = gatelib.SLUG
 RECORD = re.compile(rf"^docs/features/({SLUG})/verdict\.json$")
 DISPUTES = "docs/disputes"
 DISPUTE = re.compile(rf"^{DISPUTES}/\d{{4}}-[a-z0-9-]+\.md$")
 STATUS = re.compile(r"^- Status:[ \t]*(\S+)[ \t]*$", re.MULTILINE)
 DECIDED = frozenset({"upheld", "rejected"})
 TREE = re.compile(r"[0-9a-f]{40,64}")
-APPROVE = "approve"
+APPROVE = gatelib.APPROVE
 TIER_STATES = ("green", "red", "none")
 RED = "red"
 DOOR_EVENTS = frozenset({"deployed", "irreplaceable-data"})
@@ -499,6 +499,15 @@ def flag_doors(old: list[registry.Flag], new: list[registry.Flag]) -> list[str]:
             found.append(f"flag '{key}' is on by default, which ships its behaviour to everyone")
         if flag.get("permanent") is True and prior.get("permanent") is not True:
             found.append(f"flag '{key}' becomes permanent")
+        prior_date, now_date = prior.get("remove-by"), flag.get("remove-by")
+        if (
+            isinstance(prior_date, dt.date)
+            and not isinstance(prior_date, dt.datetime)
+            and isinstance(now_date, dt.date)
+            and not isinstance(now_date, dt.datetime)
+            and now_date > prior_date
+        ):
+            found.append(f"flag '{key}' moves its removal date later ({prior_date} to {now_date})")
     found += [
         f"flag '{key}' leaves the registry while off by default: its behaviour ships on, or goes"
         for key, flag in sorted(was.items())
@@ -528,6 +537,18 @@ def flag_reasons(change: Change) -> list[Reason]:
     return [Reason("door", f"{registry.REGISTRY}: {text}") for text in found or []]
 
 
+def flag_row_asked(change: Change) -> bool:
+    binding = change.tip(BINDING) or ""
+    kinds = frozenset(application_types.declared(binding) or ())
+    if not (application_types.load().asked_of(FLAGS_QUESTION) & kinds):
+        return False
+    row = next(
+        (r for r in project_bite.gate_rows(binding) if r.question == FLAGS_QUESTION),
+        None,
+    )
+    return row is None or application_types.NONE.match(row.tool) is None
+
+
 def flags_asked(change: Change) -> bool:
     binding = git(change.root, "show", f"{change.base}:{gatelib.BINDING.as_posix()}")
     kinds = application_types.declared(binding or "")
@@ -555,11 +576,13 @@ def new_surface(change: Change, manifest: Manifest) -> list[str]:
     ]
 
 
-def dark_flag(change: Change, surface: list[str]) -> bool:
+def dark_flag(change: Change, surface: list[str], *, keys: frozenset[str] | None = None) -> bool:
     old, _ = registry.parse(change.before(registry.REGISTRY) or "")
     new, _ = registry.parse(change.after(registry.REGISTRY) or "")
     was = {registry.name(flag) for flag in old}
     dark = {registry.name(flag) for flag in new if flag.get("default") is False}
+    if keys is not None:
+        dark &= keys
     if dark - was:
         return True
     code = [
@@ -577,8 +600,7 @@ def dark_flag(change: Change, surface: list[str]) -> bool:
     return any(key in line for key in dark for line in added)
 
 
-def unflagged_reasons(change: Change, manifest: Manifest) -> list[Reason]:
-    surface = new_surface(change, manifest)
+def unflagged_reasons(change: Change, surface: list[str]) -> list[Reason]:
     if not surface or not flags_asked(change) or dark_flag(change, surface):
         return []
     text = (
@@ -587,6 +609,71 @@ def unflagged_reasons(change: Change, manifest: Manifest) -> list[Reason]:
         " ship it dark, or the owner merges it"
     )
     return [Reason("unflagged", text)]
+
+
+def yes_flag_problem(change: Change, key: str, surface: list[str]) -> str | None:
+    after_text = change.after(registry.REGISTRY)
+    new, errors = registry.parse(after_text or "")
+    if after_text is None or errors:
+        return f"requires {registry.REGISTRY} to exist and parse"
+    matches_key = [flag for flag in new if registry.name(flag) == key]
+    if len(matches_key) != 1:
+        return "is not declared" if not matches_key else f"is declared {len(matches_key)} times"
+    flag = matches_key[0]
+    due = flag.get("remove-by")
+    if (
+        flag.get("permanent") is True
+        or not isinstance(due, dt.date)
+        or isinstance(due, dt.datetime)
+    ):
+        return "needs a `remove-by` date and not `permanent = true`"
+    old, old_errors = registry.parse(change.before(registry.REGISTRY) or "")
+    was = [entry for entry in old if not old_errors and registry.name(entry) == key]
+    already_on = len(was) == 1 and was[0].get("default") is True
+    default = flag.get("default")
+    if not isinstance(default, bool) or (default and not already_on):
+        return "is not off (`default = false`)"
+    if not already_on and not dark_flag(change, surface, keys=frozenset({key})):
+        return (
+            f"requires the change to declare `{key}` off in {registry.REGISTRY} or name"
+            f" `{key}` in the code it adds"
+        )
+    return None
+
+
+def yes_flag_reasons(change: Change, key: str, surface: list[str]) -> list[Reason]:
+    problem = yes_flag_problem(change, key, surface)
+    if problem is None:
+        return []
+    return [Reason("unflagged", f"{registry.REGISTRY}: the ticket's flag `{key}` {problem}")]
+
+
+def surface_reasons(
+    change: Change,
+    manifest: Manifest,
+    found: FoundTicket | None,
+    *,
+    asked_flags: bool,
+    notes: list[str],
+) -> list[Reason]:
+    surface = new_surface(change, manifest)
+    if found is not None and found.flag.form == "hidden" and found.flag.key is not None:
+        return yes_flag_reasons(change, found.flag.key, surface)
+    reasons = unflagged_reasons(change, surface)
+    if not reasons:
+        return []
+    can_wait = not asked_flags or (
+        found is not None and found.flag.form == "appears" and not open_yes(change)
+    )
+    if can_wait:
+        return waiting(
+            change,
+            reasons,
+            needs=SURFACE_EVENTS,
+            notes=notes,
+            what="new surface with no flag that is off",
+        )
+    return reasons
 
 
 def dispute_reasons(change: Change) -> list[Reason]:
@@ -754,14 +841,99 @@ def same_refs(change: Change, path: str, texts: tuple[str, str]) -> bool:
     return len(refs[0]) == len(refs[1]) and all(same(*pair) for pair in zip(*refs, strict=False))
 
 
-def agreement(change: Change, path: str) -> str | None:
+@dataclass(frozen=True)
+class FoundTicket:
+    ticket: preflight.Ticket
+    flag: preflight.Flag
+
+
+def ticket_flag(change: Change, ref: str, ticket: preflight.Ticket) -> preflight.Flag:
+    with tracker_names(change, ref) as names:
+        parent_ref = preflight.parent_of(ticket, names)
+    parent = None
+    if parent_ref is not None and not parent_ref.startswith(("/", "../")):
+        parent_text = git(change.root, "show", f"{ref}:{posixpath.normpath(parent_ref)}")
+        if parent_text is not None:
+            parent = preflight.local_ticket(parent_ref, parent_text)
+    lines = preflight.operability_lines(ticket, parent)
+    return preflight.flag_reading(lines.get(preflight.FLAG_LINE, ()))[0]
+
+
+def labelled_ticket(change: Change, path: str) -> tuple[str, preflight.Ticket]:
+    labels = spellings(change)
+    before = change.before(path)
+    if before is not None and carries(before, labels):
+        return change.fork, preflight.local_ticket(path, before)
+    return change.base, preflight.local_ticket(path, change.tip(path) or "")
+
+
+def ticket_of(change: Change, slug: str) -> FoundTicket | None:
+    found = [
+        (ref, ticket)
+        for path in sorted(labelled(change))
+        for ref, ticket in (labelled_ticket(change, path),)
+        if preflight.slug_of(ticket.title, ticket.number) == slug
+    ]
+    if len(found) != 1:
+        return None
+    ref, ticket = found[0]
+    return FoundTicket(ticket, ticket_flag(change, ref, ticket))
+
+
+def open_yes(change: Change) -> bool:
+    labels = spellings(change)
+    for path in sorted(labelled(change)):
+        for ref in dict.fromkeys((change.fork, change.base)):
+            text = git(change.root, "show", f"{ref}:{path}")
+            if text is None or not carries(text, labels):
+                continue
+            ticket = preflight.local_ticket(path, text)
+            if ticket.is_open and ticket_flag(change, ref, ticket).form == "hidden":
+                return True
+    return False
+
+
+def verdict_slug(change: Change) -> str | None:
+    found = [path for path in change.paths if RECORD.match(path)]
+    if len(found) != 1:
+        return None
+    matched = RECORD.match(found[0])
+    return matched.group(1) if matched else None
+
+
+def status_resolved(change: Change, path: str) -> bool:
+    before, after = change.before(path), change.after(path)
+    if before is None or after is None:
+        return False
+    old, new = before.splitlines(keepends=True), after.splitlines(keepends=True)
+    if len(old) != len(new):
+        return False
+    diffs = [(was, now) for was, now in zip(old, new, strict=True) if was != now]
+    if len(diffs) != 1:
+        return False
+    was_match = preflight.STATUS_LINE.fullmatch(diffs[0][0].rstrip("\r\n"))
+    now_match = preflight.STATUS_LINE.fullmatch(diffs[0][1].rstrip("\r\n"))
+    if was_match is None or now_match is None:
+        return False
+    labels = {label.casefold() for label in spellings(change)}
+    return (
+        was_match.group(1).strip().casefold() in labels
+        and now_match.group(1).strip().casefold() == "resolved"
+    )
+
+
+def agreement(change: Change, path: str, *, allowed_close: str | None = None) -> str | None:
+    if path == allowed_close and status_resolved(change, path):
+        return None
     whole, status = build_inputs(change)
     if path in whole:
         ticket = whole[path]
         if ticket == path:
-            if link_only(change, path):
-                return None
-            return "is a ticket the owner agreed to build, and only they change it"
+            return (
+                None
+                if link_only(change, path)
+                else "is a ticket the owner agreed to build, and only they change it"
+            )
         return f"is what {ticket} inherits its approach from, a ticket the owner agreed to build"
     if path in status and not change.held(path):
         return (
@@ -773,6 +945,28 @@ def agreement(change: Change, path: str) -> str | None:
     ):
         return f"changes whether {status[path]} may start, a ticket the owner agreed to build"
     return None
+
+
+def records_only(change: Change, manifest: Manifest) -> bool:
+    return bool(change.paths) and all(
+        not RECORD.match(path) and record_kind(manifest, path) is not None for path in change.paths
+    )
+
+
+def agreement_reasons(
+    change: Change, manifest: Manifest, found: FoundTicket | None
+) -> list[Reason]:
+    if records_only(change, manifest):
+        return []
+    allowed = None if found is None else found.ticket.ref
+    reasons = []
+    for path in change.paths:
+        if not change.kept(path) and path in expiring(change):
+            continue
+        why = agreement(change, path, allowed_close=allowed)
+        if why is not None:
+            reasons.append(Reason("record", f"{path} {why}"))
+    return reasons
 
 
 def closes(change: Change, path: str) -> str | None:
@@ -1089,17 +1283,7 @@ def not_records(
     return [path for path in listed_paths if not shaped(seen, manifest, path)]
 
 
-def reviewed_tree(root: Path, ref: str, record: str) -> str | None:
-    with tempfile.TemporaryDirectory() as scratch:
-        env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
-        steps = (
-            ("read-tree", ref),
-            ("update-index", "--force-remove", "--", record),
-            ("write-tree",),
-        )
-        results = [git(root, *step, env=env) for step in steps]
-    tree = results[-1]
-    return tree.strip() if tree and None not in results else None
+reviewed_tree = gatelib.reviewed_tree
 
 
 def listed(value: object) -> list[str] | None:
@@ -1363,6 +1547,10 @@ def judge(
             *registry_reasons(change),
             *dispute_reasons(change),
         ]
+    asked_flags = flag_row_asked(change)
+    flags = flag_reasons(change)
+    slug = verdict_slug(change)
+    found = None if slug is None else ticket_of(change, slug)
     return [
         *setting_reasons(change, base_ref, asked or Asked()),
         *file_reasons(change, manifest),
@@ -1370,22 +1558,18 @@ def judge(
         *registry_reasons(change),
         *waiting(
             change,
-            [*door_reasons(change, manifest), *flag_reasons(change)],
+            [*door_reasons(change, manifest), *([] if asked_flags else flags)],
             needs=DOOR_EVENTS,
             notes=notes,
             what="a one-way door",
         ),
-        *waiting(
-            change,
-            unflagged_reasons(change, manifest),
-            needs=SURFACE_EVENTS,
-            notes=notes,
-            what="new surface with no flag that is off",
-        ),
+        *(flags if asked_flags else ()),
+        *surface_reasons(change, manifest, found, asked_flags=asked_flags, notes=notes),
         *dispute_reasons(change),
         *expiry_reasons(change),
         *lost_headings(change),
         *prune_reasons(change),
+        *agreement_reasons(change, manifest, found),
         *record_reasons(change, manifest),
     ]
 
@@ -1412,39 +1596,9 @@ def report(reasons: list[Reason], head: str) -> str:
     return f"{MARKER}\n**{said}** at `{head[:12]}`. {lead}:\n\n{rows}"
 
 
-def uncommitted(root: Path) -> list[str]:
-    status = git(root, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all")
-    return sorted({entry[3:] for entry in (status or "").split("\0") if entry})
-
-
-def dirty(root: Path, record: str) -> list[str]:
-    return [path for path in uncommitted(root) if path != record]
-
-
-def write_record(root: Path, text: str) -> int:
-    try:
-        data: object = json.loads(text)
-    except ValueError:
-        data = None
-    slug = data.get("slug") if isinstance(data, dict) else None
-    if not isinstance(data, dict) or not isinstance(slug, str) or not re.fullmatch(SLUG, slug):
-        print("record: stdin is not the pipeline's verdictRecord: a JSON object with its slug")
-        return 1
-    record = f"docs/features/{slug}/verdict.json"
-    uncommitted = dirty(root, record)
-    tree = reviewed_tree(root, "HEAD", record)
-    if uncommitted or tree is None:
-        print(
-            "record: commit the change first, so the record names the tree that was reviewed:"
-            f" {', '.join(uncommitted) or 'HEAD cannot be read'}"
-        )
-        return 1
-    target = root / record
-    target.parent.mkdir(parents=True, exist_ok=True)
-    stamped = {**data, "schema": SCHEMA, "tree": tree}
-    target.write_text(json.dumps(stamped, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(f"record: {record} certifies tree {tree[:12]}; commit it alone, last")
-    return 0
+uncommitted = gatelib.uncommitted
+dirty = gatelib.dirty
+write_record = gatelib.write_record
 
 
 def main(argv: list[str]) -> int:

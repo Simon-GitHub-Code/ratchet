@@ -205,8 +205,8 @@ def unprobeable(root: Path) -> Problem | None:
         return Problem(
             f"the justfile's `pre-commit` and `commit-msg` recipes do not answer {PROBE_ENV}, so"
             " the hooks cannot be probed without running tier 0",
-            f"copy the `tier0`, `tier0-tree`, `pre-commit` and `commit-msg` recipes of {TEMPLATE}"
-            " into the justfile",
+            f"copy the `tier0`, `tier0-tree`, `tier0-staged`, `pre-commit` and `commit-msg` recipes"
+            f" of {TEMPLATE} into the justfile",
         )
     return None
 

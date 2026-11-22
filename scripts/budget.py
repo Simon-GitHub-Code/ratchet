@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import contextvars
+import json
 import math
+import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 from dataclasses import dataclass
@@ -20,6 +25,10 @@ FULL_PROOF = "bite-all"
 PROOF = "bite"
 TIER_BUDGETS = {"tier0": 60.0, "tier1": 900.0}
 GROUP = "group"
+GROUP_ENV = "RATCHET_BUDGET_GROUP"
+_TIMED_ENV: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
+    "timed_env", default=None
+)
 _TABLE_HEADER = re.compile(r"^\[ceilings\.seconds\]\s*$", re.MULTILINE)
 _ANY_HEADER = re.compile(r"^\[", re.MULTILINE)
 
@@ -65,6 +74,22 @@ class Outcome:
         reported = self.status == "red" and not self.blocks
         tail = "red, reported and not blocking (--over report)" if reported else self.status
         return f"ratchet-budget: {self.key} took {self.seconds:.1f}s ({bound}{whose}{used}): {tail}"
+
+
+@dataclass(frozen=True, slots=True)
+class NotJudged:
+    key: str
+    job: str
+
+    @property
+    def verdict(self) -> int:
+        return 0
+
+    def line(self) -> str:
+        return (
+            f"ratchet-budget: {self.key} ran in {self.job}, and this run's record holds no time"
+            " of it: not judged"
+        )
 
 
 def held(text: str, key: str, tier: str | None) -> tuple[float | None, str | None]:
@@ -118,7 +143,7 @@ def lowered_ceiling(
 
 def timed(command: list[str], cwd: Path) -> tuple[float, int]:
     started = time.monotonic()
-    completed = subprocess.run(command, cwd=cwd, check=False)
+    completed = subprocess.run(command, cwd=cwd, env=_TIMED_ENV.get(), check=False)
     return time.monotonic() - started, completed.returncode
 
 
@@ -154,26 +179,68 @@ def grouped(this_run: list[dict[str, object]], job: str) -> list[tuple[str, Time
     return [(gate, times.get(gate)) for gate in map(str, ran[-1])]
 
 
+def manifest_gates(manifest_records: list[dict[str, object]], job: str) -> list[str] | None:
+    ran = [
+        list(gates)
+        for record in manifest_records
+        if record.get("kind") == GROUP
+        and record.get("job") == job
+        and isinstance(gates := record.get("gates"), list)
+        and all(isinstance(gate, str) for gate in gates)
+    ]
+    return ran[-1] if ran else None
+
+
+def manifest_times(
+    manifest_records: list[dict[str, object]], all_records: list[dict[str, object]]
+) -> dict[str, Timed | None]:
+    present = {json.dumps(record, sort_keys=True) for record in all_records}
+    times: dict[str, Timed | None] = {}
+    for record in manifest_records:
+        if (
+            "kind" not in record
+            and json.dumps(record, sort_keys=True) in present
+            and isinstance(key := record.get("key"), str)
+            and (measured := timing(record)) is not None
+            and key not in times
+        ):
+            times[key] = measured
+    return times
+
+
+def run_gates(
+    report_to: Path | None,
+    earlier: int,
+    *,
+    job: str,
+    manifest: Path,
+) -> list[tuple[str, Timed | None]] | None:
+    all_records = records(report_to)
+    manifest_records = records(manifest)
+    if (gates := manifest_gates(manifest_records, job)) is not None:
+        times = manifest_times(manifest_records, all_records)
+        return [(gate, times.get(gate)) for gate in gates]
+    return grouped(all_records[earlier:], job)
+
+
 def judged(
     job: Outcome, gates: list[tuple[str, Timed | None]], *, text: str, tier: str | None
-) -> list[Outcome]:
-    outcomes = []
+) -> list[Outcome | NotJudged]:
+    outcomes: list[Outcome | NotJudged] = []
     for gate, seconds in gates:
         if seconds is None:
-            line = (
-                f"ratchet-budget: {gate} ran in {job.key}, and this run's record holds no time"
-                " of it: not judged"
-            )
-            print(line)
-            print(f"::warning title=ratchet-budget::{line}")
+            outcomes.append(NotJudged(gate, job.key))
             continue
         ceiling, whose = held(text, gate, tier)
         outcomes.append(Outcome(gate, seconds[0], ceiling, seconds[1], whose, job.blocks))
     return outcomes
 
 
-def said(outcome: Outcome) -> None:
+def said(outcome: Outcome | NotJudged) -> None:
     print(outcome.line())
+    if isinstance(outcome, NotJudged):
+        print(f"::warning title=ratchet-budget::{outcome.line()}")
+        return
     if outcome.status == "red" and not outcome.blocks:
         print(f"::warning title=ratchet-budget::{outcome.line()}")
     if outcome.near:
@@ -184,7 +251,14 @@ def said(outcome: Outcome) -> None:
         )
 
 
-def report(path: Path, outcome: Outcome, stamp: dict[str, str], *, root: Path) -> None:
+def report(
+    path: Path,
+    outcome: Outcome,
+    stamp: dict[str, str],
+    *,
+    root: Path,
+    group_log: Path | None = None,
+) -> None:
     record: dict[str, object] = {
         "key": outcome.key,
         "seconds": round(outcome.seconds, 3),
@@ -193,7 +267,9 @@ def report(path: Path, outcome: Outcome, stamp: dict[str, str], *, root: Path) -
         "exit": outcome.exit_code,
         **stamp,
     }
-    runrecord.append(path, record, root=root)
+    if runrecord.append(path, record, root=root) and group_log is not None:
+        with contextlib.suppress(OSError), group_log.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record) + "\n")
 
 
 def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
@@ -222,8 +298,14 @@ def main(argv: list[str]) -> int:
     report_to = root / options.report if options.report else None
     tree = runrecord.tree_id(root) if report_to else None
     earlier = len(records(report_to))
-    seconds, exit_code = timed(command, root)
-    gates = grouped(records(report_to)[earlier:], options.key)
+    with tempfile.TemporaryDirectory() as directory:
+        manifest = Path(directory) / "group.jsonl"
+        env_token = _TIMED_ENV.set({**os.environ, GROUP_ENV: str(manifest)})
+        try:
+            seconds, exit_code = timed(command, root)
+        finally:
+            _TIMED_ENV.reset(env_token)
+        gates = run_gates(report_to, earlier, job=options.key, manifest=manifest)
     ceiling, tier = held(text, options.key, None if gates is not None else options.tier)
     outcome = Outcome(options.key, seconds, ceiling, exit_code, tier, options.over == "block")
     said(outcome)

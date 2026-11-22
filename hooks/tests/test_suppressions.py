@@ -7,7 +7,7 @@ import pytest
 import conformance
 import markers
 import suppressions
-from tests.repos import branch, commit, repository, write
+from tests.repos import branch, commit, git, repository, write
 from tests.test_conformance import pristine
 
 Out = pytest.CaptureFixture[str]
@@ -276,3 +276,103 @@ def test_a_pattern_edged_with_punctuation_counts_inside_a_word(tmp_path: Path, c
     write(root, "a.txt", "call.HUSH(arg)\n")
     assert run(root) == 1
     assert "quiet: rose from 0 to 1" in capsys.readouterr().out
+
+
+def run_staged(root: Path) -> int:
+    return suppressions.main(["gate", "--root", str(root), "--staged"])
+
+
+def test_staged_ignores_unstaged_and_untracked_files_and_catches_staged_rises_and_focus(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, {"a.txt": "x SILENCE-IT\n"})
+    assert run_staged(root) == 0
+    assert "suppressions: green against" in capsys.readouterr().out
+    write(root, "a.txt", "x SILENCE-IT\nSILENCE-IT\nONLY-THIS\n")
+    write(root, "untracked.txt", "SILENCE-IT\nONLY-THIS\n")
+    assert run_staged(root) == 0
+    capsys.readouterr()
+    git(root, "add", "a.txt")
+    assert run_staged(root) == 1
+    out = capsys.readouterr().out
+    assert "focus at a.txt:3:ONLY-THIS" in out
+    assert "silence: rose from 1 to 2" in out
+
+
+def test_staged_deletion_offsets_addition_and_binding_is_read_from_index(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, {"a.txt": "SILENCE-IT\n", "b.txt": "plain\n"})
+    git(root, "rm", "-q", "a.txt")
+    write(root, "b.txt", "SILENCE-IT\n")
+    git(root, "add", "b.txt")
+    write(root, "docs/process/binding.md", "# Binding\n")
+    assert run_staged(root) == 0
+    capsys.readouterr()
+    write(root, "b.txt", "SILENCE-IT\nNEW-FOCUS\n")
+    git(root, "add", "b.txt")
+    write(
+        root,
+        "docs/process/binding.md",
+        BINDING.replace(
+            "| focus | `ONLY-THIS` | never |\n",
+            "| focus | `ONLY-THIS` | never |\n| extra | `NEW-FOCUS` | never |\n",
+        ),
+    )
+    git(root, "add", "docs/process/binding.md")
+    assert run_staged(root) == 1
+    assert "extra at b.txt:2:NEW-FOCUS" in capsys.readouterr().out
+
+
+def test_staged_chunks_over_200_paths_and_handles_missing_base_or_section(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = repository(tmp_path, {"docs/process/binding.md": BINDING})
+    write(root, "init.txt", "SILENCE-IT\n")
+    git(root, "add", "init.txt")
+    assert run_staged(root) == 0
+    assert capsys.readouterr().out == "suppressions: green\n"
+    write(root, "init.txt", "ONLY-THIS\n")
+    git(root, "add", "init.txt")
+    assert run_staged(root) == 1
+    assert "focus at init.txt:1:ONLY-THIS" in capsys.readouterr().out
+    write(root, "init.txt", "plain\n")
+    commit(root, "feat(core): second")
+    branch(root)
+    for i in range(205):
+        write(root, f"f{i:03d}.txt", "SILENCE-IT\n" if i == 204 else "ok\n")
+    git(root, "add", "-A")
+    assert run_staged(root) == 1
+    assert "silence: rose from 0 to 1" in capsys.readouterr().out
+    write(root, "f204.txt", "ONLY-THIS\n")
+    git(root, "add", "f204.txt")
+    assert run_staged(root) == 1
+    assert "focus at f204.txt:1:ONLY-THIS" in capsys.readouterr().out
+
+
+def test_staged_with_base_lacking_section_counts_nothing_and_checks_never(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = repository(tmp_path, {"docs/process/binding.md": "# Binding\n"})
+    commit(root, "feat(core): second")
+    branch(root)
+    write(root, "docs/process/binding.md", BINDING)
+    write(root, "a.txt", "SILENCE-IT\n")
+    git(root, "add", "-A")
+    assert run_staged(root) == 0
+    out = capsys.readouterr().out
+    assert "the merge base's binding has no Suppressions section: none counted" in out
+    write(root, "a.txt", "ONLY-THIS\n")
+    git(root, "add", "a.txt")
+    assert run_staged(root) == 1
+    assert "focus at a.txt:1:ONLY-THIS" in capsys.readouterr().out
+
+
+def test_staged_matches_bracketed_route_filenames_literally(tmp_path: Path, capsys: Out) -> None:
+    root = project(tmp_path, {"app/[id]/page.txt": "plain\n"})
+    write(root, "app/[id]/page.txt", "SILENCE-IT\nONLY-THIS\n")
+    git(root, "add", "app/[id]/page.txt")
+    assert run_staged(root) == 1
+    out = capsys.readouterr().out
+    assert "focus at app/[id]/page.txt:2:ONLY-THIS" in out
+    assert "silence: rose from 0 to 1" in out

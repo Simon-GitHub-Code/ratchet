@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import re
@@ -3863,3 +3864,203 @@ def test_a_patch_fault_rewritten_to_edit_another_file_is_targeted_by_both_files(
     root = patched(tmp_path)
     write(root, "quality/bites/p.patch", PATCH_FILE.replace("src/code.txt", "src/other.txt"))
     named_by(project_bite.fault_targets(root, "main"), "src/code.txt", "src/other.txt")
+
+
+FORMAT_GATE_REJECTS_RECORD = (
+    'if [ -z "$2" ]; then\n'
+    "  for f in docs/features/*/verdict.json; do\n"
+    '    [ -f "$f" ] || continue\n'
+    '    if grep -q \'"forcedBy": \\[\' "$f"; then\n'
+    '      echo "would reformat $f"; exit 1\n'
+    "    fi\n"
+    "  done\n"
+    "fi\n"
+    'target="${2:-src}"\n'
+    'if grep -rl planted "$target"; then echo "L001 a planted fault"; exit 1; fi'
+)
+
+FORMAT_GATE_SKIPS_RECORD = (
+    'target="${2:-src}"\n'
+    'if grep -rl planted "$target"; then echo "L001 a planted fault"; exit 1; fi'
+)
+
+
+@pytest.mark.parametrize(
+    ("extra_bite", "flags"),
+    [
+        pytest.param("", (), id="whole"),
+        pytest.param('args = ["src/code.txt"]\n', (), id="narrowed"),
+        pytest.param('args = ["src/code.txt"]\n', ("--gate", "format"), id="one gate narrowed"),
+    ],
+)
+def test_a_format_gate_that_rejects_a_verdict_record_is_red(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    extra_bite: str,
+    flags: tuple[str, ...],
+) -> None:
+    fault = 'replace = { path = "src/code.txt", old = "clean", new = "planted" }'
+    root = project(
+        tmp_path / "repo",
+        {"format": FORMAT_GATE_REJECTS_RECORD},
+        bite("format", "a planted word", fault) + extra_bite,
+    )
+    before = state(root)
+    assert prove(root, *flags) == 1
+    out = shown(capsys)
+    assert "bite: format: a planted word: bites\n" in out
+    assert "bite: format: accepts verdict record: REJECTS VERDICT RECORD\n" in out
+    assert (
+        "  the format gate rejects the record the record step writes"
+        " (docs/features/<slug>/verdict.json); leave docs/features/*/verdict.json out of the"
+        " format gate\n" in out
+    )
+    assert "would reformat docs/features/ratchet-verdict-format-check/verdict.json\n" in out
+    assert "bite: red: 1 of 1 faults bit, over 1 gates in " in out
+    assert state(root) == before
+
+
+def test_a_format_gate_that_rejects_a_verdict_record_is_red_on_changed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(
+        tmp_path / "repo",
+        {"format": FORMAT_GATE_REJECTS_RECORD},
+        bite("format", "a planted word"),
+    )
+    write(root, "guards/manifest.toml", MANIFEST)
+    write(root, "lint.cfg", "rules = all\n")
+    commit(root, "feat(core): a manifest")
+    branch(root)
+    write(root, "lint.cfg", "rules = format\n")
+    commit(root, "chore(core): touch config")
+    assert prove(root, "--changed") == 1
+    out = shown(capsys)
+    assert "bite: format: accepts verdict record: REJECTS VERDICT RECORD\n" in out
+
+
+def test_a_format_gate_that_skips_verdict_records_stays_green(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fault = 'replace = { path = "src/code.txt", old = "clean", new = "planted" }'
+    root = project(
+        tmp_path / "repo",
+        {"format": f"sleep 0.2\n{FORMAT_GATE_SKIPS_RECORD}"},
+        bite("format", "a planted word", fault) + 'args = ["src/code.txt"]\n',
+    )
+    write(root, "quality/thresholds.toml", ceilings(tier0=0.05))
+    write(root, "docs/features/ratchet-verdict-format-check/verdict.json", "{}\n")
+    commit(root, "feat(core): thresholds and existing verdict")
+    write(root, "src/extra.txt", "clean\n")
+    assert prove(root) == 0
+    out = shown(capsys)
+    assert "bite: format: a planted word: bites\n" in out
+    assert "bite: format: accepts verdict record: accepts verdict record\n" in out
+    assert "bite: slow:" not in out
+    assert "bite: green: 1 of 1 faults bit, over 1 gates in " in out
+    assert [(r["gate"], r["bite"]) for r in recorded(root)] == [("format", "a planted word")]
+    assert (root / "docs/features/ratchet-verdict-format-check/verdict.json").read_text() == "{}\n"
+    assert not (root / "docs/features/ratchet-verdict-format-check-2").exists()
+
+
+def test_a_format_gate_red_before_the_verdict_record_reports_red_before(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    whole_red = project(
+        tmp_path / "whole",
+        {"format": "echo already unformatted; exit 1"},
+        bite("format", "a planted word"),
+    )
+    assert prove(whole_red) == 1
+    out_whole = shown(capsys)
+    assert "bite: format: accepts verdict record: RED BEFORE THE FAULT\n" in out_whole
+    assert "REJECTS VERDICT RECORD" not in out_whole
+
+    narrowed_gate = (
+        f'if [ -z "$2" ]; then echo "other.txt unformatted"; exit 1; fi\n{FORMAT_GATE_SKIPS_RECORD}'
+    )
+    narrowed_red = project(
+        tmp_path / "narrowed",
+        {"format": narrowed_gate},
+        bite("format", "a planted word") + 'args = ["src"]\n',
+    )
+    assert prove(narrowed_red) == 1
+    out_narrowed = shown(capsys)
+    assert "bite: format: a planted word: bites\n" in out_narrowed
+    assert "bite: format: accepts verdict record: RED BEFORE THE FAULT\n" in out_narrowed
+    assert "other.txt unformatted\n" in out_narrowed
+    assert "REJECTS VERDICT RECORD" not in out_narrowed
+
+
+def test_a_format_gate_that_times_out_on_the_verdict_record_reports_timed_out(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gate = f"if [ -d docs/features ]; then sleep 5; fi\n{FORMAT_GATE_SKIPS_RECORD}"
+    root = project(tmp_path / "repo", {"format": gate}, bite("format", "a planted word"))
+    assert prove(root, "--limit", "0.5") == 1
+    out = shown(capsys)
+    assert "bite: format: a planted word: bites\n" in out
+    assert "bite: format: accepts verdict record: TIMED OUT\n" in out
+    assert "bite: timed out after 0.5s\n" in out
+
+
+@pytest.mark.parametrize(
+    "tool",
+    ["none: nothing to format; ADR 0001", "later: code:source"],
+    ids=["none", "later"],
+)
+def test_an_unbound_format_gate_stays_green(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], tool: str
+) -> None:
+    rows = row("lint") + row("format", tool=tool)
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "a planted word"), rows=rows)
+    assert prove(root) == 0
+    out = shown(capsys)
+    assert "accepts verdict record" not in out
+    assert "bite: green: 1 of 1 faults bit, over 1 gates in " in out
+
+
+def test_the_verdict_record_written_for_format_check_matches_merge_ready_record(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    captured = tmp_path / "captured.json"
+    gate = (
+        f'for f in docs/features/*/verdict.json; do [ -f "$f" ] && cp "$f" {captured}; done\n'
+        f"{FORMAT_GATE_SKIPS_RECORD}"
+    )
+    root = project(tmp_path / "repo", {"format": gate}, bite("format", "a planted word"))
+    assert prove(root) == 0
+    assert "bite: format: accepts verdict record: accepts verdict record\n" in shown(capsys)
+    raw = captured.read_text(encoding="utf-8")
+    assert '"forcedBy": [\n    "smoke",\n    "lint"\n  ]' in raw
+    parsed = json.loads(raw)
+    assert parsed["schema"] == 1
+    assert parsed["verdict"] == "approve"
+    assert parsed["forcedBy"] == ["smoke", "lint"]
+    assert parsed["tree"] == git(root, "rev-parse", "HEAD^{tree}")
+    expected = json.dumps(parsed, indent=2, sort_keys=True) + "\n"
+    assert raw == expected
+
+
+def test_a_format_verdict_record_check_that_cannot_plant_reports_not_planted(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(
+        tmp_path / "repo",
+        {"format": FORMAT_GATE_SKIPS_RECORD},
+        bite("format", "a planted word"),
+    )
+
+    def fail_write(
+        _root: Path, _text: str, *, allow_dirty: bool = False, out: io.StringIO | None = None
+    ) -> int:
+        del allow_dirty
+        print("record: refused in test", file=out)
+        return 1
+
+    monkeypatch.setattr(gatelib, "write_record", fail_write)
+    assert prove(root) == 1
+    out = shown(capsys)
+    assert "bite: format: accepts verdict record: THE FAULT WAS NOT PLANTED\n" in out
+    assert "  record: refused in test\n" in out

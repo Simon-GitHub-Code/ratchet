@@ -1,4 +1,6 @@
+import hashlib
 import io
+import itertools
 import json
 import os
 import re
@@ -69,6 +71,8 @@ def test_a_deny_writes_one_line_with_the_fields(adopted: Path) -> None:
     assert decision(printed) == "deny"
     [line] = lines(log_of(adopted))
     detail = str(line["detail"])
+    digest = str(line["digest"])
+    assert re.fullmatch(r"[0-9a-f]{64}", digest)
     assert line == {
         "at": line["at"],
         "decision": "deny",
@@ -76,7 +80,10 @@ def test_a_deny_writes_one_line_with_the_fields(adopted: Path) -> None:
         "rule": "guard-path-default",
         "detail": detail,
         "branch": "main",
+        "prev": events.GENESIS,
+        "digest": digest,
     }
+    assert events.verify(log_of(adopted)) == []
     assert detail.startswith("justfile is in guard group 'gate-commands'.")
     assert detail in json.loads(printed)["hookSpecificOutput"]["permissionDecisionReason"]
     assert re.fullmatch(STAMP, str(line["at"]))
@@ -285,6 +292,7 @@ def test_a_long_line_is_cut_under_the_atomic_size_and_marked(adopted: Path) -> N
     [line] = lines(log_of(adopted))
     assert line["truncated"] is True
     assert line["detail"] == command[: events.CLIP]
+    assert events.verify(log_of(adopted)) == []
 
 
 def test_every_field_is_cut_whatever_its_characters() -> None:
@@ -440,3 +448,250 @@ def test_an_agent_in_a_worktree_cannot_write_the_plugin_record(adopted: Path) ->
             printed = answer(tree, case, project=project)
             assert decision(printed) == "deny"
             assert "plugin-record" in printed
+
+
+def chained_log(adopted: Path, count: int = 3) -> tuple[Path, list[str]]:
+    for index in range(count):
+        answer(adopted, bash(adopted, f"git push --force origin b{index}"))
+    log = log_of(adopted)
+    return log, log.read_text(encoding="utf-8").splitlines()
+
+
+def test_a_multi_event_log_chains_digests_from_genesis(adopted: Path) -> None:
+    log, raw_lines = chained_log(adopted, 4)
+    entries = [json.loads(raw) for raw in raw_lines]
+    assert entries[0]["prev"] == events.GENESIS
+    for previous, current in itertools.pairwise(entries):
+        assert current["prev"] == previous["digest"]
+    for entry in entries:
+        fields = {key: value for key, value in entry.items() if key not in ("prev", "digest")}
+        assert entry["digest"] == events.digest_of(str(entry["prev"]), fields)
+    assert events.verify(log) == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("decision", "ask"),
+        ("detail", "tampered"),
+        ("branch", "other"),
+        ("rule", "other-rule"),
+        ("tool", "Write"),
+        ("at", "2026-01-01T00:00:00Z"),
+    ],
+)
+def test_editing_any_field_breaks_verify_at_that_line(
+    adopted: Path, field: str, value: str
+) -> None:
+    log, raw_lines = chained_log(adopted, 3)
+    entry = json.loads(raw_lines[1])
+    entry[field] = value
+    raw_lines[1] = json.dumps(entry)
+    log.write_text("\n".join(raw_lines) + "\n", encoding="utf-8")
+    problems = events.verify(log)
+    assert len(problems) == 1
+    assert problems[0].startswith("line 2:")
+
+
+def test_removing_inserting_or_swapping_lines_breaks_verify(adopted: Path) -> None:
+    log, raw_lines = chained_log(adopted, 3)
+
+    log.write_text("\n".join([raw_lines[0], raw_lines[2]]) + "\n", encoding="utf-8")
+    middle_removed = events.verify(log)
+    assert any(problem.startswith("line 2:") for problem in middle_removed)
+
+    log.write_text("\n".join(raw_lines[1:]) + "\n", encoding="utf-8")
+    first_removed = events.verify(log)
+    assert any(problem.startswith("line 1:") for problem in first_removed)
+
+    first = json.loads(raw_lines[0])
+    fake_fields = {
+        "at": "2026-11-15T00:00:00Z",
+        "decision": "ask",
+        "tool": "Bash",
+        "rule": "inserted",
+        "detail": "crafted",
+        "branch": "main",
+    }
+    crafted = json.dumps(
+        {
+            **fake_fields,
+            "prev": first["digest"],
+            "digest": events.digest_of(str(first["digest"]), fake_fields),
+        }
+    )
+    log.write_text("\n".join([raw_lines[0], crafted, *raw_lines[1:]]) + "\n", encoding="utf-8")
+    inserted = events.verify(log)
+    assert any(problem.startswith("line 3:") for problem in inserted)
+
+    log.write_text("\n".join([raw_lines[0], raw_lines[2], raw_lines[1]]) + "\n", encoding="utf-8")
+    swapped = events.verify(log)
+    assert any(problem.startswith("line 2:") for problem in swapped)
+    assert any(problem.startswith("line 3:") for problem in swapped)
+
+
+def test_stripping_digest_or_corrupting_json_breaks_verify(adopted: Path) -> None:
+    log, raw_lines = chained_log(adopted, 3)
+
+    stripped = json.loads(raw_lines[1])
+    stripped.pop("digest")
+    raw_stripped = [*raw_lines[:1], json.dumps(stripped), *raw_lines[2:]]
+    log.write_text("\n".join(raw_stripped) + "\n", encoding="utf-8")
+    assert any(problem.startswith("line 2:") for problem in events.verify(log))
+
+    no_prev = json.loads(raw_lines[0])
+    no_prev["prev"] = "not-hex"
+    log.write_text("\n".join([json.dumps(no_prev), *raw_lines[1:]]) + "\n", encoding="utf-8")
+    assert any(problem.startswith("line 1:") for problem in events.verify(log))
+
+    log.write_text("\n".join([raw_lines[0], "{corrupt", raw_lines[2]]) + "\n", encoding="utf-8")
+    assert any(problem.startswith("line 2:") for problem in events.verify(log))
+
+    log.write_text("\n".join([raw_lines[0], "[]", raw_lines[2]]) + "\n", encoding="utf-8")
+    assert any(problem.startswith("line 2:") for problem in events.verify(log))
+
+
+def test_append_after_legacy_or_unterminated_line_chains_its_hash(tmp_path: Path) -> None:
+    log = tmp_path / events.LOG_NAME
+    legacy = b'{"at":"2026-11-15T00:00:00Z","decision":"deny","rule":"old"}'
+    log.write_bytes(legacy)
+    event = events.Event(
+        "2026-11-15T00:00:01Z", "deny", "Bash", "force-push", "git push -f", "main"
+    )
+    events.append(log, event)
+    first_raw, second_raw = log.read_bytes().splitlines()
+    assert first_raw == legacy
+    second = json.loads(second_raw)
+    expected_prev = hashlib.sha256(legacy).hexdigest()
+    assert second["prev"] == expected_prev
+    problems = events.verify(log)
+    assert len(problems) == 1
+    assert problems[0].startswith("line 1:")
+
+    tampered = b'{"at":"2026-11-15T00:00:00Z","decision":"ask","rule":"old"}'
+    log.write_bytes(tampered + b"\n" + second_raw + b"\n")
+    tampered_problems = events.verify(log)
+    assert any(problem.startswith("line 1:") for problem in tampered_problems)
+    assert any(problem.startswith("line 2:") for problem in tampered_problems)
+
+    blank_log = tmp_path / "blank.jsonl"
+    blank_log.write_bytes(b"\n\n")
+    events.append(blank_log, event)
+    assert events.verify(blank_log)[-1].startswith("line ")
+    first_blank_event = json.loads(blank_log.read_bytes().splitlines()[-1])
+    assert first_blank_event["prev"] == events.GENESIS
+
+    corrupt_log = tmp_path / "corrupt.jsonl"
+    corrupt_tail = b"{truncated"
+    corrupt_log.write_bytes(corrupt_tail)
+    events.append(corrupt_log, event)
+    appended = json.loads(corrupt_log.read_bytes().splitlines()[1])
+    assert appended["prev"] == hashlib.sha256(corrupt_tail).hexdigest()
+
+    no_newline = tmp_path / "no-newline.jsonl"
+    no_newline.write_bytes(event.line(events.GENESIS).rstrip(b"\n"))
+    assert events.verify(no_newline) == []
+
+
+CHAIN_WRITER = """
+import sys
+from pathlib import Path
+from ratchet_guards import events
+log, tag, count = Path(sys.argv[1]), sys.argv[2], int(sys.argv[3])
+for n in range(count):
+    detail = f"{tag} {n}"
+    event = events.Event("2026-11-15T00:00:00Z", "deny", "Bash", "force-push", detail, tag)
+    events.append(log, event)
+"""
+
+
+def test_concurrent_event_appends_keep_an_intact_digest_chain(tmp_path: Path) -> None:
+    log = tmp_path / events.LOG_NAME
+    tags, count = "abcd", 50
+    writers = [
+        subprocess.Popen(  # noqa: S603 # -- the interpreter running these tests, on a fixed script
+            [sys.executable, "-c", CHAIN_WRITER, str(log), tag, str(count)],
+            env={**os.environ, "PYTHONPATH": str(PLUGIN_ROOT / "hooks")},
+        )
+        for tag in tags
+    ]
+    assert [writer.wait(timeout=120) for writer in writers] == [0] * len(tags)
+    found = lines(log)
+    assert Counter(str(line["branch"]) for line in found) == dict.fromkeys(tags, count)
+    assert events.verify(log) == []
+
+
+def test_oversized_unicode_chained_line_fits_under_limit_and_verifies(tmp_path: Path) -> None:
+    log = tmp_path / events.LOG_NAME
+    widest = "\U0001f600" * 5000
+    event = events.Event("2026-11-15T00:00:00Z", "deny", widest, widest, widest, "\ud800" * 5000)
+    events.append(log, event)
+    raw = log.read_bytes()
+    assert len(raw) < events.LIMIT
+    assert events.verify(log) == []
+
+
+def test_verify_handles_missing_empty_and_non_regular_logs(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.jsonl"
+    assert events.verify(missing) == []
+
+    empty = tmp_path / "empty.jsonl"
+    empty.write_bytes(b"")
+    assert events.verify(empty) == []
+
+    directory = tmp_path / "dir.jsonl"
+    directory.mkdir()
+    assert len(events.verify(directory)) == 1
+
+    dangling = tmp_path / "dangling.jsonl"
+    dangling.symlink_to(tmp_path / "target.jsonl")
+    assert len(events.verify(dangling)) == 1
+
+    fifo = tmp_path / "fifo.jsonl"
+    os.mkfifo(fifo)
+    assert len(events.verify(fifo)) == 1
+    with pytest.raises(OSError, match="Invalid argument"):
+        events.append(fifo, events.Event("2026-11-15T00:00:00Z", "deny", None, "r", "d", None))
+
+
+def test_cli_verifies_intact_missing_and_tampered_logs(
+    adopted: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    missing = tmp_path / "absent.jsonl"
+    assert events.main([str(missing)]) == 0
+    assert capsys.readouterr().out.strip() == "guard-log: green (0 events)"
+
+    assert events.main(["--root", str(adopted)]) == 0
+    assert capsys.readouterr().out.strip() == "guard-log: green (0 events)"
+
+    log, raw_lines = chained_log(adopted, 2)
+    assert events.main(["--root", str(adopted)]) == 0
+    assert capsys.readouterr().out.strip() == "guard-log: green (2 events)"
+
+    tree = tmp_path / "tree"
+    git(adopted, "worktree", "add", "-q", "-b", "feature/cli", str(tree))
+    assert events.main(["--root", str(tree)]) == 0
+    assert capsys.readouterr().out.strip() == "guard-log: green (2 events)"
+
+    not_git = tmp_path / "plain"
+    not_git.mkdir()
+    assert events.main(["--root", str(not_git)]) == 1
+    assert "not a git repository" in capsys.readouterr().out
+
+    tampered = json.loads(raw_lines[0])
+    tampered["decision"] = "ask"
+    log.write_text("\n".join([json.dumps(tampered), raw_lines[1]]) + "\n", encoding="utf-8")
+    assert events.main([str(log)]) == 1
+    output = capsys.readouterr().out
+    assert "line 1:" in output
+    assert "guard-log: red" in output
+
+    script = PLUGIN_ROOT / "hooks/ratchet_guards/events.py"
+    done = subprocess.run(  # noqa: S603 # -- the interpreter running these tests, on a fixed script
+        [sys.executable, str(script), str(log)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 1
+    assert "line 1:" in done.stdout

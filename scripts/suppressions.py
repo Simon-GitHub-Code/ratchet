@@ -7,10 +7,14 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import gatelib
 import markdown_text
-from markers import grep_count
+from markers import CHUNK, diff_paths, grep_count, grep_count_paths, staged_paths
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 SECTION = "## Suppressions"
 KIND = "Kind"
@@ -121,6 +125,16 @@ def counts(root: Path, ref: str | None, kinds: tuple[Kind, ...]) -> dict[str, in
     }
 
 
+def counts_staged(
+    root: Path, kinds: tuple[Kind, ...], paths: Sequence[str], *, ref: str | None = None
+) -> dict[str, int]:
+    return {
+        k.name: grep_count_paths(root, k.pattern, paths, ref=ref, word=False)
+        for k in kinds
+        if k.rule == RISES
+    }
+
+
 def risen(before: dict[str, int], after: dict[str, int]) -> list[str]:
     return [
         f"{kind}: rose from {before.get(kind, 0)} to {count}"
@@ -142,22 +156,59 @@ def focused(root: Path, kinds: tuple[Kind, ...]) -> list[str]:
     return found
 
 
+def focused_staged(root: Path, kinds: tuple[Kind, ...], paths: Sequence[str]) -> list[str]:
+    if not paths:
+        return []
+    found: list[str] = []
+    for kind in kinds:
+        for start in range(0, len(paths), CHUNK):
+            out = gatelib.git(
+                root,
+                *("--literal-pathspecs", "grep", "--cached", "-I", "-n", "-E", "-e", kind.pattern),
+                *("--", *paths[start : start + CHUNK]),
+            )
+            found += [f"{kind.name} at {line}" for line in (out or "").splitlines()]
+    return found
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=".")
     parser.add_argument("--base")
+    parser.add_argument("--staged", action="store_true")
     options = parser.parse_args(argv[1:])
     root = Path(options.root).resolve()
     base = gatelib.base_commit(root, options.base)
-    now = parse(gatelib.read_text(root / gatelib.BINDING))
+    now = parse(
+        gatelib.show(root, "", BINDING)
+        if options.staged
+        else gatelib.read_text(root / gatelib.BINDING)
+    )
     then = parse(gatelib.show(root, base, str(gatelib.BINDING))) if base else None
-    never = {k.name: k for spec in (then, now) if spec for k in spec.kinds if k.rule == NEVER}
-    problems = focused(root, tuple(never.values()))
-    if then is None:
+    never = tuple(
+        {k.name: k for spec in (then, now) if spec for k in spec.kinds if k.rule == NEVER}.values()
+    )
+    if options.staged:
+        index_paths = (
+            staged_paths(root, outside=BINDING)
+            if base is None
+            else diff_paths(root, base, in_index=True, outside=BINDING)
+        )
+        problems = focused_staged(root, never, index_paths)
+    else:
+        index_paths = []
+        problems = focused(root, never)
+    if base is None or then is None:
         if base is not None:
             print(
                 "suppressions: the merge base's binding has no Suppressions section: none counted"
             )
+    elif options.staged:
+        base_paths = diff_paths(root, base, in_index=False, outside=BINDING)
+        problems += risen(
+            counts_staged(root, then.kinds, base_paths, ref=base),
+            counts_staged(root, then.kinds, index_paths),
+        )
     else:
         problems += risen(counts(root, base, then.kinds), counts(root, None, then.kinds))
     return gatelib.report("suppressions", problems, base)

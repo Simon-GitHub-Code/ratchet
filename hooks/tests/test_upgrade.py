@@ -1143,3 +1143,115 @@ def test_an_upgrade_owes_the_documents_section_and_is_never_red_for_a_file_of_no
     assert "## Documents" in binding
     stray = documents.unkinded(gatelib.tracked_paths(root), documents.kinds_of(root))
     assert [e.problem.split("`")[1] for e in owing if "of no kind" in e.problem] == stray
+
+
+def test_an_upgrade_shows_workflow_diffs_for_a_stale_cache_key_without_going_red(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = repos.repository(tmp_path / "repo")
+    shutil.copytree(pristine(), root, symlinks=True, dirs_exist_ok=True)
+    repos.git(root, "add", "-A")
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    ci = root / ".github/workflows/ci.yml"
+    template_key = (
+        "key: tier1-${{ runner.os }}-${{ matrix.gate }}-${{ hashFiles('**/*.lock') }}-"
+        "${{ hashFiles('quality/snapshots/**') }}-${{ github.sha }}"
+    )
+    stale_key = (
+        "key: tier1-${{ runner.os }}-${{ hashFiles('**/*.lock') }}-"
+        "${{ hashFiles('quality/snapshots/**') }}-${{ github.sha }}"
+    )
+    text = ci.read_text(encoding="utf-8")
+    assert template_key in text
+    ci.write_text(text.replace(template_key, stale_key, 1), encoding="utf-8")
+    repos.git(root, "add", "-A")
+    capsys.readouterr()
+    assert upgrade.main(["upgrade.py", "--root", str(root)]) == 0
+    dry = capsys.readouterr().out
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    applied = capsys.readouterr().out
+    for out in (dry, applied):
+        assert (
+            "Workflow differences against the current templates"
+            " (review for fixed cache keys or steps):\n"
+        ) in out
+        assert "\n  .github/workflows/ci.yml\n" in out
+        assert "\n    --- template/.github/workflows/ci.yml\n" in out
+        assert "\n    +++ .github/workflows/ci.yml\n" in out
+        assert f"\n    -          {template_key}\n" in out
+        assert f"\n    +          {stale_key}\n" in out
+        assert "\n  .github/workflows/merge.yml\n" not in out
+        assert verdict(out).startswith("upgrade: nothing to write. 0 items are owed and 0 red")
+
+
+def test_an_upgrade_omits_workflow_diffs_when_workflows_match_the_templates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = repos.repository(tmp_path / "repo")
+    shutil.copytree(pristine(), root, symlinks=True, dirs_exist_ok=True)
+    for workflow in (conformance.ADOPT_TEMPLATES / ".github/workflows").glob("*.yml"):
+        text = workflow.read_text(encoding="utf-8").replace(
+            conformance.PLUGIN_CHECKOUT_PLACEHOLDER, str(PLUGIN_COMMIT)
+        )
+        (root / ".github/workflows" / workflow.name).write_text(text, encoding="utf-8")
+    binding = root / BINDING
+    binding.write_text(
+        plugin_pin.with_pin(plugin_pin.line_for(PLUGIN_ROOT))(binding.read_text(encoding="utf-8")),
+        encoding="utf-8",
+    )
+    repos.git(root, "add", "-A")
+    result = planned(root)
+    assert result.workflow_diffs == ()
+    assert "Workflow differences against the current templates" not in upgrade.render(
+        root, result, applied=False
+    )
+
+    used = plugin_at(tmp_path / "plugin", "999.0.0")
+    used_workflows = used / "skills/adopt/templates/.github/workflows"
+    used_workflows.mkdir(parents=True)
+    exact_root = repos.repository(tmp_path / "exact-repo")
+    shutil.copytree(pristine(), exact_root, symlinks=True, dirs_exist_ok=True)
+    repos.git(exact_root, "add", "-A")
+    monkeypatch.setattr(plugin_pin, "PLUGIN", used)
+    assert upgrade.main(["upgrade.py", "--root", str(exact_root), "--apply"]) == 0
+    used_commit = repos.git(used, "rev-parse", "HEAD")
+    for workflow in (exact_root / ".github/workflows").glob("*.yml"):
+        (used_workflows / workflow.name).write_text(
+            workflow.read_text(encoding="utf-8").replace(
+                used_commit, conformance.PLUGIN_CHECKOUT_PLACEHOLDER
+            ),
+            encoding="utf-8",
+        )
+    capsys.readouterr()
+    assert upgrade.main(["upgrade.py", "--root", str(exact_root)]) == 0
+    assert "Workflow differences against the current templates" not in capsys.readouterr().out
+
+
+def test_workflow_diffs_ignore_custom_workflows_and_omit_missing_template_workflows(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = repos.repository(tmp_path / "repo")
+    shutil.copytree(pristine(), root, symlinks=True, dirs_exist_ok=True)
+    repos.git(root, "add", "-A")
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    (root / ".github/workflows/custom.yml").write_text(
+        "name: custom\non: push\nconcurrency:\n  group: custom\njobs:\n  build:\n"
+        "    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/cache@v4\n",
+        encoding="utf-8",
+    )
+    (root / ".github/workflows/weekly.yml").unlink()
+    repos.git(root, "add", "-A")
+    direct = {path for path, _ in upgrade.workflow_diffs(root, PLUGIN_ROOT)}
+    assert ".github/workflows/ci.yml" in direct
+    assert ".github/workflows/custom.yml" not in direct
+    assert ".github/workflows/weekly.yml" not in direct
+    result = planned(root)
+    names = {path for path, _ in result.workflow_diffs}
+    assert ".github/workflows/ci.yml" in names
+    assert ".github/workflows/custom.yml" not in names
+    assert ".github/workflows/weekly.yml" not in names
+    capsys.readouterr()
+    assert upgrade.main(["upgrade.py", "--root", str(root)]) == 1
+    out = capsys.readouterr().out
+    assert "custom.yml" not in out
+    assert "--- template/.github/workflows/weekly.yml" not in out

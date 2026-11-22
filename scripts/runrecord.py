@@ -103,11 +103,12 @@ def written(path: Path, line: bytes) -> str | None:
     return None
 
 
-def append(path: Path, record: dict[str, object], *, root: Path, who: str = "ratchet") -> None:
+def append(path: Path, record: dict[str, object], *, root: Path, who: str = "ratchet") -> bool:
     why = written(path, (json.dumps(record) + "\n").encode())
     if why is not None and (path, why) not in UNRECORDED:
         UNRECORDED.add((path, why))
         print(f"{who}: not recorded: {os.path.relpath(path, root)}: {why}", flush=True)
+    return why is None
 
 
 def lines(path: Path) -> Iterator[bytes]:
