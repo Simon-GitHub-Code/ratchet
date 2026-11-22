@@ -50,6 +50,7 @@ def stack(root: Path, lines: str = NEEDED, *, wired: bool = True) -> None:
         for tier in (
             "tier0",
             "tier0-tree",
+            "tier0-staged",
             "tier1",
             "tier2",
             "check",
@@ -238,6 +239,7 @@ def test_a_recipe_that_reaches_install_through_another_is_wired(repo: Path) -> N
     for tier in (
         "tier0",
         "tier0-tree",
+        "tier0-staged",
         "tier1",
         "tier2",
         "check",

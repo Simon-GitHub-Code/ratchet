@@ -182,6 +182,7 @@ RUNNER = '"$RATCHET_PLUGIN_DIR/scripts/parallel.py" --runner'
     [
         ("tier0", ["tier0_gates"], ""),
         ("tier0-tree", ["tier0_tree_gates"], ""),
+        ("tier0-staged", ["tier0_staged_gates"], ""),
         ("tier1", ["tier1_gates"], ""),
         ("tier2", ["tier2_gates"], ""),
         ("check", ["tier0_gates", "tier1_gates"], ""),
@@ -204,7 +205,39 @@ def test_every_tier_runs_its_gates_at_once_through_the_runner(
 
 def test_tier_zero_is_the_tree_gates_and_the_history_gate() -> None:
     assert gate_list("tier0_gates") == [*gate_list("tier0_tree_gates"), "commits"]
-    assert "just tier0-tree" in recipe("pre-commit")
+    assert "just tier0-staged" in recipe("pre-commit")
+    staged = gate_list("tier0_staged_gates")
+    expected = [
+        {"markers": "markers-staged", "suppressions": "suppressions-staged"}.get(g, g)
+        for g in gate_list("tier0_tree_gates")
+    ]
+    assert staged == expected
+
+
+def test_hook_lanes_and_staged_recipes_are_configured_independently() -> None:
+    needs_just()
+    assert "ratchet.hook-jobs" in JUSTFILE
+    assert "RATCHET_HOOK_JOBS" in JUSTFILE
+    assert 'suppressions.py" --staged' in recipe("suppressions-staged")
+    assert 'markers.py" --staged' in recipe("markers-staged")
+    just = shutil.which("just")
+    assert just
+    env = {**os.environ, "RATCHET_HOOK_JOBS": "2", "RATCHET_JOBS": "7"}
+    hook_jobs = subprocess.run(  # noqa: S603
+        [just, "--justfile", str(TEMPLATES / "justfile"), "--evaluate", "hook_jobs"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    jobs = subprocess.run(  # noqa: S603
+        [just, "--justfile", str(TEMPLATES / "justfile"), "--evaluate", "jobs"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert (hook_jobs.stdout.strip(), jobs.stdout.strip()) == ("2", "7")
 
 
 def test_every_listed_gate_is_a_recipe_and_a_sharded_gate_is_listed() -> None:
@@ -212,6 +245,7 @@ def test_every_listed_gate_is_a_recipe_and_a_sharded_gate_is_listed() -> None:
     listed = [g for tier in ("tier0_gates", "tier1_gates", "tier2_gates") for g in gate_list(tier)]
     assert len(set(listed)) == len(listed), "one run holds a gate once"
     assert set(listed) <= defined
+    assert set(gate_list("tier0_staged_gates")) <= defined
     assert set(gate_list("tier1_sharded")) <= set(gate_list("tier1_gates"))
     assert set(gate_list("tier2_sharded")) <= set(gate_list("tier2_gates"))
 
@@ -491,6 +525,7 @@ def test_start_and_test_files_are_entry_points_and_in_no_tier() -> None:
     lists = (
         "tier0_gates",
         "tier0_tree_gates",
+        "tier0_staged_gates",
         "tier1_gates",
         "tier2_gates",
         "tier1_sharded",
@@ -684,6 +719,7 @@ def test_every_runner_keeps_what_each_template_recipe_passes_and_nothing_is_said
 ) -> None:
     needs_just()
     monkeypatch.setenv("RATCHET_JOBS", "4")
+    monkeypatch.setenv("RATCHET_HOOK_JOBS", "4")
     stated, bare = tmp_path / "stated", tmp_path / "bare"
     repos.write(stated, "docs/process/binding.md", BINDING)
     bare.mkdir()
@@ -691,7 +727,10 @@ def test_every_runner_keeps_what_each_template_recipe_passes_and_nothing_is_said
     names = [
         block.name
         for block in justfile_text.blocks(lines)
-        if "{{parallel}}" in "\n".join(lines[block.head + 1 : block.end])
+        if any(
+            runner in "\n".join(lines[block.head + 1 : block.end])
+            for runner in ("{{parallel}}", "{{hook_parallel}}")
+        )
     ]
     assert {"check", "check-deep", "tier1", "weekly"} <= set(names)
     passed, unread, assumed = schedule.recipes(JUSTFILE)
@@ -700,7 +739,7 @@ def test_every_runner_keeps_what_each_template_recipe_passes_and_nothing_is_said
     for name in names:
         argv = runner_argv(name)
         apart = kept_apart(argv)
-        assert apart or name in {"tier0", "tier0-tree"}, name
+        assert apart or name in {"tier0", "tier0-tree", "tier0-staged"}, name
         assert not [pair for pair in apart if proof.beside(*pair)], name
         for seed in range(3):
             events, said = ran_beside(monkeypatch, stated, argv, seed=seed)

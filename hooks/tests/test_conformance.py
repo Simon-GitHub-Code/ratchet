@@ -635,6 +635,28 @@ def test_a_comment_does_not_count_as_the_runner_item(repo: Path) -> None:
     assert red(repo)[0].startswith("justfile: no gate runs through `changed.py`")
 
 
+def test_pre_commit_accepts_both_tier0_staged_and_tier0_tree(repo: Path) -> None:
+    assert red(repo) == []
+    replace(JUSTFILE, "else just tier0-staged; fi", "else just tier0-tree; fi")(repo)
+    assert red(repo) == []
+    replace(JUSTFILE, "else just tier0-tree; fi", "else just tier0-staged; fi")(repo)
+    justfile = (repo / JUSTFILE).read_text(encoding="utf-8")
+    without_staged = re.sub(
+        r"\n(?:#[^\n]*\n)*tier0-staged:.*?\n(?:    .*\n)+",
+        "\n",
+        justfile,
+    )
+    without_staged = without_staged.replace(
+        "else just tier0-staged; fi", "else just tier0-tree; fi"
+    )
+    (repo / JUSTFILE).write_text(without_staged, encoding="utf-8")
+    assert red(repo) == []
+    replace(JUSTFILE, "[no-exit-message]\npre-commit:", "pre-commit:")(repo)
+    [finding] = conformance.findings(repo)
+    assert "neither runs plugin_pin.py first nor carries `[no-exit-message]`" in finding.problem
+    assert isinstance(finding.fix, conformance.Agent)
+
+
 CI, DEEP = ".github/workflows/ci.yml", ".github/workflows/deep.yml"
 
 
