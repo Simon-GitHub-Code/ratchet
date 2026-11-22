@@ -616,6 +616,7 @@ class Bite:
     proof: str = ""
     whole: str = field(default="", compare=False)
     alone: bool = False
+    stage: bool = False
 
     @property
     def narrowed(self) -> bool:
@@ -624,8 +625,9 @@ class Bite:
     def plant(self, copy: Tree) -> None:
         with copy.use():
             self.fault.plant(copy)
-            if self.commit:
+            if self.stage or self.commit:
                 git_in(copy, "add", "-A")
+            if self.commit:
                 git_in(copy, *COMMIT, f"test(bite): {self.name}")
 
 
@@ -719,12 +721,16 @@ def flag_bool(table: dict[str, object], key: str) -> bool:
 
 
 def read_bite(table: dict[str, object]) -> Bite:
-    keys = {"gate", "name", "expect", "args", "commit", "proof", "whole", "alone", *KINDS}
+    keys = {"gate", "name", "expect", "args", "stage", "commit", "proof", "whole", "alone", *KINDS}
     unknown = sorted(set(table) - keys)
     if unknown:
         message = f"unknown key '{unknown[0]}'"
         raise ValueError(message)
+    stage = flag_bool(table, "stage")
     commit = flag_bool(table, "commit")
+    if stage and commit:
+        message = "a bite sets 'stage' or 'commit', not both"
+        raise ValueError(message)
     alone = flag_bool(table, "alone")
     bite = Bite(
         gate=text(table, "gate"),
@@ -736,6 +742,7 @@ def read_bite(table: dict[str, object]) -> Bite:
         proof=text(table, "proof") if "proof" in table else "",
         whole=text(table, "whole") if "whole" in table else "",
         alone=alone,
+        stage=stage,
     )
     if bite.narrowed and bite.whole:
         message = "a bite narrows its gate with 'args' or says in 'whole' why it cannot, not both"
