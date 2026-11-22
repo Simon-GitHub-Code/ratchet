@@ -432,8 +432,8 @@ def test_a_close_killed_outright_while_it_proves_leaves_nothing_a_rerun_waits_on
 
 
 def ticking() -> contextlib.AbstractContextManager[object]:
-    clock = itertools.count()
-    return mock.patch.object(drain, "now", lambda: STAMP + timedelta(seconds=next(clock)))
+    ticks = (STAMP + timedelta(seconds=tick) for tick in itertools.count())
+    return mock.patch.object(drain, "now", side_effect=ticks)
 
 
 REAL_WRITE_BYTES = Path.write_bytes
@@ -790,11 +790,13 @@ def test_a_restore_whose_apply_to_the_files_fails_keeps_the_unit_and_the_checkou
     assert close_parked(root) == 0
     [unit] = kept_files(root, BRANCH_C)
     was = snapshot(root)
-    given, why = APPLIED[answer]
+    answered, why = APPLIED[answer]
     real = drain.plumb
 
-    def plumb(where: Path, *args: str, **named: object) -> bytes | None:
-        return given if args == (*drain.APPLY, "-") else real(where, *args, **named)  # type: ignore[arg-type]
+    def plumb(
+        where: Path, *args: str, env: dict[str, str] | None = None, given: bytes = b""
+    ) -> bytes | None:
+        return answered if args == (*drain.APPLY, "-") else real(where, *args, env=env, given=given)
 
     capsys.readouterr()
     with mock.patch.object(drain, "plumb", plumb):

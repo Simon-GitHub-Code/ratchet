@@ -514,7 +514,9 @@ def test_clean_all_leaves_a_tree_git_cannot_read_and_a_killed_close_keeps_its_wo
     play.cut(Kind.KILL_LAND_AFTER_DISCARD, Name.C)
     assert not tree.exists(), "land finishes the close's discard before a second kill"
     held = f"land: {REF[Name.C]} is held and is not landed: "
-    assert play.named("drain.py land c").startswith(held)
+    named, landed = play.named("drain.py land c").splitlines()[:2]
+    assert named == drain.kept_line(BRANCH[Name.C], kept), "the rerun names the unit"
+    assert landed.startswith(held)
     assert plan_of(play)[BRANCH[Name.C]].state == "held"
 
 
