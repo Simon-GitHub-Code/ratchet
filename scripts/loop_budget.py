@@ -86,6 +86,15 @@ class Reading:
     m: float
     machine_read: bool
     forced: Forced | None = None
+    detail: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class EvalOptions:
+    place: Place = Place.LOCAL
+    tree: str | None = None
+    run: str | None = None
+    exclude_proof: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +184,8 @@ class Result:
         }
         if isinstance(self.judgement, NotJudged):
             fields["reason"] = self.judgement.reason.value
+            if self.judgement.reason is Reason.UNREAD and self.reading.detail:
+                fields["missing"] = self.reading.detail
         if self.reading.forced is not None:
             fields["forced"] = {
                 "cause": self.reading.forced.cause,
@@ -262,19 +273,15 @@ def forced_tag(raw: object) -> tuple[str, str] | None:
     return None
 
 
-def read_forced(root: Path, report: Path | None, *, run: str, tree: str) -> Forced | None:
-    if (
-        report is None
-        or not run
-        or run == runrecord.NO_RUN
-        or not tree
-        or tree == runrecord.NO_TREE
-    ):
+def forced_from_records(
+    root: Path, records: Sequence[Mapping[str, object]], *, run: str, tree: str
+) -> Forced | None:
+    if not run or run == runrecord.NO_RUN or not tree or tree == runrecord.NO_TREE:
         return None
     cause_info: tuple[str, str] | None = None
     bite_seconds: float | None = None
     forced_seconds = 0.0
-    for rec in runrecord.read(report):
+    for rec in records:
         if rec.get("run") != run or rec.get("tree") != tree:
             continue
         seconds = finite_seconds(rec.get("seconds"))
@@ -287,6 +294,12 @@ def read_forced(root: Path, report: Path | None, *, run: str, tree: str) -> Forc
         return None
     total = bite_seconds if bite_seconds is not None else forced_seconds
     return Forced(cause_info[0], cause_info[1], total)
+
+
+def read_forced(root: Path, report: Path | None, *, run: str, tree: str) -> Forced | None:
+    if report is None:
+        return None
+    return forced_from_records(root, list(runrecord.read(report)), run=run, tree=tree)
 
 
 def has_deep_hold(root: Path) -> bool:
@@ -475,7 +488,8 @@ def format_not_judged(
             f" asked loop.wait; {streak} in a row"
         )
     if reason is Reason.UNREAD:
-        return f"loop: not judged: times unread: {Reason.UNREAD.value}; {streak} in a row"
+        detail = reading.detail or Reason.UNREAD.value
+        return f"loop: not judged: times unread: {detail}; {streak} in a row"
     explained = explained_seconds(reading)
     return (
         f"loop: not judged: the machine: {reading.seconds:.1f}s of {budget:g}s{note};"
@@ -513,6 +527,57 @@ def format_message(
     return format_over(root, budget, reading, blame=blame)
 
 
+def _evaluate_with(
+    root: Path,
+    *,
+    reading: Reading,
+    records: Sequence[Mapping[str, object]],
+    gates: Sequence[GateTime],
+    options: EvalOptions,
+) -> Result:
+    run = options.run or os.environ.get(report_lib.RUN) or runrecord.NO_RUN
+    tree_hash = options.tree if options.tree is not None else runrecord.tree_id(root)
+    forced = reading.forced or forced_from_records(root, records, run=run, tree=tree_hash)
+    resolved = Reading(reading.seconds, reading.m, reading.machine_read, forced, reading.detail)
+    budget = budget_of(root)
+    judgement = judge(budget, resolved)
+    streak = (
+        not_judged_streak(records, judgement.reason) + 1 if isinstance(judgement, NotJudged) else 0
+    )
+    blame = ""
+    if isinstance(judgement, Over):
+        medians, prior_history = gate_medians(records, current_run=run)
+        exclude = PROOF_GATE if (forced is not None or options.exclude_proof) else None
+        blame = growth_summary(gates, medians, prior_history=prior_history, exclude=exclude)
+    message = format_message(root, budget, resolved, judgement=judgement, details=(streak, blame))
+    return Result(
+        budget=budget,
+        reading=resolved,
+        judgement=judgement,
+        effect=EFFECT[(Kind.LOOP, options.place, judgement)],
+        streak=streak,
+        message=message,
+    )
+
+
+def evaluate_run(
+    root: Path,
+    *,
+    reading: Reading,
+    report: Path | None = None,
+    gates: Sequence[GateTime] = (),
+    options: EvalOptions | None = None,
+) -> Result:
+    records = list(runrecord.read(report)) if report is not None else []
+    return _evaluate_with(
+        root,
+        reading=reading,
+        records=records,
+        gates=gates,
+        options=options or EvalOptions(),
+    )
+
+
 def evaluate(
     root: Path,
     *,
@@ -521,31 +586,10 @@ def evaluate(
     tree: str | None = None,
     gates: Sequence[GateTime] = (),
 ) -> Result:
-    run = os.environ.get(report_lib.RUN) or runrecord.NO_RUN
-    tree_hash = tree if tree is not None else runrecord.tree_id(root)
-    forced = reading.forced or read_forced(root, report, run=run, tree=tree_hash)
-    resolved = Reading(reading.seconds, reading.m, reading.machine_read, forced)
-    budget = budget_of(root)
-    judgement = judge(budget, resolved)
-    records = list(runrecord.read(report)) if report is not None else []
-    streak = (
-        not_judged_streak(records, judgement.reason) + 1 if isinstance(judgement, NotJudged) else 0
-    )
-    blame = ""
-    if isinstance(judgement, Over):
-        medians, prior_history = gate_medians(records, current_run=run)
-        blame = growth_summary(
-            gates,
-            medians,
-            prior_history=prior_history,
-            exclude=PROOF_GATE if forced is not None else None,
-        )
-    message = format_message(root, budget, resolved, judgement=judgement, details=(streak, blame))
-    return Result(
-        budget=budget,
-        reading=resolved,
-        judgement=judgement,
-        effect=EFFECT[(Kind.LOOP, Place.LOCAL, judgement)],
-        streak=streak,
-        message=message,
+    return evaluate_run(
+        root,
+        reading=reading,
+        report=report,
+        gates=gates,
+        options=EvalOptions(tree=tree),
     )

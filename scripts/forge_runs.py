@@ -49,17 +49,25 @@ NAME --repository OWNER/NAME [--report FILE]``, ``forge_runs.py deep|tier1 --tip
 green|red``.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
+import os
 import re
 import sys
-from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import gatelib
 import unproven
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    import loop_budget
 
 PAGE = 100
 CI_PATH = ".github/workflows/ci.yml"
@@ -76,6 +84,11 @@ MARKER = "<!-- ratchet:merge -->"
 OWNER = "merge: owner"
 START = "start"
 STARTS = "the merge job starts a deep run on the default branch's tip when it next runs"
+LOOP_JOB = "loop"
+UNSTARTED = frozenset({"queued", "waiting", "pending", "requested"})
+JOB_LINE = re.compile(r"^([A-Za-z_][\w-]*):(?:\s|$)")
+NEEDS_WORD = re.compile(r"[\w-]+")
+WAIT_THRESHOLD = 0.1
 
 
 def at(value: object, *keys: str) -> object:
@@ -343,7 +356,545 @@ def read(path: str) -> str | None:
     return gatelib.read_text(Path(path))
 
 
-def main(argv: list[str] | None = None, runs: str | None = None) -> int:
+def strip_yaml_comment(text: str) -> str:
+    quote = ""
+    for index, char in enumerate(text):
+        if quote:
+            if char == quote:
+                quote = ""
+        elif char in ("'", '"'):
+            quote = char
+        elif char == "#" and (index == 0 or text[index - 1].isspace()):
+            return text[:index].rstrip()
+    return text.rstrip()
+
+
+def unquote_yaml(raw: str) -> str:
+    stripped = strip_yaml_comment(raw).strip()
+    if len(stripped) > 1 and stripped[0] == stripped[-1] and stripped[0] in ("'", '"'):
+        return stripped[1:-1]
+    return stripped
+
+
+def collect_job_lines(content: str) -> list[tuple[str, list[str]]]:
+    lines = content.splitlines()
+    jobs_at = next((i for i, line in enumerate(lines) if strip_yaml_comment(line) == "jobs:"), None)
+    if jobs_at is None:
+        return []
+    found: list[tuple[str, list[str]]] = []
+    job_indent: int | None = None
+    for line in lines[jobs_at + 1 :]:
+        stripped = line.lstrip(" ")
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(stripped)
+        if indent == 0:
+            break
+        if job_indent is None:
+            job_indent = indent
+        if indent == job_indent and (match := JOB_LINE.match(stripped)):
+            found.append((match.group(1), []))
+        elif found and indent > job_indent:
+            found[-1][1].append(line)
+    return found
+
+
+def parse_job_needs(job_lines: list[str]) -> tuple[str, ...]:
+    indents = [
+        len(line) - len(line.lstrip(" "))
+        for line in job_lines
+        if strip_yaml_comment(line.lstrip(" "))
+    ]
+    if not indents:
+        return ()
+    attr_indent = min(indents)
+    for idx, line in enumerate(job_lines):
+        stripped = line.lstrip(" ")
+        indent = len(line) - len(stripped)
+        cleaned = strip_yaml_comment(stripped)
+        if indent != attr_indent or not (cleaned == "needs:" or cleaned.startswith("needs: ")):
+            continue
+        rhs = cleaned.partition(":")[2].strip()
+        if rhs.startswith("["):
+            parts = [rhs]
+            for follow in job_lines[idx + 1 :]:
+                if "]" in parts[-1]:
+                    break
+                parts.append(strip_yaml_comment(follow))
+            return tuple(NEEDS_WORD.findall(" ".join(parts)))
+        if rhs:
+            val = unquote_yaml(rhs)
+            return (val,) if val else ()
+        return block_needs(job_lines[idx + 1 :], attr_indent)
+    return ()
+
+
+def block_needs(following: list[str], attr_indent: int) -> tuple[str, ...]:
+    items: list[str] = []
+    for line in following:
+        stripped = line.lstrip(" ")
+        cleaned = strip_yaml_comment(stripped)
+        indent = len(line) - len(stripped)
+        if indent <= attr_indent and not cleaned.startswith("- "):
+            break
+        if cleaned.startswith("- "):
+            val = unquote_yaml(cleaned[2:])
+            if val:
+                items.append(val)
+    return tuple(items)
+
+
+def workflow_needs(content: str) -> dict[str, tuple[str, ...]]:
+    return {
+        job: tuple(dep for dep in parse_job_needs(lines) if dep != LOOP_JOB)
+        for job, lines in collect_job_lines(content)
+        if job != LOOP_JOB
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class JobSpan:
+    name: str
+    wf_job: str
+    created_at: datetime | None
+    started_at: datetime
+    completed_at: datetime
+    seconds: float
+    wait: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactData:
+    gates: tuple[loop_budget.GateTime, ...]
+    by_label: dict[str, tuple[float, bool]]
+    bite_labels: frozenset[str]
+    fallback_machine: tuple[float, bool]
+    forced: loop_budget.Forced | None
+
+
+def combine_machine(pairs: list[tuple[float, float, bool]]) -> tuple[float, bool]:
+    import machine  # noqa: PLC0415 # -- keep ci, deep and tier1 standalone without loop_budget
+
+    total = sum(sec for sec, _, _ in pairs)
+    if total <= 0:
+        return 1.0, False
+    unexplained = 0.0
+    all_read = True
+    for sec, m_val, read_ok in pairs:
+        if not read_ok:
+            all_read = False
+            unexplained += sec
+        else:
+            eff = m_val if m_val >= machine.NOISE_FLOOR else 1.0
+            unexplained += sec / eff
+    return total / unexplained, all_read
+
+
+def read_artifacts(artifacts_dir: Path | None, root: Path, *, run: str, tree: str) -> ArtifactData:
+    import loop_budget  # noqa: PLC0415 # -- keep ci, deep and tier1 standalone without loop_budget
+    import runrecord  # noqa: PLC0415 # -- keep ci, deep and tier1 standalone without loop_budget
+
+    if artifacts_dir is None or not artifacts_dir.is_dir():
+        return ArtifactData((), {}, frozenset(), (1.0, False), None)
+    all_records: list[dict[str, object]] = []
+    gates_map: dict[str, tuple[float, bool]] = {}
+    by_label: dict[str, tuple[float, bool]] = {}
+    bite_labels: set[str] = set()
+    all_machine: list[tuple[float, float, bool]] = []
+    for path in sorted(artifacts_dir.rglob("timing.jsonl")):
+        stem = path.parent.name.removeprefix("timing-")
+        records = list(runrecord.read(path))
+        all_records.extend(records)
+        label_pairs: list[tuple[float, float, bool]] = []
+        for rec in records:
+            if rec.get("key") == loop_budget.PROOF_GATE or loop_budget.forced_tag(
+                rec.get("forced")
+            ):
+                bite_labels.add(stem)
+            if "kind" in rec:
+                continue
+            key, sec = rec.get("key"), loop_budget.finite_seconds(rec.get("seconds"))
+            if not isinstance(key, str) or sec is None:
+                continue
+            green = rec.get("status") == GREEN
+            prev = gates_map.get(key)
+            gates_map[key] = (
+                max(prev[0], sec) if prev is not None else sec,
+                (prev[1] if prev is not None else True) and green,
+            )
+            m_raw = loop_budget.finite_seconds(rec.get("m"))
+            read_ok = isinstance(rec.get("machine_read"), bool) and bool(rec["machine_read"])
+            pair = (max(sec, 1e-6), m_raw if m_raw is not None else 1.0, read_ok)
+            label_pairs.append(pair)
+            all_machine.append(pair)
+        if label_pairs:
+            by_label[stem] = combine_machine(label_pairs)
+    gates = tuple(loop_budget.GateTime(k, sec, ok) for k, (sec, ok) in gates_map.items())
+    forced = loop_budget.forced_from_records(root, all_records, run=run, tree=tree)
+    return ArtifactData(
+        gates=gates,
+        by_label=by_label,
+        bite_labels=frozenset(bite_labels),
+        fallback_machine=combine_machine(all_machine),
+        forced=forced,
+    )
+
+
+def map_workflow_job(name: object, dag: dict[str, tuple[str, ...]]) -> str | None:
+    if not isinstance(name, str) or name == LOOP_JOB or name.startswith(f"{LOOP_JOB} ("):
+        return None
+    if name in dag:
+        return name
+    prefix = name.partition(" (")[0]
+    return prefix if " (" in name and prefix in dag else None
+
+
+def parse_jobs_payload(
+    text: str, *, jobs_status: int, dag: dict[str, tuple[str, ...]]
+) -> list[JobSpan] | str:
+    if jobs_status != 0:
+        return f"gh exited {jobs_status}"
+    if not text.strip():
+        return "jobs JSON is empty"
+    pages = documents(text)
+    if pages is None or not all(isinstance(page, dict) for page in pages):
+        return "jobs JSON is malformed"
+    jobs: list[object] = []
+    total_count: int | None = None
+    for page in pages:
+        page_jobs = page["jobs"] if isinstance(page, dict) else None
+        if not isinstance(page_jobs, list):
+            return "jobs JSON has no jobs list"
+        jobs.extend(page_jobs)
+        tc = page.get("total_count") if isinstance(page, dict) else None
+        if isinstance(tc, int) and not isinstance(tc, bool):
+            total_count = tc
+    if total_count is not None and len(jobs) < total_count:
+        return f"jobs JSON is truncated ({len(jobs)} of {total_count})"
+    return parse_job_spans(jobs, dag)
+
+
+def parse_job_spans(jobs: list[object], dag: dict[str, tuple[str, ...]]) -> list[JobSpan] | str:
+    spans: list[JobSpan] = []
+    for entry in jobs:
+        name = at(entry, "name")
+        wf_job = map_workflow_job(name, dag)
+        if wf_job is None:
+            continue
+        status, conclusion = at(entry, "status"), at(entry, "conclusion")
+        if status in UNSTARTED or conclusion in UNCOUNTED:
+            continue
+        start = unproven.instant(at(entry, "started_at"))
+        end = unproven.instant(at(entry, "completed_at"))
+        if start is None or end is None:
+            return f"job {name!r} has missing timestamps"
+        if end < start:
+            return f"job {name!r} completed before it started"
+        created = unproven.instant(at(entry, "created_at"))
+        spans.append(JobSpan(str(name), wf_job, created, start, end, (end - start).total_seconds()))
+    if not spans:
+        return "no completed jobs found"
+    return spans
+
+
+def topological_jobs(dag: dict[str, tuple[str, ...]]) -> list[str] | None:
+    indegree = {job: len([d for d in deps if d in dag]) for job, deps in dag.items()}
+    ready = [job for job, deg in indegree.items() if deg == 0]
+    order: list[str] = []
+    while ready:
+        cur = ready.pop(0)
+        order.append(cur)
+        for job, deps in dag.items():
+            if cur in deps:
+                indegree[job] -= 1
+                if indegree[job] == 0:
+                    ready.append(job)
+    return order if len(order) == len(dag) else None
+
+
+def span_stems(span: JobSpan) -> tuple[str, ...]:
+    if " (" not in span.name:
+        return (span.wf_job,)
+    inner = span.name.partition(" (")[2].removesuffix(")")
+    parts = [part.strip() for part in inner.split(",")]
+    joined = "-".join(parts)
+    return (joined, f"{span.wf_job}-{joined}", span.wf_job)
+
+
+def assign_waits(spans: list[JobSpan], dag: dict[str, tuple[str, ...]]) -> list[JobSpan]:
+    by_wf: dict[str, list[JobSpan]] = {}
+    for span in spans:
+        by_wf.setdefault(span.wf_job, []).append(span)
+    earliest_created = min(
+        (span.created_at for span in spans if span.created_at is not None),
+        default=min(span.started_at for span in spans),
+    )
+    updated: list[JobSpan] = []
+    for span in spans:
+        dep_ends = [
+            dep_span.completed_at
+            for dep in dag.get(span.wf_job, ())
+            for dep_span in by_wf.get(dep, ())
+        ]
+        ready_at = max(dep_ends) if dep_ends else (span.created_at or earliest_created)
+        wait = max(0.0, (span.started_at - ready_at).total_seconds())
+        updated.append(
+            JobSpan(
+                span.name,
+                span.wf_job,
+                span.created_at,
+                span.started_at,
+                span.completed_at,
+                span.seconds,
+                wait,
+            )
+        )
+    return updated
+
+
+@dataclass(frozen=True, slots=True)
+class LoopMetrics:
+    root: Path
+    place: loop_budget.Place
+    run_id: str
+    tree_id: str
+    raw_wp: float | None
+    wall_wait: float
+    max_wait: float
+    m_val: float
+    machine_read: bool
+    exit_code: int
+
+
+def compute_work_path(
+    spans: list[JobSpan],
+    dag: dict[str, tuple[str, ...]],
+    order: list[str],
+    *,
+    artifacts: ArtifactData,
+) -> tuple[float, float, list[JobSpan]]:
+    import loop_budget  # noqa: PLC0415 # -- keep ci, deep and tier1 standalone without loop_budget
+
+    by_wf: dict[str, list[JobSpan]] = {}
+    for span in spans:
+        by_wf.setdefault(span.wf_job, []).append(span)
+    forced = artifacts.forced
+    raw_end: dict[str, float] = {}
+    net_end: dict[str, float] = {}
+    net_path: dict[str, list[JobSpan]] = {}
+    subtracted_any = False
+    for wf_job in order:
+        deps = [dep for dep in dag[wf_job] if dep in raw_end]
+        raw_base = max((raw_end[dep] for dep in deps), default=0.0)
+        net_best_dep = max(deps, key=lambda dep: net_end[dep], default=None)
+        net_base = net_end[net_best_dep] if net_best_dep is not None else 0.0
+        base_path = list(net_path[net_best_dep]) if net_best_dep is not None else []
+        job_spans = by_wf.get(wf_job, [])
+        if not job_spans:
+            raw_end[wf_job], net_end[wf_job], net_path[wf_job] = raw_base, net_base, base_path
+            continue
+        raw_end[wf_job] = raw_base + max(span.seconds for span in job_spans)
+        best_span = job_spans[0]
+        best_end = -1.0
+        for span in job_spans:
+            stems = span_stems(span)
+            is_bite = forced is not None and (
+                any(stem in artifacts.bite_labels for stem in stems)
+                or f"({loop_budget.PROOF_GATE}" in span.name
+            )
+            dur = max(0.0, span.seconds - forced.seconds) if is_bite and forced else span.seconds
+            if is_bite:
+                subtracted_any = True
+            if net_base + dur > best_end:
+                best_end = net_base + dur
+                best_span = span
+        net_end[wf_job] = best_end
+        net_path[wf_job] = [*base_path, best_span]
+    raw_wp = max(raw_end.values(), default=0.0)
+    best_job = max(net_end, key=lambda job: net_end[job])
+    net_wp = net_end[best_job]
+    if forced is not None and not subtracted_any:
+        net_wp = max(0.0, raw_wp - forced.seconds)
+    return raw_wp, net_wp, net_path[best_job]
+
+
+def machine_for_path(path_spans: list[JobSpan], artifacts: ArtifactData) -> tuple[float, bool]:
+    pairs: list[tuple[float, float, bool]] = []
+    for span in path_spans:
+        for stem in span_stems(span):
+            if stem in artifacts.by_label:
+                m_val, read_ok = artifacts.by_label[stem]
+                pairs.append((max(span.seconds, 1e-6), m_val, read_ok))
+                break
+    return combine_machine(pairs) if pairs else artifacts.fallback_machine
+
+
+def record_loop_run(
+    report_path: Path | None,
+    *,
+    spans: list[JobSpan],
+    artifacts: ArtifactData,
+    result: loop_budget.Result,
+    metrics: LoopMetrics,
+) -> None:
+    import runrecord  # noqa: PLC0415 # -- keep ci, deep and tier1 standalone without loop_budget
+
+    if report_path is None:
+        return
+    for span in spans:
+        runrecord.append(
+            report_path,
+            {
+                "kind": "wait",
+                "job": span.name,
+                "workflow_job": span.wf_job,
+                "seconds": round(span.seconds, 3),
+                "wait": round(span.wait, 3),
+                "run": metrics.run_id,
+                "tree": metrics.tree_id,
+            },
+            root=metrics.root,
+            who=LOOP_JOB,
+        )
+    for gate in artifacts.gates:
+        runrecord.append(
+            report_path,
+            {
+                "key": gate.name,
+                "seconds": round(gate.seconds, 3),
+                "status": GREEN if gate.green else RED,
+                "run": metrics.run_id,
+                "tree": metrics.tree_id,
+            },
+            root=metrics.root,
+            who=LOOP_JOB,
+        )
+    runrecord.append(
+        report_path,
+        {
+            "kind": runrecord.TIER,
+            "tier": LOOP_JOB,
+            "place": metrics.place.value,
+            "gates": [gate.name for gate in artifacts.gates],
+            "seconds": round(metrics.raw_wp, 3) if metrics.raw_wp is not None else 0.0,
+            "runner_wait": round(metrics.wall_wait, 3),
+            "max_wait": round(metrics.max_wait, 3),
+            "status": GREEN if metrics.exit_code == 0 else RED,
+            "m": round(metrics.m_val, 3),
+            "machine_read": metrics.machine_read,
+            **result.tier_fields(),
+            "run": metrics.run_id,
+            "tree": metrics.tree_id,
+        },
+        root=metrics.root,
+        who=LOOP_JOB,
+    )
+
+
+def resolve_loop_spans(
+    wf_text: str | None,
+    jobs_text: str | None,
+    options: argparse.Namespace,
+) -> tuple[dict[str, tuple[str, ...]], list[str], list[JobSpan]] | str:
+    if wf_text is None:
+        return f"workflow {options.workflow} could not be read"
+    dag = workflow_needs(wf_text)
+    order = topological_jobs(dag)
+    if order is None:
+        return "workflow needs graph has a cycle"
+    if jobs_text is None:
+        return f"jobs file {options.jobs} could not be read"
+    parsed = parse_jobs_payload(jobs_text, jobs_status=options.jobs_status, dag=dag)
+    if isinstance(parsed, str):
+        return parsed
+    return dag, order, assign_waits(parsed, dag)
+
+
+def analyze_loop_reading(
+    spans: list[JobSpan],
+    dag: dict[str, tuple[str, ...]],
+    order: list[str],
+    *,
+    artifacts: ArtifactData,
+) -> tuple[loop_budget.Reading, float, float, float]:
+    import loop_budget  # noqa: PLC0415 # -- keep ci, deep and tier1 standalone without loop_budget
+
+    raw_wp, net_wp, path_spans = compute_work_path(spans, dag, order, artifacts=artifacts)
+    eff_forced: loop_budget.Forced | None = None
+    if artifacts.forced is not None and raw_wp - net_wp > 0:
+        eff_forced = loop_budget.Forced(
+            artifacts.forced.cause, artifacts.forced.record, raw_wp - net_wp
+        )
+    m_val, machine_read = machine_for_path(path_spans, artifacts)
+    reading = loop_budget.Reading(raw_wp, m_val, machine_read, forced=eff_forced)
+    start_anchor = min(span.created_at or span.started_at for span in spans)
+    run_wall = max(0.0, (max(s.completed_at for s in spans) - start_anchor).total_seconds())
+    wall_wait = max(0.0, run_wall - raw_wp)
+    max_wait = max(span.wait for span in spans)
+    if run_wall > 0 and max_wait > WAIT_THRESHOLD * run_wall:
+        print(
+            f"loop: runner wait: {max_wait:.1f}s max"
+            f" ({wall_wait:.1f}s across {run_wall:.1f}s run, not judged)"
+        )
+    return reading, raw_wp, wall_wait, max_wait
+
+
+def run_loop_command(options: argparse.Namespace, jobs_text: str | None) -> int:
+    import loop_budget  # noqa: PLC0415 # -- keep ci, deep and tier1 standalone without loop_budget
+    import runrecord  # noqa: PLC0415 # -- keep ci, deep and tier1 standalone without loop_budget
+
+    root = Path(options.root)
+    run_id = os.environ.get("RATCHET_RUN") or runrecord.NO_RUN
+    tree_id = runrecord.tree_id(root)
+    place = loop_budget.Place(options.place)
+    artifacts = read_artifacts(options.artifacts, root, run=run_id, tree=tree_id)
+    resolved = resolve_loop_spans(gatelib.read_text(Path(options.workflow)), jobs_text, options)
+    spans: list[JobSpan] = []
+    raw_wp: float | None = None
+    wall_wait, max_wait = 0.0, 0.0
+    if isinstance(resolved, str):
+        reading = loop_budget.Reading(None, 1.0, machine_read=False, detail=resolved)
+    else:
+        dag, order, spans = resolved
+        reading, raw_wp, wall_wait, max_wait = analyze_loop_reading(
+            spans, dag, order, artifacts=artifacts
+        )
+    eval_opts = loop_budget.EvalOptions(
+        place=place,
+        tree=tree_id,
+        run=run_id,
+        exclude_proof=artifacts.forced is not None,
+    )
+    result = loop_budget.evaluate_run(
+        root, reading=reading, report=options.report, gates=artifacts.gates, options=eval_opts
+    )
+    exit_code = result.exit_for(0)
+    if result.effect.annotation:
+        print(f"::warning title=ratchet-loop::{result.line()}")
+    print(result.line())
+    metrics = LoopMetrics(
+        root,
+        place,
+        run_id,
+        tree_id,
+        raw_wp,
+        wall_wait,
+        max_wait,
+        reading.m,
+        reading.machine_read,
+        exit_code,
+    )
+    record_loop_run(
+        options.report,
+        spans=spans,
+        artifacts=artifacts,
+        result=result,
+        metrics=metrics,
+    )
+    return exit_code
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -357,6 +908,15 @@ def main(argv: list[str] | None = None, runs: str | None = None) -> int:
     one.add_argument("--base", required=True)
     one.add_argument("--repository", required=True)
     one.add_argument("--report", type=Path)
+    loop_cmd = commands.add_parser("loop")
+    loop_cmd.add_argument("--workflow", type=Path, required=True)
+    loop_cmd.add_argument("--jobs", type=Path)
+    loop_cmd.add_argument("--jobs-status", type=int, default=0)
+    loop_cmd.add_argument("--artifacts", type=Path)
+    places = ("pull-request", "default-branch")
+    loop_cmd.add_argument("--place", choices=places, required=True)
+    loop_cmd.add_argument("--root", default=".")
+    loop_cmd.add_argument("--report", type=Path)
     tiers = {}
     for name in (*ON_THE_DEFAULT_BRANCH, "speaks"):
         tiers[name] = commands.add_parser(name)
@@ -367,7 +927,19 @@ def main(argv: list[str] | None = None, runs: str | None = None) -> int:
     tiers["speaks"].add_argument("--commit", required=True)
     tiers["speaks"].add_argument("--state", choices=(GREEN, RED), required=True)
     parser.set_defaults(answer=None)
+    return parser
+
+
+def main(argv: list[str] | None = None, runs: str | None = None) -> int:
+    parser = build_parser()
     options = parser.parse_args(argv)
+    if options.command == "loop":
+        jobs_text = (
+            gatelib.read_text(options.jobs)
+            if options.jobs is not None
+            else sys.stdin.buffer.read().decode("utf-8", "surrogateescape")
+        )
+        return run_loop_command(options, jobs_text)
     if options.command == "speaks" and not COMMIT.fullmatch(options.commit):
         parser.error(f"argument --commit: {options.commit!a} is not a full commit name")
     text = sys.stdin.buffer.read().decode("utf-8", "surrogateescape") if runs is None else runs
