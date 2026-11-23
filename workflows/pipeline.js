@@ -136,7 +136,8 @@ axis takes every line. Where a finding carries an axis, the axis a line names is
 the issue.
 - Blocker: wrong result (a wrong output, or a wrong input accepted with exit 0), data loss, a
   violated AGENTS.md non-negotiable, a declared-path or contract violation, a crash the fuzz
-  harness finds, a span attribute or log field carrying a secret or a personal identifier.
+  harness finds, a span attribute or log field carrying a secret or a personal identifier, a
+  recorded output added-by-recording or altered with no justifying criterion in spec.md.
 - Major: unhandled edge case the spec covers, survived mutant on a stated invariant, missing
   contract, behaviour shipped on with no flag where spec.md does not say "none" with a reason.
 - Minor: everything else.
@@ -634,12 +635,21 @@ const DEPARTURES_FIELD = {
   },
 }
 
+const RECORDED_OUTPUTS_FIELD = {
+  recordedOutputs: {
+    type: 'array',
+    items: { type: 'string' },
+    description: 'Repo-relative paths of recorded outputs you recorded or updated with the recorded-output tool because the expected text was too large to state by hand; empty if none',
+  },
+}
+
 const IMPLEMENT_SCHEMA = {
   type: 'object',
   properties: {
     filesChanged: { type: 'array', items: { type: 'string' }, description: 'Repo-relative paths created or modified' },
     allNewTestsPass: { type: 'boolean' },
     checkPasses: { type: 'boolean', description: 'true only if `check` exited 0' },
+    ...RECORDED_OUTPUTS_FIELD,
     ...CHANGE_SIZE_FIELD,
     notes: { type: 'string', description: 'Design decisions and trade-offs' },
     ...DISPUTES_FIELD,
@@ -647,7 +657,7 @@ const IMPLEMENT_SCHEMA = {
     ...DEPARTURES_FIELD,
     ...checkOutputField(),
   },
-  required: ['filesChanged', 'allNewTestsPass', 'checkPasses', 'notes', 'disputes', 'unstated', 'departures', 'checkOutput'],
+  required: ['filesChanged', 'allNewTestsPass', 'checkPasses', 'recordedOutputs', 'notes', 'disputes', 'unstated', 'departures', 'checkOutput'],
 }
 
 const NAMED_GATES_RUN_FIELD = {
@@ -1140,9 +1150,15 @@ ${flagRule().spec}
    - Neighbouring cases: ${NEIGHBOURING_RULE}
    - Out of scope (copied from the ticket)
 2. Write the failing tests at those seams, with the test frameworks and directories binding.md
-   names. Write a property test for every invariant you can state. Follow every AGENTS.md
-   non-negotiable in the tests themselves. Implementation code is the implementer's: you write
-   tests only.
+   names. Where behaviour shows as readable output (a rendered page, CLI output, a structured
+   response, a formatted report), write an expect test with the recorded-output facility
+   binding.md's \`## Tests\` section names, placing any recorded files beside the tests (never
+   under \`quality/**\`) and writing the expected text by hand from the ticket so the test fails
+   first for the right reason (never record from a run). Once \`depended-on\` is declared,
+   altering an existing recorded output sends the merge to the owner (\`expect-output\`), just as
+   new surface without a flag sends it (\`unflagged\`). Write a property test for every invariant
+   you can state. Follow every AGENTS.md non-negotiable in the tests themselves. Implementation
+   code is the implementer's: you write tests only.
 3. Run the new tests and quote each failure's content. The right reason is a missing function,
    class, endpoint or component, or an assertion on behaviour that does not exist yet. An
    ImportError on a module that should already exist, a syntax error or a fixture error means
@@ -1286,9 +1302,12 @@ ${DEPARTURE_RULE}
 Load the \`mattpocock-skills:tdd\` skill and work its loop one slice at a time: run the listed
 tests, implement the smallest change that makes one pass, re-run, repeat. If the change touches
 a user interface, load \`impeccable:impeccable\` as well: \`shape\` before you build the surface,
-\`polish\` before you return, and DESIGN.md is the standard you build to. The spec's tests
-are fixed inputs: a test you believe wrong stays red and is named in \`notes\`. Keep every
-declared-path rule and every AGENTS.md non-negotiable, add the contracts binding.md requires
+\`polish\` before you return, and DESIGN.md is the standard you build to. The spec's tests and expected text are fixed inputs: a test you believe wrong stays red and is
+named in \`notes\`. Only where an expected output is too large to state by hand may you record it
+with the recorded-output tool binding.md's \`## Tests\` section names, placing any recorded files
+beside the tests (never under \`quality/**\`) and returning every such path in
+\`recordedOutputs\` for the reviewer; never re-accept an existing recorded output silently. Keep
+every declared-path rule and every AGENTS.md non-negotiable, add the contracts binding.md requires
 where the spec states pre/postconditions, and regenerate any contract artefacts binding.md
 names when an interface changes, with the entry point it names.
 
@@ -1325,7 +1344,11 @@ ${JSON.stringify(blockingFindings, null, 2)}
 Findings you MAY resolve if cheap (minor):
 ${JSON.stringify(minors, null, 2)}
 
-Resolve each blocking finding by changing the implementation; the tests are fixed inputs. A
+Resolve each blocking finding by changing the implementation; the spec's tests and expected text
+are fixed inputs. Only where an expected output is too large to state by hand may you record it
+with the recorded-output tool binding.md's \`## Tests\` section names, placing any recorded files
+beside the tests (never under \`quality/**\`) and returning every such path in
+\`recordedOutputs\` for the reviewer; never re-accept an existing recorded output silently. A
 critic test that asserts something the spec contradicts stays red and is explained in
 \`notes\`. A finding that can only be resolved by changing a guard path, or a gate you believe
 is wrong, becomes a gate dispute listed in \`disputes\`.
@@ -1431,7 +1454,10 @@ Do all of the following and report evidence for each:
    idempotence, ordering, anything an AGENTS.md non-negotiable implies for the values touched).
    Add edge-case tests you EXPECT to fail: zero, negative and boundary values, empty
    collections, duplicates, unknown identifiers, unit, period or time-zone boundaries where
-   the domain has them, very large values, unicode. Put them in the critique directory
+   the domain has them, very large values, unicode; where behaviour shows as readable output,
+   edge-case tests may be expect tests under the same rule (expected text written by hand from
+   the spec, never recorded from a run, with any recorded files beside the critique tests and
+   never under \`quality/**\`). Put them in the critique directory
    binding.md's Critique tests section names, flat, one file per layer touched, named
    \`<slug>.<layer>.critique.test.<ext>\` (\`tests/critique/\` when the section names none).
    Never put them beside the code: a critique file is organised by feature, not by module.
@@ -1504,7 +1530,7 @@ finding with no test kept, or with a test that proves nothing yet, leaves both f
 owed a fix if it is a blocker or major.`
 }
 
-function reviewPrompt(spec, again, settled) {
+function reviewPrompt(spec, again, settled, recordedOutputs = []) {
   const readings = settled
     ? `Before the build a ticket check read the ticket against spec.md, and spec.md was
    settled on these readings:
@@ -1547,6 +1573,7 @@ ${parentInput()}- The spec: \`${spec.specPath}\`
 
 - AGENTS.md, GLOSSARY.md, docs/adr/, docs/process/binding.md, docs/disputes/, DESIGN.md
 - Any generated contract artefacts that binding.md names
+- Recorded outputs recorded by implement/fix with the tool: ${JSON.stringify(recordedOutputs || [])} (plus any recorded output added or altered in the diff, which the plugin's \`scripts/expect_outputs.py\` lists against the base branch)
 ${outsideInputs(CRITIC)} are outside your inputs:
 judge the spec against the ticket, and the code against the spec and the standards.
 
@@ -1558,7 +1585,11 @@ baseline as judgement calls. Load the \`mattpocock-skills:codebase-design\` skil
 use its vocabulary. Record every issue with axis, severity, location and evidence:
 A. Spec conformance: does each Given/When/Then acceptance criterion have a test and an
    implementation that satisfies it? Any criterion silently narrowed? Any test weakened,
-   skipped or deleted? Any behaviour added that the spec does not ask for?
+   skipped or deleted? Any behaviour added that the spec does not ask for? Hold each recorded
+   output added-by-recording or altered (in \`recordedOutputs\` or the diff) to a justifying
+   criterion in spec.md: a recorded output added-by-recording or altered with no justifying
+   criterion is a blocker, and once \`depended-on\` is declared, altering an existing recorded
+   output waits for the owner (\`expect-output\`) like \`unflagged\` for new surface.
 B. Standards conformance:
    - Glossary vocabulary in identifiers, docs and API names; banned words absent
    - Declared-path rules as AGENTS.md and binding.md define them: dependency direction, purity
@@ -1632,6 +1663,7 @@ async function fixRound(findings, testsAdded, round, rounds) {
     `fix-${round}`,
   )
   filesChanged = union(filesChanged, fix.filesChanged)
+  recordedOutputs = union(recordedOutputs, fix.recordedOutputs)
   disputes.push(...(fix.disputes || []))
   const stop = noRoom(`fix round ${round}`, fix.changeSize, false)
   lastCheckOutput = fix.checkOutput
@@ -2125,7 +2157,7 @@ if (REJUDGE) {
   const reconcileHalt = reconcile ? settleCases('reconcile', reconcile.unstated || [], reconcile.departures || [], rejudgeContext) : null
   if (reconcileHalt) return reconcileHalt
   phase('Review')
-  const review = readReview(must(await agent(reviewPrompt(spec, true, SETTLED), { label: 'review-again', phase: 'Review', schema: REVIEW_SCHEMA }), 'review'))
+  const review = readReview(must(await agent(reviewPrompt(spec, true, SETTLED, Array.isArray(REJUDGE.recordedOutputs) ? REJUDGE.recordedOutputs : []), { label: 'review-again', phase: 'Review', schema: REVIEW_SCHEMA }), 'review'))
   const reviewHalt = settleCases('review-again', reviewEntries(review), [], { ...rejudgeContext, extra: { ...rejudgeContext.extra, reviewIssues: reviewIssues(review), checkOutput: review.checkOutput } })
   if (reviewHalt) return reviewHalt
   const judged = rejudged({ review, reconcile, dependencies: REJUDGE.dependencies })
@@ -2247,6 +2279,7 @@ const impl = must(
   'implement',
 )
 let filesChanged = union(spec.testFiles, impl.filesChanged)
+let recordedOutputs = union(impl.recordedOutputs)
 const disputes = [...(impl.disputes || [])]
 const implStop = noRoom('the implementation', impl.changeSize, CRITIC)
 if (implStop) return tooLarge(implStop, spec, { filesChanged, disputes, checkOutput: impl.checkOutput })
@@ -2363,7 +2396,7 @@ function parkCarried() {
 if (carriedStillOwed.length) return parkCarried()
 
 phase('Review')
-let review = readReview(must(await agent(reviewPrompt(spec, false, settled), { label: 'review', phase: 'Review', schema: REVIEW_SCHEMA }), 'review'))
+let review = readReview(must(await agent(reviewPrompt(spec, false, settled, recordedOutputs), { label: 'review', phase: 'Review', schema: REVIEW_SCHEMA }), 'review'))
 const reviewHalt = reviewStop('review', review)
 if (reviewHalt) return reviewHalt
 function reviewStop(after, result) {
@@ -2377,7 +2410,7 @@ if (!CRITIC && fixableByReview(review)) {
   const stop = await fixRound(review.issues, [], iterations, YOUNG_FIX_ROUNDS)
   if (stop) return stop
   phase('Review')
-  review = readReview(must(await agent(reviewPrompt(spec, false, settled), { label: `review-${iterations}`, phase: 'Review', schema: REVIEW_SCHEMA }), `review-${iterations}`))
+  review = readReview(must(await agent(reviewPrompt(spec, false, settled, recordedOutputs), { label: `review-${iterations}`, phase: 'Review', schema: REVIEW_SCHEMA }), `review-${iterations}`))
   const reReviewHalt = reviewStop(`review-${iterations}`, review)
   if (reReviewHalt) return reReviewHalt
   log(`Re-review after the one fix pass: ${review.verdict}`)
@@ -2419,6 +2452,7 @@ return {
   verdictForcedBy: forcedReasons,
   iterations,
   filesChanged,
+  recordedOutputs,
   critic: { ran: CRITIC, reason: CRITIC ? CRITIC_REASON : `the critic was not run: ${CRITIC_REASON || 'the preflight says it does not run'}` },
   criticFindings: critique.findings,
   criticFindingsByRound: allCriticFindings,
