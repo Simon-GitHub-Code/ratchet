@@ -1751,3 +1751,52 @@ def test_tier2_red_on_time_alone_names_gate_time_machine_and_way_out(
     assert len(also) == 2
     assert any("mutation" in line and "the machine explains 20.0s of it" in line for line in also)
     assert any("e2e" in line and "the machine could not be read" in line for line in also)
+
+
+def test_slow_unnarrowed_bite_surfaces_as_actionable_route_proposal(
+    tmp_path: Path, capsys: Out
+) -> None:
+    files = {
+        **ADOPTED,
+        "quality/thresholds.toml": (
+            "[ceilings.loop]\nseconds = 300\n\n[ceilings.seconds]\ntier0 = 10\n"
+        ),
+        "quality/bites.toml": (
+            '[[bite]]\ngate = "build"\nname = "missing symbol"\n'
+            'write = { path = "src/bad", content = "bad" }\nexpect = "error"\n'
+        ),
+    }
+    root = repository(tmp_path, files)
+    fault = {
+        "kind": "fault",
+        "gate": "build",
+        "bite": "missing symbol",
+        "seconds": 42.5,
+        "narrowed": False,
+    }
+    write(root, ".ratchet/timing.jsonl", json.dumps(fault) + "\n")
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    also = [line for line in capsys.readouterr().out.splitlines() if line.startswith("also:")]
+    assert len(also) == 1
+    assert "build" in also[0]
+    assert "missing symbol" in also[0]
+    assert "42.5s" in also[0]
+    assert "10s" in also[0]
+    assert "args" in also[0]
+    assert "whole" in also[0]
+
+    write(
+        root,
+        "quality/bites.toml",
+        files["quality/bites.toml"] + 'args = ["src/entry"]\n',
+    )
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    assert not any(line.startswith("also:") for line in capsys.readouterr().out.splitlines())
+
+    write(
+        root,
+        "quality/bites.toml",
+        files["quality/bites.toml"] + 'whole = "must compile whole project"\n',
+    )
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    assert not any(line.startswith("also:") for line in capsys.readouterr().out.splitlines())

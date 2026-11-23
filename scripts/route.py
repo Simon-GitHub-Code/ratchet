@@ -24,6 +24,7 @@ import merge
 import merge_ready
 import owed
 import plugin_pin
+import project_bite
 import questions
 import queue_notes
 import runrecord
@@ -1170,6 +1171,18 @@ def loop_proposals(root: Path) -> list[str]:
     )
 
 
+def slow_bite_proposals(root: Path) -> list[str]:
+    return [
+        (
+            f"`{project_bite.REGISTRY}` gate `{slow.gate}` bite `{slow.bite}` ran in"
+            f" {slow.seconds:.1f}s with no `args` (over the `tier0` ceiling of"
+            f" {slow.ceiling:g}s). Narrow it with `args` in `{project_bite.REGISTRY}`,"
+            ' or record `whole = "<reason>"` if it cannot be narrowed'
+        )
+        for slow in project_bite.recorded_slow_bites(root)
+    ]
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=".")
@@ -1181,14 +1194,16 @@ def main(argv: list[str]) -> int:
     if options.decline:
         return decline(root, options.decline)
     step = decide(root, None if options.offline else preflight.run_gh)
-    also = (
-        pin_proposals(root)
-        + questions.proposals(root)
-        + event_proposals(root)
-        + expired_switches(root)
-        + loop_proposals(root)
-        + ceiling_proposals(root)
-    )
+    with runrecord.read_once():
+        also = (
+            pin_proposals(root)
+            + questions.proposals(root)
+            + event_proposals(root)
+            + expired_switches(root)
+            + loop_proposals(root)
+            + ceiling_proposals(root)
+            + slow_bite_proposals(root)
+        )
     if options.as_json:
         print(json.dumps({**asdict(step), "also": also}, indent=2))
     else:

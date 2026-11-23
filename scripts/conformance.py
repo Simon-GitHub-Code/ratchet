@@ -23,6 +23,7 @@ from typing import NamedTuple
 import application_types
 import architecture
 import budget
+import build_cache
 import change_size
 import changed_tests
 import ci_jobs
@@ -2000,6 +2001,7 @@ def check_speed(root: Path) -> Iterable[Finding]:
         yield agent(f"{BINDING_PATH}: has no '{SPEED_SECTION}' section (ceilings, shards)")
     elif text:
         yield from check_speed_parts(markdown_text.section(text, SPEED_SECTION))
+        yield from check_build_cache(text)
     workflows = root / WORKFLOWS
     if not workflows.is_dir():
         return
@@ -2308,7 +2310,7 @@ def cache_key_lines(lines: list[str]) -> list[tuple[int, re.Match[str]]]:
         if line.lstrip().startswith(("- ", "-\t")) and CACHE_USES not in line:
             cache = False
         if CACHE_USES in line:
-            cache = True
+            cache = CACHE_RESTORE_PREFIX not in line
         elif cache and (match := CACHE_KEY.match(line)):
             found.append((index, match))
     return found
@@ -2459,6 +2461,13 @@ def check_speed_parts(body: str) -> Iterable[Finding]:
                 )
         elif not value or value.startswith("<"):
             yield agent(f"{BINDING_PATH}: the Speed section does not say how '{part}' is met")
+
+
+def check_build_cache(binding: str) -> Iterable[Finding]:
+    rows = project_bite.gate_rows(binding)
+    known = {row.gate for row in rows} if rows else None
+    for error in build_cache.validate_build_spec(binding, known_gates=known):
+        yield agent(f"{BINDING_PATH}: {error}")
 
 
 def check_local_caches(root: Path) -> Iterable[Finding]:
@@ -5280,6 +5289,10 @@ def speed_mutations() -> list[Mutation]:
             "Speed section with an incremental line of none and no reason",
             rebind(f"- Incremental: {stated}", "- Incremental: none:"),
         ),
+        (
+            "Speed section with an invalid Build line",
+            rebind("- Build: <", "- Build: bad "),
+        ),
         ("CI workflow without concurrency control", rewrite(ci, "concurrency:", "serial:")),
         ("CI workflow without a cache", rewrite(deep, "cache", "store")),
         (
@@ -5809,7 +5822,7 @@ TEST_PATHS_PLACEHOLDER = re.compile(r"^- Tests: <[^\n]*>$", re.MULTILINE)
 TRIGGERS_PLACEHOLDER = re.compile(r"^\| <kind> \|[^\n]*$", re.MULTILINE)
 INCREMENTAL_PLACEHOLDER = re.compile(r'"bind: the mutation tool\'s option[^"]*"')
 SPEED_PLACEHOLDER = re.compile(
-    r"^(- (?!Local caches|Model:|Mirrors:|Synced:)[A-Z][a-z ]+: )<[^\n]*>$", re.MULTILINE
+    r"^(- (?!Local caches|Build|Model:|Mirrors:|Synced:)[A-Z][a-z ]+: )<[^\n]*>$", re.MULTILINE
 )
 INSTALL_PLACEHOLDER = re.compile(r"^- Install: <[^\n]*>$", re.MULTILINE)
 DEPENDENCY_PLACEHOLDER = re.compile(

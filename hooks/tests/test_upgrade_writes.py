@@ -735,6 +735,32 @@ def test_a_cache_key_ending_in_the_run_is_green(repo: Path, part: str) -> None:
     assert cache_findings(repo) == []
 
 
+def test_cache_restore_step_with_input_key_does_not_fail_while_cache_save_requires_per_run_key(
+    repo: Path,
+) -> None:
+    split_cache = (
+        "name: ci\non: push\nconcurrency:\n  group: ci\njobs:\n"
+        "  build:\n    runs-on: ubuntu-latest\n    steps:\n"
+        "      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6\n"
+        "        with:\n"
+        "          path: .build-cache\n"
+        "          key: build-${{ runner.os }}-1.82-${{ hashFiles('**/*.lock') }}\n"
+        "          restore-keys: |\n"
+        "            build-${{ runner.os }}-1.82-\n"
+        "      - run: just build\n"
+        "      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6\n"
+        "        with:\n"
+        "          path: .build-cache\n"
+        "          key: b-${{ runner.os }}-1.82-${{ hashFiles('**/*.lock') }}-${{ github.sha }}\n"
+    )
+    (repo / CI).write_text(split_cache, encoding="utf-8")
+    assert cache_findings(repo) == []
+
+    bad_save = split_cache.replace("-${{ github.sha }}", "")
+    (repo / CI).write_text(bad_save, encoding="utf-8")
+    assert len(cache_findings(repo)) == 1
+
+
 def test_a_merge_workflow_without_a_cache_is_not_flagged(repo: Path) -> None:
     (repo / ".github/workflows/merge.yml").write_text("name: merge\njobs: {}\n", encoding="utf-8")
     assert [found for found in cache_findings(repo) if found.path.endswith("merge.yml")] == []

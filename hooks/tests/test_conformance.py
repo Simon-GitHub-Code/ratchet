@@ -2275,3 +2275,26 @@ def test_sharded_bite_recipes_must_pass_shard_and_deep_must_cover_all_slices(
 
     monkeypatch.setattr(conformance.project_bite, "slice_tasks", lambda _tasks, _shard: [])
     assert any("shard check for 1 shards failed" in line for line in red(repo))
+
+
+def test_build_speed_line_validates_syntax_and_known_gates_when_filled(repo: Path) -> None:
+    binding_text = (repo / BINDING).read_text(encoding="utf-8")
+    assert "- Build: <" in binding_text
+    assert red(repo) == []
+
+    valid = (
+        "- Build: gate `build`; caches `.build-cache`; cold 120s; warm 15s;"
+        " reuse moved; consumers `smoke`"
+    )
+    (repo / BINDING).write_text(
+        re.sub(r"^- Build: <[^\n]*>$", valid, binding_text, flags=re.MULTILINE),
+        encoding="utf-8",
+    )
+    assert red(repo) == []
+
+    bad = "- Build: gate `nonexistent`; caches `.build-cache`; cold 120s; warm 15s; reuse moved"
+    (repo / BINDING).write_text(
+        re.sub(r"^- Build: <[^\n]*>$", bad, binding_text, flags=re.MULTILINE),
+        encoding="utf-8",
+    )
+    assert any("unknown gate `nonexistent`" in line for line in red(repo))
