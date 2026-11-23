@@ -2066,3 +2066,132 @@ def test_wall_clock_line_with_dependencies_never_blames_serial_or_order(
     assert line == "parallel: the lanes were full (4 lanes, 30.0s of check time in 20.0s)"
     assert not parallel.matches_gate("a 'b", "b")
     assert not parallel.matches_gate("", "b")
+
+
+def test_first_runs_fast_gates_before_heavy_and_allows_later_or_none(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = binding(tmp_path / "repo", {"later": "later: code:source", "none": "none: skipped"})
+    log = tmp_path / "first.log"
+    heavy_a = gate(LOG, log, "heavy-a")
+    heavy_b = gate(LOG, log, "heavy-b")
+    fast_ok = gate(LOG, log, "fast-ok")
+    fast_later = named(SAY, "later: code:source", "", name="later")
+    fast_none = named(SAY, "none: skipped", "", name="none")
+    code = run(
+        "--root",
+        str(root),
+        "--jobs",
+        "4",
+        "--first",
+        fast_ok,
+        fast_later,
+        fast_none,
+        "not-in-run",
+        "--",
+        heavy_a,
+        heavy_b,
+        fast_ok,
+        fast_later,
+        fast_none,
+    )
+    assert code == 0
+    events = log.read_text().splitlines()
+    assert events[:2] == ["+fast-ok", "-fast-ok"]
+    assert set(events[2:]) == {"+heavy-a", "-heavy-a", "+heavy-b", "-heavy-b"}
+    assert "parallel: green (3 ran, 1 not run yet, 1 not applicable)\n" in capsys.readouterr().out
+
+    log_no_match = tmp_path / "nomatch.log"
+    assert (
+        run(
+            "--first",
+            "absent",
+            "--",
+            gate(LOG, log_no_match, "one"),
+            gate(LOG, log_no_match, "two"),
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+
+def test_first_stops_before_heavy_gates_on_red_or_unjudged_and_validates_deps(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fast_red = gate(EXIT, 2)
+    fast_ok = gate(SAY, "fast-ok", "")
+    heavy = gate(SAY, "heavy-ran", "")
+    assert (
+        run(
+            "--jobs",
+            "3",
+            "--first",
+            fast_red,
+            fast_ok,
+            "--",
+            heavy,
+            fast_red,
+            fast_ok,
+        )
+        == 1
+    )
+    out = capsys.readouterr().out
+    assert "heavy-ran\n" not in out
+    assert f"parallel: {heavy}: started" not in out
+    assert f"parallel: stopped before heavy gates after fast failure: {heavy}\n" in out
+    assert "fast-ok\n" in out
+    assert out.endswith("parallel: red\n")
+
+    fast_unjudged = gate(EXIT, 3)
+    assert run("--first", fast_unjudged, "--", heavy, fast_unjudged) == 3
+    out_unjudged = capsys.readouterr().out
+    assert f"parallel: stopped before heavy gates after fast failure: {heavy}\n" in out_unjudged
+    assert out_unjudged.endswith("parallel: could not judge\n")
+
+    fast_dep = gate(SAY, "fast-dep", "")
+    assert (
+        run(
+            "--jobs",
+            "1",
+            "--first",
+            fast_red,
+            fast_dep,
+            "--after",
+            f"{fast_dep}:{fast_red}",
+            "--",
+            fast_red,
+            fast_dep,
+            heavy,
+        )
+        == 1
+    )
+    out_dep = capsys.readouterr().out
+    assert f"{fast_dep}: skipped (dependency {fast_red} failed)\n" in out_dep
+    assert f"parallel: stopped before heavy gates after fast failure: {heavy}\n" in out_dep
+
+    with pytest.raises(SystemExit) as caught:
+        run("--first", "smoke", "--after", "smoke:build", "--", "build", "smoke")
+    assert caught.value.code == 2
+    assert "--first gate 'smoke' depends on 'build'" in capsys.readouterr().err
+
+    constraints = parallel.Constraints(first=frozenset({"fast"}))
+    options = argparse.Namespace(
+        root=tmp_path,
+        jobs=4,
+        fail_fast=False,
+        report=None,
+        alone=[],
+        wide=[],
+        constraints=constraints,
+    )
+    sched = parallel.Scheduler(
+        [("fast",), ("heavy1",), ("heavy2",)], [], options, kept=schedule.Schedule()
+    )
+    sched.finished = [
+        parallel.Finished("fast", 2.0, 0, ""),
+        parallel.Finished("heavy1", 5.0, 0, ""),
+        parallel.Finished("heavy2", 5.0, 0, ""),
+    ]
+    line = parallel.wall_clock_line(sched, 7.0)
+    assert "order lost" not in line
+    assert line == "parallel: the lanes were full (4 lanes, 12.0s of check time in 7.0s)"

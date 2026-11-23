@@ -11,8 +11,8 @@ yours to give. Python 3.11 standard library only, Linux and macOS.
 Usage::
 
     parallel.py [--runner "just"] [--jobs N] [--serial A B]... [--alone GATE...]
-                [--wide GATE...] [--after GATE:DEP]... [--fail-fast] [--root DIR]
-                [--report PATH] -- GATE...
+                [--wide GATE...] [--after GATE:DEP]... [--first GATE...]
+                [--fail-fast] [--root DIR] [--report PATH] -- GATE...
 
 * Each ``GATE`` becomes ``RUNNER GATE`` and runs in ``--root`` (the current directory). The
   entry is split like a shell line, so ``"test-shard 1/4"`` passes two words. With no
@@ -163,6 +163,7 @@ WAITING = re.compile(r"(?P<standing>later|none): \S.*")
 @dataclass(frozen=True, slots=True)
 class Constraints:
     deps: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    first: frozenset[str] = frozenset()
 
 
 class Standing(Enum):
@@ -441,12 +442,21 @@ def resolve_deps(
     gates: Sequence[str],
     raw_after: Sequence[str],
     spec: build_cache.BuildSpec | None,
+    *,
+    first: frozenset[str] = frozenset(),
 ) -> dict[str, frozenset[str]]:
     edges = build_spec_deps(spec, gates)
     for gate, deps in parse_after(raw_after, frozenset(gates)).items():
         edges.setdefault(gate, set()).update(deps)
     check_acyclic(gates, edges)
-    return {gate: frozenset(deps) for gate, deps in edges.items()}
+    resolved = {gate: frozenset(deps) for gate, deps in edges.items()}
+    for gate in sorted(first):
+        missing = resolved.get(gate, frozenset()) - first
+        if missing:
+            dep = min(missing)
+            message = f"--first gate {gate!r} depends on {dep!r}, which is not in --first"
+            raise ValueError(message)
+    return resolved
 
 
 def take_ready(board: schedule.Board[str], is_ready: Callable[[str], bool]) -> str | None:
@@ -490,6 +500,9 @@ class Scheduler:
         self.deps: dict[str, frozenset[str]] = {
             gate: frozenset(reqs) for gate, reqs in constraints.deps.items() if reqs
         }
+        self.first: frozenset[str] = constraints.first
+        self.first_remaining: set[str] = set(self.first)
+        self.first_failed = False
         self.green_done: set[str] = set()
         self.skipped_deps: list[tuple[str, str]] = []
         self.live: dict[str, Live] = {}
@@ -519,11 +532,17 @@ class Scheduler:
         return list(self.board.pending)
 
     def _is_ready(self, name: str) -> bool:
+        if (self.first_remaining or self.first_failed) and name not in self.first:
+            return False
         return self.deps.get(name, frozenset()) <= self.green_done
 
     def start_ready(self) -> None:
         while not self.halted and len(self.live) < self.jobs:
-            name = take_ready(self.board, self._is_ready) if self.deps else self.board.take()
+            name = (
+                take_ready(self.board, self._is_ready)
+                if (self.deps or self.first)
+                else self.board.take()
+            )
             if name is None:
                 return
             self.begin(name)
@@ -611,15 +630,19 @@ class Scheduler:
             for pending in list(self.board.pending):
                 if self.deps.get(pending, frozenset()) & failed:
                     self.board.pending.remove(pending)
+                    self.first_remaining.discard(pending)
                     self.skipped_deps.append((pending, failed_gate))
                     next_failed.add(pending)
             failed = next_failed
 
     def _advance_state(self, result: Finished) -> None:
+        self.first_remaining.discard(result.name)
         if result.green:
             self.green_done.add(result.name)
-        else:
-            self._skip_dependents(result.name)
+            return
+        if result.name in self.first:
+            self.first_failed = True
+        self._skip_dependents(result.name)
 
     def settle(self, result: Finished) -> None:
         alone = not self.board.done(result.name)
@@ -678,6 +701,7 @@ def _simulate_board(
     constraints: Constraints | None = None,
 ) -> float:
     deps = constraints.deps if constraints is not None else NO_DEPS
+    first = constraints.first if constraints is not None else frozenset()
     board = schedule.Board(
         sorted(names, key=lambda name: (-seconds[name], name)),
         schedule.Schedule({schedule.APART: tuple(groups)}),
@@ -685,12 +709,18 @@ def _simulate_board(
     )
     running: list[tuple[float, str]] = []
     done: set[str] = set()
+    first_left = set(first & names)
     now = 0.0
     while True:
         while len(running) < jobs:
             picked = (
-                take_ready(board, lambda name: deps.get(name, frozenset()) <= done)
-                if deps
+                take_ready(
+                    board,
+                    lambda name: (
+                        (not first_left or name in first) and deps.get(name, frozenset()) <= done
+                    ),
+                )
+                if (deps or first_left)
                 else board.take()
             )
             if picked is None:
@@ -704,6 +734,7 @@ def _simulate_board(
         for name in finished_now:
             board.done(name)
             done.add(name)
+            first_left.discard(name)
 
 
 def best_schedule(
@@ -725,19 +756,21 @@ def best_schedule(
         if len(members := tuple(name for name in group if name in normal_names)) > 1
     ]
     deps = constraints.deps if constraints is not None else NO_DEPS
+    first = constraints.first if constraints is not None else frozenset()
     active_deps = {
         name: req & normal_names
         for name, req in deps.items()
         if name in normal_names and req & normal_names
     }
+    active_first = first & normal_names
     grouped_list = [name for group in active_groups for name in group]
-    if active_deps or len(set(grouped_list)) != len(grouped_list):
+    if active_deps or active_first or len(set(grouped_list)) != len(grouped_list):
         return alone_wall + _simulate_board(
             normal_names,
             groups=active_groups,
             seconds=seconds,
             jobs=jobs,
-            constraints=Constraints(deps=active_deps),
+            constraints=Constraints(deps=active_deps, first=active_first),
         )
     grouped = set(grouped_list)
     units = [*active_groups, *((name,) for name in normal_names if name not in grouped)]
@@ -824,7 +857,7 @@ def wall_clock_line(scheduler: Scheduler, wall: float) -> str:
         groups=scheduler.groups,
         alone=scheduler.measured_alone,
         jobs=jobs,
-        constraints=Constraints(deps=scheduler.deps),
+        constraints=Constraints(deps=scheduler.deps, first=scheduler.first),
     )
     lost = wall - best
     if lost >= max(MIN_ORDER_LOSS, ORDER_LOSS_SHARE * wall):
@@ -1001,8 +1034,13 @@ def closing(scheduler: Scheduler, wall: float) -> list[str]:
         problems.append(f"stopped by --fail-fast: {', '.join(scheduler.stopped)}")
     for consumer, dep in scheduler.skipped_deps:
         problems.append(f"{consumer}: skipped (dependency {dep} failed)")
-    if scheduler.not_started():
-        problems.append(f"not started, --fail-fast: {', '.join(scheduler.not_started())}")
+    if not_started := scheduler.not_started():
+        if scheduler.first_failed and not scheduler.halted:
+            say(
+                f"parallel: stopped before heavy gates after fast failure: {', '.join(not_started)}"
+            )
+        else:
+            problems.append(f"not started, --fail-fast: {', '.join(not_started)}")
     return problems
 
 
@@ -1083,6 +1121,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="GATE:DEP",
         help="run GATE only after DEP passes",
+    )
+    parser.add_argument(
+        "--first",
+        nargs="+",
+        default=[],
+        metavar="GATE",
+        help="run these gates first and stop before the rest on failure",
     )
     parser.add_argument("--fail-fast", action="store_true", help="stop at the first red gate")
     parser.add_argument("--root", type=Path, default=Path(), help="directory the gates run in")
@@ -1178,14 +1223,15 @@ def main(argv: list[str], *, group_log: Path | None = None) -> int:
     try:
         runner = shlex.split(options.runner)
         units = plan(gates, options.serial, frozenset(options.alone), seconds=seconds)
-        deps = resolve_deps(gates, options.after, spec)
+        first = frozenset(name for name in gates if name in options.first)
+        deps = resolve_deps(gates, options.after, spec, first=first)
     except ValueError as error:
         parser.error(str(error))
     options.alone = [name for name in gates if name in kept.alone]
     options.wide = [name for name in gates if name in kept.wide]
     for line in unstated(stated, given):
         say(line)
-    options.constraints = Constraints(deps=deps)
+    options.constraints = Constraints(deps=deps, first=first)
     scheduler = Scheduler(units, runner, options, kept=kept, group_log=group_log)
     started = time.monotonic()
     try:
