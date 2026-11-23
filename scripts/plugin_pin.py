@@ -29,7 +29,19 @@ CHECKED = "RATCHET_PLUGIN_CHECKED"
 RUNNER = "## Runner"
 WORKFLOWS = Path(".github/workflows")
 UNREADABLE = "a commit git cannot read"
-EXCLUDED_AT_ROOT = frozenset({".git", ".claude-plugin/commit", ".in_use", ".orphaned_at"})
+EXCLUDED_PATHS = frozenset(
+    {
+        ".git",
+        ".claude-plugin/commit",
+        ".in_use",
+        ".orphaned_at",
+        "package-lock.json",
+        "hooks.json",
+        "plugin.json",
+        "hooks/hooks.json",
+        "skills/init/templates/CLAUDE.md",
+    }
+)
 DOTTED = re.compile(r"\d+(?:\.\d+)*")
 NONE_RECORDED = (
     "plugin-pin: no plugin recorded for this repository: start an agent session here once, or set"
@@ -106,8 +118,31 @@ def commit_of(plugin: Path) -> str | None:
     return head.strip()
 
 
+@dataclass(frozen=True)
+class TreeFolder:
+    dirs: dict[str, TreeFolder]
+    files: dict[str, tuple[bytes, bytes]]
+
+
 def object_id(kind: bytes, body: bytes) -> bytes:
     return hashlib.sha1(b"%s %d\0" % (kind, len(body)) + body, usedforsecurity=False).digest()
+
+
+def excluded(path: str) -> bool:
+    prefix = ""
+    for part in path.split("/"):
+        prefix = f"{prefix}/{part}" if prefix else part
+        if part == "__pycache__" or prefix in EXCLUDED_PATHS:
+            return True
+    return False
+
+
+def tree_digest(entries: list[tuple[bytes, bytes, bytes]]) -> bytes:
+    body = b"".join(
+        kind + b" " + name.removesuffix(b"/") + b"\0" + digest
+        for name, kind, digest in sorted(entries)
+    )
+    return object_id(b"tree", body)
 
 
 def tree_of(folder: Path, relative: str) -> bytes | None:
@@ -115,7 +150,7 @@ def tree_of(folder: Path, relative: str) -> bytes | None:
     for entry in folder.iterdir():
         name = entry.name
         path = f"{relative}{name}"
-        if path in EXCLUDED_AT_ROOT or name == "__pycache__":
+        if path in EXCLUDED_PATHS or name == "__pycache__":
             continue
         full = entry
         mode = full.lstat().st_mode
@@ -129,13 +164,35 @@ def tree_of(folder: Path, relative: str) -> bytes | None:
         elif stat.S_ISREG(mode):
             kind = b"100755" if mode & stat.S_IXUSR else b"100644"
             entries.append((os.fsencode(name), kind, object_id(b"blob", full.read_bytes())))
-    if not entries:
-        return None
-    body = b"".join(
-        kind + b" " + name.removesuffix(b"/") + b"\0" + digest
-        for name, kind, digest in sorted(entries)
-    )
-    return object_id(b"tree", body)
+    return tree_digest(entries) if entries else None
+
+
+def hash_folder(folder: TreeFolder) -> bytes:
+    entries = [
+        *(
+            (os.fsencode(name) + b"/", b"40000", hash_folder(sub))
+            for name, sub in folder.dirs.items()
+        ),
+        *((os.fsencode(name), mode, digest) for name, (mode, digest) in folder.files.items()),
+    ]
+    return tree_digest(entries)
+
+
+def tree_from_listing(listing: str) -> bytes:
+    root = TreeFolder({}, {})
+    for record in listing.split("\0"):
+        if not record:
+            continue
+        header, _, path = record.partition("\t")
+        if excluded(path):
+            continue
+        mode, _, sha = header.split(" ")
+        folder = root
+        *parents, leaf = path.split("/")
+        for part in parents:
+            folder = folder.dirs.setdefault(part, TreeFolder({}, {}))
+        folder.files[leaf] = (mode.encode("ascii"), bytes.fromhex(sha))
+    return hash_folder(root)
 
 
 def copy_tree_id(plugin: Path) -> str | None:
@@ -154,8 +211,8 @@ def release_tree(plugin: Path) -> str | None:
     commit = commit_of(plugin)
     if commit in (None, UNREADABLE):
         return None
-    tree = git_output(plugin, "rev-parse", f"{commit}^{{tree}}")
-    return tree.strip() if tree else None
+    listing = git_output(plugin, "ls-tree", "-r", "-z", commit)
+    return tree_from_listing(listing).hex() if listing is not None else None
 
 
 def line_for(plugin: Path) -> str:

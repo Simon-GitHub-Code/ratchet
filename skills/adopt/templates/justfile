@@ -16,7 +16,7 @@ plugin_choice := ```
 	    out = []
 	    for name in os.listdir(folder):
 	        path = rel + name
-	        if path in (".git", ".claude-plugin/commit", ".in_use", ".orphaned_at") or name == "__pycache__": continue
+	        if path in (".git", ".claude-plugin/commit", ".in_use", ".orphaned_at", "package-lock.json", "hooks.json", "plugin.json", "hooks/hooks.json", "skills/init/templates/CLAUDE.md") or name == "__pycache__": continue
 	        full = os.path.join(folder, name); mode = os.lstat(full).st_mode; raw = os.fsencode(name)
 	        if stat.S_ISLNK(mode): out.append((raw, b"120000", h(b"blob", os.fsencode(os.readlink(full)))))
 	        elif stat.S_ISDIR(mode):

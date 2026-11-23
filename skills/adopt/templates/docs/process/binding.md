@@ -8,7 +8,7 @@ This repository's binding of the Ratchet method (`ratchet:method`; `skills/metho
 
 - Ratchet plugin: <X.Y.Z> at <ratchet-sha> tree <ratchet-tree-id>
 
-The plugin version has this one home. Every workflow checks the plugin out at this commit. The tree id is the pinned commit's `<commit>^{tree}`; CI holds it to the commit it checks out. Only the pinned release runs a local gate: a local tier runs the copy of the plugin whose tree id is this one, wherever it is on disk, beside the recorded folder too, and is red when no copy matches (`plugin-pin`). To upgrade, run the plugin's `scripts/upgrade.py --apply`: it changes this line, every workflow `ref` and the permission rules together, adds what the new version's templates hold, and lists the rest for an agent or the owner. The upgrade is one change.
+The plugin version has this one home. Every workflow checks the plugin out at this commit. The tree id is the pinned commit's tree without harness-managed files; CI holds it to the commit it checks out. Only the pinned release runs a local gate: a local tier runs the copy of the plugin whose tree id is this one, wherever it is on disk, beside the recorded folder too, and is red when no copy matches (`plugin-pin`). To upgrade, run the plugin's `scripts/upgrade.py --apply`: it changes this line, every workflow `ref` and the permission rules together, adds what the new version's templates hold, and lists the rest for an agent or the owner. The upgrade is one change.
 
 ## Forge
 
