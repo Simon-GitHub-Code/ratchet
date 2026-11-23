@@ -1522,8 +1522,14 @@ def test_ci_wires_already_proven_skip_with_least_privilege_actions_read() -> Non
     proven = ci.split("\n  proven:\n", 1)[1].split("\n  tier0:\n", 1)[0]
     assert "if: github.event_name == 'push'" in proven
     assert "actions: read" in proven
-    rest = ci.split("\n  tier0:\n", 1)[1]
+    rest = ci.split("\n  tier0:\n", 1)[1].split("\n  loop:\n", 1)[0]
     assert "actions:" not in rest
+    loop_job = ci.split("\n  loop:\n", 1)[1]
+    assert "actions: read" in loop_job
+    assert "contents: read" in loop_job
+    assert "needs: [proven, tier0, shape, tier1, tier1-long]" in loop_job
+    assert "if: always()" in loop_job
+    assert "RATCHET_RUN: ${{ github.run_id }}" in ci.split("\njobs:\n", 1)[0]
     for job_name, next_job in (("tier0", "shape"), ("shape", "tier1")):
         job = ci.split(f"\n  {job_name}:\n", 1)[1].split(f"\n  {next_job}:\n", 1)[0]
         assert "needs: proven" in job
@@ -1901,3 +1907,102 @@ def test_ci_template_prints_and_records_restored_cache_size_in_every_cached_job(
         assert "cache_restore.py" in section
         assert "--report .ratchet/timing.jsonl" in section
         assert section.index("uses: actions/cache@") < section.index("cache_restore.py")
+
+
+LOOP_STEP = re.compile(
+    r"  loop:\n[\s\S]*?      - id: judge\n"
+    r"(?:        env:\n(?:          .*\n)+)?        run: \|\n((?:          .*\n)+)"
+)
+FAKE_LOOP_GH = """#!__PYTHON__ -S
+import os, sys
+mode = os.environ["GH_MODE"]
+if mode == "fail":
+    sys.exit(1)
+print(os.environ["JOBS_JSON"])
+"""
+
+
+def test_ci_template_wires_loop_cache_download_and_judges_end_to_end(tmp_path: Path) -> None:
+    ci = WORKFLOWS["ci.yml"]
+    loop_block = ci.split("\n  loop:\n", 1)[1]
+    assert "uses: actions/cache/restore@" in loop_block
+    assert "uses: actions/cache/save@" in loop_block
+    assert "uses: actions/download-artifact@" in loop_block
+    assert 'pattern: "timing-*"' in loop_block
+    assert 'forge_runs.py" loop' in loop_block
+
+    step = LOOP_STEP.search(ci)
+    bash = shutil.which("bash")
+    assert step
+    assert bash
+    repo = repos.repository(
+        tmp_path / "repo",
+        {
+            ".github/workflows/ci.yml": ci,
+            "quality/thresholds.toml": "[ceilings.loop]\nseconds = 20\n",
+        },
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text(FAKE_LOOP_GH.replace("__PYTHON__", sys.executable), encoding="utf-8")
+    gh.chmod(0o755)
+    runner_temp = tmp_path / "runner_temp"
+    runner_temp.mkdir()
+    timings = repo / ".ratchet/timings/timing-tier0"
+    timings.mkdir(parents=True)
+    record = {
+        "key": "fmt",
+        "seconds": 15.0,
+        "status": "green",
+        "exit": 0,
+        "m": 1.0,
+        "machine_read": True,
+    }
+    (timings / "timing.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    def run_judge(event: str, *, end_s: int, gh_mode: str = "ok") -> tuple[int, str]:
+        jobs = {
+            "jobs": [
+                {
+                    "name": "tier0",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "created_at": "2026-11-22T10:00:00Z",
+                    "started_at": "2026-11-22T10:00:00Z",
+                    "completed_at": f"2026-11-22T10:00:{end_s:02d}Z",
+                }
+            ]
+        }
+        done = subprocess.run(  # noqa: S603 # -- fixed argv; script is the template's own
+            [bash, "-e", "-c", textwrap.dedent(step.group(1))],
+            cwd=repo,
+            env={
+                **os.environ,
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "RUNNER_TEMP": str(runner_temp),
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_RUN_ID": "99",
+                "RATCHET_PLUGIN": str(PLUGIN_ROOT),
+                "EVENT_NAME": event,
+                "GH_MODE": gh_mode,
+                "JOBS_JSON": json.dumps(jobs),
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return done.returncode, done.stdout
+
+    assert run_judge("pull_request", end_s=15)[0] == 0
+    code_pr_over, out_pr_over = run_judge("pull_request", end_s=30)
+    assert code_pr_over == 1
+    assert "loop: over: 30.0s of 20s" in out_pr_over
+
+    code_push_over, out_push_over = run_judge("push", end_s=30)
+    assert code_push_over == 0
+    assert "::warning title=ratchet-loop::loop: over: 30.0s of 20s" in out_push_over
+
+    code_unread, out_unread = run_judge("pull_request", end_s=15, gh_mode="fail")
+    assert code_unread == 0
+    assert "::warning title=ratchet-loop::loop: not judged: times unread:" in out_unread

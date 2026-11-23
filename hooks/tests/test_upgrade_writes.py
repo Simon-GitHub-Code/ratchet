@@ -848,3 +848,42 @@ def test_a_hand_edited_justfile_check_without_budget_loop_is_left_for_an_agent(
 def test_a_missing_loop_budget_ceiling_is_not_a_conformance_finding(repo: Path) -> None:
     assert "[ceilings.loop]" not in text(repo, THRESHOLDS)
     assert conformance.findings(repo) == []
+
+
+def test_ci_gains_ratchet_run_and_loop_job_via_auto_edits_and_falls_back_when_hand_edited(
+    repo: Path,
+) -> None:
+    before = text(repo, CI)
+    without_run = before.replace(f"  {conformance.CI_RUN_MARKER}\n", "")
+    without_both = without_run.split("\n  loop:\n", 1)[0] + "\n"
+    (repo / CI).write_text(without_both, encoding="utf-8")
+    found = conformance.findings(repo)
+    assert {f.path for f in found} == {CI}
+    assert all(isinstance(f.fix, conformance.Auto) for f in found), found
+    assert settle(repo) == []
+    assert text(repo, CI) == before
+
+    no_env_src = without_both.replace(
+        "env:\n"
+        "  RATCHET_PLUGIN: ${{ github.workspace }}/ratchet\n"
+        "  OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}\n",
+        "",
+    )
+    no_env = conformance.with_ci_run("ci.yml")(no_env_src)
+    assert f"env:\n  {conformance.CI_RUN_MARKER}\njobs:\n" in no_env
+    assert conformance.with_ci_run("ci.yml")("name: bare\n") == "name: bare\n"
+
+    custom = without_both.replace("\n  tier1-long:\n", "\n  custom:\n")
+    (repo / CI).write_text(custom, encoding="utf-8")
+    left = settle(repo)
+    assert [f.path for f in left] == [CI]
+    assert isinstance(left[0].fix, conformance.Agent)
+    assert conformance.CI_LOOP_MARKER in left[0].problem
+    assert conformance.CI_RUN_MARKER in text(repo, CI)
+    assert conformance.with_ci_loop("ci.yml")("name: ci\n") == "name: ci\n"
+    assert conformance.with_ci_loop("ci.yml")(
+        "jobs:\n  proven:\n  tier0:\n  shape:\n  tier1:\n  tier1-long:\nfooter: 1\n"
+    ).endswith("footer: 1\n")
+    assert conformance.with_ci_loop("ci.yml")(
+        "jobs:\n  proven:\n  tier0:\n  shape:\n  tier1:\n  tier1-long:\n"
+    ).endswith("  tier1-long:\n")
