@@ -1997,13 +1997,95 @@ def test_matrix_job_cache_key_without_matrix_value_is_a_finding(repo: Path) -> N
         "      - uses: actions/cache/save@v4\n"
     )
     findings = matrix_workflow(repo, bad)
-    assert len(findings) == 3
+    assert len(findings) == 2
     assert findings[0].path == ".github/workflows/ci.yml"
     assert "`gates`" in findings[0].problem
     assert "tools-${{ runner.os }}-${{ github.sha }}" in findings[0].problem
     assert "${{ matrix.<key> }}" in findings[0].problem
     assert "no `with.key`" in findings[1].problem
-    assert "no `with.key`" in findings[2].problem
+
+
+def test_matrix_cache_check_skips_restore_and_single_leg_if_and_deduplicates(repo: Path) -> None:
+    sha = "55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+    body = (
+        "name: ci\non: push\nconcurrency:\n  group: ci\njobs:\n"
+        "  gates:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    strategy:\n"
+        "      fail-fast: false\n"
+        "      matrix:\n"
+        "        job: [tier1-rest, bite, tests-changed]\n"
+        "    steps:\n"
+        "      - id: restore-only\n"
+        f"        uses: actions/cache/restore@{sha} # v6\n"
+        "        with:\n"
+        "          path: ~/.cache/scanner\n"
+        "          key: restore-only-${{ runner.os }}-${{ github.sha }}\n"
+        "      - id: single-leg\n"
+        "        if: matrix.job == 'tests-changed'\n"
+        f"        uses: actions/cache/save@{sha} # v6\n"
+        "        with:\n"
+        "          path: ~/.cache/single\n"
+        "          key: single-${{ runner.os }}-${{ github.sha }}\n"
+        "      - id: single-leg-expr\n"
+        "        if: ${{ (matrix.job == 'tests-changed') && always() }}\n"
+        "        uses: actions/cache@v4\n"
+        "        with:\n"
+        "          key: single-expr-${{ github.sha }}\n"
+        "      - id: single-leg-multiline\n"
+        "        if: >\n"
+        "          matrix.job == 'tests-changed'\n"
+        "        uses: actions/cache@v4\n"
+        "        with:\n"
+        "          key: single-multi-${{ github.sha }}\n"
+        "      - { if: \"matrix.job == 'tests-changed'\","
+        " uses: actions/cache@v4, with: { key: single-flow-${{ github.sha }} } }\n"
+        "      - id: two-leg-restore\n"
+        "        if: matrix.job == 'tier1-rest' || matrix.job == 'bite'\n"
+        f"        uses: actions/cache/restore@{sha} # v6\n"
+        "        with:\n"
+        "          path: ~/.cache/scanner\n"
+        "          key: scanner-${{ runner.os }}-${{ github.sha }}\n"
+        "      - id: two-leg-save\n"
+        "        if: matrix.job == 'tier1-rest' || matrix.job == 'bite'\n"
+        f"        uses: actions/cache/save@{sha} # v6\n"
+        "        with:\n"
+        "          path: ~/.cache/scanner\n"
+        "          key: scanner-${{ runner.os }}-${{ github.sha }}\n"
+        "      - id: two-leg-save-dup\n"
+        "        if: matrix.job == 'tier1-rest' || matrix.job == 'bite'\n"
+        f"        uses: actions/cache/save@{sha} # v6\n"
+        "        with:\n"
+        "          path: ~/.cache/scanner\n"
+        "          key: scanner-${{ runner.os }}-${{ github.sha }}\n"
+        "      - id: neq-save\n"
+        "        if: matrix.job != 'bite'\n"
+        "        uses: actions/cache/save@v4\n"
+        "        with:\n"
+        "          key: neq-${{ github.sha }}\n"
+        "      - id: negated-eq\n"
+        "        if: !(matrix.job == 'bite')\n"
+        "        uses: actions/cache@v4\n"
+        "        with:\n"
+        "          key: negated-${{ github.sha }}\n"
+        "  other:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    strategy:\n"
+        "      matrix:\n"
+        "        job: [a, b]\n"
+        "    steps:\n"
+        "      - uses: actions/cache/save@v4\n"
+        "        with:\n"
+        "          key: scanner-${{ runner.os }}-${{ github.sha }}\n"
+    )
+    findings = matrix_workflow(repo, body)
+    assert len(findings) == 4
+    assert "scanner-${{ runner.os }}-${{ github.sha }}" in findings[0].problem
+    assert "`gates`" in findings[0].problem
+    assert "neq-${{ github.sha }}" in findings[1].problem
+    assert "negated-${{ github.sha }}" in findings[2].problem
+    assert "scanner-${{ runner.os }}-${{ github.sha }}" in findings[3].problem
+    assert "`other`" in findings[3].problem
 
 
 @pytest.mark.parametrize(
@@ -2115,6 +2197,35 @@ def test_ci_loop_and_ratchet_run_conformance_findings(repo: Path) -> None:
     no_loop = original.split("\n  loop:\n", 1)[0] + "\n"
     (repo / ci).write_text(no_loop, encoding="utf-8")
     assert any(conformance.CI_LOOP_MARKER in line for line in red(repo))
+
+    no_proven = (
+        original.split("\n  proven:\n", 1)[0]
+        + "\n  tier0:\n"
+        + original.split("\n  tier0:\n", 1)[1]
+        .replace(
+            "    if: ${{ !cancelled() && (needs.proven.result == 'skipped'"
+            " || needs.proven.outputs.skip != 'true') }}\n"
+            "    needs: proven\n",
+            "",
+        )
+        .replace(
+            "    if: always() && !cancelled() && (needs.proven.result == 'skipped'"
+            " || needs.proven.outputs.skip != 'true')\n"
+            "    needs: [proven, tier0, shape, tier1, tier1-long]\n",
+            "    if: always() && !cancelled()\n    needs: [tier0, shape, tier1, tier1-long]\n",
+        )
+    )
+    (repo / ci).write_text(no_proven, encoding="utf-8")
+    assert red(repo) == []
+
+    (repo / ci).write_text(
+        no_proven.replace(
+            "needs: [tier0, shape, tier1, tier1-long]",
+            "needs: [tier0, shape, tier1]",
+        ),
+        encoding="utf-8",
+    )
+    assert any("needs:" in line and "tier1-long" in line for line in red(repo))
 
 
 def test_sharded_bite_recipes_must_pass_shard_and_deep_must_cover_all_slices(
