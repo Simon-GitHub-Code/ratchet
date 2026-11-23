@@ -165,7 +165,7 @@ def test_a_red_tier_is_a_red_line(work: Path) -> None:
         parallel.main(["parallel", "--report", str(record), "--root", str(work), "--", unjudged])
         == 3
     )
-    tier_unjudged = lines(record)[-1]
+    tier_unjudged = [row for row in lines(record) if row.get("kind") == runrecord.TIER][-1]
     assert (tier_unjudged["status"], tier_unjudged["exit"]) == ("not judged", 3)
 
 
