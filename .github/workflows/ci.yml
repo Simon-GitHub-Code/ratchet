@@ -8,9 +8,8 @@ permissions:
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-env:
-  # Why: a ceiling in quality/thresholds.toml is the wall clock of one job. Each shard job of
-  # `test` and `test-floor` is held to its gate's ceiling, not the sum of its shards.
+# Why: a ceiling in quality/thresholds.toml is the wall clock of one job. Each shard job of
+# `test` and `test-floor` is held to its gate's ceiling, not the sum of its shards.
 jobs:
   # Why: a pull request of records and pages alone runs only the tests that read the pages it
   # changes (`scripts/lane.py` holds the mapping), under the same job names, so a required check
