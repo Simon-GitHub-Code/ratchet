@@ -1600,7 +1600,7 @@ def test_a_route_that_answers_before_its_request_is_whole_is_judged_as_before(
     if code == gatelib.UNJUDGED:
         assert out.endswith("with_service: could not judge\n")
         assert (
-            "0 request(s) had been accepted and not yet answered at the stop signal" in out
+            "the command exited with code 3" in out
             or "ended before the 0.5s signal: nothing was in flight" in out
         )
     else:
