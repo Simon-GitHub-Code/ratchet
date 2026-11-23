@@ -89,6 +89,8 @@ Every question also has a trigger in the same file (ADR 0028): `always`, `code:<
 
 `Life events` lists the events the owner has declared, from `deployed`, `irreplaceable-data` and `depended-on` (`none` until then). A declared event owes its rows in the same way and is never red. The route proposes an event when it sees a sign of it; only the owner declares one.
 
+For `static security analysis`, state in the row or beside it whether the gate reads product code or every file with its reason; when narrowed to product code, record what is given up and which gates still read test files (such as secrets scan, typed lint, and import rules), and keep exclusions visible in the gate's command rather than a hidden ignore file.
+
 | Question | Tool | Tier | Threshold source | Entry point |
 | --- | --- | --- | --- | --- |
 | format | | 0 | | `just fmt-check` |
@@ -335,6 +337,7 @@ The `justfile`'s `serial` and `alone` variables say which gates never run at onc
 - Shards: 1
 - Cache: <the lockfiles and tool configs each CI cache is keyed on, the tool caches it restores, and the caches the tools keep locally>
 - Local caches: <each path a tool keeps its local cache in, as a code span; leave this placeholder while no tool keeps one>
+- Profile: <each slow gate's profiling command as `gate: command` in backticks, using the tool's own timing flag; leave this placeholder while none is>
 - Incremental: <the mutation tool's incremental mode: the option that has a local run reuse the last run's results and test only the mutants whose code or tests changed, which the `justfile`'s `mutation_incremental` holds and CI leaves out; or `none: <reason>` where the tool has none>
 - Affected only: <what a pull request does not run: the changed-code gates, the later-tier suites past the test files the change adds or edits (`tests-changed` runs those, and `test-stability-changed` shuffles changed test files), the path filters, the affected-only tool of a monorepo; the default branch runs everything>
 - Ceilings: <`quality/thresholds.toml` `[ceilings.seconds]`, one per tier, set by `just budget <tier> --set` from the first green run and only lowered since; the seconds one gate may take before it is sharded>
