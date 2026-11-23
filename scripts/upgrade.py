@@ -16,10 +16,15 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TypeVar
 
+import build_cache
 import conformance
 import gatelib
+import justfile_text
+import loop_budget
+import markdown_text
 import owed
 import plugin_pin
+import suites
 from conformance import Agent, Auto, Finding, Owner
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
@@ -39,6 +44,7 @@ EDITORS = {
 NOT_GUARDED = "not a guard path: an agent edits it"
 REFUSED, STUCK = 2, 3
 JUSTFILE = "justfile"
+IMPACT_HEADING = "### Impact triggers"
 LOCK = ".lock"
 TEMPORARY = ".upgrade-"
 
@@ -78,6 +84,7 @@ class Plan:
     head: str = ""
     owes: bool = False
     workflow_diffs: tuple[tuple[str, str], ...] = ()
+    opt_ins: tuple[tuple[str, str], ...] = ()
 
     @property
     def edits(self) -> int:
@@ -260,6 +267,90 @@ def workflow_diffs(sandbox: Path, plugin: Path) -> tuple[tuple[str, str], ...]:
     return tuple(diffs)
 
 
+def _has_build_opt_in(binding: str) -> bool:
+    if build_cache.parse_build_spec(binding) is not None:
+        return True
+    line = build_cache.build_line(binding)
+    return line is not None and build_cache.NONE_REASON.fullmatch(line.strip()) is not None
+
+
+def _has_bound_build(justfile: str) -> bool:
+    return any(
+        justfile_text.BINDS
+        not in justfile_text.code_of("\n".join(justfile_text.definition(justfile, name)))
+        for name, exists in (
+            ("build", justfile_text.defines_recipe(justfile, "build")),
+            ("boot", justfile_text.defines_variable(justfile, "boot")),
+        )
+        if exists
+    )
+
+
+def _needs_adr0097(justfile: str) -> bool:
+    code = justfile_text.code_of(justfile)
+    needs_fuzz = justfile_text.defines_recipe(justfile, "fuzz") and not justfile_text.runs(
+        justfile, "fuzz", "parser_fuzz.py"
+    )
+    needs_oracle = "coverage_groups.py" in code and "--check-unrecorded" not in code
+    return needs_fuzz or needs_oracle
+
+
+def available_opt_ins(sandbox: Path) -> tuple[tuple[str, str], ...]:
+    binding = gatelib.read_text(sandbox / gatelib.BINDING) or ""
+    justfile = gatelib.read_text(sandbox / JUSTFILE) or ""
+    opt_ins: list[tuple[str, str]] = []
+    if not _has_build_opt_in(binding) and _has_bound_build(justfile):
+        opt_ins.append(
+            (
+                "Build cache (`- Build:`, ADR 0095)",
+                (
+                    "declare `- Build: gate `build`; caches `<path>`; cold <N>s; warm <N>s;"
+                    " reuse moved | shared `ENV=dir` | none: <reason>; consumers `<gate>`, ...`"
+                    " under `## Speed` in `docs/process/binding.md` to enable build-once consumer"
+                    " ordering (`parallel.py`), worktree/bite cache seeding (`drain.py`,"
+                    " `project_bite.py`), and `COLD_BUILD` detection"
+                ),
+            )
+        )
+    has_suites_or_tier2 = suites.table(binding) is not None or justfile_text.defines_variable(
+        justfile, "tier2_gates"
+    )
+    if has_suites_or_tier2 and not markdown_text.has_section(binding, IMPACT_HEADING):
+        opt_ins.append(
+            (
+                "Impact triggers (`### Impact triggers`, ADR 0096)",
+                (
+                    "add a `### Impact triggers` table (`Sources | Suite | Tests`) under `## Tests`"
+                    " in `docs/process/binding.md` so `changed_tests.py` runs impacted tier-2 tests"
+                    " in tier 1 when shared source files change"
+                ),
+            )
+        )
+    if (sandbox / gatelib.THRESHOLDS).is_file() and loop_budget.budget_of(sandbox) is None:
+        opt_ins.append(
+            (
+                "CI loop budget (`[ceilings.loop]`, ADR 0088)",
+                (
+                    "declare `[ceilings.loop]` with `seconds = <N>` in `quality/thresholds.toml`"
+                    " so `parallel.py --budget loop` and the CI `loop` job enforce the PR"
+                    " feedback-loop ceiling"
+                ),
+            )
+        )
+    if _needs_adr0097(justfile):
+        opt_ins.append(
+            (
+                "Adversarial parser fuzz & coverage oracle (ADR 0097)",
+                (
+                    "wire `scripts/parser_fuzz.py` (12-case adversarial corpus) into `fuzz` or"
+                    " parser gates and pass `--check-unrecorded` to `scripts/coverage_groups.py`"
+                    " to catch omitted executable files in absolute coverage groups"
+                ),
+            )
+        )
+    return tuple(opt_ins)
+
+
 def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
     reason = refusal(root, plugin)
     if reason is not None:
@@ -301,6 +392,7 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
         )
         owes = bool(owed.read(sandbox).entries)
         diffs = workflow_diffs(sandbox, plugin)
+        opt_ins = available_opt_ins(sandbox)
     return Plan(
         old=standing(root, plugin),
         new=plugin_pin.in_use(plugin),
@@ -326,6 +418,7 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
         head=str(gatelib.git(root, "rev-parse", "--verify", "-q", "HEAD"))[:12],
         owes=owes,
         workflow_diffs=diffs,
+        opt_ins=opt_ins,
     )
 
 
@@ -545,6 +638,13 @@ def workflow_diffs_block(diffs: tuple[tuple[str, str], ...]) -> str:
     return "\n".join(lines)
 
 
+def opt_ins_block(opt_ins: tuple[tuple[str, str], ...]) -> str:
+    lines = ["Available opt-in capabilities (not yet configured in this project):"]
+    for title, guidance in opt_ins:
+        lines.append(f"  - {title}: {guidance}")
+    return "\n".join(lines)
+
+
 def render(root: Path, result: Plan, *, applied: bool) -> str:
     blocks = [f"upgrade: {root} from {result.old} to {result.new}."]
     if result.changes:
@@ -571,6 +671,8 @@ def render(root: Path, result: Plan, *, applied: bool) -> str:
         blocks.append(items_block(root, title, owing))
     if result.workflow_diffs:
         blocks.append(workflow_diffs_block(result.workflow_diffs))
+    if result.opt_ins:
+        blocks.append(opt_ins_block(result.opt_ins))
     blocks += [summary(root, result, applied=applied), plain(result, applied=applied)]
     return "\n\n".join(blocks) + "\n"
 
