@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.15.1
+
+This patch release holds two field-driven fixes merged since 0.15.0 (#403 and #404), closing #402 and improving the upgrade and feedback-loop experience across all supported harnesses.
+
+Upgrade from 0.15.0 as the README's Upgrading section says. The upgrade rewrites the `justfile`'s `treeof` check and updates the `binding.md` pin tree id together in one step. These changes reach the project:
+
+- **Consistent `plugin-pin` tree id across all harnesses (#402, #404).** `scripts/plugin_pin.py` (`release_tree` and `copy_tree_id`) and the template `justfile`'s `treeof` exclude the five harness-managed manifest/lock files (`hooks/hooks.json`, Antigravity's root `hooks.json` and `plugin.json`, Codex's stripped `skills/init/templates/CLAUDE.md`, and pi's `package-lock.json`) alongside `.git`, `.claude-plugin/commit`, `.in_use`, `.orphaned_at`, and `__pycache__`. All five harnesses (Claude Code, Antigravity, Codex, pi, and Grok) and CI checkouts now hash to the exact same tree id with no `RATCHET_PLUGIN` override needed.
+- **Upgrade surfaces unconfigured opt-in capabilities (#403).** `scripts/upgrade.py` inspects the upgraded project and prints a tailored, non-blocking `Available to adopt (optional, non-blocking):` checklist for high-value features not yet wired — ADR 0095 `- Build:` build-once and worktree cache seeding, ADR 0096 `### Impact triggers`, ADR 0088 `[ceilings.loop]`, and ADR 0097 `parser_fuzz.py` / `coverage_groups.py --check-unrecorded` — without altering exit codes, `In plain words:`, or `quality/owed.toml`.
+- **`change-size` exempts generated snapshots and `mise` sub-lockfiles (#403).** `scripts/change_size.py` adds `quality/snapshots/**` and `.mise/locks/**` to `RECORDS` so machine-generated guard snapshots and `mise` tool sub-lockfiles do not count as hand-written product lines.
+
 ## 0.15.0
 
 This release holds the 11 pull requests merged since 0.14.0 (#390 through #400), closing the remaining 3 open issues (#139, #272, #358) and introducing four new owner-approved verification capabilities (ADRs 0096 through 0099) alongside field-observed fail-fast improvements.
