@@ -102,10 +102,10 @@ def test_ci_runs_tier_1_as_the_proof_and_one_job_for_every_other_gate(tmp_path: 
     code, outputs, _ = shards(BINDING, tmp_path, "ci.yml")
     assert code == 0
     assert (json.loads(outputs["tier1"]), json.loads(outputs["tier1_long"])) == (
-        ["bite", "rest"],
+        ["rest"],
         gate_list("tier1_sharded"),
     )
-    assert gate_list("tier1_jobs") == [*gate_list("tier1_sharded"), "bite", "rest"]
+    assert gate_list("tier1_jobs") == [*gate_list("tier1_sharded"), "rest"]
     assert "gate: ${{ fromJSON(needs.shape.outputs.tier1) }}" in WORKFLOWS["ci.yml"]
     assert 'just ci-job "${{ matrix.gate }}"' in WORKFLOWS["ci.yml"]
     assert "needs: [tier0" not in WORKFLOWS["ci.yml"], "tier 1 starts beside tier 0"
@@ -2074,3 +2074,59 @@ def test_ci_template_wires_loop_cache_download_and_judges_end_to_end(tmp_path: P
     code_unread, out_unread = run_judge("pull_request", end_s=15, gh_mode="fail")
     assert code_unread == 0
     assert "::warning title=ratchet-loop::loop: not judged: times unread:" in out_unread
+
+
+def dry_run_env(recipe_name: str, env: dict[str, str]) -> str:
+    just = shutil.which("just")
+    assert just
+    done = subprocess.run(  # noqa: S603 # -- a fixed argv; the justfile is the template's own
+        [just, "--justfile", str(TEMPLATES / "justfile"), "--dry-run", recipe_name],
+        env={**os.environ, "RATCHET_PLUGIN": "/plugin", **env},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return " ".join(done.stderr.split())
+
+
+def test_bite_and_bite_all_shard_across_slices_and_deep_shape_checks_partition(
+    tmp_path: Path,
+) -> None:
+    needs_just()
+    assert "bite" in gate_list("tier1_sharded")
+    assert "bite-all" in gate_list("tier2_sharded")
+
+    assert 'scripts/project_bite.py" --changed --shard 1/1' in dry_run("bite")
+    assert 'scripts/project_bite.py" --changed --shard 2/4' in dry_run_env(
+        "bite", {"SHARD": "2", "SHARDS": "4"}
+    )
+
+    slice_one = dry_run_env("bite-all", {"SHARD": "1", "SHARDS": "3"})
+    assert 'if [ "1" = "1" ]; then' in slice_one
+    assert 'scripts/bite.py"' in slice_one
+    assert 'scripts/project_bite.py" --shard 1/3' in slice_one
+
+    slice_two = dry_run_env("bite-all", {"SHARD": "2", "SHARDS": "3"})
+    assert 'if [ "2" = "1" ]; then' in slice_two
+    assert 'scripts/project_bite.py" --shard 2/3' in slice_two
+
+    bash = shutil.which("bash")
+    assert bash
+    ran = subprocess.run(  # noqa: S603
+        [bash, "-ec", 'if [ "2" = "1" ]; then echo RAN_BITE; fi; echo RAN_SLICE'],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert ran.stdout.splitlines() == ["RAN_SLICE"]
+
+    deep = WORKFLOWS["deep.yml"]
+    shape_block = deep.split("\n  shape:\n", 1)[1].split("\n  tier2:\n", 1)[0]
+    assert "quality/" in shape_block
+    assert "repository: Simon-GitHub-Code/ratchet" in shape_block
+    assert 'project_bite.py" --shard-check "${{ steps.shards.outputs.count }}"' in shape_block
+
+    _, outputs, _ = shards(BINDING.replace("- Shards: 1", "- Shards: 3"), tmp_path, "deep.yml")
+    assert outputs["count"] == "3"
+    assert "bite-all" in json.loads(outputs["tier2_long"])
+    assert "bite-all" not in json.loads(outputs["tier2"])

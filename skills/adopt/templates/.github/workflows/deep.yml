@@ -23,7 +23,9 @@ jobs:
       tier2_long: ${{ steps.shards.outputs.tier2_long }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with: { sparse-checkout: "justfile\ndocs/process/binding.md", sparse-checkout-cone-mode: false }
+        with: { sparse-checkout: "justfile\ndocs/process/binding.md\nquality/", sparse-checkout-cone-mode: false }
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with: { repository: Simon-GitHub-Code/ratchet, ref: "<ratchet-sha>", path: ratchet }
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - id: shards
         run: |
@@ -38,6 +40,7 @@ jobs:
           done
           echo "tier2=$(json "$short")" >> "$GITHUB_OUTPUT"
           echo "tier2_long=$(json "$long")" >> "$GITHUB_OUTPUT"
+      - run: python3 "$RATCHET_PLUGIN/scripts/project_bite.py" --shard-check "${{ steps.shards.outputs.count }}"
   tier2:
     runs-on: ubuntu-latest
     timeout-minutes: 90

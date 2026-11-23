@@ -110,8 +110,8 @@ tier0_gates := tier0_tree_gates + " commits"
 tier1_gates := "test coverage diff-coverage test-counts tests-changed test-stability-changed mutation-changed contracts-check audit duplication build smoke telemetry flag-states load-smoke bite api-check data-compat doctests sast iac artefact-scan type-coverage doc-coverage change-size guard-diff settings-check conformance triggers incidents rollback dependency-faults config-refusal graceful-stop"
 tier2_gates := "mutation api-deep symbolic fuzz e2e test-stability reproducible sanitizers perf dast pentest load telemetry-e2e flags-expired a11y formal bite-all"
 
-tier1_sharded := "test mutation-changed"
-tier2_sharded := "mutation e2e test-stability"
+tier1_sharded := "test mutation-changed bite"
+tier2_sharded := "mutation e2e test-stability bite-all"
 
 tier1_jobs := "test mutation-changed bite rest"
 
@@ -331,7 +331,7 @@ load-smoke: _plugin
     {{probed}} -- {{plugin_py}} "{{ratchet_plugin}}/scripts/load_smoke.py" --url "bind: METHOD URL STATUS BODY of a route worth overlapping, on port {port}"
 
 bite: _plugin
-    {{plugin_py}} "{{ratchet_plugin}}/scripts/project_bite.py" --changed
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/project_bite.py" --changed --shard {{shard}}/{{shards}}
 
 tests-changed *suites: _plugin
     {{changed}} -- {{plugin_py}} "{{ratchet_plugin}}/scripts/changed_tests.py" --base {base} {{suites}}
@@ -422,8 +422,8 @@ a11y:
     @echo "bind: accessibility checks inside the end-to-end suite; red when no surface is checked"; exit 1
 
 bite-all: _plugin
-    {{plugin_py}} "{{ratchet_plugin}}/scripts/bite.py"
-    {{plugin_py}} "{{ratchet_plugin}}/scripts/project_bite.py"
+    @if [ "{{shard}}" = "1" ]; then {{plugin_py}} "{{ratchet_plugin}}/scripts/bite.py"; fi
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/project_bite.py" --shard {{shard}}/{{shards}}
 
 bite-one gate: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/project_bite.py" --gate {{gate}}

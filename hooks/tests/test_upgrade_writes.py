@@ -928,3 +928,59 @@ def test_ci_gains_ratchet_run_and_loop_job_via_auto_edits_and_falls_back_when_ha
     assert conformance.with_ci_loop("ci.yml")(
         "jobs:\n  proven:\n  tier0:\n  shape:\n  tier1:\n  tier1-long:\n"
     ).endswith("  tier1-long:\n")
+
+
+def test_deep_gains_shard_check_and_unsharded_bite_recipes_upgrade_via_auto_edits(
+    repo: Path,
+) -> None:
+    before_deep = text(repo, DEEP)
+    old_deep = (
+        before_deep.replace(
+            "justfile\\ndocs/process/binding.md\\nquality/",
+            "justfile\\ndocs/process/binding.md",
+        )
+        .replace(
+            "      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5\n"
+            '        with: { repository: Simon-GitHub-Code/ratchet, ref: "'
+            + "0" * 40
+            + '", path: ratchet }\n',
+            "",
+            1,
+        )
+        .replace(
+            '      - run: python3 "$RATCHET_PLUGIN/scripts/project_bite.py"'
+            ' --shard-check "${{ steps.shards.outputs.count }}"\n',
+            "",
+        )
+    )
+    assert old_deep != before_deep
+    (repo / DEEP).write_text(old_deep, encoding="utf-8")
+    found = conformance.findings(repo)
+    assert [f.path for f in found] == [DEEP]
+    assert isinstance(found[0].fix, conformance.Auto)
+    assert settle(repo) == []
+    assert text(repo, DEEP) == before_deep
+
+    custom_deep = old_deep.replace("timeout-minutes: 2", "timeout-minutes: 5")
+    (repo / DEEP).write_text(custom_deep, encoding="utf-8")
+    left = settle(repo)
+    assert [f.path for f in left] == [DEEP]
+    assert isinstance(left[0].fix, conformance.Agent)
+    assert conformance.DEEP_SHARD_CHECK_MARKER in left[0].problem
+    assert conformance.with_deep_shard_check("deep.yml")("name: bare\n") == "name: bare\n"
+    (repo / DEEP).write_text(before_deep, encoding="utf-8")
+
+    before_just = text(repo, JUSTFILE)
+    old_bite = conformance.OLD_BITE_RECIPES["bite"]
+    old_bite_all = conformance.OLD_BITE_RECIPES["bite-all"]
+    new_bite = "\n".join(justfile_text.definition(before_just, "bite"))
+    new_bite_all = "\n".join(justfile_text.definition(before_just, "bite-all"))
+    (repo / JUSTFILE).write_text(
+        before_just.replace(new_bite, old_bite).replace(new_bite_all, old_bite_all),
+        encoding="utf-8",
+    )
+    found_just = conformance.findings(repo)
+    assert {f.path for f in found_just} == {JUSTFILE}
+    assert all(isinstance(f.fix, conformance.Auto) for f in found_just)
+    assert settle(repo) == []
+    assert text(repo, JUSTFILE) == before_just

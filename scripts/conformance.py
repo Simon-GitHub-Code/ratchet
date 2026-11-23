@@ -4,6 +4,7 @@ from __future__ import annotations
 import contextlib
 import difflib
 import functools
+import io
 import json
 import os
 import re
@@ -115,6 +116,28 @@ TIER2_FLAG = '--tier2 "$tier2"'
 DEEP_ARGUMENT = '--deep "$answer"'
 DEEP_FINISH_MARKER = "cancel-in-progress: false"
 DEEP_SPEAKS_MARKER = 'forge_runs.py" speaks'
+DEEP_SHARD_CHECK_MARKER = "--shard-check"
+DEEP_SLICE_REQUIREMENTS = (
+    ("needs.shape.outputs.tier2_long", "runs the gates of `tier2_sharded`"),
+    ("needs.shape.outputs.shards", "runs every slice `1..N`"),
+    ("SHARD: ${{ matrix.shard }}", "passes `SHARD` to each slice"),
+    ("SHARDS: ${{ needs.shape.outputs.count }}", "passes `SHARDS` to each slice"),
+)
+SHARD_FLAG = re.compile(r"--shard(?:=|[ \t]+)\{\{[ \t]*shard[ \t]*\}\}/\{\{[ \t]*shards[ \t]*\}\}")
+SHARDED_BITE_RECIPES = (
+    ("tier1_sharded", "bite"),
+    ("tier2_sharded", "bite-all"),
+)
+OLD_BITE_RECIPES = {
+    "bite": (
+        'bite: _plugin\n    {{plugin_py}} "{{ratchet_plugin}}/scripts/project_bite.py" --changed'
+    ),
+    "bite-all": (
+        "bite-all: _plugin\n"
+        '    {{plugin_py}} "{{ratchet_plugin}}/scripts/bite.py"\n'
+        '    {{plugin_py}} "{{ratchet_plugin}}/scripts/project_bite.py"'
+    ),
+}
 DEEP_TRIGGER = "workflows: [ci, deep]"
 DEEP_DISPATCH = "workflow_dispatch:"
 DEEP_FLAG = "--deep"
@@ -155,6 +178,7 @@ TIER_STEP_SHAPE = {
     "ci.yml": (JOB_LIST_SHAPE,),
     "deep.yml": (
         ("just --evaluate", "turns the justfile's tier lists into the jobs a tier runs"),
+        (DEEP_SHARD_CHECK_MARKER, "proves every fault of quality/bites.toml lands in one slice"),
         (DEEP_FINISH_MARKER, "lets a deep run that started finish instead of cancelling it"),
         (
             DEEP_SPEAKS_MARKER,
@@ -2012,6 +2036,28 @@ def workflow_speed_findings(root: Path, path: Path) -> Iterable[Finding]:
             f"{path.relative_to(root)}: no long gate runs over the binding's shard count "
             f"('{SHARD_MATRIX}' absent)"
         )
+    if path.name == "deep.yml":
+        yield from deep_shard_findings(root, path, content)
+
+
+def deep_shard_findings(root: Path, path: Path, content: str) -> Iterable[Finding]:
+    rel = str(path.relative_to(root))
+    justfile = read_justfile(root) or ""
+    sharded = set(justfile_text.ordered(justfile, "tier2_sharded") or ())
+    tier2_long = next(
+        (lines for job, lines in workflow_job_blocks(content) if job == "tier2-long"),
+        None,
+    )
+    if tier2_long is None:
+        if "bite-all" in sharded:
+            yield agent(
+                f"{rel}: `tier2_sharded` lists `bite-all`, but no `tier2-long` job runs each slice"
+            )
+        return
+    body = "\n".join(tier2_long)
+    missing = [why for marker, why in DEEP_SLICE_REQUIREMENTS if marker not in body]
+    if missing:
+        yield agent(f"{rel}: job `tier2-long` does not cover every slice ({', '.join(missing)})")
 
 
 def strip_yaml_comment(text: str) -> str:
@@ -2709,6 +2755,45 @@ def with_deep_finish() -> gatelib.Want:
 
 
 @functools.cache
+def with_deep_shard_check(name: str) -> gatelib.Want:
+    template = template_file(f".github/workflows/{name}")
+    new_shape = template[template.index("\n  shape:\n") + 1 : template.index("\n  tier2:\n") + 1]
+    stripped = [
+        line.replace('\\nquality/"', '"')
+        for line in new_shape.splitlines()
+        if "repository: Simon-GitHub-Code/ratchet" not in line
+        and DEEP_SHARD_CHECK_MARKER not in line
+    ]
+    checkout_prefix = "      - uses: actions/checkout@"
+    kept = [
+        line
+        for index, line in enumerate(stripped)
+        if not (
+            line.startswith(checkout_prefix)
+            and index + 1 < len(stripped)
+            and stripped[index + 1].lstrip().startswith("- uses:")
+        )
+    ]
+    old_shape = "\n".join(kept) + "\n"
+
+    def want(current: str | None) -> str:
+        text = current or ""
+        eol = "\r\n" if "\r\n" in text else "\n"
+        body = text.replace("\r\n", "\n")
+        refs = plugin_pin.refs(text)
+        if len(refs) != 1:
+            return text
+        ref = next(iter(refs))
+        before = old_shape.replace(PLUGIN_CHECKOUT_PLACEHOLDER, ref)
+        after = new_shape.replace(PLUGIN_CHECKOUT_PLACEHOLDER, ref)
+        if body.count(before) != 1:
+            return text
+        return body.replace(before, after, 1).replace("\n", eol)
+
+    return want
+
+
+@functools.cache
 def with_deep_speaks(name: str) -> gatelib.Want:
     template = template_file(f".github/workflows/{name}")
     job = template[template.index("\n  speaks:\n") + 1 :].rstrip("\n")
@@ -2859,6 +2944,9 @@ def tier_step_findings(root: Path, path: Path, content: str) -> Iterable[Finding
         if marker == DEEP_FINISH_MARKER:
             does = "let a deep run that started finish, as the template does"
             yield Finding(name, problem, Edit(does, with_deep_finish(), Agent()))
+        elif marker == DEEP_SHARD_CHECK_MARKER:
+            does = "check bite slice partitioning in the shape job, as the template does"
+            yield Finding(name, problem, Edit(does, with_deep_shard_check(path.name), Agent()))
         elif marker == DEEP_SPEAKS_MARKER:
             does = (
                 "add the job that reports which merges each deep run speaks for,"
@@ -4468,6 +4556,62 @@ def check_bites(root: Path) -> Iterable[Finding]:
     return bite_findings(project_bite.registry_check(root))
 
 
+def bite_recipe_sharding(justfile: str) -> Iterable[Finding]:
+    template = template_file("justfile")
+    for variable, recipe in SHARDED_BITE_RECIPES:
+        sharded = justfile_text.ordered(justfile, variable) or ()
+        defn = justfile_text.definition(justfile, recipe)
+        if recipe not in sharded or not defn:
+            continue
+        if SHARD_FLAG.search(justfile_text.code_of("\n".join(defn))):
+            continue
+        problem = (
+            f"`{recipe}` is in `{variable}`, but its recipe does not pass"
+            " `--shard {{shard}}/{{shards}}` (so each shard would run every fault)"
+        )
+        reasons = justfile_text.unmet(template, justfile, recipe)
+        agent_fix = Agent(start=template_definition(recipe), then=reasons)
+        if not reasons and "\n".join(justfile_text.uncommented(defn)) == OLD_BITE_RECIPES[recipe]:
+            does = (
+                f"pass `--shard {{{{shard}}}}/{{{{shards}}}}` in `{recipe}`, as the template does"
+            )
+            fix: Fix = Edit(does, justfile_text.with_template_recipe(template, recipe), agent_fix)
+        else:
+            fix = agent_fix
+        yield Finding("justfile", problem, fix)
+
+
+def bite_shard_check(root: Path) -> Iterable[Finding]:
+    binding = read(root / BINDING_PATH) or ""
+    shards = ci_jobs.shard_count(binding)
+    source = read(root / project_bite.REGISTRY)
+    if shards is None or source is None:
+        return
+    registry, problems = project_bite.read_registry(source)
+    if problems or not registry.bites:
+        return
+    rows = project_bite.gate_rows(binding)
+    selected = [(row, [bite for bite in registry.bites if bite.gate == row.gate]) for row in rows]
+    tasks = project_bite.fault_tasks(selected, ())
+    if not tasks:
+        return
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        code = project_bite.check_shards(tasks, shards)
+    if code != 0:
+        yield agent(
+            f"{project_bite.REGISTRY}: shard check for {shards} shards failed:"
+            f" {out.getvalue().strip()}"
+        )
+
+
+def check_bite_sharding(root: Path) -> Iterable[Finding]:
+    justfile = read_justfile(root)
+    if justfile is not None:
+        yield from bite_recipe_sharding(justfile)
+    yield from bite_shard_check(root)
+
+
 def bite_findings(bites: project_bite.RegistryCheck) -> Iterator[Finding]:
     path = str(project_bite.REGISTRY)
     for problem in bites.failures:
@@ -4576,6 +4720,7 @@ CHECKS: tuple[Check, ...] = (
     check_local_caches,
     check_gate_reads,
     check_bites,
+    check_bite_sharding,
     check_incidents,
     check_disputes,
     check_features,
@@ -5105,6 +5250,31 @@ def speed_mutations() -> list[Mutation]:
             rewrite("justfile", TIER1_JOBS_LINE, ALONE_AUDIT),
         ),
         ("group that holds a gate with a ceiling of its own", rewrite(*AUDIT_CEILING)),
+        ("nightly without bite slice check", rewrite(deep, DEEP_SHARD_CHECK_MARKER, "--no-check")),
+        (
+            "nightly whose tier2-long job skips slice shards",
+            rewrite(deep, "needs.shape.outputs.shards", "[1]"),
+        ),
+        (
+            "nightly whose tier2-long job omits SHARDS",
+            rewrite(deep, "SHARDS: ${{ needs.shape.outputs.count }}", "OTHER: 1"),
+        ),
+        (
+            "sharded bite recipe that omits --shard",
+            rewrite(
+                "justfile",
+                'project_bite.py" --changed --shard {{shard}}/{{shards}}',
+                'project_bite.py" --changed',
+            ),
+        ),
+        (
+            "sharded bite-all recipe that omits --shard",
+            rewrite(
+                "justfile",
+                'project_bite.py" --shard {{shard}}/{{shards}}',
+                'project_bite.py"',
+            ),
+        ),
     ]
 
 
