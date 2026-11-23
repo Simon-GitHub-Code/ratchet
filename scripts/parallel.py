@@ -160,6 +160,7 @@ WAITING = re.compile(r"(?P<standing>later|none): \S.*")
 class Standing(Enum):
     GREEN = "ran and passed"
     RED = "failed"
+    UNJUDGED = "could not judge"
     LATER = "not run yet, each waiting for what its line names"
     NONE = "not applicable, as its line says"
 
@@ -233,13 +234,23 @@ class Finished:
         return self.exit_code == 0
 
     @property
+    def unjudged(self) -> bool:
+        return self.exit_code == gatelib.UNJUDGED
+
+    @property
     def standing(self) -> Standing:
-        return standing_of(self.output, tool=self.tool) if self.green else Standing.RED
+        if self.green:
+            return standing_of(self.output, tool=self.tool)
+        if self.unjudged:
+            return Standing.UNJUDGED
+        return Standing.RED
 
     def line(self) -> str:
         match self.standing:
             case Standing.GREEN:
                 how = "green"
+            case Standing.UNJUDGED:
+                how = f"could not judge (exit {self.exit_code})"
             case Standing.RED:
                 how = f"red (exit {self.exit_code})"
             case Standing.LATER:
@@ -789,8 +800,15 @@ def closing(scheduler: Scheduler, wall: float) -> list[str]:
     counts = Counter(result.standing for result in scheduler.finished)
     ran = f"{counts[Standing.GREEN]} {Standing.GREEN.value}"
     failed = f", {counts[Standing.RED]} {Standing.RED.value}" if counts[Standing.RED] else ""
+    unjudged = (
+        f", {counts[Standing.UNJUDGED]} {Standing.UNJUDGED.value}"
+        if counts[Standing.UNJUDGED]
+        else ""
+    )
     waits = [f"{counts[each]} {each.value}" for each in (Standing.LATER, Standing.NONE)]
-    tally = "; ".join([ran + failed, *(part for part in waits if not part.startswith("0 "))])
+    tally = "; ".join(
+        [ran + failed + unjudged, *(part for part in waits if not part.startswith("0 "))]
+    )
     finished = len(scheduler.finished)
     checks = f"{total} checks" if finished == total else f"{finished} of {total} checks finished"
     say(
@@ -801,7 +819,10 @@ def closing(scheduler: Scheduler, wall: float) -> list[str]:
     if hint := profile_hint(scheduler):
         say(hint)
     problems = [
-        f"{result.name}: red (exit {result.exit_code})"
+        (
+            f"{result.name}: {'could not judge' if result.unjudged else 'red'} "
+            f"(exit {result.exit_code})"
+        )
         for result in scheduler.finished
         if not result.green
     ]
@@ -839,7 +860,9 @@ def record(
     whole: dict[str, object] = {
         "kind": runrecord.TIER,
         "seconds": round(wall, 3),
-        "status": "red" if exit_code else "green",
+        "status": (
+            "not judged" if exit_code == gatelib.UNJUDGED else ("red" if exit_code else "green")
+        ),
         "exit": exit_code,
         "gates": gates,
         **scheduler.monitor.result().fields(),
@@ -852,9 +875,9 @@ def record(
         runrecord.append(scheduler.report_to, found, root=scheduler.root)
 
 
-def verdict(scheduler: Scheduler, problems: list[str]) -> str:
+def verdict(scheduler: Scheduler, problems: list[str], *, exit_code: int = 1) -> str:
     if problems:
-        return "parallel: red"
+        return "parallel: could not judge" if exit_code == gatelib.UNJUDGED else "parallel: red"
     counts = Counter(result.standing for result in scheduler.finished)
     waits = [
         f"{counts[each]} {words}"
@@ -915,6 +938,14 @@ def judge_loop(
     )
 
 
+def gates_exit_of(scheduler: Scheduler, problems: list[str]) -> int:
+    if not problems:
+        return 0
+    unjudged_count = sum(1 for result in scheduler.finished if result.unjudged)
+    only_unjudged = unjudged_count > 0 and len(problems) == unjudged_count
+    return gatelib.UNJUDGED if only_unjudged else 1
+
+
 def finish_run(
     scheduler: Scheduler,
     options: argparse.Namespace,
@@ -928,7 +959,7 @@ def finish_run(
         say(slower)
     for line in problems:
         say(line)
-    gates_exit = 1 if problems else 0
+    gates_exit = gates_exit_of(scheduler, problems)
     judged = judge_loop(scheduler, options, wall, wall_clock=wall_clock)
     exit_code = judged.exit_for(gates_exit) if judged is not None else gates_exit
     record(
@@ -938,7 +969,7 @@ def finish_run(
         gates=gates,
         extra=None if judged is None else judged.tier_fields(),
     )
-    say(verdict(scheduler, problems))
+    say(verdict(scheduler, problems, exit_code=exit_code))
     if judged is not None:
         say(judged.line())
     return exit_code

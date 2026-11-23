@@ -41,7 +41,7 @@ def test_the_output_of_a_red_gate_is_kept_and_a_green_gate_s_is_not(tmp_path: Pa
     log = (
         Tier(tmp_path)
         .add("one", 0, "green one speaks")
-        .add("audit", 3, "the audit found CVE-1", "two packages are affected")
+        .add("audit", 2, "the audit found CVE-1", "two packages are affected")
         .add("two", 0, *[f"green two line {n}" for n in range(100)])
         .log()
     )
@@ -52,7 +52,7 @@ def test_the_output_of_a_red_gate_is_kept_and_a_green_gate_s_is_not(tmp_path: Pa
     assert report.count("==>") == 1
     assert report.splitlines()[0].startswith("==> ")
     assert "audit" in report.splitlines()[0]
-    assert report.splitlines()[-1].split(": ")[2].startswith("red (exit 3) in ")
+    assert report.splitlines()[-1].split(": ")[2].startswith("red (exit 2) in ")
     assert "green one speaks" not in report
     assert "green two line" not in report
 
@@ -95,7 +95,7 @@ def test_a_gate_that_judged_nothing_is_not_red_and_leaves_the_red_ones_whole(
     )
     log = (
         Tier(tmp_path)
-        .add("first", 3, "the first red gate")
+        .add("first", 2, "the first red gate")
         .add("waits", 0, "later: code:source")
         .add("second", 4, "the second red gate")
         .log()

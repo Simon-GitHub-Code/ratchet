@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 HEADER = re.compile(r"^==> (\S+) <==$")
-VERDICT = re.compile(r"^parallel: (\S+): (green|red)\b")
+VERDICT = re.compile(r"^parallel: (\S+): (green|red|could not judge)\b")
 NOTHING = re.compile(
     r"^parallel: (\S+): (?:judged nothing|not run yet|not applicable) \((later|none): (.*)\)"
 )
@@ -15,6 +15,7 @@ LATER = re.compile(r"^later: (.+)$")
 class Status(StrEnum):
     GREEN = "green"
     RED = "red"
+    UNJUDGED = "could not judge"
     LATER = "later"
     NONE = "none"
 

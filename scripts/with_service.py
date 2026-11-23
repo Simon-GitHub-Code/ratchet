@@ -350,11 +350,11 @@ class Stop:
 
 def signal_midway(
     process: subprocess.Popen[bytes], options: argparse.Namespace, stop: Stop
-) -> list[str]:
+) -> tuple[int, list[str]]:
     hold: Hold | str = ""
     try:
         if not sends_within(stop.sending, options.timeout, stop.ended) and not stop.ended.is_set():
-            return [
+            return 1, [
                 (
                     f"the command did not start sending within {options.timeout:g}s: the signal "
                     f"waits until it creates ${gatelib.SENDING_ENV}, as load_smoke.py "
@@ -372,7 +372,7 @@ def signal_midway(
 
 def older(
     process: subprocess.Popen[bytes], options: argparse.Namespace, *, stop: Stop, why: str
-) -> list[str]:
+) -> tuple[int, list[str]]:
     print(
         "with_service: the gate judged the stop the older way, by the command's own requests, "
         f"since {why}",
@@ -381,15 +381,17 @@ def older(
     released = stop.released or time.monotonic()
     if stop.ended.wait(max(released + options.signal_after - time.monotonic(), 0)):
         after = options.signal_after
-        return [f"the command ended before the {after:g}s signal: nothing was in flight"]
+        return gatelib.UNJUDGED, [
+            f"the command ended before the {after:g}s signal: nothing was in flight"
+        ]
     return stop_now(process, options, stop=stop, hold=None)
 
 
 def stop_now(
     process: subprocess.Popen[bytes], options: argparse.Namespace, *, stop: Stop, hold: Hold | None
-) -> list[str]:
+) -> tuple[int, list[str]]:
     if process.poll() is not None:
-        return [f"the service exited with code {process.returncode} before it was signalled"]
+        return 1, [f"the service exited with code {process.returncode} before it was signalled"]
     held = listeners.grab(process.pid)
     gatelib.write_stopping(stop.marker, listeners.told(held))
     signalled = time.monotonic()
@@ -399,7 +401,8 @@ def stop_now(
     stop.started.append(taker)
     deadline = signalled + options.graceful
     said = [] if hold is None else answered(hold, deadline)
-    return [*said, *stopped(process, signalled, deadline)]
+    found = [*said, *stopped(process, signalled, deadline)]
+    return int(bool(found)), found
 
 
 def stopped(process: subprocess.Popen[bytes], signalled: float, deadline: float) -> list[str]:
@@ -418,6 +421,14 @@ def stopped(process: subprocess.Popen[bytes], signalled: float, deadline: float)
     return [f"the service {how} {took:.1f}s after SIGTERM, not 0"]
 
 
+def combined_exit(command_code: int, watch_code: int) -> int:
+    if command_code not in (0, gatelib.UNJUDGED):
+        return command_code
+    if watch_code not in (0, gatelib.UNJUDGED):
+        return watch_code
+    return gatelib.UNJUDGED if gatelib.UNJUDGED in (command_code, watch_code) else 0
+
+
 def run_signalled(
     process: subprocess.Popen[bytes],
     options: argparse.Namespace,
@@ -429,11 +440,14 @@ def run_signalled(
         stop = Stop(Path(scratch) / "stopping", Path(scratch) / "sending")
         env[gatelib.STOPPING_ENV], env[gatelib.SENDING_ENV] = str(stop.marker), str(stop.sending)
         env[gatelib.HOLD_WITHIN_ENV] = str(options.timeout)
+        watch_code = [0]
         found: list[str] = []
 
         def watch() -> None:
             try:
-                found.extend(signal_midway(process, options, stop))
+                exit_status, lines = signal_midway(process, options, stop)
+                watch_code[0] = exit_status
+                found.extend(lines)
             finally:
                 gatelib.stop_group(process)
 
@@ -446,7 +460,7 @@ def run_signalled(
             watcher.join()
             for thread in stop.started:
                 thread.join()
-    return (code or int(bool(found))), [*problems, *found]
+    return combined_exit(code, watch_code[0]), [*problems, *found]
 
 
 def refusal(
@@ -622,7 +636,9 @@ def main(argv: list[str]) -> int:
         )
         print("\n".join(problems), file=sys.stderr)
         code, problems, _ = attempt()
-    gatelib.report("with_service", problems)
+    gatelib.report(
+        "with_service", problems, exit_code=gatelib.UNJUDGED if code == gatelib.UNJUDGED else 1
+    )
     return code
 
 

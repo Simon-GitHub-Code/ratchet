@@ -53,7 +53,8 @@ def test_the_plugins_runner_reads_as_each_gate_stood(tmp_path: Path) -> None:
         "imports": "echo later: code:layer",
         "load": "echo none: not a service or a job",
         "lint": "true",
-        "bite": "exit 3",
+        "bite": "exit 1",
+        "stop": "exit 3",
     }
     for name, body in bodies.items():
         (tmp_path / name).write_text(f"{body}\n", encoding="utf-8")
@@ -70,6 +71,7 @@ def test_the_plugins_runner_reads_as_each_gate_stood(tmp_path: Path) -> None:
         Gate("load", Status.NONE, "not a service or a job"),
         Gate("lint", Status.GREEN),
         Gate("bite", Status.RED),
+        Gate("stop", Status.UNJUDGED),
     ]
 
 

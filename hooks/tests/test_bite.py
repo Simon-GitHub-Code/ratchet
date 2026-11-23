@@ -34,8 +34,11 @@ def test_every_shipped_service_gate_bites(
 
 
 LATE = (
-    "import os, pathlib, subprocess, sys, time; "
-    "pathlib.Path(os.environ['RATCHET_SENDING']).touch(); time.sleep(1); "
+    "import json, os, pathlib, subprocess, sys, time; "
+    "url = sys.argv[sys.argv.index('--url') + 1].split(); "
+    "pathlib.Path(os.environ['RATCHET_SENDING']).write_text("
+    "json.dumps([[url[0], url[1], int(url[2]), url[3]]])); "
+    "time.sleep(1); "
     "sys.exit(subprocess.run([sys.executable, *sys.argv[1:]]).returncode)"
 )
 
