@@ -1579,6 +1579,14 @@ def run_limit(root: Path, override: float | None) -> tuple[float, str]:
     return GATE_LIMIT, f"bite: limit: {GATE_LIMIT:g}s a run; no {key}"
 
 
+@dataclass(frozen=True)
+class SlowBite:
+    gate: str
+    bite: str
+    seconds: float
+    ceiling: float
+
+
 def slow_ceiling(root: Path) -> float | None:
     try:
         text = gatelib.read_text(root / gatelib.THRESHOLDS) or ""
@@ -1588,26 +1596,34 @@ def slow_ceiling(root: Path) -> float | None:
     return ceiling if ceiling and ceiling > 0 else None
 
 
-def slow_line(bite: Bite, seconds: float, ceiling: float) -> str:
-    cure = f"whole on purpose: {bite.whole}" if bite.whole else CURE
+def _format_slow(slow: SlowBite, cure: str) -> str:
     return (
-        f"{bite.gate}: {bite.name}: {seconds:.1f}s with no args, over the {SLOW_CEILING}"
-        f" ceiling of {ceiling:g}s; {cure}"
+        f"{slow.gate}: {slow.bite}: {slow.seconds:.1f}s with no args, over the {SLOW_CEILING}"
+        f" ceiling of {slow.ceiling:g}s; {cure}"
     )
 
 
-def recorded_slow(root: Path) -> list[str]:
+def slow_line(bite: Bite, seconds: float, ceiling: float) -> str:
+    cure = f"whole on purpose: {bite.whole}" if bite.whole else CURE
+    return _format_slow(SlowBite(bite.gate, bite.name, seconds, ceiling), cure)
+
+
+def recorded_slow_bites(root: Path) -> list[SlowBite]:
     ceiling = slow_ceiling(root)
     if ceiling is None:
         return []
     last = runrecord.facts(root / runrecord.TIMING).faults
     registry, _ = read_registry(gatelib.read_text(root / REGISTRY) or "")
-    lines = []
+    found: list[SlowBite] = []
     for bite in registry.bites:
         seconds, narrowed = last.get((bite.gate, bite.name), (0.0, True))
         if not (narrowed or bite.narrowed or bite.whole) and seconds > ceiling:
-            lines.append(f"{REGISTRY}: {slow_line(bite, seconds, ceiling)}")
-    return lines
+            found.append(SlowBite(bite.gate, bite.name, seconds, ceiling))
+    return found
+
+
+def recorded_slow(root: Path) -> list[str]:
+    return [f"{REGISTRY}: {_format_slow(slow, CURE)}" for slow in recorded_slow_bites(root)]
 
 
 def next_task(board: schedule.Board[int], ready: threading.Condition, shell: Shell) -> int | None:
