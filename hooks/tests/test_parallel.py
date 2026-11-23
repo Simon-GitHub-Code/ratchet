@@ -106,13 +106,58 @@ def test_all_green_prints_each_gate_whole_then_one_line_with_its_seconds(
 
 
 def test_every_red_gate_is_named_among_green_ones(capsys: pytest.CaptureFixture[str]) -> None:
-    red_a, green, red_b = gate(EXIT, 3), gate(EXIT, 0), gate(EXIT, 5)
+    red_a, green, red_b = gate(EXIT, 2), gate(EXIT, 0), gate(EXIT, 5)
     assert run("--", red_a, green, red_b) == 1
     out = capsys.readouterr().out
-    assert f"{red_a}: red (exit 3)\n" in out
+    assert f"{red_a}: red (exit 2)\n" in out
     assert f"{red_b}: red (exit 5)\n" in out
     assert f"{green}: red" not in out
     assert out.endswith("parallel: red\n")
+
+
+def test_a_gate_that_could_not_judge_exits_3_and_never_passes_silently(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    unjudged, green = gate(EXIT, 3), gate(EXIT, 0)
+    report = tmp_path / "timing.jsonl"
+    assert run("--report", str(report), "--", unjudged, green) == 3
+    out = capsys.readouterr().out
+    assert f"parallel: {unjudged}: could not judge (exit 3) in " in out
+    assert f"{unjudged}: could not judge (exit 3)\n" in out
+    assert "1 ran and passed, 1 could not judge" in out
+    assert out.endswith("parallel: could not judge\n")
+    rows = [json.loads(line) for line in report.read_text().splitlines()]
+    [tier] = [row for row in rows if row.get("kind") == "tier"]
+    assert (tier["status"], tier["exit"]) == ("not judged", 3)
+
+    red = gate(EXIT, 2)
+    assert run("--report", str(report), "--", unjudged, green, red) == 1
+    mixed = capsys.readouterr().out
+    assert "1 ran and passed, 1 failed, 1 could not judge" in mixed
+    assert f"{unjudged}: could not judge (exit 3)\n" in mixed
+    assert f"{red}: red (exit 2)\n" in mixed
+    assert mixed.endswith("parallel: red\n")
+    rows = [json.loads(line) for line in report.read_text().splitlines()]
+    tier_mixed = [row for row in rows if row.get("kind") == "tier"][-1]
+    assert (tier_mixed["status"], tier_mixed["exit"]) == ("red", 1)
+
+    (tmp_path / "quality").mkdir()
+    (tmp_path / "quality/thresholds.toml").write_text(
+        "[ceilings.loop]\nseconds = 60\n", encoding="utf-8"
+    )
+    assert run("--root", str(tmp_path), "--budget", "loop", "--", unjudged) == 3
+    loop_out = capsys.readouterr().out.splitlines()
+    assert loop_out[-2] == "parallel: could not judge"
+    assert loop_out[-1].startswith("loop: within:")
+
+    (tmp_path / "quality/thresholds.toml").write_text(
+        "[ceilings.loop]\nseconds = 0.01\n", encoding="utf-8"
+    )
+    slow_unjudged = gate("import time; time.sleep(0.05); raise SystemExit(3)")
+    assert run("--root", str(tmp_path), "--budget", "loop", "--", slow_unjudged) == 1
+    over_out = capsys.readouterr().out.splitlines()
+    assert over_out[-2] == "parallel: red"
+    assert over_out[-1].startswith("loop: over:")
 
 
 def test_a_gate_killed_by_a_signal_is_red_with_the_shell_s_code(
@@ -1094,15 +1139,23 @@ def test_gate_exit3_beside_detached_work_keeps_tier_red_with_exit3(tmp_path: Pat
         "    os._exit(0)\n",
         detached,
     )
-    red_gate = gate("import time; time.sleep(0.05); raise SystemExit(3)")
+    red_gate = gate("import time; time.sleep(0.05); raise SystemExit(4)")
+    unjudged_gate = gate("import time; time.sleep(0.05); raise SystemExit(3)")
     try:
         assert run("--jobs", "2", "--report", str(record), "--", detach_gate, red_gate) == 1
         rows = [json.loads(line) for line in record.read_text().splitlines()]
         by_key = {row["key"]: row for row in rows if "key" in row}
-        assert by_key[red_gate]["exit"] == 3
+        assert by_key[red_gate]["exit"] == 4
         assert by_key[red_gate]["status"] == "failed"
         [tier] = [row for row in rows if row.get("kind") == "tier"]
         assert (tier["status"], tier["exit"]) == ("red", 1)
+
+        assert run("--jobs", "2", "--report", str(record), "--", detach_gate, unjudged_gate) == 3
+        rows = [json.loads(line) for line in record.read_text().splitlines()]
+        by_key = {row["key"]: row for row in rows if "key" in row}
+        assert by_key[unjudged_gate]["exit"] == 3
+        tier2 = [row for row in rows if row.get("kind") == "tier"][-1]
+        assert (tier2["status"], tier2["exit"]) == ("not judged", 3)
     finally:
         if detached.is_file():
             with contextlib.suppress(ProcessLookupError, ValueError):
@@ -1240,7 +1293,7 @@ def test_budget_loop_skips_early_fail_fast_and_preserves_non_budget_behavior(
     (tmp_path / "quality/thresholds.toml").write_text(
         "[ceilings.loop]\nseconds = 60\n", encoding="utf-8"
     )
-    red = gate(EXIT, 3)
+    red = gate(EXIT, 2)
     assert (
         run(
             "--root",
