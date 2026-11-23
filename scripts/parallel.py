@@ -127,6 +127,7 @@ import budget
 import gatelib
 import loop_budget
 import machine
+import markdown_text
 import project_bite
 import runrecord
 import schedule
@@ -136,6 +137,8 @@ if TYPE_CHECKING:
 
 POLL = 0.05
 RECENT = 5
+MIN_HINT_GATES = 2
+PROFILE_BULLET = "Profile"
 WINDOW = 2**20
 UNREADABLE = (ValueError, TypeError, KeyError, OverflowError, RecursionError)
 NO_RECORD: Mapping[str, float] = MappingProxyType({})
@@ -155,6 +158,43 @@ def tools(root: Path) -> frozenset[str]:
     return frozenset(
         row.gate for row in rows if row.tool and not any(w.match(row.tool) for w in waits)
     )
+
+
+def profile_commands(root: Path) -> dict[str, str]:
+    body = markdown_text.section(gatelib.read_text(root / gatelib.BINDING) or "", schedule.SPEED)
+    line = markdown_text.bullets(body).get(PROFILE_BULLET, "")
+    if not line or line.startswith("<"):
+        return {}
+    commands: dict[str, str] = {}
+    for span in markdown_text.ticked(line):
+        gate, colon, command = span.partition(":")
+        gate, command = gate.strip(), command.strip()
+        if colon and gate and command:
+            commands[gate] = command
+    return commands
+
+
+def profile_hint(scheduler: Scheduler) -> str | None:
+    if len(scheduler.finished) < MIN_HINT_GATES:
+        return None
+    slowest = max(scheduler.finished, key=lambda result: result.seconds)
+    median = statistics.median(result.seconds for result in scheduler.finished)
+    if slowest.seconds <= median:
+        return None
+    gate = shlex.split(slowest.name)[-1]
+    if gate in scheduler.profile_commands:
+        command = scheduler.profile_commands[gate]
+        return (
+            f"parallel: {slowest.name} took {slowest.seconds:.1f}s (tier median {median:.1f}s);"
+            f" profile it with `{command}` to see where its time goes"
+        )
+    if gate in scheduler.tools:
+        return (
+            f"parallel: {slowest.name} took {slowest.seconds:.1f}s (tier median {median:.1f}s);"
+            f" run its tool with its profiling flag (and record `{gate}: <command>` under"
+            " Speed -> Profile in binding.md) to see where its time goes"
+        )
+    return None
 
 
 def standing_of(output: str, *, tool: bool) -> Standing:
@@ -315,6 +355,7 @@ class Scheduler:
         self.report_to: Path | None = options.report
         self.tree = runrecord.tree_id(self.root) if options.report else None
         self.tools = tools(self.root)
+        self.profile_commands = profile_commands(self.root)
         self.group_log = group_log
         self.live: dict[str, Live] = {}
         self.finished: list[Finished] = []
@@ -506,6 +547,8 @@ def closing(scheduler: Scheduler, wall: float) -> list[str]:
     )
     for line in chains(scheduler):
         say(line)
+    if hint := profile_hint(scheduler):
+        say(hint)
     problems = [
         f"{result.name}: red (exit {result.exit_code})"
         for result in scheduler.finished

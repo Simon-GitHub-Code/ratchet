@@ -303,13 +303,13 @@ def test_a_run_with_no_gate_outside_every_group_names_no_group(
     assert len(capsys.readouterr().out.splitlines()) == 1
 
 
-def binding(root: Path, rows: dict[str, str]) -> Path:
+def binding(root: Path, rows: dict[str, str], *, speed: str = "") -> Path:
     table = "".join(
         f"| {name} question | {tool} | 1 | | `just {name}` |\n" for name, tool in rows.items()
     )
     text = (
         "# Binding\n\n## Gates\n\n| Question | Tool | Tier | Threshold source | Entry point |\n"
-        f"|---|---|---|---|---|\n{table}\n## Speed\n"
+        f"|---|---|---|---|---|\n{table}\n## Speed\n{speed}"
     )
     (root / "docs/process").mkdir(parents=True)
     (root / "docs/process/binding.md").write_text(text, encoding="utf-8")
@@ -1260,3 +1260,163 @@ def test_budget_loop_skips_early_fail_fast_and_preserves_non_budget_behavior(
     lines = capsys.readouterr().out.splitlines()
     assert lines[-2] == "parallel: red"
     assert lines[-1].startswith("loop: within:")
+
+
+def test_slowest_gate_over_median_with_declared_profile_command_prints_hint_before_verdict_and_loop(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    speed = (
+        "- Profile: `lint: linter --stats` `no-colon` `: no-gate` `sast:` `sast: scanner --time`\n"
+    )
+    root = binding(tmp_path, {"lint": "linter", "sast": "scanner"}, speed=speed)
+    (root / "quality").mkdir()
+    (root / "quality/thresholds.toml").write_text(
+        "[ceilings.loop]\nseconds = 60\n", encoding="utf-8"
+    )
+    options = argparse.Namespace(
+        root=root, jobs=2, fail_fast=False, report=None, alone=[], wide=[], budget="loop"
+    )
+    scheduler = parallel.Scheduler([], [], options, kept=schedule.Schedule())
+    scheduler.finished = [
+        parallel.Finished("lint", 1.0, 0, ""),
+        parallel.Finished("sast", 5.0, 0, ""),
+    ]
+    assert parallel.finish_run(scheduler, options, 5.0, gates=["lint", "sast"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    hint = (
+        "parallel: sast took 5.0s (tier median 3.0s);"
+        " profile it with `scanner --time` to see where its time goes"
+    )
+    assert hint in lines
+    assert lines.index(hint) < lines.index("parallel: green (2 ran)")
+    assert lines[-1].startswith("loop: within:")
+
+
+@pytest.mark.parametrize(
+    "speed",
+    [
+        "",
+        "- Profile: <each slow gate's profiling command as `gate: command`; leave while none>\n",
+        "- Profile: `other: other --time`\n",
+    ],
+)
+def test_bound_slowest_gate_without_profile_command_prints_fallback_hint(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], speed: str
+) -> None:
+    root = binding(tmp_path, {"lint": "linter", "sast": "scanner"}, speed=speed)
+    (root / "quality").mkdir()
+    (root / "quality/thresholds.toml").write_text(
+        "[ceilings.loop]\nseconds = 60\n", encoding="utf-8"
+    )
+    options = argparse.Namespace(
+        root=root, jobs=2, fail_fast=False, report=None, alone=[], wide=[], budget="loop"
+    )
+    scheduler = parallel.Scheduler([], [], options, kept=schedule.Schedule())
+    scheduler.finished = [
+        parallel.Finished("lint", 1.0, 0, ""),
+        parallel.Finished("sast", 5.0, 0, ""),
+    ]
+    assert parallel.finish_run(scheduler, options, 5.0, gates=["lint", "sast"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    hint = (
+        "parallel: sast took 5.0s (tier median 3.0s);"
+        " run its tool with its profiling flag (and record `sast: <command>` under"
+        " Speed -> Profile in binding.md) to see where its time goes"
+    )
+    assert hint in lines
+    assert lines.index(hint) < lines.index("parallel: green (2 ran)")
+    assert lines[-1].startswith("loop: within:")
+
+
+def test_single_gate_or_at_or_below_median_prints_no_profile_hint(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = binding(
+        tmp_path,
+        {"lint": "linter", "sast": "scanner"},
+        speed="- Profile: `sast: scanner --time`\n",
+    )
+    options = argparse.Namespace(root=root, jobs=2, fail_fast=False, report=None, alone=[], wide=[])
+    single = parallel.Scheduler([], [], options, kept=schedule.Schedule())
+    single.finished = [parallel.Finished("sast", 5.0, 0, "")]
+    assert parallel.closing(single, 5.0) == []
+    assert "profile" not in capsys.readouterr().out
+
+    tied = parallel.Scheduler([], [], options, kept=schedule.Schedule())
+    tied.finished = [
+        parallel.Finished("lint", 4.0, 0, ""),
+        parallel.Finished("sast", 4.0, 0, ""),
+    ]
+    assert parallel.closing(tied, 4.0) == []
+    assert "profile" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "tool_cell",
+    ["none: not a service", "later: code:source", ""],
+)
+def test_waiting_unbound_or_missing_binding_prints_no_profile_hint(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], tool_cell: str
+) -> None:
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    bare_options = argparse.Namespace(
+        root=bare, jobs=2, fail_fast=False, report=None, alone=[], wide=[]
+    )
+    bare_scheduler = parallel.Scheduler([], [], bare_options, kept=schedule.Schedule())
+    bare_scheduler.finished = [
+        parallel.Finished("fast", 1.0, 0, ""),
+        parallel.Finished("slow", 5.0, 0, ""),
+    ]
+    assert parallel.closing(bare_scheduler, 5.0) == []
+    assert "profile" not in capsys.readouterr().out
+
+    bound = binding(tmp_path / "bound", {"fast": "linter", "slow": tool_cell})
+    bound_options = argparse.Namespace(
+        root=bound, jobs=2, fail_fast=False, report=None, alone=[], wide=[]
+    )
+    bound_scheduler = parallel.Scheduler([], [], bound_options, kept=schedule.Schedule())
+    bound_scheduler.finished = [
+        parallel.Finished("fast", 1.0, 0, ""),
+        parallel.Finished("slow", 5.0, 0, ""),
+    ]
+    assert parallel.closing(bound_scheduler, 5.0) == []
+    assert "profile" not in capsys.readouterr().out
+
+
+def test_main_prints_profile_hint_for_slow_bound_gate_before_verdict(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = binding(
+        tmp_path,
+        {"lint": "linter", "sast": "scanner"},
+        speed="- Profile: `sast: scanner --time`\n",
+    )
+    fast = named(EXIT, 0, name="lint")
+    slow = named("import sys, time; time.sleep(0.15)", name="sast")
+    assert run("--root", str(root), "--", fast, slow) == 0
+    lines = capsys.readouterr().out.splitlines()
+    hints = [line for line in lines if "; profile it with `scanner --time` " in line]
+    assert len(hints) == 1
+    assert hints[0].startswith(f"parallel: {slow} took ")
+    assert lines.index(hints[0]) < lines.index("parallel: green (2 ran)")
+
+
+@pytest.mark.parametrize(
+    ("speed", "expected"),
+    [
+        ("", {}),
+        ("- Profile:\n", {}),
+        ("- Profile: <placeholder `sast: scanner --time`>\n", {}),
+        ("- Profile: none\n", {}),
+        (
+            "- Profile: `lint: linter --stats` `bad` `: missing` `sast:` `sast: scanner --time`\n",
+            {"lint": "linter --stats", "sast": "scanner --time"},
+        ),
+    ],
+)
+def test_profile_commands_parses_valid_entries_and_ignores_placeholders(
+    tmp_path: Path, speed: str, expected: dict[str, str]
+) -> None:
+    root = binding(tmp_path, {"lint": "linter"}, speed=speed)
+    assert parallel.profile_commands(root) == expected
