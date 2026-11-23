@@ -1265,3 +1265,164 @@ def test_workflow_diffs_ignore_custom_workflows_and_omit_missing_template_workfl
     out = capsys.readouterr().out
     assert "custom.yml" not in out
     assert "--- template/.github/workflows/weekly.yml" not in out
+
+
+def test_available_opt_ins_surfaces_missing_capabilities_and_omits_configured_ones(
+    tmp_path: Path,
+) -> None:
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert upgrade.available_opt_ins(empty) == ()
+
+    unconfigured = tmp_path / "unconfigured"
+    (unconfigured / "docs/process").mkdir(parents=True)
+    (unconfigured / "quality").mkdir(parents=True)
+    (unconfigured / BINDING).write_text(
+        "# Binding\n\n## Speed\n\n- Build: <placeholder>\n\n"
+        "## Tests\n\n### Suites\n\n"
+        "| Suite | Gate | Files | Run files |\n| --- | --- | --- | --- |\n"
+        "| e2e | `just e2e` | `tests/e2e/**` | `just e2e` |\n",
+        encoding="utf-8",
+    )
+    (unconfigured / "quality/thresholds.toml").write_text(
+        "[ceilings.change]\nproduct_files = 10\n", encoding="utf-8"
+    )
+    (unconfigured / "justfile").write_text(
+        'boot := "./server --port {port}"\n'
+        "build:\n    cargo build\n"
+        "fuzz:\n    cargo fuzz run target\n"
+        "coverage:\n    python3 scripts/coverage_groups.py --report cov.xml\n",
+        encoding="utf-8",
+    )
+    titles = [title for title, _ in upgrade.available_opt_ins(unconfigured)]
+    assert titles == [
+        "Build cache (`- Build:`, ADR 0095)",
+        "Impact triggers (`### Impact triggers`, ADR 0096)",
+        "CI loop budget (`[ceilings.loop]`, ADR 0088)",
+        "Adversarial parser fuzz & coverage oracle (ADR 0097)",
+    ]
+
+    boot_only = tmp_path / "boot-only"
+    (boot_only / "docs/process").mkdir(parents=True)
+    (boot_only / BINDING).write_text("# Binding\n\n## Speed\n", encoding="utf-8")
+    (boot_only / "justfile").write_text(
+        'boot := "./server --port {port}"\n'
+        'build:\n    @echo "bind: build the deliverable"; exit 1\n'
+        'tier2_gates := "e2e"\n'
+        "coverage:\n    python3 scripts/coverage_groups.py --report cov.xml\n",
+        encoding="utf-8",
+    )
+    boot_titles = [title for title, _ in upgrade.available_opt_ins(boot_only)]
+    assert boot_titles == [
+        "Build cache (`- Build:`, ADR 0095)",
+        "Impact triggers (`### Impact triggers`, ADR 0096)",
+        "Adversarial parser fuzz & coverage oracle (ADR 0097)",
+    ]
+
+    placeholders_only = tmp_path / "placeholders"
+    (placeholders_only / "docs/process").mkdir(parents=True)
+    (placeholders_only / "quality").mkdir(parents=True)
+    (placeholders_only / BINDING).write_text(
+        "# Binding\n\n## Speed\n\n- Build: none: pure interpreted scripts\n\n"
+        "## Tests\n\n### Impact triggers\n\n"
+        "| Sources | Suite | Tests |\n| --- | --- | --- |\n"
+        "| none: no shared shell | | |\n",
+        encoding="utf-8",
+    )
+    (placeholders_only / "quality/thresholds.toml").write_text(
+        "[ceilings.loop]\nseconds = 300\n", encoding="utf-8"
+    )
+    (placeholders_only / "justfile").write_text(
+        'boot := "bind: start server"\n'
+        'build:\n    @echo "bind: build"; exit 1\n'
+        "fuzz:\n    python3 scripts/parser_fuzz.py -- ./parser\n"
+        "coverage:\n    python3 scripts/coverage_groups.py --report cov.xml --check-unrecorded\n",
+        encoding="utf-8",
+    )
+    assert upgrade.available_opt_ins(placeholders_only) == ()
+
+    configured = tmp_path / "configured"
+    (configured / "docs/process").mkdir(parents=True)
+    (configured / BINDING).write_text(
+        "# Binding\n\n## Speed\n\n"
+        "- Build: gate `build`; caches `target`; cold 60s; warm 5s; reuse moved\n",
+        encoding="utf-8",
+    )
+    (configured / "justfile").write_text("build:\n    cargo build\n", encoding="utf-8")
+    assert upgrade.available_opt_ins(configured) == ()
+
+
+def test_an_upgrade_renders_opt_ins_before_summary_without_altering_plain_or_owed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = repos.repository(tmp_path / "repo")
+    shutil.copytree(pristine(), root, symlinks=True, dirs_exist_ok=True)
+    binding = root / BINDING
+    text = binding.read_text(encoding="utf-8")
+    before_impact, after_impact = text.split("\n### Impact triggers\n", 1)
+    _, after_test_paths = after_impact.split("\n## Test paths\n", 1)
+    binding.write_text(f"{before_impact}\n## Test paths\n{after_test_paths}", encoding="utf-8")
+    (root / "justfile").write_text(
+        (root / "justfile")
+        .read_text(encoding="utf-8")
+        .replace('@echo "bind: build the deliverable"; exit 1', "cargo build"),
+        encoding="utf-8",
+    )
+    (root / "quality/thresholds.toml").write_text(
+        "[ceilings.change]\nproduct_files = 10\n", encoding="utf-8"
+    )
+    repos.git(root, "add", "-A")
+    repos.git(root, "commit", "-q", "-m", "chore: baseline")
+    capsys.readouterr()
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    applied = capsys.readouterr().out
+    assert "Available opt-in capabilities (not yet configured in this project):\n" in applied
+    assert "Build cache (`- Build:`, ADR 0095)" in applied
+    assert "Impact triggers (`### Impact triggers`, ADR 0096)" in applied
+    assert "CI loop budget (`[ceilings.loop]`, ADR 0088)" in applied
+    assert "Adversarial parser fuzz & coverage oracle (ADR 0097)" in applied
+    opt_idx = applied.index("Available opt-in capabilities")
+    summary_idx = applied.index("\nupgrade: ")
+    plain_idx = applied.index("\nIn plain words:\n")
+    assert opt_idx < summary_idx < plain_idx
+    assert "Available opt-in capabilities" not in plain(applied)
+    assert owed.read(root).entries == ()
+
+    binding.write_text(
+        binding.read_text(encoding="utf-8")
+        .replace(
+            "- Build: <gate `build`; caches `path`, ...; cold Ns; warm Ns;"
+            " reuse moved | shared `ENV=dir` | none: reason; consumers `smoke`, ...;"
+            " leave this placeholder while no gate builds>",
+            "- Build: gate `build`; caches `target`; cold 60s; warm 5s; reuse moved",
+        )
+        .replace(
+            "\n## Test paths\n",
+            "\n### Impact triggers\n\n| Sources | Suite | Tests |\n| --- | --- | --- |\n"
+            "| none: no shared shell | | |\n\n## Test paths\n",
+        ),
+        encoding="utf-8",
+    )
+    (root / "quality/thresholds.toml").write_text(
+        "[ceilings.change]\nproduct_files = 10\n\n[ceilings.loop]\nseconds = 300\n",
+        encoding="utf-8",
+    )
+    (root / "justfile").write_text(
+        (root / "justfile")
+        .read_text(encoding="utf-8")
+        .replace(
+            '@echo "bind: coverage-guided fuzzing of each target with a kept corpus for {{each}}'
+            ' seconds, {{cap}} at most in total; red when there is no fuzz target"; exit 1',
+            '{{plugin_py}} "{{ratchet_plugin}}/scripts/parser_fuzz.py" -- ./parser',
+        )
+        .replace(
+            'coverage_groups.py" --report "$report"',
+            'coverage_groups.py" --report "$report" --check-unrecorded',
+        ),
+        encoding="utf-8",
+    )
+    repos.git(root, "add", "-A")
+    capsys.readouterr()
+    assert upgrade.main(["upgrade.py", "--root", str(root)]) == 0
+    clean = capsys.readouterr().out
+    assert "Available opt-in capabilities" not in clean
