@@ -50,6 +50,7 @@ DEFAULT_BRANCH_LINE = re.compile(r"^- Default branch: `([^`]+)`$", re.MULTILINE)
 SCHEMA = 1
 SLUG = r"[a-z0-9]+(?:-[a-z0-9]+)*"
 APPROVE = "approve"
+UNJUDGED = 3
 
 REPOSITORY_VARIABLES = frozenset(
     {
@@ -498,12 +499,15 @@ def _glob_class(segment: str, start: int) -> tuple[str, int]:
     return translated[len("(?s:") : -len(")\\Z")], end
 
 
-def report(name: str, problems: list[str], against: str | None = None) -> int:
+def report(
+    name: str, problems: list[str], against: str | None = None, *, exit_code: int = 1
+) -> int:
     for line in problems:
         print(line)
     where = f" against {against[:12]}" if against else ""
-    print(f"{name}: {'red' if problems else 'green'}{where}")
-    return 1 if problems else 0
+    outcome = "could not judge" if exit_code == UNJUDGED else "red" if problems else "green"
+    print(f"{name}: {outcome}{where}")
+    return exit_code if (problems or exit_code == UNJUDGED) else 0
 
 
 class Interrupted(Exception):  # noqa: N818 # -- a signal, not a fault
