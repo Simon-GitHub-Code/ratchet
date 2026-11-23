@@ -1588,3 +1588,166 @@ def test_three_consecutive_not_judged_runs_surface_for_machine_and_unread(
     write(root, ".ratchet/timing.jsonl", "\n".join(json.dumps(r) for r in three_no_budget) + "\n")
     assert route.main(["route", "--root", str(root), "--offline"]) == 0
     assert not any(line.startswith("also:") for line in capsys.readouterr().out.splitlines())
+
+
+def test_lowering_offers_are_surfaced_as_non_blocking_proposals(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = repository(
+        tmp_path,
+        {
+            **ADOPTED,
+            "quality/thresholds.toml": (
+                "[ceilings.loop]\nseconds = 300\n\n[ceilings.seconds]\nbite-all = 100\nlint = 20\n"
+            ),
+        },
+    )
+    records = [
+        *({"key": "bite-all", "seconds": 10.0, "status": "green", "exit": 0} for _ in range(5)),
+        *({"key": "lint", "seconds": 15.0, "status": "green", "exit": 0} for _ in range(5)),
+    ]
+    write(root, ".ratchet/timing.jsonl", "\n".join(json.dumps(r) for r in records) + "\n")
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    also = [line for line in capsys.readouterr().out.splitlines() if line.startswith("also:")]
+    assert len(also) == 1
+    assert "ceilings.seconds.bite-all" in also[0]
+    assert "100s" in also[0]
+    assert "13s" in also[0]
+    assert "5 green runs" in also[0]
+    assert "just budget bite-all --set" in also[0]
+
+
+def test_tier2_red_on_time_alone_names_gate_time_machine_and_way_out(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = repository(
+        tmp_path,
+        {
+            **ADOPTED,
+            "quality/thresholds.toml": (
+                "[ceilings.loop]\nseconds = 300\n\n[ceilings.seconds]\nmutation = 60\n"
+            ),
+            "justfile": 'tier2_gates := "mutation bite-all"\n',
+        },
+    )
+    red_run = [
+        {
+            "key": "mutation",
+            "tier": "tier2",
+            "seconds": 95.0,
+            "ceiling": 60.0,
+            "status": "red",
+            "exit": 0,
+            "m": 1.02,
+            "machine_read": True,
+            "run": "deep-1",
+        },
+        {
+            "key": "bite-all",
+            "tier": "tier2",
+            "seconds": 20.0,
+            "ceiling": 120.0,
+            "status": "green",
+            "exit": 0,
+            "m": 1.02,
+            "machine_read": True,
+            "run": "deep-1",
+        },
+    ]
+    write(root, ".ratchet/timing.jsonl", "\n".join(json.dumps(r) for r in red_run) + "\n")
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    also = [line for line in capsys.readouterr().out.splitlines() if line.startswith("also:")]
+    assert len(also) == 1
+    assert "mutation" in also[0]
+    assert "95.0s of 60s" in also[0]
+    assert "the machine explains none of it" in also[0]
+    assert "every gate passed" in also[0]
+    assert "raising the ceiling is an owner's record" in also[0]
+    assert "move it to tier 2" not in also[0]
+
+    failed_run = [
+        *red_run,
+        {
+            "key": "mutation",
+            "tier": "tier2",
+            "seconds": 95.0,
+            "ceiling": 60.0,
+            "status": "failed",
+            "exit": 1,
+            "m": 1.0,
+            "machine_read": True,
+            "run": "deep-2",
+        },
+    ]
+    write(root, ".ratchet/timing.jsonl", "\n".join(json.dumps(r) for r in failed_run) + "\n")
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    assert not any(line.startswith("also:") for line in capsys.readouterr().out.splitlines())
+
+    excused_run = [
+        {
+            "key": "mutation",
+            "seconds": 95.0,
+            "ceiling": 60.0,
+            "status": "red",
+            "exit": 0,
+            "m": 2.0,
+            "machine_read": True,
+            "run": "deep-3",
+        }
+    ]
+    write(root, ".ratchet/timing.jsonl", "\n".join(json.dumps(r) for r in excused_run) + "\n")
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    assert not any(line.startswith("also:") for line in capsys.readouterr().out.splitlines())
+
+    green_run = [
+        *red_run,
+        {
+            "key": "mutation",
+            "tier": "tier2",
+            "seconds": 40.0,
+            "ceiling": 60.0,
+            "status": "green",
+            "exit": 0,
+            "m": 1.0,
+            "machine_read": True,
+            "run": "deep-4",
+        },
+    ]
+    write(root, ".ratchet/timing.jsonl", "\n".join(json.dumps(r) for r in green_run) + "\n")
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    assert not any(line.startswith("also:") for line in capsys.readouterr().out.splitlines())
+
+    no_run_partial = [
+        {"key": "lint", "seconds": 99.0, "ceiling": 10.0, "status": "red", "exit": 0},
+        {
+            "key": "mutation",
+            "seconds": 120.0,
+            "ceiling": 60.0,
+            "status": "red",
+            "exit": 0,
+            "m": 1.2,
+            "machine_read": True,
+        },
+        {
+            "key": "bite-all",
+            "seconds": "bad",
+            "ceiling": 60.0,
+            "status": "red",
+            "exit": 0,
+        },
+        {
+            "key": "e2e",
+            "tier": "tier2",
+            "seconds": 90.0,
+            "ceiling": 60.0,
+            "status": "red",
+            "exit": 0,
+            "machine_read": False,
+        },
+    ]
+    write(root, ".ratchet/timing.jsonl", "\n".join(json.dumps(r) for r in no_run_partial) + "\n")
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    also = [line for line in capsys.readouterr().out.splitlines() if line.startswith("also:")]
+    assert len(also) == 2
+    assert any("mutation" in line and "the machine explains 20.0s of it" in line for line in also)
+    assert any("e2e" in line and "the machine could not be read" in line for line in also)
