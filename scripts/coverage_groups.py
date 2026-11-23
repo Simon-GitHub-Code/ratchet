@@ -237,7 +237,36 @@ def write(root: Path, found: list[Group], totals: dict[str, Tally]) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def problems(root: Path, reports: list[Path], *, write_back: bool = False) -> list[str]:
+def unrecorded(root: Path, found: list[Group], files: dict[str, Tally]) -> list[str]:
+    candidates = [
+        path
+        for path in gatelib.seen(root)
+        if not path.endswith(EXCLUDED_FROM_SCAN)
+        and (text := gatelib.read_text(root / path)) is not None
+        and text.strip()
+    ]
+    faults = []
+    for group in found:
+        if not group.absolute:
+            continue
+        for path in candidates:
+            if gatelib.matches(path, group.paths):
+                tally = files.get(path)
+                if tally is None or tally.lines == 0:
+                    faults.append(
+                        f"{path} in {group.key} has no recorded executable lines in the coverage"
+                        " report"
+                    )
+    return faults
+
+
+def problems(
+    root: Path,
+    reports: list[Path],
+    *,
+    write_back: bool = False,
+    check_unrecorded: bool = False,
+) -> list[str]:
     missing = [
         f"{r}: missing; run the suite with a Cobertura or LCOV report first"
         for r in reports
@@ -272,6 +301,8 @@ def problems(root: Path, reports: list[Path], *, write_back: bool = False) -> li
         else:
             print(f"{group.key}: not measured; no file in the report falls in it")
         faults += judge(group, tally, root, patterns=patterns)
+    if check_unrecorded:
+        faults += unrecorded(root, found, files)
     return faults
 
 
@@ -280,11 +311,20 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--root", default=".")
     parser.add_argument("--report", action="append", default=None, help="repeatable")
     parser.add_argument("--write", action="store_true")
+    parser.add_argument("--check-unrecorded", action="store_true")
     options = parser.parse_args(argv[1:])
     root = Path(options.root).resolve()
     reports = [Path(r) for r in options.report or ["coverage.xml"]]
     reports = [r if r.is_absolute() else root / r for r in reports]
-    return gatelib.report("coverage", problems(root, reports, write_back=options.write))
+    return gatelib.report(
+        "coverage",
+        problems(
+            root,
+            reports,
+            write_back=options.write,
+            check_unrecorded=options.check_unrecorded,
+        ),
+    )
 
 
 if __name__ == "__main__":
