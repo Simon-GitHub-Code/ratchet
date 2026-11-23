@@ -1,4 +1,5 @@
 import shlex
+import shutil
 from pathlib import Path
 
 import pytest
@@ -557,6 +558,11 @@ def test_a_copys_tree_id_leaves_out_what_the_harness_and_the_interpreter_write(
         ".in_use",
         ".orphaned_at",
         ".claude-plugin/commit",
+        "package-lock.json",
+        "hooks.json",
+        "plugin.json",
+        "hooks/hooks.json",
+        "skills/init/templates/CLAUDE.md",
     ):
         repos.write(copy, name, "left out\n")
     assert plugin_pin.copy_tree_id(copy) == held
@@ -571,3 +577,68 @@ def test_a_folder_that_is_not_there_or_cannot_be_read_has_no_tree_id(tmp_path: P
         assert plugin_pin.copy_tree_id(tmp_path / "copy") is None
     finally:
         (tmp_path / "copy/scripts/x.py").chmod(0o644)
+
+
+def copy_without_git(source: Path, destination: Path) -> Path:
+    shutil.copytree(source, destination, symlinks=True, ignore=shutil.ignore_patterns(".git"))
+    return destination
+
+
+def test_release_tree_matches_copy_tree_id_across_harness_layouts(tmp_path: Path) -> None:
+    source = repos.repository(
+        tmp_path / "source",
+        {
+            MANIFEST: '{"version": "0.15.0"}',
+            "hooks/hooks.json": '{"hooks": {}}\n',
+            "hooks/guard.py": "#!/usr/bin/env python3\nprint('guard')\n",
+            "skills/init/templates/CLAUDE.md": "# Claude\n",
+            "scripts/plugin_pin.py": "print(1)\n",
+            "scripts/__pycache__/plugin_pin.pyc": "cached",
+            "a.b": "dot before slash\n",
+            "a/inner.txt": "inside a\n",
+            "café.txt": "unicode\n",
+        },
+    )
+    (source / "hooks/guard.py").chmod(0o755)
+    (source / "link-to-guard").symlink_to("hooks/guard.py")
+    repos.commit(source, "feat(core): add executable and symlink")
+    expected = plugin_pin.release_tree(source)
+    assert expected is not None
+    assert expected != tree(source)
+    assert plugin_pin.copy_tree_id(source) == expected
+
+    agy = copy_without_git(source, tmp_path / "agy")
+    (agy / "hooks/hooks.json").unlink()
+    repos.write(agy, "hooks.json", '{"hooks": {}}\n')
+    repos.write(agy, "plugin.json", '{"name": "ratchet"}\n')
+    assert plugin_pin.copy_tree_id(agy) == expected
+
+    codex = copy_without_git(source, tmp_path / "codex")
+    (codex / "skills/init/templates/CLAUDE.md").unlink()
+    assert plugin_pin.copy_tree_id(codex) == expected
+
+    pi = copy_without_git(source, tmp_path / "pi")
+    repos.write(pi, "package-lock.json", '{"lockfileVersion": 3}\n')
+    assert plugin_pin.copy_tree_id(pi) == expected
+
+
+def test_release_tree_handles_empty_filtered_tree_and_unreadable_git_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    only_excluded = repos.repository(
+        tmp_path / "only-excluded", {"hooks/hooks.json": '{"hooks": {}}\n'}
+    )
+    empty_tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+    assert plugin_pin.release_tree(only_excluded) == empty_tree
+    assert plugin_pin.copy_tree_id(only_excluded) == empty_tree
+
+    used, _ = plugin(tmp_path / "unreadable")
+    real_git_output = plugin_pin.git_output
+
+    def failing_ls_tree(folder: Path, *args: str) -> str | None:
+        if "ls-tree" in args:
+            return None
+        return real_git_output(folder, *args)
+
+    monkeypatch.setattr(plugin_pin, "git_output", failing_ls_tree)
+    assert plugin_pin.release_tree(used) is None

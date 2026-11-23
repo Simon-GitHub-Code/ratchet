@@ -15,7 +15,19 @@ JUSTFILE = (Path(__file__).resolve().parents[2] / "skills/adopt/templates/justfi
     encoding="utf-8"
 )
 HOSTILE = 'a"$(touch pwned)`touch pwned2`$HOME'
-EXCLUDED = {".git", ".in_use", "__pycache__"}
+EXCLUDED_DIRS = {".git", ".in_use", "__pycache__"}
+EXCLUDED_FILES = frozenset(
+    {
+        ".claude-plugin/commit",
+        ".in_use",
+        ".orphaned_at",
+        "package-lock.json",
+        "hooks.json",
+        "plugin.json",
+        "hooks/hooks.json",
+        "skills/init/templates/CLAUDE.md",
+    }
+)
 
 
 def raw_tree_id(copy: Path, scratch: Path) -> str:
@@ -23,11 +35,11 @@ def raw_tree_id(copy: Path, scratch: Path) -> str:
     shutil.copytree(repos.skeleton(), work / ".git", symlinks=True)
     for directory, names, files in os.walk(copy):
         linked = [name for name in names if (Path(directory) / name).is_symlink()]
-        names[:] = [name for name in names if name not in EXCLUDED]
+        names[:] = [name for name in names if name not in EXCLUDED_DIRS]
         for name in [*files, *(name for name in linked if name in names)]:
             path = Path(directory) / name
             relative = path.relative_to(copy).as_posix()
-            if relative in (".claude-plugin/commit", ".orphaned_at"):
+            if relative in EXCLUDED_FILES:
                 continue
             if path.is_symlink():
                 mode, sha = "120000", hash_object(work, "--stdin", feed=str(path.readlink()))
@@ -364,3 +376,56 @@ def test_a_record_naming_a_deleted_copy_is_red_in_one_line_not_a_traceback(
     )
     assert "Traceback" not in done.stderr
     assert done.stderr == ""
+
+
+def git_checkout_copy(destination: Path) -> tuple[Path, str]:
+    checkout = release_copy(destination)
+    repos.git(checkout, "init", "-q")
+    repos.git(checkout, "config", "user.email", "t@example.invalid")
+    repos.git(checkout, "config", "user.name", "t")
+    repos.git(checkout, "config", "commit.gpgsign", "false")
+    repos.git(checkout, "add", "-A", "-f")
+    repos.git(checkout, "commit", "-q", "-m", "chore: snapshot plugin")
+    return checkout, repos.git(checkout, "rev-parse", "HEAD")
+
+
+def test_just_plugin_pin_passes_for_agy_codex_and_pi_layouts_and_catches_script_edits(
+    tmp_path: Path,
+) -> None:
+    checkout, commit = git_checkout_copy(tmp_path / "checkout")
+    pinned = plugin_pin.release_tree(checkout)
+    assert pinned is not None
+    assert pinned == plugin_pin.copy_tree_id(checkout)
+    assert pinned == raw_tree_id(checkout, tmp_path / "oracle")
+
+    version = plugin_pin.version_of(checkout)
+    pin = f"- Ratchet plugin: {version} at {commit} tree {pinned}"
+    root = repos.repository(
+        tmp_path / "repo",
+        {"justfile": JUSTFILE, "docs/process/binding.md": f"# B\n\n## Runner\n\n{pin}\n"},
+    )
+
+    agy = release_copy(tmp_path / "agy")
+    (agy / "hooks/hooks.json").unlink()
+    repos.write(agy, "hooks.json", '{"hooks": {}}\n')
+    repos.write(agy, "plugin.json", '{"name": "ratchet"}\n')
+
+    codex = release_copy(tmp_path / "codex")
+    (codex / "skills/init/templates/CLAUDE.md").unlink()
+
+    pi = release_copy(tmp_path / "pi")
+    repos.write(pi, "package-lock.json", '{"lockfileVersion": 3}\n')
+
+    for copy in (checkout, agy, codex, pi):
+        done = just(root, "plugin-pin", plugin=copy)
+        assert done.returncode == 0, f"{copy.name}: {done.stdout}{done.stderr}"
+
+    repos.write(agy, "hooks/guard.py", "print('tampered')\n")
+    tampered_guard = just(root, "plugin-pin", plugin=agy)
+    assert tampered_guard.returncode == 1
+    assert tampered_guard.stdout.startswith(f"the plugin at {agy} is tree ")
+
+    repos.write(pi, "scripts/plugin_pin.py", "print('tampered')\n")
+    tampered_pin = just(root, "plugin-pin", plugin=pi)
+    assert tampered_pin.returncode == 1
+    assert tampered_pin.stdout.startswith(f"the plugin at {pi} is tree ")

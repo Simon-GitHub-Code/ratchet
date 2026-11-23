@@ -3359,7 +3359,7 @@ def check_plugin_pin(root: Path) -> Iterable[Finding]:
         problem = (
             f"the pin names no tree id, so no copy of the plugin can be held to the release; write"
             f" `- Ratchet plugin: {pin.version} at {pin.commit} tree <the tree of that commit>`"
-            " (`git rev-parse <commit>^{tree}` in a clone of the plugin gives it), or run the"
+            " (`plugin_pin.release_tree` on a clone of the plugin gives it), or run the"
             " plugin's upgrade"
         )
         if plugin_pin.commit_of(plugin_pin.PLUGIN) == pin.commit:
