@@ -3047,3 +3047,44 @@ def test_open_hands_the_pipeline_no_gate_when_no_criterion_names_one(
     root = project(tmp_path, **{"docs/process/binding.md": GATED_BINDING})
     assert run(root, "open", ALPHA) == 0
     assert json.loads(capsys.readouterr().out)["named_gates"] == []
+
+
+def test_open_and_revive_seed_moved_build_cache_when_binding_declares_it(
+    tmp_path: Path, capsys: Out
+) -> None:
+    moved_binding = (
+        binding(MERGE)
+        + "\n## Speed\n\n- Build: gate `check`; caches `.build-cache`; cold 60s; warm 5s;"
+        " reuse moved\n"
+    )
+    root = project(
+        tmp_path,
+        **{"docs/process/binding.md": moved_binding, ".gitignore": ".build-cache/\n"},
+    )
+    write(root, ".build-cache/warm.o", "warm\n")
+    assert run(root, "open", ALPHA) == 0
+    opened = json.loads(capsys.readouterr().out)
+    assert "build_env" not in opened
+    tree = Path(opened["worktree"])
+    assert (tree / ".build-cache" / "warm.o").read_text(encoding="utf-8") == "warm\n"
+
+    build(root, BRANCH_A, {"src/b.py": "B = 1\n"})
+    git(root, "worktree", "remove", "--force", str(tree))
+    assert drain.revive(offline(root), BRANCH_A, tree) is None
+    assert (tree / ".build-cache" / "warm.o").read_text(encoding="utf-8") == "warm\n"
+
+
+def test_open_exposes_shared_build_env_when_binding_declares_shared_reuse(
+    tmp_path: Path, capsys: Out
+) -> None:
+    shared_binding = (
+        binding(MERGE)
+        + "\n## Speed\n\n- Build: gate `check`; caches `.build-cache`; cold 60s; warm 5s;"
+        " reuse shared `BUILD_CACHE=.shared-cache`\n"
+    )
+    root = project(tmp_path, **{"docs/process/binding.md": shared_binding})
+    assert run(root, "open", ALPHA) == 0
+    opened = json.loads(capsys.readouterr().out)
+    expected = str((root / ".shared-cache").resolve())
+    assert opened["build_env"] == {"BUILD_CACHE": expected}
+    assert Path(expected).is_dir()
