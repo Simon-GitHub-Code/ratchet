@@ -12,6 +12,7 @@ import pytest
 
 import gatelib
 import report
+import runrecord
 from tests import repos
 
 HEAD = "| Report | Producer | Paths | Readers | Judged by |\n| --- | --- | --- | --- | --- |\n"
@@ -407,3 +408,22 @@ def test_a_reader_killed_mid_production_leaves_the_lock_held_and_no_record(
             assert second.wait(timeout=60) == 0
     waiting_for(lambda: marks.read_text(encoding="utf-8").split().count("end") == 2, "both ended")
     assert marks.read_text(encoding="utf-8").split() == ["start", "end", "start", "end"]
+
+
+def test_obtain_records_producer_run_only_when_executed_in_a_real_run(
+    work: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    timing = work / runrecord.TIMING
+    assert ask(work) == 0
+    assert not timing.exists()
+
+    monkeypatch.setenv(report.RUN, "run-rec")
+    assert ask(work) == 0
+    assert ask(work) == 0
+    records = list(runrecord.read(timing))
+    assert len(records) == 1
+    assert records[0]["kind"] == runrecord.PRODUCER
+    assert records[0]["report"] == "suite"
+    assert records[0]["producer"] == "suite-report"
+    assert records[0]["run"] == "run-rec"
+    assert records[0]["tree"] == report.content_id(work)

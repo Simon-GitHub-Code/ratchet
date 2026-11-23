@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import errno
+import hashlib
 import json
 import math
 import os
@@ -15,14 +16,16 @@ from typing import TYPE_CHECKING
 
 import gatelib
 import markdown_text
-import report
+import plugin_pin
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+RUN = "RATCHET_RUN"
 NO_RUN = "none: RATCHET_RUN is not set"
 NO_TREE = "unknown: the tree's content could not be read"
 TIER = "tier"
+PRODUCER = "report-producer"
 CACHE_MISSING = "cache-missing"
 CACHE_RESTORE = "cache-restore"
 FAULT = "fault"
@@ -55,9 +58,34 @@ REFUSED = {
 UNRECORDED: set[tuple[Path, str]] = set()
 
 
+def content_id(root: Path) -> str:
+    listed = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        capture_output=True,
+        check=True,
+    ).stdout.decode()
+    digest = hashlib.sha1(usedforsecurity=False)
+    for name in sorted(set(listed.split("\0")) - {""}):
+        if Path(name).parts[0] == gatelib.STATE.name:
+            continue
+        path = root / name
+        try:
+            mode = path.lstat().st_mode
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(mode):
+            kind, body = b"120000", os.fsencode(path.readlink())
+        elif stat.S_ISREG(mode):
+            kind, body = (b"100755" if mode & stat.S_IXUSR else b"100644"), path.read_bytes()
+        else:
+            continue
+        digest.update(kind + b" " + os.fsencode(name) + b"\0" + plugin_pin.object_id(b"blob", body))
+    return digest.hexdigest()
+
+
 def tree_id(root: Path) -> str:
     try:
-        return report.content_id(root)
+        return content_id(root)
     except (subprocess.CalledProcessError, OSError):
         return NO_TREE
 
@@ -65,7 +93,7 @@ def tree_id(root: Path) -> str:
 def stamp(root: Path, tree: str | None = None) -> dict[str, str]:
     return {
         "at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "run": os.environ.get(report.RUN) or NO_RUN,
+        "run": os.environ.get(RUN) or NO_RUN,
         "tree": tree if tree is not None else tree_id(root),
     }
 
@@ -161,6 +189,8 @@ class Facts:
     missing: list[object] | None = None
     faults: dict[tuple[object, object], tuple[float, bool]] = field(default_factory=dict)
     restored: dict[tuple[str, ...], int] = field(default_factory=dict)
+    producer_counts: dict[tuple[str, str], int] = field(default_factory=dict)
+    latest_producer_run: dict[str, str] = field(default_factory=dict)
 
 
 HELD: contextvars.ContextVar[dict[Path, Facts] | None] = contextvars.ContextVar(
@@ -189,6 +219,23 @@ def record_restore(record: dict[str, object], found: Facts) -> None:
         found.restored[tuple(raw_paths)] = size
 
 
+def record_producer(record: dict[str, object], found: Facts) -> None:
+    run_id = record.get("run")
+    if not isinstance(run_id, str) or not run_id or run_id == NO_RUN:
+        return
+    kind = record.get("kind")
+    if kind == PRODUCER:
+        name = record.get("producer")
+    elif "kind" not in record:
+        name = record.get("key")
+    else:
+        return
+    if isinstance(name, str) and name:
+        pair = (run_id, name)
+        found.producer_counts[pair] = found.producer_counts.get(pair, 0) + 1
+        found.latest_producer_run[name] = run_id
+
+
 def facts(path: Path) -> Facts:
     held = HELD.get()
     if held is not None and path in held:
@@ -196,6 +243,7 @@ def facts(path: Path) -> Facts:
     found = Facts()
     for record in read(path):
         kind, key, seconds = record.get("kind"), record.get("key"), record.get("seconds")
+        record_producer(record, found)
         if isinstance(seconds, int | float):
             if isinstance(key, str):
                 found.seconds[key] = float(seconds)
