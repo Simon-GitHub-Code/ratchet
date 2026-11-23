@@ -178,6 +178,7 @@ JOB_LIST_SHAPE = ("ci_jobs.py", "turns the justfile's job list into the jobs tie
 CI_RUN_MARKER = "RATCHET_RUN: ${{ github.run_id }}"
 CI_LOOP_MARKER = 'forge_runs.py" loop'
 CORE_CI_JOBS = frozenset({"proven", "tier0", "shape", "tier1", "tier1-long"})
+REQUIRED_CI_JOBS = CORE_CI_JOBS - {"proven"}
 TIER_STEP_SHAPE = {
     "ci.yml": (JOB_LIST_SHAPE,),
     "deep.yml": (
@@ -2916,6 +2917,11 @@ def with_ci_run(name: str) -> gatelib.Want:
 def with_ci_loop(name: str) -> gatelib.Want:
     template = template_file(f".github/workflows/{name}")
     job = template[template.index("\n  loop:\n") + 1 :].rstrip("\n")
+    job_no_proven = job.replace(
+        " && (needs.proven.result == 'skipped' || needs.proven.outputs.skip != 'true')",
+        "",
+        1,
+    ).replace("[proven, ", "[", 1)
 
     def want(current: str | None) -> str:
         text = current or ""
@@ -2924,7 +2930,8 @@ def with_ci_loop(name: str) -> gatelib.Want:
         if "jobs:" not in lines or CI_LOOP_MARKER in text:
             return text
         heads = job_heads(lines)
-        if set(heads.values()) != CORE_CI_JOBS:
+        found_jobs = set(heads.values())
+        if found_jobs not in (CORE_CI_JOBS, REQUIRED_CI_JOBS):
             return text
         after_jobs = lines.index("jobs:") + 1
         if any(line[:1] not in ("", " ", "#") for line in lines[after_jobs:]):
@@ -2932,7 +2939,8 @@ def with_ci_loop(name: str) -> gatelib.Want:
         refs = plugin_pin.refs(text)
         if len(refs) != 1:
             return text
-        added = job.replace(PLUGIN_CHECKOUT_PLACEHOLDER, next(iter(refs)))
+        chosen = job if "proven" in found_jobs else job_no_proven
+        added = chosen.replace(PLUGIN_CHECKOUT_PLACEHOLDER, next(iter(refs)))
         body = "\n".join(lines).rstrip("\n") + "\n" + added
         return (body + ("\n" if text.endswith(("\n", "\r\n")) else "")).replace("\n", eol)
 
