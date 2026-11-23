@@ -530,15 +530,20 @@ def test_an_older_run_with_accepted_in_flight_requests_beside_taken_resets_is_gr
     marker, _ = until_stopped(tmp_path, monkeypatch)
     taken: set[gatelib.Connection] = set()
     lock = threading.Lock()
+    first = [True]
     entered = threading.Event()
-    answered = threading.Event()
+    signalled = threading.Event()
 
     def handle_mix(handler: http.server.BaseHTTPRequestHandler) -> None:
-        if not entered.is_set():
+        with lock:
+            is_first = first[0]
+            first[0] = False
+        if is_first:
             entered.set()
-            answered.wait(5)
+            signalled.wait(5)
             servers.reply(handler, 200)
             return
+        signalled.wait(5)
         with lock:
             taken.add(gatelib.connection(handler.connection.getsockname(), handler.client_address))
             gatelib.write_stopping(marker, held(url, *taken))
@@ -549,8 +554,9 @@ def test_an_older_run_with_accepted_in_flight_requests_beside_taken_resets_is_gr
 
         def signal_once_in_flight() -> None:
             entered.wait(5)
-            gatelib.write_stopping(marker, held(url))
-            answered.set()
+            with lock:
+                gatelib.write_stopping(marker, held(url, *taken))
+            signalled.set()
 
         signaller = threading.Thread(target=signal_once_in_flight, daemon=True)
         signaller.start()
