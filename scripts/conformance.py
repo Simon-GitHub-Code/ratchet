@@ -178,6 +178,7 @@ JOB_LIST_SHAPE = ("ci_jobs.py", "turns the justfile's job list into the jobs tie
 CI_RUN_MARKER = "RATCHET_RUN: ${{ github.run_id }}"
 CI_LOOP_MARKER = 'forge_runs.py" loop'
 CORE_CI_JOBS = frozenset({"proven", "tier0", "shape", "tier1", "tier1-long"})
+REQUIRED_CI_JOBS = CORE_CI_JOBS - {"proven"}
 TIER_STEP_SHAPE = {
     "ci.yml": (JOB_LIST_SHAPE,),
     "deep.yml": (
@@ -326,9 +327,15 @@ WORKFLOWS = Path(".github/workflows")
 CACHE_USES = "uses: actions/cache"
 CACHE_KEY = re.compile(r"^(?P<head>\s*key:\s*)(?P<value>.*?)(?P<note>\s+#.*)?$")
 CACHE_ACTION = re.compile(r"^actions/cache(?:/(?:restore|save))?@\S+$")
+CACHE_RESTORE_PREFIX = "actions/cache/restore@"
 FLOW_MATRIX = re.compile(r"\bmatrix\s*:")
 GHA_EXPR = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
-MATRIX_EXPR = re.compile(r"\bmatrix\s*(?:\.[A-Za-z_][A-Za-z0-9_-]*|\[\s*['\"][^'\"]+['\"]\s*\])")
+MATRIX_TARGET = r"matrix\s*(?:\.[A-Za-z_][A-Za-z0-9_-]*|\[\s*['\"][^'\"]+['\"]\s*\])"
+MATRIX_EXPR = re.compile(rf"\b{MATRIX_TARGET}")
+SINGLE_LITERAL = r"(?:'[^']*'|\"[^\"]*\"|\d+(?:\.\d+)?|true|false)"
+MATRIX_LITERAL_EQ = re.compile(
+    rf"(?:\b{MATRIX_TARGET}\s*==\s*{SINGLE_LITERAL}|{SINGLE_LITERAL}\s*==\s*\b{MATRIX_TARGET})"
+)
 YAML_JOB_KEY = re.compile(r"^([A-Za-z_][\w-]*):(?:\s|$)")
 MULTILINE_KEY = frozenset({"|", ">", "|-", ">-", "|+", ">+"})
 PER_RUN_PARTS = ("github.sha", "github.run_id")
@@ -2218,15 +2225,53 @@ def step_cache_key(step_lines: list[str]) -> tuple[bool, str | None]:
     return flow_cache_key(first) if first.startswith("{") else block_cache_key(step_lines)
 
 
+def step_field(step_lines: list[str], field: str) -> str | None:
+    first = step_lines[0].lstrip(" ")
+    if first.startswith("{"):
+        value = flow_value(first, field)
+        return (unquote_yaml(value) or None) if value else None
+    section = mapping_section(step_lines, field)
+    if section is None:
+        return None
+    inline, body = section
+    if inline in MULTILINE_KEY:
+        return " ".join(strip_yaml_comment(line).strip() for line in body).strip() or None
+    return unquote_yaml(inline) or None
+
+
+def is_single_leg_matrix_if(cond: str | None) -> bool:
+    if not cond:
+        return False
+    expr = GHA_EXPR.sub(lambda match: match.group(1), cond).strip()
+    if "||" in expr:
+        return False
+    for raw_part in expr.split("&&"):
+        part = raw_part.strip()
+        while part.startswith("(") and part.endswith(")"):
+            part = part[1:-1].strip()
+        if MATRIX_LITERAL_EQ.fullmatch(part):
+            return True
+    return False
+
+
 def matrix_cache_finding(root: Path, path: Path, content: str) -> Iterable[Finding]:
     rel = str(path.relative_to(root))
     for job, job_lines in workflow_job_blocks(content):
         if not job_has_matrix(job_lines):
             continue
+        seen: set[str | None] = set()
         steps = mapping_section(job_lines, "steps")
         for step_lines in step_items(steps[1] if steps else []):
+            uses = step_field(step_lines, "uses")
+            if uses is not None and uses.startswith(CACHE_RESTORE_PREFIX):
+                continue
+            if is_single_leg_matrix_if(step_field(step_lines, "if")):
+                continue
             is_cache, key = step_cache_key(step_lines)
             if is_cache and (key is None or not has_matrix_expr(key)):
+                if key in seen:
+                    continue
+                seen.add(key)
                 what = (
                     f"cache key `{key}` names no matrix value"
                     if key is not None
@@ -2916,6 +2961,11 @@ def with_ci_run(name: str) -> gatelib.Want:
 def with_ci_loop(name: str) -> gatelib.Want:
     template = template_file(f".github/workflows/{name}")
     job = template[template.index("\n  loop:\n") + 1 :].rstrip("\n")
+    job_no_proven = job.replace(
+        " && (needs.proven.result == 'skipped' || needs.proven.outputs.skip != 'true')",
+        "",
+        1,
+    ).replace("[proven, ", "[", 1)
 
     def want(current: str | None) -> str:
         text = current or ""
@@ -2924,7 +2974,8 @@ def with_ci_loop(name: str) -> gatelib.Want:
         if "jobs:" not in lines or CI_LOOP_MARKER in text:
             return text
         heads = job_heads(lines)
-        if set(heads.values()) != CORE_CI_JOBS:
+        found_jobs = set(heads.values())
+        if found_jobs not in (CORE_CI_JOBS, REQUIRED_CI_JOBS):
             return text
         after_jobs = lines.index("jobs:") + 1
         if any(line[:1] not in ("", " ", "#") for line in lines[after_jobs:]):
@@ -2932,7 +2983,8 @@ def with_ci_loop(name: str) -> gatelib.Want:
         refs = plugin_pin.refs(text)
         if len(refs) != 1:
             return text
-        added = job.replace(PLUGIN_CHECKOUT_PLACEHOLDER, next(iter(refs)))
+        chosen = job if "proven" in found_jobs else job_no_proven
+        added = chosen.replace(PLUGIN_CHECKOUT_PLACEHOLDER, next(iter(refs)))
         body = "\n".join(lines).rstrip("\n") + "\n" + added
         return (body + ("\n" if text.endswith(("\n", "\r\n")) else "")).replace("\n", eol)
 
@@ -4170,7 +4222,7 @@ def ratchet_asks(justfile: str) -> Finding:
 def with_loop_budget(recipe: str) -> gatelib.Want:
     template = template_file("justfile")
     block = next((b for b in justfile_text.blocks(template.split("\n")) if b.name == recipe), None)
-    after = "\n".join(template.split("\n")[block.head : block.end]) if block is not None else ""
+    after = "\n".join(template.split("\n")[block.head + 1 : block.end]) if block is not None else ""
     before = after.replace(f" {LOOP_BUDGET_FLAG}", "", 1)
 
     def want(current: str | None) -> str:
@@ -4181,8 +4233,11 @@ def with_loop_budget(recipe: str) -> gatelib.Want:
         found = next((b for b in justfile_text.blocks(lines) if b.name == recipe), None)
         if found is None:
             return text
-        held = "\n".join(lines[found.head : found.end])
-        return text.replace(before, after, 1) if before in held else text
+        held = "\n".join(lines[found.head + 1 : found.end])
+        if before not in held:
+            return text
+        lines[found.head + 1 : found.end] = held.replace(before, after, 1).split("\n")
+        return "\n".join(lines)
 
     return want
 

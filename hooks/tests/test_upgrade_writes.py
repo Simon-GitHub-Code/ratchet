@@ -874,6 +874,41 @@ def test_a_justfile_check_and_check_fast_in_the_previous_form_gain_budget_loop(
     assert conformance.with_loop_budget("nonexistent")("check:\n    true\n") == "check:\n    true\n"
 
 
+def test_a_justfile_check_and_check_fast_with_extra_prerequisites_gain_budget_loop(
+    repo: Path,
+) -> None:
+    before = text(repo, JUSTFILE)
+    with_prereq = (
+        before.replace(" --budget loop", "")
+        .replace("check: plugin-pin\n", "check: plugin-pin install\n", 1)
+        .replace("check-fast: plugin-pin\n", "check-fast: plugin-pin install\n", 1)
+    )
+    (repo / JUSTFILE).write_text(with_prereq, encoding="utf-8")
+    found = conformance.findings(repo)
+    assert [(f.path, type(f.fix)) for f in found] == [
+        (JUSTFILE, conformance.Auto),
+        (JUSTFILE, conformance.Auto),
+    ]
+    assert settle(repo) == []
+    upgraded = text(repo, JUSTFILE)
+    assert "check: plugin-pin install\n" in upgraded
+    assert "check-fast: plugin-pin install\n" in upgraded
+    assert upgraded == before.replace(
+        "check: plugin-pin\n", "check: plugin-pin install\n", 1
+    ).replace("check-fast: plugin-pin\n", "check-fast: plugin-pin install\n", 1)
+
+    edited_body = with_prereq.replace(
+        "{{parallel}} {{serial0}}", "{{parallel}} --jobs 2 {{serial0}}"
+    )
+    (repo / JUSTFILE).write_text(edited_body, encoding="utf-8")
+    left = settle(repo)
+    assert len(left) == 1
+    assert isinstance(left[0].fix, conformance.Agent)
+    assert text(repo, JUSTFILE) == edited_body.replace(
+        "{{parallel}} --fail-fast", "{{parallel}} --budget loop --fail-fast"
+    )
+
+
 def test_a_hand_edited_justfile_check_without_budget_loop_is_left_for_an_agent(
     repo: Path,
 ) -> None:
@@ -928,6 +963,32 @@ def test_ci_gains_ratchet_run_and_loop_job_via_auto_edits_and_falls_back_when_ha
     assert conformance.with_ci_loop("ci.yml")(
         "jobs:\n  proven:\n  tier0:\n  shape:\n  tier1:\n  tier1-long:\n"
     ).endswith("  tier1-long:\n")
+
+
+def test_ci_without_proven_gains_loop_job_via_auto_edit(repo: Path) -> None:
+    before = text(repo, CI)
+    without_proven = (
+        before.split("\n  proven:\n", 1)[0]
+        + "\n  tier0:\n"
+        + before.split("\n  tier0:\n", 1)[1]
+        .split("\n  loop:\n", 1)[0]
+        .replace(
+            "    if: ${{ !cancelled() && (needs.proven.result == 'skipped'"
+            " || needs.proven.outputs.skip != 'true') }}\n"
+            "    needs: proven\n",
+            "",
+        )
+        + "\n"
+    )
+    (repo / CI).write_text(without_proven, encoding="utf-8")
+    found = conformance.findings(repo)
+    assert [(f.path, type(f.fix)) for f in found] == [(CI, conformance.Auto)]
+    assert settle(repo) == []
+    upgraded = text(repo, CI)
+    loop_block = upgraded.split("\n  loop:\n", 1)[1]
+    assert "    if: always() && !cancelled()\n" in loop_block
+    assert "needs.proven" not in loop_block
+    assert "    needs: [tier0, shape, tier1, tier1-long]\n" in loop_block
 
 
 def test_deep_gains_shard_check_and_unsharded_bite_recipes_upgrade_via_auto_edits(
