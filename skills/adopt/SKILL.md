@@ -110,7 +110,7 @@ Tell the owner this before step 1. It is not a question.
 
 5. **Take the tool for every row bound now, and for the tests.** Go through the floor, the owed rows of step 4 and the tests one at a time, each with the tool the architecture round chose for its concept. Any other `later:` row gets no tool until its trigger fires. A row bound now whose concept the round named no tool for gets one chosen by the rules below, which are also the rules the sets you offered at step 3 were chosen by.
 
-   - **The tests are provisioned, not asked.** The first feature writes its tests before any module exists, so every repository gets its test runner now, and a property-testing library where the runner has none, while their row stays `later: code:source`. Step 7 names them in the binding's Tests section, with one row of its suites table for each suite and the recipe that runs given files of it (`none: <reason>` where it cannot), and step 9 sets `test_runner` in the `justfile`. `/ratchet:safeguard` later binds the row to them and installs nothing.
+   - **The tests are provisioned, not asked.** The first feature writes its tests before any module exists, so every repository gets its test runner now, a property-testing library where the runner has none, and a recorded-output facility (`built in` where the runner includes one) for expect tests, while their row stays `later: code:source`. Step 7 names them in the binding's Tests section (including `- Recorded-output facility:`) with one row of its suites table for each suite and the recipe that runs given files of it (`none: <reason>` where it cannot), declares recorded-output paths and any inline snapshot pattern in `## Recorded outputs` beside the tests (never under `quality/**`), and step 9 sets `test_runner` in the `justfile`. `/ratchet:safeguard` later binds the row to them and installs nothing.
    - **What is there wins**, unless you give the reason to replace it.
    - **Look it up, now.** What you remember of a tool is a conjecture. Check its current documentation (Context7 or a web search) that it exists, is maintained and answers the row, and say which rows you could not check. Versions come from the registry through the package manager's add command, never from memory, and never from this plugin.
    - **Prefer** one tool for several rows; a tool the package manager locks; a tool that fails when it finds nothing to run; a tool that uses every core and can run one shard of several.
@@ -119,12 +119,12 @@ Tell the owner this before step 1. It is not a question.
 
    Write one table, for the pull request and the hand-over:
    - each row bound now with its tier, the tool and where you checked it;
-   - the test runner and property-testing library on a line marked `provisioned`;
+   - the test runner, property-testing library and recorded-output facility on a line marked `provisioned`;
    - the `later:` rows on one line per trigger;
    - the rows left out, on one line;
    - under it, what you assume without asking, with reasons: the non-negotiables and their gates, and, where their rows are bound now, the telemetry and flag seams and who may turn a flag on in production (the owner, unless a record says otherwise).
 
-   Done when every row bound now has a tool or a reasoned `none`, the test runner and, where it has none, a property-testing library are chosen, and the table is written.
+   Done when every row bound now has a tool or a reasoned `none`, the test runner and, where it has none, a property-testing library and recorded-output facility are chosen, and the table is written.
 
 6. **Settle what is assumed.** A life event the owner answered yes to: write it on `- Life events:` and bind its owed rows with the rest.
 

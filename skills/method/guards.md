@@ -148,7 +148,7 @@ The `guard-diff` entry point (tier 1) lists every changed path that matches the 
 
 A change reaches the default branch in one of two ways: the merge judge passes it and it merges itself, or the owner merges it. The judge is `scripts/merge_ready.py`, behind the `merge-ready` entry point.
 
-The owner merges when any of these holds, each under its own heading below: a guard path changed, a one-way door (from the first commit for an asked project's flag registry, and once `deployed` or holding `irreplaceable-data` for the rest), new surface with no flag (from the first commit in an asked project unless the ticket carries the owner's no with no open yes, or a `yes` ticket whose key is missing or on), a labelled ticket or its spec changed in any change (save a build closing its own ticket), a dispute, no clean approval, or the setting.
+The owner merges when any of these holds, each under its own heading below: a guard path changed, a one-way door (from the first commit for an asked project's flag registry, and once `deployed` or holding `irreplaceable-data` for the rest), new surface with no flag (from the first commit in an asked project unless the ticket carries the owner's no with no open yes, or a `yes` ticket whose key is missing or on), an altered recorded output once `depended-on` (`expect-output`), a labelled ticket or its spec changed in any change (save a build closing its own ticket), a dispute, no clean approval, or the setting.
 
 ### A guard path changed
 
@@ -182,9 +182,13 @@ When the found ticket's `Flag:` line is a yes naming `<key>`, `flags.toml` at th
 
 The surface check reads the `on = "removal"` doors (a route, a command or an exported symbol in a contract artefact or public-surface snapshot): `flags.toml` gains no flag that is off, and no line the change adds outside `docs/`, the registry and those files names one that is off. The judge prints `unflagged` and the owner sees what ships. After `deployed`, it is asked of the application types the method asks the flag questions of (and unknown or missing types), read from the binding on the default branch, so a library is exempt.
 
+### An altered recorded output
+
+Once the binding's `- Life events:` line declares `depended-on`, altering or removing a recorded output that existed at the merge base sends the merge to the owner (`expect-output`), because re-accepting an expected output changes what tests claim the software already promised. `scripts/expect_outputs.py` reads the binding's `## Recorded outputs` table at the merge base (so a branch cannot narrow what is watched): for a row with no `Pattern`, any modification, deletion or rename of a matching file that existed at the merge base counts as altered; for a row with a `Pattern` (inline expectations inside a test file), any change to or removal of a merge-base line matching `Pattern` counts as altered. Newly added recorded outputs pass, and before `depended-on` is declared the judge prints a `note:` letting the change through.
+
 ### Before a life event is declared
 
-When a door or new surface is let through because no event is declared yet, the judge prints a `note:` line saying what it let through and why, so the owner sees it. The judge reads the binding's `- Life events:` line at the merge base and at the default branch's tip, never at the head, so a change that declares an event, or drops one, is not judged by its own line. The binding is a guard path, so declaring an event is itself a change the owner merges. Guard paths, disputes, agreement on labelled tickets and their specs, a `yes` ticket's flag check, an asked project's flag registry doors, before-deployment `unflagged`, and the clean-approval rule below hold from the first commit whatever the events.
+When a door, new surface or an altered recorded output is let through because no event is declared yet, the judge prints a `note:` line saying what it let through and why, so the owner sees it. The judge reads the binding's `- Life events:` line at the merge base and at the default branch's tip, never at the head, so a change that declares an event, or drops one, is not judged by its own line. The binding is a guard path, so declaring an event is itself a change the owner merges. Guard paths, disputes, agreement on labelled tickets and their specs, a `yes` ticket's flag check, an asked project's flag registry doors, before-deployment `unflagged`, and the clean-approval rule below hold from the first commit whatever the events.
 
 ### A dispute
 
@@ -255,7 +259,7 @@ Tier 2 with no forge is what `merge.py --deep` records. It proves the default br
 
 - The verdict record is written by an agent, so an agent can forge it. It says the pipeline ran and what it concluded, and every other reason above (agreement on labelled tickets and their specs included, save closing the found ticket) is read from the diff and holds against a forged record. What records alone refuse outside agreement (an unagreed ticket closed, or a new ADR in a change with a verdict record) still meets only the guard rules and the hook's ask on the label.
 - The review's independence rests on the pipeline's sight lines, which an agent runs.
-- Tests are not guard paths, so a change that weakens its own tests meets only the count, coverage and mutation gates.
+- Tests are not guard paths, so a change that weakens its own tests meets only the count, coverage and mutation gates; once `depended-on` is declared, existing recorded outputs listed under `## Recorded outputs` also require the owner's merge when altered (`expect-output`), while newly added recorded outputs or assertions outside `## Recorded outputs` meet only those gates and the review.
 - A flag whose default is set outside `flags.toml` is not seen.
 - Whether the behaviour actually sits behind the switch, which the review holds.
 - Surface no `on = "removal"` door lists, such as a screen no snapshot records: `unflagged` sees only the surface those doors list (and a `yes` ticket's key check in `flags.toml`).
@@ -271,6 +275,7 @@ Tier 2 with no forge is what `merge.py --deep` records. It proves the default br
   - a guard path changed
   - a one-way door, once the project is `deployed` or holds `irreplaceable-data`, and the flag registry's doors from the first commit in an asked project
   - new surface with no flag once `deployed`, or before `deployed` when not under the owner's no with no open yes in flight, and any `yes` ticket whose key is missing, on, permanent, or unused
+  - an altered recorded output once `depended-on` (`expect-output`)
   - any change to a labelled ticket, the spec it inherits from, or a blocker's open state (save a build closing its own found ticket to `resolved`)
   - a dispute
   - a verdict that is not a clean approval

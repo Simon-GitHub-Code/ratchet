@@ -873,3 +873,27 @@ def test_method_and_adopt_skills_reflect_local_loop_budget() -> None:
     assert "**Ask** `loop.wait`" in ADOPT
     next_page = flat("next/SKILL.md")
     assert "**Ask** `loop.wait`" in next_page
+
+
+def test_adopt_binding_and_method_docs_cover_expect_tests_and_recorded_outputs() -> None:
+    binding = (SKILLS / "adopt/templates/docs/process/binding.md").read_text(encoding="utf-8")
+    assert "- Recorded-output facility:" in binding
+    assert "## Recorded outputs\n" in binding
+    assert "| Paths | Pattern |" in binding
+    assert "recorded-output facility" in ADOPT
+    assert "## Recorded outputs" in ADOPT
+    tiers = flat("method/tiers.md")
+    assert (
+        "| Does the code do what its tests claim? | unit, property, expect and fitness tests;"
+        in tiers
+    )
+    assert "**An expect test holds outputs, not inputs.**" in tiers
+    assert "**An expect test masks varying values.**" in tiers
+    assert "**No gate recipe runs update mode.**" in tiers
+    pipeline_doc = flat("method/pipeline.md")
+    assert "expect test" in pipeline_doc
+    assert "recordedOutputs" in pipeline_doc
+    assert "expect-output" in pipeline_doc
+    guards_doc = flat("method/guards.md")
+    assert "expect-output" in guards_doc
+    assert "scripts/expect_outputs.py" in guards_doc
