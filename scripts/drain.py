@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import application_types
+import build_cache
 import documents
 import feature_preflight as preflight
 import gatelib
@@ -954,6 +955,7 @@ def open_ticket(drain: Drain, ref: str) -> int:
         print(f"open: no work tree of `{entry.branch}` could be made at {tree}")
         discard(drain.root, tree, entry.branch)
         return 1
+    seeded = build_cache.seed_from_binding(drain.root, tree)
     try:
         start = asdict(publish_check.start_of(tree, entry.branch, forge_gh(drain)))
     except publish_check.UnreadableError as error:
@@ -967,18 +969,16 @@ def open_ticket(drain: Drain, ref: str) -> int:
     kept = {k: v for k, v in prior.items() if k not in START_DROPPED} if keep else {}
     queue_notes.write_note(path, {**kept, **asdict(entry), "opened": opened, "start": start})
     named = [asdict(n) for n in preflight.ticket_named_gates(entry.ref, tree, drain.tracker)]
-    print(
-        json.dumps(
-            {
-                **asdict(entry),
-                "state": BUILDING,
-                "base": drafted.base,
-                "start": start,
-                "named_gates": named,
-            },
-            indent=2,
-        )
-    )
+    payload: dict[str, object] = {
+        **asdict(entry),
+        "state": BUILDING,
+        "base": drafted.base,
+        "start": start,
+        "named_gates": named,
+    }
+    if seeded is not None and seeded.env:
+        payload["build_env"] = seeded.env
+    print(json.dumps(payload, indent=2))
     return 0
 
 
@@ -1001,6 +1001,7 @@ def revive(drain: Drain, branch: str, tree: Path) -> str | None:
         return f"{theirs}: {NOT_OURS}"
     if gatelib.git(root, "worktree", "add", "--quiet", str(tree), branch) is None:
         return f"no work tree of `{branch}` could be made at {tree}"
+    build_cache.seed_from_binding(root, tree)
     return None
 
 

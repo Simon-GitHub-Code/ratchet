@@ -1,16 +1,26 @@
+#!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import math
 import re
-from dataclasses import dataclass
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
+import gatelib
 import markdown_text
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable
+
+    Runner = Callable[[list[str], Path], tuple[int, float]]
 
 SPEED = "## Speed"
 BUILD = "Build"
@@ -42,6 +52,22 @@ class BuildSpec:
     warm_seconds: float
     reuse: ReusePolicy
     consumers: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SeedResult:
+    kind: ReuseKind
+    copied: tuple[str, ...] = ()
+    missing: tuple[str, ...] = ()
+    env: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ProbeResult:
+    survived: bool
+    seconds: float
+    threshold: float
+    reason: str
 
 
 def build_line(binding_text: str) -> str | None:
@@ -227,3 +253,200 @@ def validate_build_spec(
         if consumer != spec.gate and consumer not in gates:
             errors.append(f"Build line names unknown consumer gate `{consumer}`")
     return errors
+
+
+def _safe_cache_rel(source: Path, dest: Path, rel: str) -> tuple[Path, Path]:
+    pure = PurePosixPath(rel)
+    if not rel or not pure.parts or pure.is_absolute() or ".." in pure.parts:
+        message = f"cache path must be relative without `..`: `{rel}`"
+        raise ValueError(message)
+    src_root = source.resolve()
+    dst_root = dest.resolve()
+    src_path = (src_root / pure).resolve()
+    dst_path = (dst_root / pure).resolve()
+    if not src_path.is_relative_to(src_root) or not dst_path.is_relative_to(dst_root):
+        message = f"cache path escapes tree: `{rel}`"
+        raise ValueError(message)
+    return source / pure, dest / pure
+
+
+def _copy_cache_entry(src_path: Path, dst_path: Path) -> bool:
+    if src_path.is_dir():
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(src_path, dst_path, dirs_exist_ok=True, symlinks=True)
+        return True
+    if src_path.is_file():
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_path, dst_path)
+        return True
+    return False
+
+
+def seed_worktree(source: Path, dest: Path, spec: BuildSpec) -> SeedResult:
+    if spec.reuse.kind is ReuseKind.NONE:
+        return SeedResult(kind=ReuseKind.NONE)
+    if spec.reuse.kind is ReuseKind.SHARED:
+        raw = Path(spec.reuse.env_dir).expanduser()
+        resolved = (raw if raw.is_absolute() else source / raw).resolve()
+        resolved.mkdir(parents=True, exist_ok=True)
+        return SeedResult(kind=ReuseKind.SHARED, env={spec.reuse.env_name: str(resolved)})
+    copied: list[str] = []
+    missing: list[str] = []
+    for rel in spec.cache_paths:
+        src_path, dst_path = _safe_cache_rel(source, dest, rel)
+        if _copy_cache_entry(src_path, dst_path):
+            copied.append(rel)
+        else:
+            missing.append(rel)
+    return SeedResult(kind=ReuseKind.MOVED, copied=tuple(copied), missing=tuple(missing))
+
+
+def seed_from_binding(source: Path, dest: Path) -> SeedResult | None:
+    text = gatelib.read_text(source / gatelib.BINDING)
+    if text is None:
+        return None
+    spec = parse_build_spec(text)
+    if spec is None:
+        return None
+    return seed_worktree(source, dest, spec)
+
+
+def _is_excluded(rel: str, cache_paths: tuple[str, ...]) -> bool:
+    pure = PurePosixPath(rel)
+    return any(
+        pure == PurePosixPath(cache) or pure.is_relative_to(PurePosixPath(cache))
+        for cache in cache_paths
+    )
+
+
+def _visible_paths(source: Path) -> list[str] | None:
+    if gatelib.git(source, "rev-parse", "--show-toplevel") is None:
+        return None
+    listed = subprocess.run(
+        ["git", "-C", str(source), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        capture_output=True,
+        check=False,
+    )
+    return [item.decode() for item in listed.stdout.split(b"\0") if item]
+
+
+def _copy_tree_without_caches(source: Path, dest: Path, cache_paths: tuple[str, ...]) -> None:
+    visible = _visible_paths(source)
+    if visible is None:
+        visible = [
+            path.relative_to(source).as_posix()
+            for path in source.rglob("*")
+            if (path.is_file() or path.is_symlink())
+            and ".git" not in path.relative_to(source).parts
+        ]
+    for rel in visible:
+        if _is_excluded(rel, cache_paths):
+            continue
+        src = source / rel
+        if src.is_symlink() or src.is_file():
+            dst = dest / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst, follow_symlinks=False)
+
+
+def _run_timed(command: list[str], cwd: Path) -> tuple[int, float]:
+    started = time.monotonic()
+    try:
+        done = subprocess.run(command, cwd=cwd, capture_output=True, check=False)
+    except OSError:
+        return 127, time.monotonic() - started
+    return done.returncode, time.monotonic() - started
+
+
+def probe_threshold(spec: BuildSpec) -> float:
+    if spec.cold_seconds <= spec.warm_seconds:
+        return spec.warm_seconds * 1.25
+    return (spec.warm_seconds + spec.cold_seconds) / 2.0
+
+
+def probe_moved_cache(
+    source: Path,
+    command: list[str],
+    spec: BuildSpec,
+    *,
+    runner: Runner | None = None,
+) -> ProbeResult:
+    threshold = probe_threshold(spec)
+    run = runner or _run_timed
+    with tempfile.TemporaryDirectory(prefix="ratchet-cache-probe-") as scratch:
+        dest = Path(scratch) / "tree"
+        dest.mkdir()
+        _copy_tree_without_caches(source, dest, spec.cache_paths)
+        seed_worktree(source, dest, spec)
+        code, elapsed = run(command, dest)
+    if code != 0:
+        return ProbeResult(
+            survived=False, seconds=elapsed, threshold=threshold, reason=f"command exited {code}"
+        )
+    if elapsed <= threshold:
+        return ProbeResult(
+            survived=True,
+            seconds=elapsed,
+            threshold=threshold,
+            reason="moved cache stayed warm",
+        )
+    return ProbeResult(
+        survived=False,
+        seconds=elapsed,
+        threshold=threshold,
+        reason="moved cache was rejected and ran cold",
+    )
+
+
+def _cmd_seed(source: Path, dest: Path) -> int:
+    result = seed_from_binding(source.resolve(), dest.resolve())
+    if result is None:
+        print("build_cache: no build spec")
+        return 0
+    if result.kind is ReuseKind.MOVED:
+        print(f"build_cache: moved: copied={list(result.copied)} missing={list(result.missing)}")
+    elif result.kind is ReuseKind.SHARED:
+        pairs = " ".join(f"{name}={value}" for name, value in sorted(result.env.items()))
+        print(f"build_cache: shared: {pairs}")
+    else:
+        print("build_cache: none")
+    return 0
+
+
+def _cmd_probe(root: Path, command: list[str]) -> int:
+    cmd = command[1:] if command[:1] == ["--"] else command
+    if not cmd:
+        print("build_cache: probe: missing build command")
+        return 2
+    resolved = root.resolve()
+    text = gatelib.read_text(resolved / gatelib.BINDING)
+    spec = parse_build_spec(text) if text is not None else None
+    if spec is None:
+        print("build_cache: probe: no build spec")
+        return 1
+    result = probe_moved_cache(resolved, cmd, spec)
+    verdict = "survived" if result.survived else "rejected"
+    print(
+        f"build_cache: probe: {verdict} ({result.seconds:.2f}s,"
+        f" threshold {result.threshold:.2f}s): {result.reason}"
+    )
+    return 0 if result.survived else 1
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="build_cache.py")
+    sub = parser.add_subparsers(dest="action", required=True)
+    seed_parser = sub.add_parser("seed")
+    seed_parser.add_argument("--source", type=Path, required=True)
+    seed_parser.add_argument("--dest", type=Path, required=True)
+    probe_parser = sub.add_parser("probe")
+    probe_parser.add_argument("--root", type=Path, default=Path())
+    probe_parser.add_argument("command", nargs=argparse.REMAINDER)
+    options = parser.parse_args(argv[1:])
+    if options.action == "seed":
+        return _cmd_seed(options.source, options.dest)
+    return _cmd_probe(options.root, options.command)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

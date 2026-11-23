@@ -4732,3 +4732,38 @@ def test_a_gate_that_exits_3_never_counts_as_biting_and_fails_before_or_after_fa
     assert f"bite: format: a planted word: {before_msg}\n" in out
     assert f"bite: format: accepts verdict record: {before_msg}\n" in out
     assert "bite: red: 0 of 3 faults bit, over 3 gates in " in out
+
+
+def test_bite_copy_seeds_moved_cache_and_keeps_it_across_restore(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gates = {
+        "build": f"test -f .build-cache/warm.o && echo extra > .build-cache/extra.o\n{LINT}",
+        "lint": f"test -f .build-cache/warm.o && test -f .build-cache/extra.o\n{LINT}",
+    }
+    speed = "- Build: gate `build`; caches `.build-cache`; cold 60s; warm 5s; reuse moved\n"
+    registry = bite("build", "a planted word") + bite("lint", "a planted word")
+    repo = tmp_path / "repo"
+    write(repo, ".build-cache/warm.o", "warm\n")
+    root = project(repo, gates, registry, speed=speed)
+    write(root, ".gitignore", "ignored/\n*.secret\n.build-cache/\n")
+    commit(root, "chore: ignore build cache")
+    assert prove(root) == 0
+    assert shown(capsys).count(": bites\n") == 2
+
+
+def test_bite_copy_passes_shared_build_env_to_setup_and_gate_commands(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gates = {"build": f'test -d "$SHARED_CACHE" && test -f "$SHARED_CACHE/ready"\n{LINT}'}
+    speed = (
+        "- Build: gate `build`; caches `.build-cache`; cold 60s; warm 5s;"
+        " reuse shared `SHARED_CACHE=.shared-cache`\n"
+    )
+    registry = 'setup = ["sh -c \'touch \\"$SHARED_CACHE/ready\\"\'"]\n' + bite(
+        "build", "a planted word"
+    )
+    root = project(tmp_path / "repo", gates, registry, speed=speed)
+    assert prove(root) == 0
+    assert "bite: build: a planted word: bites" in shown(capsys)
+    assert (root / ".shared-cache" / "ready").is_file()

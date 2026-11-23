@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, NamedTuple
 
 import application_types
 import budget
+import build_cache
 import gatelib
 import owed
 import plugin_pin
@@ -1015,7 +1016,13 @@ class Shell:
         self.stopped = False
 
     def run(
-        self, command: Sequence[str], cwd: Path, limit: float | None = None, *, jobs: int = 0
+        self,
+        command: Sequence[str],
+        cwd: Path,
+        limit: float | None = None,
+        *,
+        jobs: int = 0,
+        extra_env: dict[str, str] | None = None,
     ) -> Run:
         share = {JOBS: str(jobs)} if jobs else {}
         with tempfile.TemporaryFile() as log:
@@ -1026,7 +1033,7 @@ class Shell:
                     process = subprocess.Popen(
                         command,
                         cwd=cwd,
-                        env=environment() | share,
+                        env=environment() | (extra_env or {}) | share,
                         stdin=subprocess.DEVNULL,
                         stdout=log,
                         stderr=subprocess.STDOUT,
@@ -1232,6 +1239,7 @@ class Copy:
     staged: bytes
     exclude: bytes
     lane: int = 0
+    env: tuple[tuple[str, str], ...] = ()
 
     @property
     def path(self) -> Path:
@@ -1261,7 +1269,13 @@ class Copy:
             contained(self.path, self.head)
 
     def run(self, command: Sequence[str], limit: float, jobs: int) -> Run:
-        result = self.shell.run(command, self.path, limit, jobs=jobs)
+        result = self.shell.run(
+            command,
+            self.path,
+            limit,
+            jobs=jobs,
+            extra_env=dict(self.env) if self.env else None,
+        )
         self.restore()
         return result
 
@@ -1460,12 +1474,14 @@ def build_copy(root: Path, tree: Tree, *, registry: Registry, shell: Shell, lane
         carry(root / path, copy / path)
     for path in registry.include:
         carry_included(root, copy, path)
+    seeded = build_cache.seed_from_binding(root, copy)
+    extra_env = seeded.env if seeded is not None else {}
     for name in gatelib.default_branches(copy):
         ref = f"refs/remotes/{name}" if name.startswith("origin/") else f"refs/heads/{name}"
         if run_git(tree, "rev-parse", "-q", "--verify", ref).returncode == 0:
             git_in(tree, "update-ref", ref, head)
     for command in registry.setup:
-        result = shell.run(shlex.split(command), copy, GATE_LIMIT)
+        result = shell.run(shlex.split(command), copy, GATE_LIMIT, extra_env=extra_env or None)
         if result.code != 0:
             how = "timed out" if result.timed_out else f"exited {result.code}"
             message = f"setup `{command}` {how} in the scratch copy\n{tail(result.output)}"
@@ -1479,6 +1495,7 @@ def build_copy(root: Path, tree: Tree, *, registry: Registry, shell: Shell, lane
         tree.read(INDEX) or b"",
         tree.read(EXCLUDE) or b"",
         lane,
+        tuple(sorted(extra_env.items())),
     )
     made.restore()
     return made
