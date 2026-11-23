@@ -610,3 +610,68 @@ def test_evaluate_over_handles_first_run_new_gate_no_gates_and_deep_hold(
     assert "already over before this change" in already_over.line()
     assert "or move it to tier 2" in already_over.line()
     assert loop_budget.label_of(WITHIN) == "within"
+
+
+def test_evaluate_run_supports_places_unread_detail_and_forced_exclusion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = pin_repo(tmp_path / "repo", change_pin=True)
+    report = root / ".ratchet/timing.jsonl"
+    report.parent.mkdir(parents=True)
+    monkeypatch.setenv("RATCHET_RUN", "run-pr")
+    history = [
+        {"key": "lint", "seconds": 5.0, "status": "green", "exit": 0, "run": "r0", "tree": "t0"},
+        {"key": "bite", "seconds": 5.0, "status": "green", "exit": 0, "run": "r0", "tree": "t0"},
+        {
+            "kind": "tier",
+            "seconds": 5.0,
+            "status": "green",
+            "judgement": "within",
+            "run": "r0",
+            "tree": "t0",
+        },
+    ]
+    report.write_text("\n".join(json.dumps(r) for r in history) + "\n", encoding="utf-8")
+    (root / "quality/thresholds.toml").write_text(
+        "[ceilings.loop]\nseconds = 20\n", encoding="utf-8"
+    )
+
+    unread = loop_budget.evaluate_run(
+        root,
+        reading=Reading(None, 1.0, machine_read=False, detail="jobs JSON is malformed"),
+        report=report,
+        options=loop_budget.EvalOptions(place=Place.PULL_REQUEST, tree="t1", run="run-pr"),
+    )
+    assert unread.judgement == NotJudged(Reason.UNREAD)
+    assert unread.exit_for(0) == 0
+    assert unread.effect.annotation is True
+    assert "times unread: jobs JSON is malformed; 1 in a row" in unread.line()
+    assert unread.tier_fields()["missing"] == "jobs JSON is malformed"
+
+    over_pr = loop_budget.evaluate_run(
+        root,
+        reading=Reading(30.0, 1.0, machine_read=True),
+        report=report,
+        gates=[GateTime("lint", 5.0), GateTime("bite", 25.0)],
+        options=loop_budget.EvalOptions(
+            place=Place.PULL_REQUEST, tree="t1", run="run-pr", exclude_proof=True
+        ),
+    )
+    assert over_pr.judgement == OVER
+    assert over_pr.exit_for(0) == 1
+    assert over_pr.effect.annotation is False
+    assert "bite" not in over_pr.line()
+
+    over_main = loop_budget.evaluate_run(
+        root,
+        reading=Reading(30.0, 1.0, machine_read=True),
+        report=report,
+        gates=[GateTime("lint", 30.0)],
+        options=loop_budget.EvalOptions(place=Place.DEFAULT_BRANCH, tree="t1", run="run-pr"),
+    )
+    assert over_main.judgement == OVER
+    assert over_main.exit_for(0) == 0
+    assert over_main.effect.annotation is True
+    assert "grew: lint (30.0s vs 5.0s median)" in over_main.line()
+
+    assert loop_budget.forced_from_records(root, [], run="run-pr", tree="t1") is None

@@ -148,6 +148,9 @@ WEEKLY_SHAPE = (
     ("gh issue create", "opens the issue a finding gets"),
 )
 JOB_LIST_SHAPE = ("ci_jobs.py", "turns the justfile's job list into the jobs tier 1 runs")
+CI_RUN_MARKER = "RATCHET_RUN: ${{ github.run_id }}"
+CI_LOOP_MARKER = 'forge_runs.py" loop'
+CORE_CI_JOBS = frozenset({"proven", "tier0", "shape", "tier1", "tier1-long"})
 TIER_STEP_SHAPE = {
     "ci.yml": (JOB_LIST_SHAPE,),
     "deep.yml": (
@@ -207,6 +210,10 @@ EXEMPT_STEPS = (
     (
         "cache_restore.py",
         "prints and records how many bytes the CI cache restored",
+    ),
+    (
+        CI_LOOP_MARKER,
+        "judges the run's work path against the loop budget",
     ),
 )
 DOOR_MEANINGS = {
@@ -1971,6 +1978,7 @@ def workflow_speed_findings(root: Path, path: Path) -> Iterable[Finding]:
         if builds and marker not in content:
             yield agent(f"{path.relative_to(root)}: nothing {meaning} ('{marker}' absent)")
     yield from tier_step_findings(root, path, content)
+    yield from ci_loop_findings(root, path, content)
     for name, marker, meaning in CEILING_SHAPE:
         if path.name == name and marker not in content:
             problem = f"nothing {meaning} ('{marker}' absent)"
@@ -2661,6 +2669,102 @@ def with_kept_branch(name: str) -> gatelib.Want:
     return want
 
 
+def ci_loop_findings(root: Path, path: Path, content: str) -> Iterable[Finding]:
+    if path.name != "ci.yml" or JOB_LIST_SHAPE[0] not in content:
+        return
+    name = str(path.relative_to(root))
+    if CI_RUN_MARKER not in content:
+        problem = (
+            f"nothing keeps one run id across every job of the CI run ('{CI_RUN_MARKER}' absent)"
+        )
+        does = "pass `RATCHET_RUN` to every job of the CI run, as the template does"
+        yield Finding(name, problem, Edit(does, with_ci_run(path.name), Agent()))
+    if CI_LOOP_MARKER not in content:
+        problem = (
+            "nothing judges the run's work path against the loop budget"
+            f" ('{CI_LOOP_MARKER}' absent)"
+        )
+        does = "add the `loop` job to judge the run's work path, as the template does"
+        yield Finding(name, problem, Edit(does, with_ci_loop(path.name), Agent()))
+        return
+    blocks = workflow_job_blocks(content)
+    loop_lines = next((lines for job, lines in blocks if job == "loop"), None)
+    if loop_lines is None:
+        yield agent(f"{name}: runs `{CI_LOOP_MARKER}` outside a `loop` job")
+        return
+    perms = mapping_section(loop_lines, "permissions")
+    perm_lines = (
+        (perms[0], *(strip_yaml_comment(line).strip() for line in perms[1])) if perms else ()
+    )
+    if "actions: read" not in perm_lines:
+        yield agent(f"{name}: job `loop` needs `permissions: actions: read` to read the run's jobs")
+    cond = mapping_section(loop_lines, "if")
+    cond_text = f"{cond[0]} {' '.join(cond[1])}" if cond else ""
+    if "always()" not in cond_text:
+        yield agent(
+            f"{name}: job `loop` needs `always()` in `if:` so it runs even when a job fails"
+        )
+    other_jobs = {job for job, _ in blocks if job != "loop"}
+    needs_sec = mapping_section(loop_lines, "needs")
+    needs_text = (
+        " ".join([needs_sec[0], *(strip_yaml_comment(line) for line in needs_sec[1])])
+        if needs_sec
+        else ""
+    )
+    missing = sorted((other_jobs & CORE_CI_JOBS) - set(WORD.findall(needs_text)))
+    if missing:
+        joined = ", ".join(f"`{job}`" for job in missing)
+        yield agent(f"{name}: job `loop` `needs:` omits {joined}")
+
+
+@functools.cache
+def with_ci_run(name: str) -> gatelib.Want:
+    template = template_file(f".github/workflows/{name}").splitlines()
+    run_line = next(line for line in template if CI_RUN_MARKER in line)
+
+    def want(current: str | None) -> str:
+        text = current or ""
+        eol = "\r\n" if "\r\n" in text else "\n"
+        lines = text.replace("\r\n", "\n").split("\n")
+        if CI_RUN_MARKER in text or "jobs:" not in lines:
+            return text
+        jobs_at = lines.index("jobs:")
+        if "env:" in lines[:jobs_at]:
+            lines[jobs_at:jobs_at] = [run_line]
+        else:
+            lines[jobs_at:jobs_at] = ["env:", run_line]
+        return eol.join(lines)
+
+    return want
+
+
+@functools.cache
+def with_ci_loop(name: str) -> gatelib.Want:
+    template = template_file(f".github/workflows/{name}")
+    job = template[template.index("\n  loop:\n") + 1 :].rstrip("\n")
+
+    def want(current: str | None) -> str:
+        text = current or ""
+        eol = "\r\n" if "\r\n" in text else "\n"
+        lines = text.replace("\r\n", "\n").split("\n")
+        if "jobs:" not in lines or CI_LOOP_MARKER in text:
+            return text
+        heads = job_heads(lines)
+        if set(heads.values()) != CORE_CI_JOBS:
+            return text
+        after_jobs = lines.index("jobs:") + 1
+        if any(line[:1] not in ("", " ", "#") for line in lines[after_jobs:]):
+            return text
+        refs = plugin_pin.refs(text)
+        if len(refs) != 1:
+            return text
+        added = job.replace(PLUGIN_CHECKOUT_PLACEHOLDER, next(iter(refs)))
+        body = "\n".join(lines).rstrip("\n") + "\n" + added
+        return (body + ("\n" if text.endswith(("\n", "\r\n")) else "")).replace("\n", eol)
+
+    return want
+
+
 def tier_step_findings(root: Path, path: Path, content: str) -> Iterable[Finding]:
     for marker, meaning in TIER_STEP_SHAPE.get(path.name, ()):
         name = str(path.relative_to(root))
@@ -2733,6 +2837,13 @@ def regroup_hunks() -> tuple[Hunk, ...]:
         '      - run: python3 "$RATCHET_PLUGIN/scripts/cache_restore.py"'
         ' --report .ratchet/timing.jsonl --hit "${{ steps.cache.outputs.cache-hit }}" -- .cache'
     )
+    run_line = f"  {CI_RUN_MARKER}"
+    loop_at = lines.index("  loop:")
+    upload_at = next(
+        i
+        for i in range(lines.index("  tier1-long:"), loop_at)
+        if "timing-${{ matrix.gate }}" in lines[i]
+    )
     return (
         ("the shape job's steps", OLD_SHAPE_STEP, tuple(lines[at - 2 : end])),
         ("the `tier1:` line", ("  tier1:",), ("  tier1:", guard)),
@@ -2759,6 +2870,12 @@ def regroup_hunks() -> tuple[Hunk, ...]:
             (TOOLCHAIN_PLACEHOLDER,),
             (cache_step, TOOLCHAIN_PLACEHOLDER),
         ),
+        ("the `RATCHET_RUN` env var", ("jobs:",), (run_line, "jobs:")),
+        (
+            "the `loop` job",
+            (*lines[upload_at - 2 : upload_at + 1], ""),
+            tuple(lines[upload_at - 2 :]),
+        ),
     )
 
 
@@ -2777,8 +2894,9 @@ def words_of(blocks: Iterable[str], pattern: re.Pattern[str]) -> set[str]:
 
 @functools.cache
 def changed_reads() -> tuple[str, ...]:
-    old = [line for _, before, _ in regroup_hunks() for line in before]
-    new = [line for _, _, after in regroup_hunks() for line in after]
+    hunks = [hunk for hunk in regroup_hunks() if hunk[0] != "the `loop` job"]
+    old = [line for _, before, _ in hunks for line in before]
+    new = [line for _, _, after in hunks for line in after]
     gone = {
         f"{kind}.{word}."
         for kind, pattern in (("steps", STEP_ID), ("needs", JOB_HEAD), ("needs", NEEDS_LINE))
@@ -2851,7 +2969,7 @@ def replaced(own: list[str], template: tuple[str, ...]) -> list[Span] | Kept:
         if old[-1].startswith(STEP_BODY) and any(one.startswith(STEP_BODY) for one in after):
             return Kept(f"a line the plugin did not write runs on from {what}")
         spans += [(at, old, new, job) for at, job in zip(found, placed, strict=True)]
-    for job in dict.fromkeys(job for *_, job in spans):
+    for job in dict.fromkeys(job for *_, job in spans if job):
         lacks = set(job_keys(template, wrote, job))
         extra = [key for key in job_keys(own, heads, job) if key not in lacks]
         if extra:
@@ -4822,6 +4940,14 @@ def speed_mutations() -> list[Mutation]:
         ),
         ("CI workflow without a shard matrix", rewrite(ci, SHARD_MATRIX, "matrix.part")),
         ("CI that reads no job list for tier 1", rewrite(ci, JOB_LIST_SHAPE[0], "jobs.py")),
+        ("CI without RATCHET_RUN", rewrite(ci, CI_RUN_MARKER, "RATCHET_OLD: 1")),
+        ("CI without the loop job", rewrite(ci, CI_LOOP_MARKER, "echo skip")),
+        (
+            "CI loop job without actions: read",
+            rewrite(ci, "      actions: read\n", ""),
+        ),
+        ("CI loop job without always()", rewrite(ci, "always() && ", "")),
+        ("CI loop job omitting a job from needs", rewrite(ci, ", tier1-long]", "]")),
         (
             "job list that drops the gates no job names",
             rewrite("justfile", TIER1_JOBS_LINE, BARE_PROOF),

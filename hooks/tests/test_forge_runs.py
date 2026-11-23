@@ -13,6 +13,7 @@ from hypothesis import strategies as st
 import forge_runs
 import gatelib
 import merge_ready
+import runrecord
 import unproven
 from tests.repos import commit, git, repository
 from tests.test_gatelib import STEPS, grown, undecodable
@@ -987,3 +988,585 @@ def test_a_red_that_todays_deep_reader_sees_on_any_history_holds(
         line = gatelib.chain(root, tip, [run.commit for run in read.runs or ()])
         if today == "red":
             assert unproven.held(line, read, gated=False, bound=None) is not None, text
+
+
+WORKFLOW_DAG = """\
+name: ci
+on: [pull_request, push]
+jobs:
+  # jobs follow
+  - stray
+  proven:
+    if: github.event_name == 'push'
+    steps:
+      - run: echo needs: fake
+  tier0:
+    needs: proven
+    steps: []
+  shape:
+    needs: "proven"
+    steps: []
+  tier1:
+    needs: [shape]
+    strategy:
+      matrix:
+        gate: [lint, bite, rest]
+    steps: []
+  tier1-long:
+    needs:
+      # after shape
+      - shape # after shape
+      - tier0
+      - ""
+      extra: ignored
+    strategy:
+      matrix:
+        gate: [test]
+        shard: [1, 2]
+    steps: []
+  empty:
+    needs: []
+    steps: []
+  multiline:
+    needs: [
+      tier0,
+      shape
+    ]
+    steps: []
+  blank_only:
+    # comment only
+  unclosed:
+    needs: [
+      tier0
+  eof_block:
+    needs:
+      - tier0
+
+  loop:
+    needs: [proven, tier0, shape, tier1, tier1-long]
+    steps: []
+env:
+  AFTER_JOBS: 1
+"""
+
+
+def test_workflow_needs_parses_scalar_inline_and_block_lists_ignoring_loop() -> None:
+    dag = forge_runs.workflow_needs(WORKFLOW_DAG)
+    assert dag == {
+        "proven": (),
+        "tier0": ("proven",),
+        "shape": ("proven",),
+        "tier1": ("shape",),
+        "tier1-long": ("shape", "tier0"),
+        "empty": (),
+        "multiline": ("tier0", "shape"),
+        "blank_only": (),
+        "unclosed": ("tier0",),
+        "eof_block": ("tier0",),
+    }
+    assert "loop" not in dag
+    assert forge_runs.workflow_needs("name: empty\n") == {}
+
+
+def job_entry(
+    name: str,
+    span: tuple[int, int],
+    *,
+    created_s: int = 0,
+    status: str = "completed",
+    conclusion: str | None = "success",
+) -> dict[str, object]:
+    start_s, end_s = span
+
+    def ts(sec: int) -> str:
+        return f"2026-11-22T10:{sec // 60:02d}:{sec % 60:02d}Z"
+
+    return {
+        "name": name,
+        "status": status,
+        "conclusion": conclusion,
+        "created_at": ts(created_s),
+        "started_at": ts(start_s) if status not in ("queued", "waiting") else None,
+        "completed_at": ts(end_s) if status == "completed" else None,
+    }
+
+
+def setup_loop_repo(
+    tmp_path: Path, *, budget: float | None = 60.0, change_pin: bool = False
+) -> Path:
+    pin_a = f"- Ratchet plugin: 0.13.5 at {'a' * 40} tree {'1' * 40}\n"
+    pin_b = f"- Ratchet plugin: 0.13.6 at {'b' * 40} tree {'2' * 40}\n"
+    thresholds = f"[ceilings.loop]\nseconds = {budget:g}\n" if budget is not None else ""
+    files = {
+        ".github/workflows/ci.yml": WORKFLOW_DAG,
+        "docs/process/binding.md": f"# Binding\n\n{pin_a}",
+        "quality/thresholds.toml": thresholds,
+    }
+    root = repository(tmp_path, files)
+    if change_pin:
+        git(root, "switch", "-q", "-c", "feat/upgrade")
+        (root / "docs/process/binding.md").write_text(f"# Binding\n\n{pin_b}", encoding="utf-8")
+        commit(root, "chore: bump pin")
+    return root
+
+
+def write_artifact(artifacts: Path, name: str, records: list[dict[str, object]]) -> None:
+    folder = artifacts / name
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "timing.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8"
+    )
+
+
+def run_loop(
+    root: Path,
+    capsys: pytest.CaptureFixture[str],
+    jobs_payload: str | None,
+    **kwargs: object,
+) -> tuple[int, str]:
+    place = str(kwargs.get("place", "pull-request"))
+    artifacts = kwargs.get("artifacts")
+    report = kwargs.get("report")
+    jobs_status = kwargs.get("jobs_status", 0)
+    monkeypatch = kwargs.get("monkeypatch")
+    run_id = kwargs.get("run_id")
+    if isinstance(monkeypatch, pytest.MonkeyPatch):
+        if isinstance(run_id, str):
+            monkeypatch.setenv("RATCHET_RUN", run_id)
+        else:
+            monkeypatch.delenv("RATCHET_RUN", raising=False)
+    jobs_file = root.parent / f"{root.name}-jobs.json"
+    if jobs_payload is not None:
+        jobs_file.write_text(jobs_payload, encoding="utf-8")
+    else:
+        jobs_file.unlink(missing_ok=True)
+    argv = [
+        "loop",
+        "--workflow",
+        str(root / ".github/workflows/ci.yml"),
+        "--jobs",
+        str(jobs_file),
+        "--jobs-status",
+        str(jobs_status),
+        "--place",
+        place,
+        "--root",
+        str(root),
+    ]
+    if isinstance(artifacts, Path):
+        argv += ["--artifacts", str(artifacts)]
+    if isinstance(report, Path):
+        argv += ["--report", str(report)]
+    code = forge_runs.main(argv)
+    return code, capsys.readouterr().out
+
+
+def gate_rec(
+    key: str, seconds: float, *, m: float = 1.0, machine_read: bool = True, **extra: object
+) -> dict[str, object]:
+    return {
+        "key": key,
+        "seconds": seconds,
+        "status": "green",
+        "exit": 0,
+        "m": m,
+        "machine_read": machine_read,
+        **extra,
+    }
+
+
+def test_loop_computes_work_path_across_parallel_and_matrix_jobs_ignoring_skipped_and_loop(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = setup_loop_repo(tmp_path, budget=50.0)
+    jobs = {
+        "total_count": 8,
+        "jobs": [
+            job_entry("proven", (0, 1), conclusion="skipped"),
+            job_entry("tier0", (2, 22)),
+            job_entry("shape", (2, 7)),
+            job_entry("tier1 (lint)", (8, 18)),
+            job_entry("tier1 (rest)", (8, 38)),
+            job_entry("tier1-long (test, 1)", (23, 55)),
+            job_entry("tier1-long (test, 2)", (23, 40)),
+            job_entry("unstarted", (0, 0), status="queued"),
+            job_entry("loop", (56, 99), status="in_progress", conclusion=None),
+        ],
+    }
+    artifacts = tmp_path / "artifacts"
+    write_artifact(artifacts, "timing-tier0", [gate_rec("fmt", 12.0)])
+    write_artifact(artifacts, "timing-test-1", [gate_rec("test", 30.0)])
+    write_artifact(artifacts, "timing-test-2", [gate_rec("test", 15.0)])
+    report = root / ".ratchet/timing.jsonl"
+    code, out = run_loop(
+        root,
+        capsys,
+        json.dumps(jobs),
+        artifacts=artifacts,
+        report=report,
+        monkeypatch=monkeypatch,
+        run_id="run-1",
+    )
+    assert code == 1
+    assert "loop: over: 50.0s of 50s" not in out
+    assert "loop: over: 50.0s" not in out
+    assert "52.0s of 50s" in out
+    assert "slowest: test (30.0s)" in out
+    assert "runner wait" not in out
+    assert "::warning" not in out
+
+    code_main, out_main = run_loop(
+        root,
+        capsys,
+        json.dumps(jobs),
+        place="default-branch",
+        artifacts=artifacts,
+        report=report,
+        monkeypatch=monkeypatch,
+        run_id="run-1b",
+    )
+    assert code_main == 0
+    assert "::warning title=ratchet-loop::loop: over: 52.0s of 50s" in out_main
+    assert out_main.splitlines()[-1].startswith("loop: over: 52.0s of 50s")
+
+
+def test_loop_prints_runner_wait_over_tenth_of_run_and_records_wait_and_gate_history(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = setup_loop_repo(tmp_path, budget=40.0)
+    report = root / ".ratchet/timing.jsonl"
+    artifacts1 = tmp_path / "a1"
+    write_artifact(artifacts1, "timing-test-1", [gate_rec("test", 10.0)])
+    jobs1 = {
+        "jobs": [
+            job_entry("tier0", (2, 12), created_s=0),
+            job_entry("shape", (1, 6), created_s=0),
+            job_entry("tier1-long (test, 1)", (13, 25), created_s=12),
+        ]
+    }
+    code1, out1 = run_loop(
+        root,
+        capsys,
+        json.dumps(jobs1),
+        artifacts=artifacts1,
+        report=report,
+        monkeypatch=monkeypatch,
+        run_id="run-1",
+    )
+    assert code1 == 0
+    assert out1.strip() == "loop: within: 22.0s of 40s"
+
+    artifacts2 = tmp_path / "a2"
+    write_artifact(artifacts2, "timing-test-1", [gate_rec("test", 35.0)])
+    jobs2 = {
+        "jobs": [
+            job_entry("tier0", (20, 30), created_s=0),
+            job_entry("shape", (2, 7), created_s=0),
+            job_entry("tier1-long (test, 1)", (60, 100), created_s=30),
+        ]
+    }
+    code2, out2 = run_loop(
+        root,
+        capsys,
+        json.dumps(jobs2),
+        artifacts=artifacts2,
+        report=report,
+        monkeypatch=monkeypatch,
+        run_id="run-2",
+    )
+    assert code2 == 1
+    lines = out2.splitlines()
+    assert lines[0].startswith("loop: runner wait:")
+    assert "not judged" in lines[0]
+    assert lines[-1].startswith("loop: over: 50.0s of 40s")
+    assert "grew: test (35.0s vs 10.0s median)" in lines[-1]
+
+    records = [json.loads(line) for line in report.read_text(encoding="utf-8").splitlines()]
+    waits = [r for r in records if r.get("kind") == "wait"]
+    assert len(waits) == 6
+    assert any(r["job"] == "tier1-long (test, 1)" and r["wait"] == 30.0 for r in waits)
+
+
+def test_loop_subtracts_forced_bite_seconds_only_when_run_tree_and_pin_match(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = setup_loop_repo(tmp_path / "changed", budget=30.0, change_pin=True)
+    tree = runrecord.tree_id(root)
+    run_id = "run-forced"
+    artifacts = tmp_path / "art-forced"
+    forced_fault = {
+        "kind": "fault",
+        "gate": "lint",
+        "bite": "a",
+        "seconds": 40.0,
+        "narrowed": False,
+        "forced": {"cause": "plugin-pin", "record": "ADR 0069"},
+        "run": run_id,
+        "tree": tree,
+    }
+    write_artifact(
+        artifacts,
+        "timing-bite",
+        [forced_fault, gate_rec("bite", 40.0, run=run_id, tree=tree)],
+    )
+    write_artifact(artifacts, "timing-rest", [gate_rec("lint", 10.0, run=run_id, tree=tree)])
+    jobs = {
+        "jobs": [
+            job_entry("shape", (0, 5)),
+            job_entry("tier1 (bite)", (5, 50)),
+            job_entry("tier1 (rest)", (5, 25)),
+        ]
+    }
+    code, out = run_loop(
+        root,
+        capsys,
+        json.dumps(jobs),
+        artifacts=artifacts,
+        monkeypatch=monkeypatch,
+        run_id=run_id,
+    )
+    assert code == 0
+    assert out.strip() == (
+        "loop: within: 50.0s of 30s (25.0s without 25.0s forced by plugin-pin, ADR 0069)"
+    )
+
+    code_no_env, out_no_env = run_loop(
+        root,
+        capsys,
+        json.dumps(jobs),
+        artifacts=artifacts,
+        monkeypatch=monkeypatch,
+        run_id=None,
+    )
+    assert code_no_env == 1
+    assert "loop: over: 50.0s of 30s" in out_no_env
+
+    same_pin_root = setup_loop_repo(tmp_path / "same", budget=30.0, change_pin=False)
+    same_tree = runrecord.tree_id(same_pin_root)
+    art_same = tmp_path / "art-same"
+    write_artifact(
+        art_same,
+        "timing-bite",
+        [
+            {**forced_fault, "tree": same_tree},
+            gate_rec("bite", 40.0, run=run_id, tree=same_tree),
+        ],
+    )
+    code_same, _ = run_loop(
+        same_pin_root,
+        capsys,
+        json.dumps(jobs),
+        artifacts=art_same,
+        monkeypatch=monkeypatch,
+        run_id=run_id,
+    )
+    assert code_same == 1
+
+
+@pytest.mark.parametrize(
+    ("payload", "jobs_status", "detail"),
+    [
+        (None, 0, "could not be read"),
+        ("", 0, "empty"),
+        ("not json", 0, "malformed"),
+        ('{"jobs": "nope"}', 0, "jobs list"),
+        ('{"total_count": 2, "jobs": []}', 0, "truncated"),
+        (json.dumps({"jobs": [{"name": "tier0", "status": "completed"}]}), 0, "missing timestamps"),
+        (
+            json.dumps(
+                {
+                    "jobs": [
+                        {
+                            "name": "tier0",
+                            "status": "completed",
+                            "started_at": "2026-11-22T10:00:10Z",
+                            "completed_at": "2026-11-22T10:00:05Z",
+                        }
+                    ]
+                }
+            ),
+            0,
+            "before it started",
+        ),
+        (json.dumps({"jobs": [job_entry("tier0", (0, 5))]}), 1, "exited 1"),
+    ],
+)
+def test_loop_unread_jobs_json_exits_zero_with_warning_and_persists_streak(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    payload: str | None,
+    jobs_status: int,
+    detail: str,
+) -> None:
+    root = setup_loop_repo(tmp_path, budget=30.0)
+    report = root / ".ratchet/timing.jsonl"
+    for attempt in (1, 2):
+        code, out = run_loop(
+            root,
+            capsys,
+            payload,
+            report=report,
+            jobs_status=jobs_status,
+        )
+        assert code == 0
+        lines = out.splitlines()
+        assert lines[0].startswith("::warning title=ratchet-loop::loop: not judged: times unread:")
+        assert detail in lines[-1]
+        assert f"{attempt} in a row" in lines[-1]
+
+
+def test_loop_handles_cycles_machine_factor_non_critical_forced_bite_and_no_budget(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cycle_root = setup_loop_repo(tmp_path / "cycle", budget=30.0)
+    (cycle_root / ".github/workflows/ci.yml").write_text(
+        "jobs:\n  a:\n    needs: b\n  b:\n    needs: a\n", encoding="utf-8"
+    )
+    code_c, out_c = run_loop(
+        cycle_root,
+        capsys,
+        json.dumps({"jobs": [job_entry("a", (0, 5)), job_entry("b", (5, 10))]}),
+    )
+    assert code_c == 0
+    assert "cycle" in out_c
+
+    no_budget_root = setup_loop_repo(tmp_path / "nobudget", budget=None)
+    code_nb, out_nb = run_loop(
+        no_budget_root,
+        capsys,
+        json.dumps({"jobs": [job_entry("tier0", (0, 5))]}),
+        artifacts=tmp_path / "missing-artifacts",
+    )
+    assert code_nb == 0
+    assert out_nb.splitlines()[0].startswith(
+        "::warning title=ratchet-loop::loop: not judged: no budget:"
+    )
+
+    root = setup_loop_repo(tmp_path / "machine", budget=30.0, change_pin=True)
+    tree = runrecord.tree_id(root)
+    art = tmp_path / "art-machine"
+    forced_fault = {
+        "kind": "fault",
+        "gate": "lint",
+        "bite": "a",
+        "seconds": 10.0,
+        "narrowed": False,
+        "forced": {"cause": "plugin-pin", "record": "ADR 0069"},
+        "run": "r1",
+        "tree": tree,
+    }
+    write_artifact(
+        art,
+        "timing-tier0",
+        [
+            gate_rec("fmt", 40.0, m=2.0),
+            forced_fault,
+            gate_rec("bite", 10.0, m=2.0, run="r1", tree=tree),
+        ],
+    )
+    write_artifact(art, "timing-long", [gate_rec("test", 45.0, m=2.0)])
+    paginated = (
+        json.dumps({"total_count": 3, "jobs": [job_entry("shape", (0, 5))]})
+        + "\n"
+        + json.dumps(
+            {
+                "total_count": 3,
+                "jobs": [
+                    job_entry("tier0", (5, 25)),
+                    job_entry("tier1-long (test, 1)", (25, 70)),
+                ],
+            }
+        )
+    )
+    code_m, out_m = run_loop(
+        root,
+        capsys,
+        paginated,
+        artifacts=art,
+        monkeypatch=monkeypatch,
+        run_id="r1",
+    )
+    assert code_m == 0
+    assert "::warning title=ratchet-loop::loop: not judged: the machine:" in out_m
+
+    art_unread = tmp_path / "art-unread-m"
+    write_artifact(art_unread, "timing-tier0", [gate_rec("fmt", 35.0, machine_read=False)])
+    jobs_unread = json.dumps({"jobs": [job_entry("tier0", (0, 40))]})
+    code_u, out_u = run_loop(
+        root,
+        capsys,
+        jobs_unread,
+        artifacts=art_unread,
+        monkeypatch=monkeypatch,
+        run_id="r2",
+    )
+    assert code_u == 1
+    assert "busy machine is a possible cause" in out_u
+
+
+def test_loop_handles_fallback_forced_bite_empty_jobs_missing_workflow_and_stdin(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    no_budget_root = setup_loop_repo(tmp_path / "nobudget", budget=None)
+    empty_art = tmp_path / "art-empty"
+    write_artifact(empty_art, "timing-bad", [{"other": 1}, {"key": 123, "seconds": "bad"}])
+    code_e, out_e = run_loop(
+        no_budget_root,
+        capsys,
+        json.dumps({"jobs": [job_entry("tier0", (0, 5))]}),
+        artifacts=empty_art,
+    )
+    assert code_e == 0
+    assert "no budget" in out_e
+
+    root = setup_loop_repo(tmp_path / "fallback", budget=30.0, change_pin=True)
+    tree = runrecord.tree_id(root)
+    code_empty_jobs, out_empty_jobs = run_loop(root, capsys, json.dumps({"jobs": []}))
+    assert code_empty_jobs == 0
+    assert "no completed jobs found" in out_empty_jobs
+
+    custom_art = tmp_path / "art-custom"
+    forced_fault = {
+        "kind": "fault",
+        "gate": "lint",
+        "bite": "a",
+        "seconds": 15.0,
+        "narrowed": False,
+        "forced": {"cause": "plugin-pin", "record": "ADR 0069"},
+        "run": "r3",
+        "tree": tree,
+    }
+    write_artifact(custom_art, "timing-custom", [forced_fault])
+    code_fallback, out_fallback = run_loop(
+        root,
+        capsys,
+        json.dumps({"jobs": [job_entry("tier0", (0, 35))]}),
+        artifacts=custom_art,
+        monkeypatch=monkeypatch,
+        run_id="r3",
+    )
+    assert code_fallback == 0
+    assert "20.0s without 15.0s forced by plugin-pin" in out_fallback
+
+    (root / ".github/workflows/ci.yml").unlink()
+    code_mw, out_mw = run_loop(root, capsys, json.dumps({"jobs": [job_entry("tier0", (0, 5))]}))
+    assert code_mw == 0
+    assert "could not be read" in out_mw
+
+    stdin_res = run_script(
+        no_budget_root,
+        [
+            "loop",
+            "--workflow",
+            str(no_budget_root / ".github/workflows/ci.yml"),
+            "--place",
+            "default-branch",
+            "--root",
+            str(no_budget_root),
+        ],
+        json.dumps({"jobs": [job_entry("tier0", (0, 5))]}).encode(),
+        locale=STRICT,
+    )
+    assert stdin_res.returncode == 0
+    assert b"no budget" in stdin_res.stdout

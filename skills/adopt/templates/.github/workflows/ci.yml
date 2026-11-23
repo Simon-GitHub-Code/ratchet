@@ -11,6 +11,7 @@ concurrency:
 env:
   RATCHET_PLUGIN: ${{ github.workspace }}/ratchet
   OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}
+  RATCHET_RUN: ${{ github.run_id }}
 jobs:
   proven:
     if: github.event_name == 'push'
@@ -172,3 +173,50 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with: { name: "timing-${{ matrix.gate }}-${{ matrix.shard }}", path: .ratchet/timing.jsonl }
+  loop:
+    if: always() && !cancelled() && (needs.proven.result == 'skipped' || needs.proven.outputs.skip != 'true')
+    needs: [proven, tier0, shape, tier1, tier1-long]
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with: { fetch-depth: 0 }
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with: { repository: Simon-GitHub-Code/ratchet, ref: "<ratchet-sha>", path: ratchet }
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: .ratchet/timing.jsonl
+          key: loop-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            loop-${{ runner.os }}-
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        if: always() && !cancelled()
+        continue-on-error: true
+        with: { pattern: "timing-*", path: .ratchet/timings }
+      - id: judge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set +e
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" --paginate > "$RUNNER_TEMP/jobs.json"
+          jobs_status=$?
+          set -e
+          place=default-branch
+          if [ "$EVENT_NAME" = pull_request ]; then place=pull-request; fi
+          python3 "$RATCHET_PLUGIN/scripts/forge_runs.py" loop \
+            --workflow .github/workflows/ci.yml \
+            --jobs "$RUNNER_TEMP/jobs.json" \
+            --jobs-status "$jobs_status" \
+            --artifacts .ratchet/timings \
+            --place "$place" \
+            --root . \
+            --report .ratchet/timing.jsonl
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        if: always() && !cancelled()
+        with:
+          path: .ratchet/timing.jsonl
+          key: loop-${{ runner.os }}-${{ github.run_id }}

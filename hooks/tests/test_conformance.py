@@ -2042,3 +2042,32 @@ def test_matrix_cache_key_check_handles_flow_syntax_multiline_keys_and_yaml_exte
     assert "plain-${{ github.sha }}" in findings[0].problem
     assert "flow-${{ github.sha }}" in findings[1].problem
     assert "unclosed" in findings[2].problem
+
+
+def test_ci_loop_and_ratchet_run_conformance_findings(repo: Path) -> None:
+    ci = ".github/workflows/ci.yml"
+    original = (repo / ci).read_text(encoding="utf-8")
+
+    replace(ci, conformance.CI_RUN_MARKER, "RATCHET_OTHER: 1")(repo)
+    assert any(conformance.CI_RUN_MARKER in line for line in red(repo))
+    (repo / ci).write_text(original, encoding="utf-8")
+
+    replace(ci, "    permissions:\n      contents: read\n      actions: read\n", "")(repo)
+    assert any("actions: read" in line and "`loop`" in line for line in red(repo))
+    (repo / ci).write_text(original, encoding="utf-8")
+
+    replace(ci, "always() && ", "")(repo)
+    assert any("always()" in line and "`loop`" in line for line in red(repo))
+    (repo / ci).write_text(original, encoding="utf-8")
+
+    replace(ci, ", tier1-long]", "]")(repo)
+    assert any("needs:" in line and "tier1-long" in line for line in red(repo))
+    (repo / ci).write_text(original, encoding="utf-8")
+
+    replace(ci, "\n  loop:\n", "\n  judge_elsewhere:\n")(repo)
+    assert any("outside a `loop` job" in line for line in red(repo))
+    (repo / ci).write_text(original, encoding="utf-8")
+
+    no_loop = original.split("\n  loop:\n", 1)[0] + "\n"
+    (repo / ci).write_text(no_loop, encoding="utf-8")
+    assert any(conformance.CI_LOOP_MARKER in line for line in red(repo))
