@@ -33,6 +33,10 @@ one object per mutant the run made. ``NAME`` is the register's ``tool`` key and 
 - ``unit``: the ``[first, last]`` line of the function or declaration the mutant sits in, when
   the tool says. Without it the gate takes the enclosing top-level declaration: from the nearest
   line above that starts in column one to the next such line or closing bracket.
+- ``duration``: optional finite non-negative seconds spent testing the mutant; when present
+  with positive total time, the gate prints a slowest-10% and top-files profile line.
+- ``tests_completed``: optional finite non-negative count of tests completed before deciding
+  the mutant; when present, the gate prints the mean tests per mutant.
 
 A tool's own report becomes these lines in a gate tool of a few lines, which the repository's
 agent writes for the tool it chose, guards and bites like any other: the plugin reads no tool's
@@ -75,6 +79,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import math
 import re
 import sys
 import tomllib
@@ -99,6 +104,8 @@ HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 RANGE_SUFFIX = re.compile(r"^(.+):(\d+)-(\d+)$")
 BAD_RANGE_SUFFIX = re.compile(r":(?:[^/]*-[^/]*|\d*)$")
 REPLACEMENT_WIDTH = 60
+SLOWEST_SHARE = 0.1
+SLOWEST_FILES = 3
 TEXTS = ("file", "mutator", "replacement", "status")
 Range = tuple[int, int]
 ScopeMap = dict[str, list[Range] | None]
@@ -110,6 +117,8 @@ class Mutant:
     status: str
     function_hash: str
     state: str
+    duration: float | None = None
+    tests_completed: float | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +131,8 @@ class Record:
     line: int
     span: tuple[int, int, int, int]
     unit: tuple[int, int] | None = None
+    duration: float | None = None
+    tests_completed: float | None = None
 
 
 @dataclass(frozen=True)
@@ -212,7 +223,14 @@ def placed(record: Record, source: list[str]) -> Mutant:
     text = "\n".join(line.rstrip() for line in source[start:end])
     digest = "sha256:" + hashlib.sha256(text.encode()).hexdigest() if source else "unknown"
     identity = f"{record.file}:{record.mutator}:{replacement}@{place}"
-    return Mutant(identity, record.status, digest, record.state)
+    return Mutant(
+        identity,
+        record.status,
+        digest,
+        record.state,
+        duration=record.duration,
+        tests_completed=record.tests_completed,
+    )
 
 
 def neutral_mutants(text: str, root: Path) -> tuple[list[Mutant], list[str]]:
@@ -263,7 +281,16 @@ def record_of(raw: object) -> Record | str:
         line=start[0],
         span=(*start, *end),
         unit=unit,
+        duration=_non_negative_number(raw.get("duration")),
+        tests_completed=_non_negative_number(raw.get("tests_completed")),
     )
+
+
+def _non_negative_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) and number >= 0 else None
 
 
 def _pair(value: object) -> tuple[int, int] | None:
@@ -405,7 +432,44 @@ def judge(
         f"{tool}: {killed}/{len(mutants)} killed, {len(live)} live, {len(mine)} registered in"
         f" scope{apart}"
     )
+    if profile := _profile_line(mutants):
+        print(profile)
     return problems
+
+
+def _duration_parts(mutants: list[Mutant]) -> list[str]:
+    timed: list[float] = []
+    by_file: dict[str, float] = {}
+    for mutant in mutants:
+        if mutant.duration is None:
+            continue
+        timed.append(mutant.duration)
+        if mutant.duration > 0:
+            file = mutant.identity.split(":", 1)[0]
+            by_file[file] = by_file.get(file, 0.0) + mutant.duration
+    total = sum(timed)
+    if total <= 0:
+        return []
+    top_count = max(1, math.ceil(len(timed) * SLOWEST_SHARE))
+    slowest_sum = sum(sorted(timed, reverse=True)[:top_count])
+    slowest_pct = round(100 * slowest_sum / total)
+    top_files = sorted(by_file.items(), key=lambda item: (-item[1], item[0]))[:SLOWEST_FILES]
+    files_text = ", ".join(
+        f"{file} {secs:.1f}s ({round(100 * secs / total)}%)" for file, secs in top_files
+    )
+    return [
+        f"slowest 10% of mutants took {slowest_pct}% of the time",
+        f"slowest files: {files_text}",
+    ]
+
+
+def _profile_line(mutants: list[Mutant]) -> str | None:
+    parts = _duration_parts(mutants)
+    tests = [m.tests_completed for m in mutants if m.tests_completed is not None]
+    if tests:
+        mean_tests = sum(tests) / len(tests)
+        parts.append(f"mean {mean_tests:.2f} tests per mutant")
+    return f"mutation: profile: {'; '.join(parts)}" if parts else None
 
 
 def _key(item: Mutant | Entry) -> tuple[str, str]:

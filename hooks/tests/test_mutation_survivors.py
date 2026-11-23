@@ -714,3 +714,153 @@ def test_only_allows_colon_in_directory_name_without_range_suffix(
     write(root, "mutants.jsonl", "")
     assert any_tool(root, "--only", "dir:1/a.src") == 0
     assert "any-tool: no mutant in the files it was given" in capsys.readouterr().out
+
+
+def test_profile_is_omitted_without_profile_fields_or_when_total_duration_is_zero(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = tmp_path
+    write(root, "src/a.src", SOURCE_TEXT)
+    text = record(file="src/a.src", status="killed", start=[4, 10], end=[4, 11]) + "\n"
+    write(root, "mutants.jsonl", text)
+    assert any_tool(root) == 0
+    without_fields = capsys.readouterr().out
+    assert "profile:" not in without_fields
+
+    zero_text = record(file="src/a.src", status="killed", start=[4, 10], end=[4, 11], duration=0)
+    write(root, "mutants.jsonl", zero_text + "\n")
+    assert any_tool(root) == 0
+    assert capsys.readouterr().out == without_fields
+
+
+def test_duration_profile_reports_slowest_tenth_and_top_files(tmp_path: Path, capsys: Out) -> None:
+    root = tmp_path
+    for path in ("src/a.src", "src/b.src", "src/c.src", "src/d.src", "src/e.src"):
+        write(root, path, SOURCE_TEXT)
+    rows = [
+        ("src/d.src", 10.0),
+        ("src/d.src", 5.0),
+        ("src/a.src", 2.0),
+        ("src/b.src", 2.0),
+        ("src/c.src", 2.0),
+        ("src/e.src", 0.0),
+        ("src/a.src", 0.5),
+        ("src/b.src", 0.5),
+        ("src/c.src", 0.5),
+        ("src/d.src", 0.5),
+        ("src/d.src", 0.5),
+    ]
+    lines = [
+        record(file=path, status="killed", start=[4, 10 + n], end=[4, 11 + n], duration=secs)
+        for n, (path, secs) in enumerate(rows)
+    ]
+    write(root, "mutants.jsonl", "\n".join(lines) + "\n")
+    assert any_tool(root) == 0
+    out = capsys.readouterr().out
+    assert (
+        "mutation: profile: slowest 10% of mutants took 64% of the time; "
+        "slowest files: src/d.src 16.0s (68%), src/a.src 2.5s (11%), src/b.src 2.5s (11%)"
+    ) in out
+    assert "src/c.src" not in out
+    assert "src/e.src" not in out
+
+    single = record(file="src/a.src", status="killed", start=[4, 10], end=[4, 11], duration=2.5)
+    write(root, "mutants.jsonl", single + "\n")
+    assert any_tool(root) == 0
+    single_out = capsys.readouterr().out
+    assert (
+        "mutation: profile: slowest 10% of mutants took 100% of the time; "
+        "slowest files: src/a.src 2.5s (100%)"
+    ) in single_out
+
+
+def test_tests_completed_profile_reports_mean_tests_per_mutant(tmp_path: Path, capsys: Out) -> None:
+    root = tmp_path
+    write(root, "src/a.src", SOURCE_TEXT)
+    counts = [19, 19, 19, 19, 19, 19, 19, 19, 19, 19.3]
+    lines = [
+        record(
+            file="src/a.src",
+            status="killed",
+            start=[4, 10 + n],
+            end=[4, 11 + n],
+            tests_completed=c,
+        )
+        for n, c in enumerate(counts)
+    ]
+    write(root, "mutants.jsonl", "\n".join(lines) + "\n")
+    assert any_tool(root) == 0
+    out = capsys.readouterr().out
+    assert "mutation: profile: mean 19.03 tests per mutant\n" in out
+
+
+def test_profile_combines_duration_and_tests_completed(tmp_path: Path, capsys: Out) -> None:
+    root = tmp_path
+    write(root, "src/a.src", SOURCE_TEXT)
+    write(root, "src/b.src", SOURCE_TEXT)
+    lines = [
+        record(
+            file="src/a.src",
+            status="killed",
+            start=[4, 10],
+            end=[4, 11],
+            duration=8.0,
+            tests_completed=12,
+        ),
+        record(
+            file="src/b.src",
+            status="killed",
+            start=[4, 12],
+            end=[4, 13],
+            duration=2.0,
+            tests_completed=9,
+        ),
+    ]
+    write(root, "mutants.jsonl", "\n".join(lines) + "\n")
+    assert any_tool(root) == 0
+    out = capsys.readouterr().out
+    assert (
+        "mutation: profile: slowest 10% of mutants took 80% of the time; "
+        "slowest files: src/a.src 8.0s (80%), src/b.src 2.0s (20%); "
+        "mean 10.50 tests per mutant\n"
+    ) in out
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [True, False, -1, -0.5, "3.0", [1], {"v": 1}, float("nan"), float("inf"), float("-inf")],
+)
+def test_malformed_optional_profile_fields_are_ignored(
+    tmp_path: Path, capsys: Out, bad_value: object
+) -> None:
+    root = tmp_path
+    write(root, "src/a.src", SOURCE_TEXT)
+    bad = record(
+        file="src/a.src",
+        status="killed",
+        start=[4, 10],
+        end=[4, 11],
+        duration=bad_value,
+        tests_completed=bad_value,
+    )
+    write(root, "mutants.jsonl", bad + "\n")
+    assert any_tool(root) == 0
+    out = capsys.readouterr().out
+    assert "profile:" not in out
+    assert "mutation: green" in out
+
+    good = record(
+        file="src/a.src",
+        status="killed",
+        start=[4, 12],
+        end=[4, 13],
+        duration=4.0,
+        tests_completed=6,
+    )
+    write(root, "mutants.jsonl", bad + "\n" + good + "\n")
+    assert any_tool(root) == 0
+    combined_out = capsys.readouterr().out
+    assert (
+        "mutation: profile: slowest 10% of mutants took 100% of the time; "
+        "slowest files: src/a.src 4.0s (100%); mean 6.00 tests per mutant\n"
+    ) in combined_out
