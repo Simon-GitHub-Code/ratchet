@@ -4289,6 +4289,32 @@ def check_cache_restored(root: Path) -> Iterable[Finding]:
             )
 
 
+def check_duplicate_producers(root: Path) -> Iterable[Finding]:
+    binding = read(root / BINDING_PATH)
+    if binding is None:
+        return
+    producers = report.producers(binding)
+    if not producers:
+        return
+    facts = runrecord.facts(root / runrecord.TIMING)
+    for report_name, producer_recipe in producers:
+        latest = facts.latest_producer_run.get(producer_recipe)
+        if latest is None:
+            continue
+        count = facts.producer_counts.get((latest, producer_recipe), 0)
+        if count > 1:
+            yield agent(
+                f"{BINDING_PATH}: the shared report '{report_name}' producer"
+                f" '{producer_recipe}' ran {count} times in run '{latest}'",
+                then=(
+                    (
+                        "ensure every reader reads the report through scripts/report.py and nothing"
+                        " mutates tracked files mid-run, then run the tier again"
+                    ),
+                ),
+            )
+
+
 def full_proof_problem(root: Path, text: str) -> str:
     tier = budget.ceiling_of(text, "tier2")
     start = "`[ceilings.seconds]` has no `bite-all`, so the full proof after a merge "
@@ -4429,6 +4455,7 @@ CHECKS: tuple[Check, ...] = (
     check_bite_all_ceiling,
     check_cache_written,
     check_cache_restored,
+    check_duplicate_producers,
     check_local_caches,
     check_gate_reads,
     check_bites,
@@ -5298,6 +5325,16 @@ def report_mutations() -> list[Mutation]:
         sharing(root)
         reading(root)
 
+    def duplicate_producer(root: Path) -> None:
+        sharing(root)
+        path = root / runrecord.TIMING
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rows = [
+            {"kind": runrecord.PRODUCER, "report": "suite", "producer": "build", "run": "run-1"},
+            {"kind": runrecord.PRODUCER, "report": "suite", "producer": "build", "run": "run-1"},
+        ]
+        path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
     return [
         ("binding without a Shared reports section", rebind(report.SECTION, "## Reports")),
         (
@@ -5318,6 +5355,7 @@ def report_mutations() -> list[Mutation]:
             rebind(row, shared.replace("just build", "just no-such-recipe")),
         ),
         ("reader recipe that opens its shared report's path itself", reading_directly),
+        ("shared report producer ran more than once in one run", duplicate_producer),
     ]
 
 

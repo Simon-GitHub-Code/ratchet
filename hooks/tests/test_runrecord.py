@@ -679,3 +679,39 @@ def test_the_runner_given_a_fifo_for_its_report_finishes_and_says_so(work: Path)
     assert run.returncode == 0, run.stdout + run.stderr
     said = [line for line in run.stdout.splitlines() if "not recorded" in line]
     assert said == [SPECIAL.replace(".ratchet/", "")]
+
+
+def test_facts_counts_producer_and_gate_records_per_real_run_and_tracks_latest(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / runrecord.TIMING
+    rows: list[dict[str, object]] = [
+        {"kind": runrecord.PRODUCER, "report": "suite", "producer": "suite-report", "run": "r1"},
+        {"key": "suite-report", "seconds": 3.0, "status": "green", "run": "r1"},
+        {"kind": runrecord.PRODUCER, "report": "suite", "producer": "suite-report", "run": "r2"},
+        {
+            "kind": runrecord.PRODUCER,
+            "report": "suite",
+            "producer": "suite-report",
+            "run": runrecord.NO_RUN,
+        },
+        {
+            "kind": runrecord.PRODUCER,
+            "report": "suite",
+            "producer": "suite-report",
+            "run": runrecord.NO_RUN,
+        },
+        {"kind": runrecord.PRODUCER, "report": "suite", "producer": "", "run": "r3"},
+        {"kind": runrecord.TIER, "seconds": 1.0, "run": "r3"},
+        {"kind": runrecord.CACHE_RESTORE, "bytes": -1, "paths": [".cache"], "run": "r3"},
+        {"kind": runrecord.CACHE_RESTORE, "bytes": 100, "paths": [".cache"], "run": "r3"},
+    ]
+    for row in rows:
+        runrecord.append(path, row, root=tmp_path)
+    facts = runrecord.facts(path)
+    assert facts.producer_counts[("r1", "suite-report")] == 2
+    assert facts.producer_counts[("r2", "suite-report")] == 1
+    assert facts.latest_producer_run["suite-report"] == "r2"
+    assert facts.restored == {(".cache",): 100}
+    assert runrecord.ci_cache_paths("## Speed\n\n- Cache: none: no cache\n") == []
+    assert all(run_id != runrecord.NO_RUN for run_id, _ in facts.producer_counts)

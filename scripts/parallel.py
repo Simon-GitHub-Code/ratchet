@@ -50,9 +50,11 @@ Usage::
   gates still running, starts no more, and names what it stopped and what never started.
 * ``--serial A B`` declares a group: its gates run one after another, in the order written,
   inside the parallel run, while other gates run beside it. The group takes one job at a time.
-  Repeat the option for more groups. A gate is in at most one group. When a group's gates took
-  longer one after another than the slowest gate outside every group and ``--alone``, the group
-  set the run's wall clock, and one line after the closing summary says so. It is never red.
+  Repeat the option for more groups. A gate is in at most one group. After every tier, one line
+  explains what set the wall clock (whether the lanes were full, one gate or ``--serial`` group
+  set it while other lanes stood idle, or the order lost seconds against the best schedule), and
+  when the run is at least 1.3 times its usual median on an uncontended machine, a second line
+  names the gates that grew most. It is never red.
 * The ``- Apart:``, ``- Alone:`` and ``- Wide:`` lines of the ``## Speed`` section of the
   binding at ``--root`` add to the flags (ADR 0086): each code span of ``Apart`` is a group,
   names split by spaces, that never runs at once, like a ``--serial`` group; ``Alone`` adds to
@@ -133,11 +135,21 @@ import runrecord
 import schedule
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
+    from collections.abc import Set as AbstractSet
 
 POLL = 0.05
 RECENT = 5
 MIN_HINT_GATES = 2
+MIN_ORDER_LOSS = 0.25
+ORDER_LOSS_SHARE = 0.05
+IDLE_LANE_SHARE = 0.25
+BOTTLENECK_WALL_SHARE = 0.5
+MIN_BOTTLENECK_GAP = 0.2
+BOTTLENECK_GAP_SHARE = 0.1
+SLOWER_RATIO = 1.3
+SLOWER_HISTORY = 10
+SLOWER_TOP_GATES = 3
 PROFILE_BULLET = "Profile"
 WINDOW = 2**20
 UNREADABLE = (ValueError, TypeError, KeyError, OverflowError, RecursionError)
@@ -506,28 +518,264 @@ def collect(gate: Live, code: int) -> Finished:
     )
 
 
-def chains(scheduler: Scheduler) -> list[str]:
-    seconds = {result.name: result.seconds for result in scheduler.finished}
-    grouped = {name for group in scheduler.groups for name in group}
-    beside = [
-        result
-        for result in scheduler.finished
-        if result.name not in grouped and result.name not in scheduler.measured_alone
+def _simulate_board(
+    names: AbstractSet[str],
+    *,
+    groups: Sequence[tuple[str, ...]],
+    seconds: Mapping[str, float],
+    jobs: int,
+) -> float:
+    board = schedule.Board(
+        sorted(names, key=lambda name: (-seconds[name], name)),
+        schedule.Schedule({schedule.APART: tuple(groups)}),
+        str,
+    )
+    running: list[tuple[float, str]] = []
+    now = 0.0
+    while True:
+        while len(running) < jobs and (picked := board.take()) is not None:
+            running.append((now + seconds[picked], picked))
+        if not running:
+            return now
+        now = min(end for end, _ in running)
+        finished_now = [name for end, name in running if end <= now]
+        running = [(end, name) for end, name in running if end > now]
+        for name in finished_now:
+            board.done(name)
+
+
+def best_schedule(
+    finished: Sequence[Finished],
+    *,
+    groups: Sequence[tuple[str, ...]],
+    alone: AbstractSet[str],
+    jobs: int,
+) -> float:
+    seconds = {result.name: result.seconds for result in finished}
+    alone_wall = sum(result.seconds for result in finished if result.name in alone)
+    normal_names = {result.name for result in finished if result.name not in alone}
+    if not normal_names:
+        return alone_wall
+    active_groups = [
+        members
+        for group in groups
+        if len(members := tuple(name for name in group if name in normal_names)) > 1
     ]
-    if not beside:
-        return []
-    slowest = max(beside, key=lambda result: result.seconds)
-    lines = []
-    for group in scheduler.groups:
-        chain = sum(seconds.get(name, 0.0) for name in group)
-        if chain > slowest.seconds:
-            lines.append(
-                f"parallel: the group {', '.join(group)} took {chain:.1f}s one after another,"
-                f" longer than {slowest.name} at {slowest.seconds:.1f}s, the slowest gate outside"
-                " every group, so the group set this run's wall clock. Time the tier without it,"
-                " and keep it only if the run is slower without it or a gate times out."
+    grouped_list = [name for group in active_groups for name in group]
+    if len(set(grouped_list)) != len(grouped_list):
+        return alone_wall + _simulate_board(
+            normal_names, groups=active_groups, seconds=seconds, jobs=jobs
+        )
+    grouped = set(grouped_list)
+    units = [*active_groups, *((name,) for name in normal_names if name not in grouped)]
+    durations = sorted((sum(seconds[name] for name in unit) for unit in units), reverse=True)
+    lanes = [0.0] * jobs
+    for duration in durations:
+        lane = lanes.index(min(lanes))
+        lanes[lane] += duration
+    return alone_wall + max(lanes)
+
+
+def serial_bottleneck(
+    scheduler: Scheduler, seconds: Mapping[str, float]
+) -> tuple[tuple[str, ...], float] | None:
+    candidates = [
+        (sum(seconds[name] for name in members), members)
+        for group in scheduler.groups
+        if len(
+            members := tuple(
+                name for name in group if name in seconds and name not in scheduler.measured_alone
             )
-    return lines
+        )
+        > 1
+    ]
+    if not candidates:
+        return None
+    total, members = max(candidates, key=lambda item: item[0])
+    return members, total
+
+
+def dominates(top: float, other: float) -> bool:
+    return top - other >= max(MIN_BOTTLENECK_GAP, BOTTLENECK_GAP_SHARE * other)
+
+
+def idle_bottleneck_line(scheduler: Scheduler, wall: float, idle: float) -> str | None:
+    jobs = scheduler.jobs
+    seconds = {result.name: result.seconds for result in scheduler.finished}
+    slowest = max(scheduler.finished, key=lambda result: result.seconds)
+    group = serial_bottleneck(scheduler, seconds)
+    if group is not None:
+        members, chain = group
+        beside = max((r.seconds for r in scheduler.finished if r.name not in members), default=0.0)
+        if (
+            chain >= slowest.seconds
+            and chain > BOTTLENECK_WALL_SHARE * wall
+            and dominates(chain, beside)
+        ):
+            return (
+                f"parallel: the --serial group {', '.join(members)} ({chain:.1f}s chained) set the"
+                f" wall clock while other lanes stood idle ({idle:.1f}s idle across {jobs} lanes),"
+                " time without it if they can run together"
+            )
+    second = (
+        sorted((r.seconds for r in scheduler.finished), reverse=True)[1]
+        if len(scheduler.finished) > 1
+        else 0.0
+    )
+    if len(scheduler.finished) == 1 or (
+        slowest.seconds > BOTTLENECK_WALL_SHARE * wall and dominates(slowest.seconds, second)
+    ):
+        alone_note = ", --alone" if slowest.name in scheduler.measured_alone else ""
+        return (
+            f"parallel: one gate {slowest.name} ({slowest.seconds:.1f}s{alone_note}) set the wall"
+            f" clock while other lanes stood idle ({idle:.1f}s idle across {jobs} lanes)"
+        )
+    alone_total = sum(
+        result.seconds for result in scheduler.finished if result.name in scheduler.measured_alone
+    )
+    if alone_total > BOTTLENECK_WALL_SHARE * wall and alone_total >= MIN_BOTTLENECK_GAP:
+        return (
+            f"parallel: --alone gates ({alone_total:.1f}s) set the wall clock while other lanes"
+            f" stood idle ({idle:.1f}s idle across {jobs} lanes)"
+        )
+    return None
+
+
+def wall_clock_line(scheduler: Scheduler, wall: float) -> str:
+    work = sum(result.seconds for result in scheduler.finished)
+    jobs = scheduler.jobs
+    if jobs == 1:
+        return f"parallel: the lanes were full (1 lane, {work:.1f}s of check time in {wall:.1f}s)"
+    best = best_schedule(
+        scheduler.finished,
+        groups=scheduler.groups,
+        alone=scheduler.measured_alone,
+        jobs=jobs,
+    )
+    lost = wall - best
+    if lost >= max(MIN_ORDER_LOSS, ORDER_LOSS_SHARE * wall):
+        return (
+            f"parallel: the order lost {lost:.1f}s against the best schedule"
+            f" ({best:.1f}s across {jobs} lanes)"
+        )
+    capacity = wall * jobs
+    idle = max(0.0, capacity - work)
+    if capacity > 0 and idle >= IDLE_LANE_SHARE * capacity:
+        line = idle_bottleneck_line(scheduler, wall, idle)
+        if line is not None:
+            return line
+    return f"parallel: the lanes were full ({jobs} lanes, {work:.1f}s of check time in {wall:.1f}s)"
+
+
+def qualifying_tiers(
+    records: Sequence[Mapping[str, object]],
+    *,
+    gate_set: AbstractSet[str],
+    current_run: str,
+) -> list[tuple[int, Mapping[str, object], float]]:
+    matched: list[tuple[int, Mapping[str, object], float]] = []
+    for idx, rec in enumerate(records):
+        if rec.get("kind") != runrecord.TIER or rec.get("status") != "green":
+            continue
+        if rec.get("judgement") == "over":
+            continue
+        if current_run != runrecord.NO_RUN and rec.get("run") == current_run:
+            continue
+        rec_gates = rec.get("gates")
+        if (
+            not isinstance(rec_gates, list)
+            or not all(isinstance(gate, str) for gate in rec_gates)
+            or frozenset(rec_gates) != gate_set
+        ):
+            continue
+        factor = loop_budget.finite_seconds(rec.get("m"))
+        seconds = loop_budget.finite_seconds(rec.get("seconds"))
+        if (
+            rec.get("machine_read") is False
+            or factor is None
+            or factor >= machine.NOISE_FLOOR
+            or seconds is None
+            or seconds <= 0
+        ):
+            continue
+        matched.append((idx, rec, seconds))
+    return matched[-SLOWER_HISTORY:]
+
+
+def prior_gate_medians(
+    records: Sequence[Mapping[str, object]],
+    *,
+    qualifying: Sequence[tuple[int, Mapping[str, object], float]],
+    gate_set: AbstractSet[str],
+    current_run: str,
+) -> dict[str, float]:
+    qualifying_runs = {
+        run_id
+        for _, rec, _ in qualifying
+        if isinstance(run_id := rec.get("run"), str) and run_id != runrecord.NO_RUN
+    }
+    has_no_run = any(
+        not isinstance(rec.get("run"), str) or rec.get("run") == runrecord.NO_RUN
+        for _, rec, _ in qualifying
+    )
+    cutoff = qualifying[-1][0]
+    gate_times: dict[str, list[float]] = {}
+    for idx, rec in enumerate(records):
+        if "kind" in rec or rec.get("status") not in ("green", "unbounded"):
+            continue
+        key = rec.get("key")
+        seconds = loop_budget.finite_seconds(rec.get("seconds"))
+        if not isinstance(key, str) or key not in gate_set or seconds is None:
+            continue
+        run_id = rec.get("run")
+        if current_run != runrecord.NO_RUN and run_id == current_run:
+            continue
+        in_real = isinstance(run_id, str) and run_id in qualifying_runs
+        in_plain = (
+            has_no_run
+            and idx <= cutoff
+            and (not isinstance(run_id, str) or run_id == runrecord.NO_RUN)
+        )
+        if in_real or in_plain:
+            gate_times.setdefault(key, []).append(seconds)
+    return {key: statistics.median(times[-SLOWER_HISTORY:]) for key, times in gate_times.items()}
+
+
+def slower_than_usual(scheduler: Scheduler, wall: float, *, gates: list[str]) -> str | None:
+    if (
+        scheduler.halted
+        or scheduler.stopped
+        or scheduler.not_started()
+        or scheduler.report_to is None
+        or not scheduler.report_to.is_file()
+    ):
+        return None
+    monitor = scheduler.monitor.result()
+    if not monitor.machine_read or not math.isfinite(monitor.m) or monitor.m >= machine.NOISE_FLOOR:
+        return None
+    records = list(runrecord.read(scheduler.report_to))
+    gate_set = frozenset(gates)
+    current_run = os.environ.get(runrecord.RUN) or runrecord.NO_RUN
+    qualifying = qualifying_tiers(records, gate_set=gate_set, current_run=current_run)
+    if not qualifying:
+        return None
+    median_wall = statistics.median(seconds for _, _, seconds in qualifying)
+    if wall < SLOWER_RATIO * median_wall:
+        return None
+    medians = prior_gate_medians(
+        records, qualifying=qualifying, gate_set=gate_set, current_run=current_run
+    )
+    grew: list[tuple[float, str, float, float]] = []
+    for result in scheduler.finished:
+        median = medians.get(result.name)
+        if median is not None and result.seconds - median > 0:
+            grew.append((result.seconds - median, result.name, result.seconds, median))
+    grew.sort(key=lambda item: item[0], reverse=True)
+    top = grew[:SLOWER_TOP_GATES]
+    if not top:
+        return f"parallel: slower than usual: {wall:.1f}s vs {median_wall:.1f}s median"
+    parts = ", ".join(f"{name} ({cur:.1f}s vs {med:.1f}s median)" for _diff, name, cur, med in top)
+    return f"parallel: slower than usual: {wall:.1f}s vs {median_wall:.1f}s median; grew: {parts}"
 
 
 def closing(scheduler: Scheduler, wall: float) -> list[str]:
@@ -545,8 +793,7 @@ def closing(scheduler: Scheduler, wall: float) -> list[str]:
         f"parallel: {checks} in {wall:.1f}s ({work:.1f}s of check time): {tally}; "
         f"slowest: {slowest.name} {slowest.seconds:.1f}s"
     )
-    for line in chains(scheduler):
-        say(line)
+    say(wall_clock_line(scheduler, wall))
     if hint := profile_hint(scheduler):
         say(hint)
     problems = [
@@ -638,7 +885,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def judge_loop(
-    scheduler: Scheduler, options: argparse.Namespace, wall: float
+    scheduler: Scheduler, options: argparse.Namespace, wall: float, *, wall_clock: str = ""
 ) -> loop_budget.Result | None:
     if options.budget != "loop" or scheduler.stopped or scheduler.not_started():
         return None
@@ -648,12 +895,12 @@ def judge_loop(
         loop_budget.GateTime(result.name, result.seconds, result.green)
         for result in scheduler.finished
     ]
-    return loop_budget.evaluate(
+    return loop_budget.evaluate_run(
         scheduler.root,
         reading=reading,
         report=scheduler.report_to,
-        tree=scheduler.tree,
         gates=gates,
+        options=loop_budget.EvalOptions(tree=scheduler.tree, wall_clock=wall_clock),
     )
 
 
@@ -664,11 +911,14 @@ def finish_run(
     *,
     gates: list[str],
 ) -> int:
+    wall_clock = wall_clock_line(scheduler, wall)
     problems = closing(scheduler, wall)
+    if slower := slower_than_usual(scheduler, wall, gates=gates):
+        say(slower)
     for line in problems:
         say(line)
     gates_exit = 1 if problems else 0
-    judged = judge_loop(scheduler, options, wall)
+    judged = judge_loop(scheduler, options, wall, wall_clock=wall_clock)
     exit_code = judged.exit_for(gates_exit) if judged is not None else gates_exit
     record(
         scheduler,

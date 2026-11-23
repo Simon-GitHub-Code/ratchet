@@ -3,12 +3,10 @@ from __future__ import annotations
 
 import argparse
 import fcntl
-import hashlib
 import json
 import os
 import re
 import shlex
-import stat
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -16,7 +14,7 @@ from pathlib import Path
 
 import gatelib
 import markdown_text
-import plugin_pin
+import runrecord
 
 SECTION = "## Shared reports"
 SCRIPT = "scripts/report.py"
@@ -29,10 +27,11 @@ PLACEHOLDER = (
     " to run the suite once, then bind the `test`, `coverage`, `diff-coverage` and `test-counts`"
     " gates as readers of the shared suite report"
 )
-RUN = "RATCHET_RUN"
+RUN = runrecord.RUN
 FOLDER = gatelib.STATE / "reports"
 NAME = re.compile(r"[A-Za-z][\w-]*")
 COMMAND = re.compile(r"just ([A-Za-z_][\w-]*)(?: .*)?")
+content_id = runrecord.content_id
 
 
 @dataclass(frozen=True)
@@ -115,31 +114,6 @@ def producers(binding: str) -> list[tuple[str, str]]:
     ]
 
 
-def content_id(root: Path) -> str:
-    listed = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-        capture_output=True,
-        check=True,
-    ).stdout.decode()
-    digest = hashlib.sha1(usedforsecurity=False)
-    for name in sorted(set(listed.split("\0")) - {""}):
-        if Path(name).parts[0] == gatelib.STATE.name:
-            continue
-        path = root / name
-        try:
-            mode = path.lstat().st_mode
-        except FileNotFoundError:
-            continue
-        if stat.S_ISLNK(mode):
-            kind, body = b"120000", os.fsencode(path.readlink())
-        elif stat.S_ISREG(mode):
-            kind, body = (b"100755" if mode & stat.S_IXUSR else b"100644"), path.read_bytes()
-        else:
-            continue
-        digest.update(kind + b" " + os.fsencode(name) + b"\0" + plugin_pin.object_id(b"blob", body))
-    return digest.hexdigest()
-
-
 def held(record: Path) -> tuple[str, str, int] | None:
     try:
         found = json.loads(record.read_text(encoding="utf-8"))
@@ -182,6 +156,18 @@ def obtain(root: Path, report: Report) -> tuple[int, Path]:
         record.write_text(
             json.dumps({"run": run, "content": content, "status": status}), encoding="utf-8"
         )
+        if run:
+            runrecord.append(
+                root / runrecord.TIMING,
+                {
+                    "kind": runrecord.PRODUCER,
+                    "report": report.name,
+                    "producer": recipe_of(report.producer),
+                    **runrecord.stamp(root, content),
+                },
+                root=root,
+                who="report",
+            )
         return status, log
 
 

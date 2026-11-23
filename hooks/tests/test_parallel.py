@@ -20,6 +20,7 @@ from hypothesis import strategies as st
 
 import budget
 import gatelib
+import machine
 import parallel
 import runrecord
 import schedule
@@ -255,20 +256,23 @@ def test_the_closing_lines_name_the_slowest_gate(capsys: pytest.CaptureFixture[s
         parallel.Finished("slow gate", 9.5, 0, ""),
     ]
     assert parallel.closing(scheduler, 10.0) == []
-    assert capsys.readouterr().out == (
-        "parallel: 2 checks in 10.0s (9.7s of check time): 2 ran and passed;"
-        " slowest: slow gate 9.5s\n"
-    )
+    assert capsys.readouterr().out.splitlines() == [
+        (
+            "parallel: 2 checks in 10.0s (9.7s of check time): 2 ran and passed;"
+            " slowest: slow gate 9.5s"
+        ),
+        "parallel: the lanes were full (1 lane, 9.7s of check time in 10.0s)",
+    ]
 
 
 def test_a_group_whose_chain_outlasts_every_gate_beside_it_is_named(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     options = argparse.Namespace(
-        root=Path(), jobs=4, fail_fast=False, report=None, alone=["perf"], wide=[]
+        root=Path(), jobs=4, fail_fast=False, report=None, alone=[], wide=[]
     )
-    units = [("coverage", "mutation-changed"), ("lint",), ("fmt", "types"), ("perf",)]
-    kept = schedule.Schedule({"Apart": (units[0], units[2]), "Alone": (("perf",),)})
+    units = [("coverage", "mutation-changed"), ("lint",), ("fmt", "types")]
+    kept = schedule.Schedule({"Apart": (units[0], units[2])})
     scheduler = parallel.Scheduler(units, [], options, kept=kept)
     scheduler.board.pending.clear()
     scheduler.finished = [
@@ -277,20 +281,18 @@ def test_a_group_whose_chain_outlasts_every_gate_beside_it_is_named(
         parallel.Finished("lint", 182.0, 0, ""),
         parallel.Finished("fmt", 1.0, 0, ""),
         parallel.Finished("types", 2.0, 0, ""),
-        parallel.Finished("perf", 500.0, 0, ""),
     ]
     assert parallel.closing(scheduler, 320.0) == []
     assert capsys.readouterr().out.splitlines()[1:] == [
         (
-            "parallel: the group coverage, mutation-changed took 312.4s one after another,"
-            " longer than lint at 182.0s, the slowest gate outside every group, so the group set"
-            " this run's wall clock. Time the tier without it, and keep it only if the run is"
-            " slower without it or a gate times out."
+            "parallel: the --serial group coverage, mutation-changed (312.4s chained) set the"
+            " wall clock while other lanes stood idle (782.6s idle across 4 lanes), time without"
+            " it if they can run together"
         )
     ]
 
 
-def test_a_run_with_no_gate_outside_every_group_names_no_group(
+def test_a_run_with_no_gate_outside_every_group_prints_full_lanes(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     options = argparse.Namespace(
@@ -300,7 +302,9 @@ def test_a_run_with_no_gate_outside_every_group_names_no_group(
     scheduler.board.pending.clear()
     scheduler.finished = [parallel.Finished("a", 5.0, 0, ""), parallel.Finished("b", 5.0, 0, "")]
     assert parallel.closing(scheduler, 10.0) == []
-    assert len(capsys.readouterr().out.splitlines()) == 1
+    assert capsys.readouterr().out.splitlines()[1:] == [
+        "parallel: the lanes were full (1 lane, 10.0s of check time in 10.0s)"
+    ]
 
 
 def binding(root: Path, rows: dict[str, str], *, speed: str = "") -> Path:
@@ -1420,3 +1424,290 @@ def test_profile_commands_parses_valid_entries_and_ignores_placeholders(
 ) -> None:
     root = binding(tmp_path, {"lint": "linter"}, speed=speed)
     assert parallel.profile_commands(root) == expected
+
+
+def test_wall_clock_line_covers_single_gate_alone_order_loss_and_full_lanes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    options = argparse.Namespace(
+        root=tmp_path, jobs=4, fail_fast=False, report=None, alone=[], wide=[]
+    )
+    single_gate = parallel.Scheduler([("lint",)], [], options, kept=schedule.Schedule())
+    single_gate.finished = [parallel.Finished("lint", 10.0, 0, "")]
+    assert parallel.wall_clock_line(single_gate, 10.0) == (
+        "parallel: one gate lint (10.0s) set the wall clock while other lanes stood idle"
+        " (30.0s idle across 4 lanes)"
+    )
+
+    alone_opts = argparse.Namespace(
+        root=tmp_path, jobs=4, fail_fast=False, report=None, alone=["perf"], wide=[]
+    )
+    alone_sched = parallel.Scheduler(
+        [("lint",)], [], alone_opts, kept=schedule.Schedule({"Alone": (("perf",),)})
+    )
+    alone_sched.finished = [
+        parallel.Finished("lint", 1.0, 0, ""),
+        parallel.Finished("perf", 20.0, 0, ""),
+    ]
+    assert parallel.wall_clock_line(alone_sched, 21.0) == (
+        "parallel: one gate perf (20.0s, --alone) set the wall clock while other lanes stood"
+        " idle (63.0s idle across 4 lanes)"
+    )
+
+    multi_alone_opts = argparse.Namespace(
+        root=tmp_path, jobs=4, fail_fast=False, report=None, alone=["p1", "p2"], wide=[]
+    )
+    multi_alone = parallel.Scheduler(
+        [("lint",)],
+        [],
+        multi_alone_opts,
+        kept=schedule.Schedule({"Alone": (("p1",), ("p2",))}),
+    )
+    multi_alone.finished = [
+        parallel.Finished("lint", 1.0, 0, ""),
+        parallel.Finished("p1", 15.0, 0, ""),
+        parallel.Finished("p2", 15.0, 0, ""),
+    ]
+    assert parallel.wall_clock_line(multi_alone, 31.0) == (
+        "parallel: --alone gates (30.0s) set the wall clock while other lanes stood idle"
+        " (93.0s idle across 4 lanes)"
+    )
+
+    only_alone = parallel.Scheduler(
+        [],
+        [],
+        multi_alone_opts,
+        kept=schedule.Schedule({"Alone": (("p1",), ("p2",))}),
+    )
+    only_alone.finished = [
+        parallel.Finished("p1", 15.0, 0, ""),
+        parallel.Finished("p2", 15.0, 0, ""),
+    ]
+    assert (
+        parallel.best_schedule(
+            only_alone.finished, groups=[], alone=only_alone.measured_alone, jobs=4
+        )
+        == 30.0
+    )
+
+    two_lane_opts = argparse.Namespace(
+        root=tmp_path, jobs=2, fail_fast=False, report=None, alone=[], wide=[]
+    )
+    order_lost = parallel.Scheduler(
+        [("a",), ("b",), ("c",)], [], two_lane_opts, kept=schedule.Schedule()
+    )
+    order_lost.finished = [
+        parallel.Finished("a", 10.0, 0, ""),
+        parallel.Finished("b", 10.0, 0, ""),
+        parallel.Finished("c", 20.0, 0, ""),
+    ]
+    assert parallel.wall_clock_line(order_lost, 30.0) == (
+        "parallel: the order lost 10.0s against the best schedule (20.0s across 2 lanes)"
+    )
+
+    saturated = parallel.Scheduler(
+        [("a",), ("b",), ("c",), ("d",)], [], two_lane_opts, kept=schedule.Schedule()
+    )
+    saturated.finished = [
+        parallel.Finished("a", 10.0, 0, ""),
+        parallel.Finished("b", 10.0, 0, ""),
+        parallel.Finished("c", 10.0, 0, ""),
+        parallel.Finished("d", 10.0, 0, ""),
+    ]
+    assert parallel.wall_clock_line(saturated, 20.0) == (
+        "parallel: the lanes were full (2 lanes, 40.0s of check time in 20.0s)"
+    )
+
+    overlap_kept = schedule.Schedule({"Apart": (("a", "b"), ("b", "c"))})
+    overlap_best = parallel.best_schedule(
+        [
+            parallel.Finished("a", 4.0, 0, ""),
+            parallel.Finished("b", 6.0, 0, ""),
+            parallel.Finished("c", 3.0, 0, ""),
+        ],
+        groups=list(overlap_kept.apart),
+        alone=frozenset(),
+        jobs=2,
+    )
+    assert overlap_best == 10.0
+
+    (tmp_path / "quality").mkdir()
+    (tmp_path / "quality/thresholds.toml").write_text(
+        "[ceilings.loop]\nseconds = 10\n", encoding="utf-8"
+    )
+    over_opts = argparse.Namespace(
+        root=tmp_path, jobs=4, fail_fast=False, report=None, alone=[], wide=[], budget="loop"
+    )
+    over_sched = parallel.Scheduler([], [], over_opts, kept=schedule.Schedule())
+    over_sched.finished = [parallel.Finished("slow", 20.0, 0, "")]
+    assert parallel.finish_run(over_sched, over_opts, 20.0, gates=["slow"]) == 1
+    out_lines = capsys.readouterr().out.splitlines()
+    assert out_lines[1].startswith("parallel: one gate slow (20.0s) set the wall clock")
+    assert "one gate slow (20.0s) set the wall clock while other lanes stood idle" in out_lines[-1]
+
+
+def test_slower_than_usual_prints_only_when_qualifying_and_preserves_loop_last(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "quality").mkdir()
+    (tmp_path / "quality/thresholds.toml").write_text(
+        "[ceilings.loop]\nseconds = 50\n", encoding="utf-8"
+    )
+    report = tmp_path / ".ratchet/timing.jsonl"
+    report.parent.mkdir()
+    prior_rows: list[dict[str, object]] = [
+        {"key": "lint", "seconds": 2.0, "status": "unbounded", "exit": 0, "run": "r1"},
+        {"key": "test", "seconds": 8.0, "status": "unbounded", "exit": 0, "run": "r1"},
+        {"key": "other", "seconds": 99.0, "status": "unbounded", "exit": 0, "run": "r1"},
+        {
+            "kind": runrecord.TIER,
+            "seconds": 10.0,
+            "status": "green",
+            "judgement": "within",
+            "gates": ["lint", "test"],
+            "m": 1.0,
+            "machine_read": True,
+            "run": "r1",
+        },
+        {"key": "lint", "seconds": 4.0, "status": "green", "exit": 0, "run": "r2"},
+        {"key": "test", "seconds": 10.0, "status": "green", "exit": 0, "run": "r2"},
+        {
+            "kind": runrecord.TIER,
+            "seconds": 12.0,
+            "status": "green",
+            "judgement": "within",
+            "gates": ["test", "lint"],
+            "m": 1.05,
+            "machine_read": True,
+            "run": "r2",
+        },
+        {"key": "lint", "seconds": 99.0, "status": "unbounded", "exit": 0, "run": "r_over"},
+        {
+            "kind": runrecord.TIER,
+            "seconds": 99.0,
+            "status": "green",
+            "judgement": "over",
+            "gates": ["lint", "test"],
+            "m": 1.0,
+            "machine_read": True,
+            "run": "r_over",
+        },
+        {"key": "lint", "seconds": 99.0, "status": "unbounded", "exit": 0, "run": "r_busy"},
+        {
+            "kind": runrecord.TIER,
+            "seconds": 99.0,
+            "status": "green",
+            "judgement": "not judged",
+            "gates": ["lint", "test"],
+            "m": 1.25,
+            "machine_read": True,
+            "run": "r_busy",
+        },
+        {"key": "lint", "seconds": 99.0, "status": "unbounded", "exit": 0, "run": "r_unread"},
+        {
+            "kind": runrecord.TIER,
+            "seconds": 99.0,
+            "status": "green",
+            "gates": ["lint", "test"],
+            "m": 1.0,
+            "machine_read": False,
+            "run": "r_unread",
+        },
+        {
+            "kind": runrecord.TIER,
+            "seconds": 1.0,
+            "status": "green",
+            "gates": ["lint"],
+            "m": 1.0,
+            "machine_read": True,
+            "run": "r_other",
+        },
+        {"key": "lint", "seconds": 99.0, "status": "unbounded", "exit": 0, "run": "r_now"},
+        {
+            "kind": runrecord.TIER,
+            "seconds": 1.0,
+            "status": "green",
+            "gates": ["lint", "test"],
+            "m": 1.0,
+            "machine_read": True,
+            "run": "r_now",
+        },
+    ]
+    report.write_text("\n".join(json.dumps(r) for r in prior_rows) + "\n", encoding="utf-8")
+
+    monkeypatch.setenv(runrecord.RUN, "r_now")
+    options = argparse.Namespace(
+        root=tmp_path, jobs=2, fail_fast=False, report=report, alone=[], wide=[], budget="loop"
+    )
+    idle_machine = machine.Machine(4, 0.5, 1.0, 1.0, 1.0, machine_read=True)
+    sched = parallel.Scheduler([], [], options, kept=schedule.Schedule())
+    monkeypatch.setattr(sched.monitor, "result", lambda: idle_machine)
+    sched.finished = [
+        parallel.Finished("lint", 9.0, 0, ""),
+        parallel.Finished("test", 18.0, 0, ""),
+    ]
+    assert parallel.finish_run(sched, options, 18.0, gates=["lint", "test"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    slower_lines = [line for line in lines if line.startswith("parallel: slower than usual:")]
+    assert len(slower_lines) == 1
+    assert "18.0s vs 11.0s median" in slower_lines[0]
+    assert "test (18.0s vs 9.0s median)" in slower_lines[0]
+    assert "lint (9.0s vs 3.0s median)" in slower_lines[0]
+    assert lines[-2] == "parallel: green (2 ran)"
+    assert lines[-1].startswith("loop: within:")
+
+    normal_sched = parallel.Scheduler([], [], options, kept=schedule.Schedule())
+    monkeypatch.setattr(normal_sched.monitor, "result", lambda: idle_machine)
+    normal_sched.finished = [
+        parallel.Finished("lint", 3.0, 0, ""),
+        parallel.Finished("test", 9.0, 0, ""),
+    ]
+    assert parallel.slower_than_usual(normal_sched, 12.0, gates=["lint", "test"]) is None
+
+    busy_machine = machine.Machine(4, 2.0, 1.5, 1.5, 1.5, machine_read=True)
+    busy_sched = parallel.Scheduler([], [], options, kept=schedule.Schedule())
+    monkeypatch.setattr(busy_sched.monitor, "result", lambda: busy_machine)
+    busy_sched.finished = list(sched.finished)
+    assert parallel.slower_than_usual(busy_sched, 18.0, gates=["lint", "test"]) is None
+
+    unread_machine = machine.Machine(4, 0.5, 1.0, 1.0, 1.0, machine_read=False)
+    unread_sched = parallel.Scheduler([], [], options, kept=schedule.Schedule())
+    monkeypatch.setattr(unread_sched.monitor, "result", lambda: unread_machine)
+    unread_sched.finished = list(sched.finished)
+    assert parallel.slower_than_usual(unread_sched, 18.0, gates=["lint", "test"]) is None
+
+    halted_sched = parallel.Scheduler([], [], options, kept=schedule.Schedule())
+    monkeypatch.setattr(halted_sched.monitor, "result", lambda: idle_machine)
+    halted_sched.halted = True
+    halted_sched.finished = [parallel.Finished("lint", 18.0, 1, "")]
+    assert parallel.slower_than_usual(halted_sched, 18.0, gates=["lint", "test"]) is None
+
+
+def test_slower_than_usual_handles_no_run_and_no_gate_growth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(runrecord.RUN, raising=False)
+    report = tmp_path / "timing.jsonl"
+    rows: list[dict[str, object]] = [
+        {"key": "a", "seconds": 5.0, "status": "unbounded", "run": runrecord.NO_RUN},
+        {
+            "kind": runrecord.TIER,
+            "seconds": 5.0,
+            "status": "green",
+            "gates": ["a", "b"],
+            "m": 1.0,
+            "machine_read": True,
+            "run": runrecord.NO_RUN,
+        },
+        {"key": "a", "seconds": 50.0, "status": "unbounded", "run": runrecord.NO_RUN},
+    ]
+    report.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    options = argparse.Namespace(
+        root=tmp_path, jobs=2, fail_fast=False, report=report, alone=[], wide=[]
+    )
+    idle_machine = machine.Machine(4, 0.5, 1.0, 1.0, 1.0, machine_read=True)
+    sched = parallel.Scheduler([], [], options, kept=schedule.Schedule())
+    monkeypatch.setattr(sched.monitor, "result", lambda: idle_machine)
+    sched.finished = [parallel.Finished("a", 5.0, 0, ""), parallel.Finished("b", 5.0, 0, "")]
+    line = parallel.slower_than_usual(sched, 10.0, gates=["a", "b"])
+    assert line == "parallel: slower than usual: 10.0s vs 5.0s median"

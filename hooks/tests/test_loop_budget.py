@@ -674,4 +674,21 @@ def test_evaluate_run_supports_places_unread_detail_and_forced_exclusion(
     assert over_main.effect.annotation is True
     assert "grew: lint (30.0s vs 5.0s median)" in over_main.line()
 
+    with_wall = loop_budget.evaluate_run(
+        root,
+        reading=Reading(30.0, 1.0, machine_read=True),
+        report=report,
+        gates=[GateTime("lint", 30.0)],
+        options=loop_budget.EvalOptions(
+            tree="t1",
+            wall_clock=(
+                "parallel: one gate lint (30.0s) set the wall clock while other lanes stood idle"
+            ),
+        ),
+    )
+    assert (
+        "; one gate lint (30.0s) set the wall clock while other lanes stood idle; grew:"
+        in with_wall.line()
+    )
+
     assert loop_budget.forced_from_records(root, [], run="run-pr", tree="t1") is None

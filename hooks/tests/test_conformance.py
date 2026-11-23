@@ -1,5 +1,6 @@
 import atexit
 import functools
+import json
 import os
 import re
 import shutil
@@ -1279,6 +1280,49 @@ def test_the_template_row_is_red_until_its_paths_are_bound_and_still_brings_the_
         " from the template justfile; it is a placeholder for the project to bind"
     )
     assert sorted(red(repo)) == sorted([placeholder, producer])
+
+
+def test_duplicate_shared_report_producer_in_latest_run_is_red_and_clears_when_fixed(
+    repo: Path,
+) -> None:
+    sharing(repo)
+    timing = repo / conformance.runrecord.TIMING
+    timing.parent.mkdir(parents=True, exist_ok=True)
+    duplicate = [
+        {"kind": "report-producer", "report": "suite", "producer": "build", "run": "r1"},
+        {"key": "build", "seconds": 1.0, "status": "green", "run": "r1"},
+    ]
+    timing.write_text("\n".join(json.dumps(r) for r in duplicate) + "\n", encoding="utf-8")
+    assert red(repo) == [
+        f"{BINDING}: the shared report 'suite' producer 'build' ran 2 times in run 'r1'"
+    ]
+
+    cleaned = [
+        *duplicate,
+        {"kind": "report-producer", "report": "suite", "producer": "build", "run": "r2"},
+    ]
+    timing.write_text("\n".join(json.dumps(r) for r in cleaned) + "\n", encoding="utf-8")
+    assert red(repo) == []
+
+    timing.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                {
+                    "kind": "report-producer",
+                    "report": "suite",
+                    "producer": "other",
+                    "run": "r3",
+                },
+                {"kind": "report-producer", "report": "suite", "producer": "build", "run": "r3"},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert list(conformance.check_duplicate_producers(repo)) == []
+    remove(BINDING)(repo)
+    assert list(conformance.check_duplicate_producers(repo)) == []
 
 
 def speed_findings(repo: Path) -> list[str]:

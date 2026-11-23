@@ -95,6 +95,7 @@ class EvalOptions:
     tree: str | None = None
     run: str | None = None
     exclude_proof: bool = False
+    wall_clock: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -497,7 +498,9 @@ def format_not_judged(
     )
 
 
-def format_over(root: Path, budget: float | None, reading: Reading, *, blame: str) -> str:
+def format_over(
+    root: Path, budget: float | None, reading: Reading, *, blame: str, wall_clock: str = ""
+) -> str:
     note = forced_note(reading)
     explained = explained_seconds(reading)
     parts = [
@@ -506,6 +509,8 @@ def format_over(root: Path, budget: float | None, reading: Reading, *, blame: st
     ]
     if not reading.machine_read:
         parts.append("the machine could not be read, so a busy machine is a possible cause")
+    if wall_clock:
+        parts.append(wall_clock.removeprefix("parallel: "))
     parts.append(blame)
     parts.append(way_out(root))
     return "; ".join(parts)
@@ -517,14 +522,14 @@ def format_message(
     reading: Reading,
     *,
     judgement: Judgement,
-    details: tuple[int, str],
+    details: tuple[int, str, str],
 ) -> str:
-    streak, blame = details
+    streak, blame, wall_clock = details
     if isinstance(judgement, Within):
         return f"loop: within: {reading.seconds:.1f}s of {budget:g}s{forced_note(reading)}"
     if isinstance(judgement, NotJudged):
         return format_not_judged(budget, reading, judgement.reason, streak=streak)
-    return format_over(root, budget, reading, blame=blame)
+    return format_over(root, budget, reading, blame=blame, wall_clock=wall_clock)
 
 
 def _evaluate_with(
@@ -549,7 +554,13 @@ def _evaluate_with(
         medians, prior_history = gate_medians(records, current_run=run)
         exclude = PROOF_GATE if (forced is not None or options.exclude_proof) else None
         blame = growth_summary(gates, medians, prior_history=prior_history, exclude=exclude)
-    message = format_message(root, budget, resolved, judgement=judgement, details=(streak, blame))
+    message = format_message(
+        root,
+        budget,
+        resolved,
+        judgement=judgement,
+        details=(streak, blame, options.wall_clock),
+    )
     return Result(
         budget=budget,
         reading=resolved,
