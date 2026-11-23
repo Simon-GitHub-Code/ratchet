@@ -152,3 +152,50 @@ def test_the_guard_asks_when_a_sibling_already_carries_the_promise() -> None:
     other = {SIBLING: child("A note is saved")}
     assert ruling(child("A note is saved"), others=other) == "agent-ready-label"
     assert ruling(child("A note is listed newest first"), others=other) is None
+
+
+NUMBERED_AND_BULLET = (
+    "# 01: Notes\n\n**Status:** `agent:ready`\n\n"
+    "## Context\n\n- Not a promise\n1. Also not a promise\n\n"
+    "## Acceptance criteria\n\n"
+    "1. A note is saved\n"
+    "2) A note is listed\n"
+    "  newest first\n\n"
+    "- A note is tagged\n"
+    "* A note is exported\n"
+    "+ A note is deleted\n"
+    "- \n"
+    "### Edge cases\n\n"
+    "- Empty notes are refused\n\n"
+    "## Notes\n\n- Outside bullet\n- [x] Checkbox outside\n"
+)
+
+
+def test_numbered_and_bullet_criteria_under_acceptance_criteria_are_promises() -> None:
+    assert splits.promises(NUMBERED_AND_BULLET) == [
+        "A note is saved",
+        "A note is listed newest first",
+        "A note is tagged",
+        "A note is exported",
+        "A note is deleted",
+        "Empty notes are refused",
+        "Checkbox outside",
+    ]
+
+
+def test_scope_problems_and_refusal_accept_numbered_and_bullet_parent_criteria() -> None:
+    parent = (
+        "# 01: Notes\n\n**Status:** `agent:ready`\n\n"
+        "## Context\n\n- Background detail\n\n"
+        "## Acceptance criteria\n\n"
+        "1. A note is saved\n"
+        "2) A note is listed newest first\n"
+        "+ A note is deleted\n"
+    )
+    first = child("A note is saved")
+    second = child("A note is listed newest first", "A note is deleted")
+    assert splits.scope_problems(parent, [first, second]) == []
+    assert splits.refusal(first, parent, LABEL, siblings=[second]) is None
+    assert "adds a promise" in (
+        splits.refusal(child("Background detail"), parent, LABEL, siblings=[second]) or ""
+    )

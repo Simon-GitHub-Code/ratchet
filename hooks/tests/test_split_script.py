@@ -665,3 +665,28 @@ def test_the_check_calls_every_reader_of_a_ticket_body_but_those_built_on_what_i
             monkeypatch.setattr(preflight.Ticket, name, property(spy(f"Ticket.{name}", found.fget)))
     split.child_body(ticket, split.parts_of(HALVES)[0], waits=[], label="L")
     assert set(readers) - called == NOT_CALLED
+
+
+def test_split_and_judge_accept_numbered_and_bullet_acceptance_criteria(tmp_path: Path) -> None:
+    parent_text = (
+        "# 01: A\n\nStatus: ready-for-agent\n\n"
+        "## Context\n\n- Context bullet is ignored.\n1. Context step is ignored.\n\n"
+        "## Acceptance criteria\n\n"
+        "1. It saves a link.\n"
+        "2) It lists links.\n"
+        "+ It deletes links.\n"
+    )
+    plan = {
+        "parts": [
+            {"title": "Save", "promises": ["It saves a link."]},
+            {"title": "List", "promises": ["It lists links.", "It deletes links."], "after": [0]},
+        ]
+    }
+    files = {**BASE, SPEC: "# Thing\n\nStatus: ready-for-agent\n", TICKET: parent_text}
+    repository(tmp_path, files)
+    branch(tmp_path, "records-thing")
+    children, refused = split.apply(tmp_path, TICKET, plan, gh=tracker(None))
+    assert refused == []
+    bodies = {child: (tmp_path / child).read_text(encoding="utf-8") for child in children}
+    change(tmp_path, bodies, record=False)
+    assert judged(tmp_path) == []
