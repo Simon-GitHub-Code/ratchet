@@ -119,10 +119,15 @@ def test_matches_spans_segments_with_a_double_star() -> None:
 
 
 def test_report_prints_each_problem_and_the_verdict(capsys: pytest.CaptureFixture[str]) -> None:
+    assert gatelib.UNJUDGED == 3
     assert gatelib.report("x", []) == 0
     assert capsys.readouterr().out == "x: green\n"
     assert gatelib.report("x", ["one", "two"], "abcdef0123456789") == 1
     assert capsys.readouterr().out == "one\ntwo\nx: red against abcdef012345\n"
+    assert gatelib.report("x", ["why"], exit_code=gatelib.UNJUDGED) == 3
+    assert capsys.readouterr().out == "why\nx: could not judge\n"
+    assert gatelib.report("x", [], exit_code=gatelib.UNJUDGED) == 3
+    assert capsys.readouterr().out == "x: could not judge\n"
 
 
 def test_a_free_port_can_be_bound_and_then_listens() -> None:

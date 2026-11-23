@@ -337,7 +337,9 @@ class Driver:
             command=command,
             gates=[dataclasses.asdict(g) for g in found],
         )
-        if "merge" not in command and any(g.status is gates.Status.RED for g in found):
+        if "merge" not in command and any(
+            g.status in (gates.Status.RED, gates.Status.UNJUDGED) for g in found
+        ):
             again, _code = self.shell(command)
             self.log.emit(
                 "gates",

@@ -1086,6 +1086,8 @@ class Verdict(Enum):
     BITES = "bites"
     GREEN = "DOES NOT BITE"
     RED_BEFORE = "RED BEFORE THE FAULT"
+    COULD_NOT_JUDGE_BEFORE = f"COULD NOT JUDGE BEFORE THE FAULT (exit {gatelib.UNJUDGED})"
+    COULD_NOT_JUDGE = f"COULD NOT JUDGE (exit {gatelib.UNJUDGED})"
     OTHER_REASON = "RED FOR ANOTHER REASON"
     NOT_PLANTED = "THE FAULT WAS NOT PLANTED"
     NOT_PROVEN = "NOT PROVEN"
@@ -1095,7 +1097,14 @@ class Verdict(Enum):
 
 
 PASSING = (Verdict.BITES, Verdict.ACCEPTS_RECORD)
-CONTENDED = (Verdict.RED_BEFORE, Verdict.OTHER_REASON, Verdict.NOT_PROVEN, Verdict.TIMED_OUT)
+CONTENDED = (
+    Verdict.RED_BEFORE,
+    Verdict.COULD_NOT_JUDGE_BEFORE,
+    Verdict.COULD_NOT_JUDGE,
+    Verdict.OTHER_REASON,
+    Verdict.NOT_PROVEN,
+    Verdict.TIMED_OUT,
+)
 BESIDE = (
     "other lanes ran {gates} while this gate ran; if `--gate {gate} --jobs 1` bites, state the"
     " gates that cannot share the machine in the binding's Speed section, `- Apart:` or `- Alone:`"
@@ -1168,6 +1177,14 @@ def tail(output: str) -> str:
     return "\n".join(output.splitlines()[-TAIL:])
 
 
+def before_verdict(before: Run) -> Verdict:
+    if before.timed_out:
+        return Verdict.TIMED_OUT
+    if before.code == gatelib.UNJUDGED:
+        return Verdict.COULD_NOT_JUDGE_BEFORE
+    return Verdict.RED_BEFORE
+
+
 def judge(bite: Bite, green: str, planted: Run) -> Outcome:
     code, output = planted.code, planted.output
     if planted.timed_out:
@@ -1175,6 +1192,9 @@ def judge(bite: Bite, green: str, planted: Run) -> Outcome:
     if code == 0:
         why = "the gate is green with the fault planted"
         return Outcome(bite, Verdict.GREEN, f"{why}\n{tail(output)}")
+    if code == gatelib.UNJUDGED:
+        why = f"the gate could not judge with the fault planted (exit {gatelib.UNJUDGED})"
+        return Outcome(bite, Verdict.COULD_NOT_JUDGE, f"{why}\n{tail(output)}")
     seen, before = output.count(bite.expect), green.count(bite.expect)
     if seen > before:
         return Outcome(bite, Verdict.BITES)
@@ -1272,9 +1292,12 @@ class Copy:
     def prove_bite(self, row: Row, bite: Bite, *, before: Run, jobs: int) -> Outcome:
         green = before.output
         if before.code != 0:
-            verdict = Verdict.TIMED_OUT if before.timed_out else Verdict.RED_BEFORE
             return self.outcome(
-                bite, verdict, detail=tail(green), seconds=before.seconds, red=before.seconds
+                bite,
+                before_verdict(before),
+                detail=tail(green),
+                seconds=before.seconds,
+                red=before.seconds,
             )
         try:
             bite.plant(self.tree)
@@ -1296,10 +1319,9 @@ class Copy:
         fault = Write(f"docs/features/{slug}/verdict.json", "")
         bite = Bite(row.gate, RECORD_CHECK_NAME, "0", fault)
         if before.code != 0:
-            verdict = Verdict.TIMED_OUT if before.timed_out else Verdict.RED_BEFORE
             return Outcome(
                 bite,
-                verdict,
+                before_verdict(before),
                 tail(before.output),
                 before.seconds,
                 self.lane,

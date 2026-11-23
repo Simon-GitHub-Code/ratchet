@@ -167,8 +167,17 @@ def slow(timeout: float) -> str:
     return f"timed out after {timeout:g}s"
 
 
+def _crossed_signal(stopping: Path | None, *, late: bool, in_flight: list[int] | None) -> None:
+    if not late and stopping is not None and stopping.exists() and in_flight is not None:
+        in_flight[0] += 1
+
+
 def attempt(
-    goal: Target, timeout: float, stopping: Path | None = None
+    goal: Target,
+    timeout: float,
+    stopping: Path | None = None,
+    *,
+    in_flight: list[int] | None = None,
 ) -> tuple[float | None, str | None]:
     clients: list[gatelib.Connection] = []
     late = stopping is not None and stopping.exists()
@@ -182,6 +191,7 @@ def attempt(
             connecting=clients.append,
         )
     except TimeoutError:
+        _crossed_signal(stopping, late=late, in_flight=in_flight)
         return None, f"{goal.label()}: {slow(timeout)}"
     except (OSError, http.client.HTTPException) as error:
         if stopping is None or not stopping.exists() or not clients:
@@ -192,6 +202,7 @@ def attempt(
         lost = isinstance(error, ConnectionError)
         cut = Cut(goal.label(), described(error), clients[-1].port, named, late, lost)
         raise Cutoff(cut) from error
+    _crossed_signal(stopping, late=late, in_flight=in_flight)
     wrong = None if goal.accepts(status) else f"{goal.label()}: HTTP {status}"
     return time.perf_counter() - started, wrong
 
@@ -201,16 +212,20 @@ class Worked:
     latencies: list[float] = field(default_factory=list)
     errors: collections.Counter[str] = field(default_factory=collections.Counter)
     cuts: list[Cut] = field(default_factory=list)
+    in_flight: int = 0
 
 
 def work(
     targets: list[Target], first: int, deadline: float, *, timeout: float, stopping: Path | None
 ) -> Worked:
     worked = Worked()
+    inflight = [0]
     turn = first
     while True:
         try:
-            latency, wrong = attempt(targets[turn % len(targets)], timeout, stopping)
+            latency, wrong = attempt(
+                targets[turn % len(targets)], timeout, stopping, in_flight=inflight
+            )
         except Closed:
             break
         except Cutoff as cutoff:
@@ -223,6 +238,7 @@ def work(
         turn += 1
         if time.monotonic() >= deadline:
             break
+    worked.in_flight = inflight[0]
     return worked
 
 
@@ -232,18 +248,37 @@ def counts(cut: Cut, told: gatelib.Stopping) -> bool:
     return not cut.named
 
 
+def taken_resets(cuts: list[Cut], told: gatelib.Stopping) -> int:
+    return sum(cut.named and not told.inexact(cut.port) for cut in cuts)
+
+
+def accepted_in_flight(cuts: list[Cut], told: gatelib.Stopping, in_flight: int) -> int:
+    return in_flight + sum(
+        not cut.late and not (cut.named and not told.inexact(cut.port)) for cut in cuts
+    )
+
+
 def judge(
-    cuts: list[Cut], told: gatelib.Stopping, ports: list[int]
+    cuts: list[Cut],
+    told: gatelib.Stopping,
+    ports: list[int],
+    *,
+    in_flight: int = 0,
 ) -> tuple[collections.Counter[str], list[str]]:
     errors = collections.Counter(f"{cut.label}: {cut.error}" for cut in cuts if counts(cut, told))
     notes = []
-    taken = sum(cut.named and not told.inexact(cut.port) for cut in cuts)
+    taken = taken_resets(cuts, told)
     if taken:
+        inflight = accepted_in_flight(cuts, told, in_flight)
         notes.append(
             f"load-smoke: {taken} connection(s) reset after the stop signal are not counted, "
             "since the service never accepted them. The gate held the service's listener and, "
             "once no process of the service held it, took each connection waiting there and "
             "reset it. Each was waiting when the service stopped listening, or arrived after."
+        )
+        notes.append(
+            f"load-smoke: {inflight} request(s) had been accepted and not yet answered at the "
+            "stop signal"
         )
     older: dict[str, list[str]] = {}
     for port in sorted(set(ports)):
@@ -261,21 +296,29 @@ def judge(
 
 
 def told_cut(
-    marker: Path | None, cuts: list[Cut], targets: list[Target], *, within: float
-) -> tuple[collections.Counter[str], list[str]]:
+    marker: Path | None,
+    worked: Worked,
+    targets: list[Target],
+    *,
+    within: float,
+) -> tuple[collections.Counter[str], list[str], bool]:
     if marker is None or not marker.exists():
-        return collections.Counter(), []
+        return collections.Counter(), [], False
     told = gatelib.ask(marker, within)
     if told is None:
         unsaid = (
             f"the gate did not say within {within:g}s which connections it took after the stop "
             "signal"
         )
-        return collections.Counter(), [unsaid]
-    cut, notes = judge(cuts, told, [goal.port() for goal in targets])
+        return collections.Counter(), [unsaid], False
+    cut, notes = judge(
+        worked.cuts, told, [goal.port() for goal in targets], in_flight=worked.in_flight
+    )
     for note in notes:
         print(note)
-    return cut, []
+    taken = taken_resets(worked.cuts, told)
+    unjudged = taken > 0 and accepted_in_flight(worked.cuts, told, worked.in_flight) == 0
+    return cut, [], unjudged
 
 
 def counted(
@@ -320,6 +363,7 @@ def hammer(
         together.latencies += part.latencies
         together.errors.update(part.errors)
         together.cuts += part.cuts
+        together.in_flight += part.in_flight
     together.latencies.sort()
     return together
 
@@ -360,7 +404,7 @@ def main(argv: list[str]) -> int:
     )
     held = bool(options.until_stopped and sending and is_held(Path(sending)))
     latencies, errors = worked.latencies, counted(worked.errors, options.timeout, held=held)
-    cut, unsaid = told_cut(marker, worked.cuts, targets, within=gate_within)
+    cut, unsaid, unjudged = told_cut(marker, worked, targets, within=gate_within)
     errors.update(cut)
     if latencies:
         p50, p95, p99, worst = (percentile(latencies, f) * 1000 for f in (0.5, 0.95, 0.99, 1.0))
@@ -376,6 +420,11 @@ def main(argv: list[str]) -> int:
             f"{len(latencies)} requests answered, under the floor of {options.min_requests}: "
             "the service hangs or is too slow for this window"
         )
+    if not held and unjudged and not problems:
+        problems.append(
+            "nothing accepted was in flight at the stop signal, so the stop could not be judged"
+        )
+        return gatelib.report("load-smoke", problems, exit_code=gatelib.UNJUDGED)
     return gatelib.report("load-smoke", problems)
 
 

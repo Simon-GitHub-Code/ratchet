@@ -156,10 +156,17 @@ def test_lines_written_outside_a_run_say_so_in_the_field(
 
 def test_a_red_tier_is_a_red_line(work: Path) -> None:
     record = work / ".ratchet/timing.jsonl"
-    bad = shlex.join([sys.executable, "-c", "raise SystemExit(3)"])
+    bad = shlex.join([sys.executable, "-c", "raise SystemExit(2)"])
     assert parallel.main(["parallel", "--report", str(record), "--root", str(work), "--", bad]) == 1
     tier = lines(record)[1]
     assert (tier["status"], tier["exit"]) == ("red", 1)
+    unjudged = shlex.join([sys.executable, "-c", "raise SystemExit(3)"])
+    assert (
+        parallel.main(["parallel", "--report", str(record), "--root", str(work), "--", unjudged])
+        == 3
+    )
+    tier_unjudged = [row for row in lines(record) if row.get("kind") == runrecord.TIER][-1]
+    assert (tier_unjudged["status"], tier_unjudged["exit"]) == ("not judged", 3)
 
 
 def test_the_runner_says_each_cache_path_that_is_missing_and_records_it(

@@ -637,7 +637,12 @@ STOPS = (
     "class H(h.BaseHTTPRequestHandler):\n"
     "    def log_message(self, *args): pass\n"
     "    def do_GET(self):\n"
-    "        if self.path == '/work': held.set(); stopping.wait()\n"
+    "        self.send_response(200); self.send_header('Content-Length', '0'); self.end_headers()\n"
+    "    def do_POST(self):\n"
+    "        if self.path == '/work': held.set()\n"
+    "        n = int(self.headers.get('Content-Length', '0'))\n"
+    "        if n: self.rfile.read(n)\n"
+    "        if self.path == '/work': stopping.wait()\n"
     "        self.send_response(200); self.send_header('Content-Length', '0'); self.end_headers()\n"
     "s = S(('127.0.0.1', int(os.environ['PORT'])), H)\n"
     "def stop():\n"
@@ -652,7 +657,8 @@ LOAD_SMOKE = str(Path(__file__).with_name("load_smoke.py"))
 GRACEFUL = [
     *("--ready", "http://127.0.0.1:{port}/", "--timeout", "120"),
     *("--graceful", "120", "--signal-after", "0.5"),
-    *("--", *gatelib.interpreter(), LOAD_SMOKE, "--url", "http://127.0.0.1:{port}/work"),
+    *("--", *gatelib.interpreter(), LOAD_SMOKE),
+    *("--url", "POST http://127.0.0.1:{port}/work 200 ok"),
     *("--until-stopped", "--seconds", "2", "--timeout", "120"),
     *("--concurrency", "2", "--min-requests", "1"),
 ]

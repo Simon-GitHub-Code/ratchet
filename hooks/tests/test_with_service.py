@@ -108,13 +108,22 @@ def test_the_exit_code_is_the_commands_and_the_boot_tail_is_shown(
     boot = f"echo booted-fine; exec {SERVING}"
     code, out = run(
         *("--boot", boot, "--ready", READY),
+        *("--", sys.executable, "-c", "exit(4)"),
+        capsys=capsys,
+    )
+    assert code == 4
+    assert "the command exited with code 4" in out
+    assert "boot output (tail):\n  booted-fine" in out
+    assert out.endswith("with_service: red\n")
+
+    code3, out3 = run(
+        *("--boot", boot, "--ready", READY),
         *("--", sys.executable, "-c", "exit(3)"),
         capsys=capsys,
     )
-    assert code == 3
-    assert "the command exited with code 3" in out
-    assert "boot output (tail):\n  booted-fine" in out
-    assert out.endswith("with_service: red\n")
+    assert code3 == gatelib.UNJUDGED
+    assert "the command exited with code 3" in out3
+    assert out3.endswith("with_service: could not judge\n")
 
 
 def test_the_probe_is_ready_below_400_and_says_what_it_saw_otherwise() -> None:
@@ -1399,7 +1408,43 @@ def test_the_marker_exists_only_from_the_signal_and_a_command_that_ends_first_is
     )
     assert seen.read_text(encoding="utf-8") == "False", "no signal yet, so no marker"
     assert "the command ended before the 30s signal: nothing was in flight" in out
-    assert code == 1
+    assert code == gatelib.UNJUDGED
+    assert out.endswith("with_service: could not judge\n")
+
+
+def test_an_unjudged_command_propagates_exit_3_only_without_a_red_failure(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exits_three = (
+        "import os, sys, time\n"
+        "open(os.environ['RATCHET_SENDING'], 'w').close()\n"
+        "time.sleep(0.1)\n"
+        "sys.exit(3)\n"
+    )
+    code, out = run(
+        *("--boot", f"MODE=drain exec {python(EXITS_ON_SIGNAL)}", "--ready", READY),
+        *("--graceful", "60", "--signal-after", "10", "--", sys.executable, "-c", exits_three),
+        capsys=capsys,
+    )
+    assert code == gatelib.UNJUDGED
+    assert out.endswith("with_service: could not judge\n")
+
+    exits_three_after_signal = (
+        "import json, os, sys, time\n"
+        "p = os.environ['RATCHET_SENDING'] + '.pending'\n"
+        f"open(p, 'w').write(json.dumps([['POST', {HOLDS!r}, 200, '{{}}']]))\n"
+        "os.replace(p, os.environ['RATCHET_SENDING'])\n"
+        "while not os.path.exists(os.environ['RATCHET_STOPPING']): time.sleep(0.01)\n"
+        "sys.exit(3)\n"
+    )
+    code_red, out_red = run(
+        *("--boot", f"MODE=late exec {python(STOPS)}", "--ready", READY),
+        *("--graceful", "60", "--signal-after", "0.2"),
+        *("--", sys.executable, "-c", exits_three_after_signal),
+        capsys=capsys,
+    )
+    assert code_red == 1
+    assert out_red.endswith("with_service: red\n")
 
 
 def exits_on_signal(
@@ -1552,7 +1597,10 @@ def test_a_route_that_answers_before_its_request_is_whole_is_judged_as_before(
     said = f"{OLDER}the service answered or closed the request the gate held, POST http://"
     assert said in out, out
     assert "bind a route that waits for its whole request, longer than --signal-after," in out
-    assert (code, out.endswith("with_service: green\n")) == (0, True)
+    if "0 request(s) had been accepted and not yet answered at the stop signal" in out:
+        assert (code, out.endswith("with_service: could not judge\n")) == (gatelib.UNJUDGED, True)
+    else:
+        assert (code, out.endswith("with_service: green\n")) == (0, True)
 
 
 def test_the_marker_is_written_before_the_signal_so_a_failure_after_it_is_judged_by_it(
@@ -1633,7 +1681,7 @@ def test_a_smoke_that_starts_sending_after_the_timeout_is_red_at_once_and_never_
         ),
         (
             (["none", "0"], ["--signal-after", "5"]),
-            ("the command ended before the 5s signal: nothing was in flight", "", 1),
+            ("the command ended before the 5s signal: nothing was in flight", "", gatelib.UNJUDGED),
         ),
         ((["none", "0", "waits"], []), (OLDER, "", 0)),
         (
