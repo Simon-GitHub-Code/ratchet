@@ -48,7 +48,7 @@ The owner is asked nothing. A tool the architecture record names was their choic
 
    Done when no owed row is `later:`, except a row a defect ticket of this run names, and each bound gate bites.
 
-   **A defect at binding.** When the create skill reports a property the code breaks, the gate would be red, and this run changes no product code. Leave that row `later:` and bind the rest. Push the model to `formal/kept-<kind>`, which never merges. File a ticket that names the row and carries the counterexample in the code's words, with the line ``Formal model: defect `<row>`, kept on `formal/kept-<kind>` ``, and under it: "A fix that adds an instance of this kind merges `formal/kept-<kind>` and binds the row in the same change."
+   **A defect at binding.** When the create skill reports a property the code breaks, the gate would be red, and this run changes no product code. Leave that row `later:` and bind the rest. Push the model to `formal/kept-<kind>`, which never merges. File a ticket that names the row, carries the counterexample in the code's words, and includes a `## Acceptance criteria` section with `- [ ]` items for fixing the broken property, merging `formal/kept-<kind>`, and binding the row (matching `/ratchet:conjecture`'s criteria digest check), with the line ``Formal model: defect `<row>`, kept on `formal/kept-<kind>` ``, and under it: "A fix that adds an instance of this kind merges `formal/kept-<kind>` and binds the row in the same change."
 
 4. **Record the choice.** Write an ADR under the next free number, one line per row: the question, the tool and its version, where you checked it, and the alternative you passed over. A new ADR passes the guard without asking.
 
@@ -78,8 +78,8 @@ A round checks the model against the code as it is now.
 1. **Branch.** Note the default branch's head commit, `<commit>`. Make the branch `formal/upkeep-<commit>` from it. When a `formal/kept-upkeep-` branch exists from a ticket since closed, start from its update.
 2. **Run the round.** Load `pstack:maintain-formal-verification-skill`, and act on its outcome:
    - **In sync, or updated:** set `- Synced:` to `<commit>`, commit the change to the model if there is one, and open the change as step 5 does. Every round edits guard paths, so it is the owner's merge.
-   - **A bug in the code:** push the update to `formal/kept-upkeep-<commit>` and leave `- Synced:` as it is. File a ticket that carries the counterexample in the code's words, with the line ``Formal model: round, kept on `formal/kept-upkeep-<commit>` ``.
-   - **Blocked:** leave `- Synced:` as it is. File a ticket that carries the reason, with the line `Formal model: round`.
+   - **A bug in the code:** push the update to `formal/kept-upkeep-<commit>` and leave `- Synced:` as it is. File a ticket that carries the counterexample in the code's words and includes a `## Acceptance criteria` section with `- [ ]` items for the fix, with the line ``Formal model: round, kept on `formal/kept-upkeep-<commit>` ``.
+   - **Blocked:** leave `- Synced:` as it is. File a ticket that carries the reason and includes a `## Acceptance criteria` section with `- [ ]` items for unblocking the round, with the line `Formal model: round`.
 3. **Hand over** as step 6 does: say what the round found, in plain words, and what waits for the owner, the merge or the ticket.
 
 Done when the change is open or the ticket is filed.
