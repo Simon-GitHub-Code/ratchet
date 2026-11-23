@@ -8,6 +8,7 @@ import markdown_text
 
 SECTION = "## Tests"
 COLUMNS = ("Suite", "Gate", "Files", "Run files")
+IMPACT_COLUMNS = ("Sources", "Suite", "Tests")
 NONE_PREFIX = "none:"
 MIN_REASON = 10
 PLACEHOLDER = (
@@ -25,6 +26,13 @@ class Suite:
     globs: tuple[str, ...]
     run: str
     reason: str
+
+
+@dataclass(frozen=True)
+class Impact:
+    sources: tuple[str, ...]
+    suite: str
+    tests: tuple[str, ...]
 
 
 def _row(row: tuple[str, ...], problems: list[str]) -> Suite | None:
@@ -103,3 +111,53 @@ def split(binding: str) -> tuple[dict[str, str], str]:
 
 def owners(suites: list[Suite], path: str) -> list[Suite]:
     return [suite for suite in suites if gatelib.matches(path, list(suite.globs))]
+
+
+def impact_table(binding: str) -> markdown_text.Table | None:
+    found = [t for t in markdown_text.tables(binding, SECTION) if t.header == IMPACT_COLUMNS]
+    return found[0] if found else None
+
+
+def _impact_row(row: tuple[str, ...], known_names: set[str], problems: list[str]) -> Impact | None:
+    sources_cell, suite_cell, tests_cell = (cell.strip() for cell in row)
+    plain = sources_cell.strip("` ")
+    if plain.startswith("<"):
+        return None
+    if plain.lower().startswith(NONE_PREFIX):
+        if len(plain[len(NONE_PREFIX) :].strip()) < MIN_REASON:
+            problems.append("an impact triggers row says none with no reason: say why")
+        return None
+    sources = tuple(markdown_text.ticked(sources_cell))
+    suite_name = suite_cell.strip("` ")
+    tests = tuple(markdown_text.ticked(tests_cell))
+    if not sources or suite_name not in known_names or not tests:
+        problems.append(
+            f"the impact triggers row for '{suite_name}' needs backticked source globs,"
+            " a known suite name and backticked test globs"
+        )
+        return None
+    return Impact(sources, suite_name, tests)
+
+
+def parse_impacts(binding: str | None, known: list[Suite]) -> tuple[list[Impact] | None, list[str]]:
+    if binding is None or not markdown_text.has_section(binding, SECTION):
+        return [], []
+    found = impact_table(binding)
+    if found is None:
+        return [], []
+    known_names = {suite.name for suite in known}
+    problems: list[str] = []
+    impacts = [impact for row in found.rows if (impact := _impact_row(row, known_names, problems))]
+    return (None if problems else impacts), problems
+
+
+def impacted(impacts: list[Impact], changed: list[str], tracked: list[str]) -> dict[str, list[str]]:
+    selected: dict[str, set[str]] = {}
+    for impact in impacts:
+        sources = list(impact.sources)
+        if any(gatelib.matches(path, sources) for path in changed):
+            tests = list(impact.tests)
+            selected.setdefault(impact.suite, set()).update(
+                path for path in tracked if gatelib.matches(path, tests)
+            )
+    return {suite: sorted(paths) for suite, paths in selected.items() if paths}
