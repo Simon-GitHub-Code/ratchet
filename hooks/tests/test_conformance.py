@@ -1914,7 +1914,7 @@ def test_a_project_on_0_13_3_templates_yields_the_three_deep_edits_giving_new_te
         ".github/workflows/deep.yml",
         ".github/workflows/merge.yml",
     }
-    assert len({id(f.fix.want) for f in deep_edits}) == 3
+    assert len({id(f.fix.want) for f in deep_edits}) == 4
     found = conformance.findings(repo)
     assert found
     assert all(isinstance(f.fix, conformance.Auto) for f in found), found

@@ -1167,10 +1167,7 @@ OWN_EDITS = {
         f"{GUARD}\n    runs-on: ubuntu-latest\n    timeout-minutes: 30\n",
         f"{GUARD}\n    timeout-minutes: 30\n    runs-on: ubuntu-latest\n",
     ),
-    "a value of its own": (
-        "  OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}",
-        "  OVER: block",
-    ),
+    "a value of its own": ("    timeout-minutes: 10", "    timeout-minutes: 20"),
     "a comment of its own": ("jobs:\n", "jobs:\n  # the project's own note\n"),
 }
 KEPT_EDITS = {
@@ -1303,6 +1300,18 @@ KEPT = [
 ]
 
 
+def upgraded_kept_ci(text: str, old_ref: str, new_ref: str) -> str:
+    return (
+        text.replace(old_ref, new_ref)
+        .replace("  OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}\n", "")
+        .replace(' --over "$OVER"', " --over report")
+        .replace(
+            "          path: |\n            .cache\n",
+            "          path: |\n            .cache\n            .ratchet/timing.jsonl\n",
+        )
+    )
+
+
 @pytest.mark.parametrize(("version", "edit"), KEPT)
 def test_the_upgrade_keeps_a_workflow_it_cannot_regroup_without_changing_a_line_of_the_project(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], *, version: str, edit: str
@@ -1310,7 +1319,7 @@ def test_the_upgrade_keeps_a_workflow_it_cannot_regroup_without_changing_a_line_
     root = adopted.copy(adopted.adopted(version), tmp_path / "repo")
     before = edited(root, edit).decode()
     upgraded(root)
-    assert read(root, CI) == before.replace(adopted.LATER[version], pinned(root))
+    assert read(root, CI) == upgraded_kept_ci(before, adopted.LATER[version], pinned(root))
     out = capsys.readouterr().out
     assert "nothing turns the justfile's job list into the jobs tier 1 runs" in out
     [found] = leftover(root)
@@ -1365,7 +1374,7 @@ def test_the_upgrade_leaves_a_job_list_of_the_project_s_own_recipes_and_offers_o
     upgraded(root)
     out = capsys.readouterr().out
     assert OWN_LIST in read(root, JUSTFILE)
-    assert read(root, CI) == workflow.replace(adopted.LATER["0.13.5"], pinned(root))
+    assert read(root, CI) == upgraded_kept_ci(workflow, adopted.LATER["0.13.5"], pinned(root))
     assert job_names(root, capsys) == matrix
     assert unresolved(root, capsys) == []
     assert "does not list" not in out
