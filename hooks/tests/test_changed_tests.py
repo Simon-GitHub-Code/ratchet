@@ -379,3 +379,258 @@ def test_an_owner_is_each_suite_whose_globs_match() -> None:
     assert found is not None
     assert [s.name for s in suites.owners(found, "tests/e2e/x.py")] == ["e2e"]
     assert suites.owners(found, "src/x.py") == []
+
+
+IMPACT_HEAD = "| Sources | Suite | Tests |\n| --- | --- | --- |\n"
+
+
+def binding_with_impacts(suite_rows: tuple[str, ...], *impact_rows: str) -> str:
+    return (
+        f"# Binding\n\n## Gates\n\n{GATES}\n## Tests\n\n### Suites\n\n"
+        f"{HEAD}{''.join(suite_rows)}\n### Impact triggers\n\n"
+        f"{IMPACT_HEAD}{''.join(impact_rows)}\n## Speed\n"
+    )
+
+
+def project_with_impacts(tmp_path: Path, suite_rows: tuple[str, ...], *impact_rows: str) -> Path:
+    root = tmp_path / "repo"
+    root.mkdir()
+    repository(
+        root,
+        {
+            "docs/process/binding.md": binding_with_impacts(suite_rows, *impact_rows),
+            "tests/unit/a_test.txt": "a\n",
+            "tests/e2e/b_test.txt": "b\n",
+            "tests/e2e/nav_test.txt": "nav\n",
+            "src/code.txt": "c\n",
+            "src/layout/shell.txt": "shell\n",
+        },
+    )
+    branch(root)
+    return root
+
+
+def test_parse_impacts_returns_empty_when_section_or_table_is_absent() -> None:
+    known, _ = parse(UNIT, E2E)
+    assert known is not None
+    assert suites.parse_impacts(None, known) == ([], [])
+    assert suites.parse_impacts("# Binding\n\n## Speed\n", known) == ([], [])
+    assert suites.parse_impacts(binding(UNIT, E2E), known) == ([], [])
+
+
+def test_parse_impacts_ignores_placeholder_and_valid_none_rows() -> None:
+    known, _ = parse(UNIT, E2E)
+    assert known is not None
+    placeholder = "| <`globs` of shared sources> | <suite name> | <`globs` of tests> |\n"
+    assert suites.parse_impacts(binding_with_impacts((UNIT, E2E), placeholder), known) == (
+        [],
+        [],
+    )
+    none_row = "| none: no shared layout files cross suites | none | none |\n"
+    assert suites.parse_impacts(binding_with_impacts((UNIT, E2E), none_row), known) == ([], [])
+
+
+def test_parse_impacts_reads_valid_rows() -> None:
+    known, _ = parse(UNIT, E2E)
+    assert known is not None
+    rows = (
+        "| `src/layout/**`, `src/router/**` | e2e | `tests/e2e/nav*`, `tests/e2e/b_*` |\n",
+        "| `src/auth/**` | `e2e` | `tests/e2e/**` |\n",
+    )
+    impacts, problems = suites.parse_impacts(binding_with_impacts((UNIT, E2E), *rows), known)
+    assert problems == []
+    assert impacts == [
+        suites.Impact(
+            ("src/layout/**", "src/router/**"),
+            "e2e",
+            ("tests/e2e/nav*", "tests/e2e/b_*"),
+        ),
+        suites.Impact(("src/auth/**",), "e2e", ("tests/e2e/**",)),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("row", "problem"),
+    [
+        (
+            "| none: x | none | none |\n",
+            "an impact triggers row says none with no reason: say why",
+        ),
+        (
+            "| src/layout/** | e2e | `tests/e2e/**` |\n",
+            (
+                "the impact triggers row for 'e2e' needs backticked source globs,"
+                " a known suite name and backticked test globs"
+            ),
+        ),
+        (
+            "| `src/layout/**` | missing | `tests/e2e/**` |\n",
+            (
+                "the impact triggers row for 'missing' needs backticked source globs,"
+                " a known suite name and backticked test globs"
+            ),
+        ),
+        (
+            "| `src/layout/**` | e2e | tests/e2e/** |\n",
+            (
+                "the impact triggers row for 'e2e' needs backticked source globs,"
+                " a known suite name and backticked test globs"
+            ),
+        ),
+    ],
+)
+def test_parse_impacts_rejects_invalid_rows(row: str, problem: str) -> None:
+    known, _ = parse(UNIT, E2E)
+    assert known is not None
+    impacts, problems = suites.parse_impacts(binding_with_impacts((UNIT, E2E), row), known)
+    assert impacts is None
+    assert problems == [problem]
+
+
+def test_impacted_selects_deduplicated_sorted_files_for_matching_sources() -> None:
+    impacts = [
+        suites.Impact(("src/layout/**",), "e2e", ("tests/e2e/b_*", "tests/e2e/nav_*")),
+        suites.Impact(("src/shell/**",), "e2e", ("tests/e2e/nav_*",)),
+        suites.Impact(("src/unused/**",), "unit", ("tests/unit/**",)),
+        suites.Impact(("src/layout/**",), "unit", ("tests/unit/none_*",)),
+    ]
+    tracked = [
+        "tests/e2e/nav_test.txt",
+        "tests/e2e/b_test.txt",
+        "tests/unit/a_test.txt",
+        "src/layout/shell.txt",
+    ]
+    selected = suites.impacted(
+        impacts,
+        ["src/layout/shell.txt", "src/shell/nav.txt"],
+        tracked,
+    )
+    assert selected == {"e2e": ["tests/e2e/b_test.txt", "tests/e2e/nav_test.txt"]}
+
+
+def test_shared_source_change_runs_impacted_tier_two_suite_in_tier_one(
+    tmp_path: Path, just: Path, capsys: Out
+) -> None:
+    impact = "| `src/layout/**` | e2e | `tests/e2e/**` |\n"
+    root = project_with_impacts(tmp_path, (UNIT, E2E), impact)
+    write(root, "src/layout/shell.txt", "changed\n")
+    commit(root, "feat(core): edit shared layout")
+    assert run(root) == 0
+    assert calls(just) == ["e2e tests/e2e/b_test.txt tests/e2e/nav_test.txt"]
+    out = capsys.readouterr().out
+    assert "e2e: running 2 selected files (2 by impact) through `just e2e`" in out
+    assert "changed_tests: green: 1 of 1 suites had changed test files" in out
+
+
+def test_unrelated_source_change_does_not_fire_impact_trigger(
+    tmp_path: Path, just: Path, capsys: Out
+) -> None:
+    impact = "| `src/layout/**` | e2e | `tests/e2e/**` |\n"
+    root = project_with_impacts(tmp_path, (UNIT, E2E), impact)
+    write(root, "src/code.txt", "changed\n")
+    commit(root, "feat(core): edit unrelated code")
+    assert run(root) == 0
+    assert calls(just) == []
+    assert "green: no test file of the suites in scope (e2e) changed" in capsys.readouterr().out
+
+
+def test_impacted_and_directly_changed_tests_are_deduplicated_and_sorted(
+    tmp_path: Path, just: Path, capsys: Out
+) -> None:
+    impact = "| `src/layout/**` | e2e | `tests/e2e/**` |\n"
+    root = project_with_impacts(tmp_path, (UNIT, E2E), impact)
+    write(root, "src/layout/shell.txt", "changed\n")
+    write(root, "tests/e2e/b_test.txt", "edited\n")
+    commit(root, "feat(core): edit layout and one e2e test")
+    assert run(root) == 0
+    assert calls(just) == ["e2e tests/e2e/b_test.txt tests/e2e/nav_test.txt"]
+    out = capsys.readouterr().out
+    assert "e2e: running 2 selected files (1 by impact) through `just e2e`" in out
+
+
+def test_impact_selecting_only_directly_changed_test_reports_changed_file(
+    tmp_path: Path, just: Path, capsys: Out
+) -> None:
+    impact = "| `src/layout/**` | e2e | `tests/e2e/b_*` |\n"
+    root = project_with_impacts(tmp_path, (UNIT, E2E), impact)
+    write(root, "src/layout/shell.txt", "changed\n")
+    write(root, "tests/e2e/b_test.txt", "edited\n")
+    commit(root, "feat(core): edit layout and matching e2e test")
+    assert run(root) == 0
+    assert calls(just) == ["e2e tests/e2e/b_test.txt"]
+    out = capsys.readouterr().out
+    assert "e2e: running 1 changed file through `just e2e`" in out
+
+
+def test_impact_trigger_for_tier_one_suite_skips_in_tier_one_and_runs_in_all_mode(
+    tmp_path: Path, just: Path
+) -> None:
+    impact = "| `src/code.txt` | unit | `tests/unit/**` |\n"
+    root = project_with_impacts(tmp_path, (UNIT, E2E), impact)
+    write(root, "src/code.txt", "changed\n")
+    commit(root, "feat(core): edit unit source")
+    assert run(root) == 0
+    assert calls(just) == []
+    assert run(root, "all") == 0
+    assert calls(just) == ["test-files tests/unit/a_test.txt"]
+
+
+def test_impact_trigger_for_unrunnable_suite_reports_not_run(
+    tmp_path: Path, just: Path, capsys: Out
+) -> None:
+    unrunnable = "| e2e | `just e2e` | `tests/e2e/**` | `none: it boots the whole service` |\n"
+    impact = "| `src/layout/**` | e2e | `tests/e2e/b_*` |\n"
+    root = project_with_impacts(tmp_path, (UNIT, unrunnable), impact)
+    write(root, "src/layout/shell.txt", "changed\n")
+    commit(root, "feat(core): edit layout")
+    assert run(root) == 0
+    assert calls(just) == []
+    out = capsys.readouterr().out
+    assert (
+        "changed_tests: e2e: 1 selected file (1 by impact) not run, since the suite cannot run"
+        " by file: it boots the whole service; `just e2e` runs it whole"
+    ) in out
+
+
+@pytest.mark.usefixtures("just")
+def test_invalid_impact_triggers_table_is_refused(tmp_path: Path, capsys: Out) -> None:
+    impact = "| `src/layout/**` | unknown | `tests/e2e/**` |\n"
+    root = project_with_impacts(tmp_path, (UNIT, E2E), impact)
+    assert run(root) == 1
+    out = capsys.readouterr().out
+    assert "changed_tests: red: docs/process/binding.md:" in out
+    assert "unknown" in out
+
+
+def test_impact_ignores_files_outside_declared_suite_and_refuses_clashes(
+    tmp_path: Path, just: Path, capsys: Out
+) -> None:
+    impact = "| `src/layout/**` | e2e | `tests/**` |\n"
+    root = project_with_impacts(tmp_path, (UNIT, E2E), impact)
+    write(root, "tests/misc/helper.txt", "helper\n")
+    write(root, "src/layout/shell.txt", "changed\n")
+    commit(root, "feat(core): edit layout with wide test glob")
+    assert run(root) == 0
+    assert calls(just) == ["e2e tests/e2e/b_test.txt tests/e2e/nav_test.txt"]
+
+    wide = "| wide | `just e2e` | `tests/e2e/**` | `just e2e` |\n"
+    write(
+        root,
+        "docs/process/binding.md",
+        binding_with_impacts((UNIT, E2E, wide), "| `src/layout/**` | e2e | `tests/e2e/**` |\n"),
+    )
+    commit(root, "feat(core): add clashing suite")
+    assert run(root) == 1
+    assert "matches the suites 'e2e', 'wide'" in capsys.readouterr().out
+
+
+def test_impact_excludes_deleted_and_includes_untracked_test_files(
+    tmp_path: Path, just: Path
+) -> None:
+    impact = "| `src/layout/**` | e2e | `tests/e2e/**` |\n"
+    root = project_with_impacts(tmp_path, (UNIT, E2E), impact)
+    (root / "tests/e2e/nav_test.txt").unlink()
+    write(root, "tests/e2e/fresh_test.txt", "fresh\n")
+    write(root, "src/layout/shell.txt", "changed\n")
+    assert run(root) == 0
+    assert calls(just) == ["e2e tests/e2e/b_test.txt tests/e2e/fresh_test.txt"]

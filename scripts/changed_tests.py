@@ -28,6 +28,11 @@ def changed_files(root: Path, base: str) -> list[str]:
     return sorted(name for name in {*tracked, *new} if (root / name).is_file())
 
 
+def tracked_files(root: Path) -> list[str]:
+    found = listed(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+    return sorted({name for name in found if (root / name).is_file()})
+
+
 def later(rows: list[project_bite.Row], suite: suites.Suite) -> bool:
     return any(row.command == suite.gate and row.tier not in TIER_ZERO_ONE for row in rows)
 
@@ -39,6 +44,11 @@ def in_scope(
     return listed_suites if everything or not deferred else deferred
 
 
+def _clash(path: str, owners: list[suites.Suite]) -> str:
+    names = ", ".join(f"'{suite.name}'" for suite in owners)
+    return f"{path} matches the suites {names}; a test file belongs to one suite"
+
+
 def sort(
     found: list[str], scoped: list[suites.Suite], every: list[suites.Suite]
 ) -> tuple[dict[str, list[str]], list[str]]:
@@ -47,15 +57,44 @@ def sort(
     for path in found:
         owners = suites.owners(every, path)
         if len(owners) > 1:
-            names = ", ".join(f"'{suite.name}'" for suite in owners)
-            clashes.append(f"{path} matches the suites {names}; a test file belongs to one suite")
+            clashes.append(_clash(path, owners))
         elif owners and owners[0].name in by_suite:
             by_suite[owners[0].name].append(path)
     return by_suite, clashes
 
 
-def run_suite(root: Path, suite: suites.Suite, files: list[str]) -> int:
-    count = f"{len(files)} changed file{'s' if len(files) != 1 else ''}"
+def merge_impacts(
+    by_suite: dict[str, list[str]],
+    selected: dict[str, list[str]],
+    every: list[suites.Suite],
+) -> tuple[dict[str, int], list[str]]:
+    added: dict[str, int] = {}
+    clashes: list[str] = []
+    for suite_name, paths in selected.items():
+        if suite_name not in by_suite:
+            continue
+        direct = set(by_suite[suite_name])
+        merged = set(direct)
+        for path in paths:
+            owners = suites.owners(every, path)
+            if len(owners) > 1:
+                clashes.append(_clash(path, owners))
+            elif owners and owners[0].name == suite_name:
+                merged.add(path)
+        by_suite[suite_name] = sorted(merged)
+        added[suite_name] = len(merged) - len(direct)
+    return added, clashes
+
+
+def _file_count(total: int, impacted_count: int) -> str:
+    plural = "s" if total != 1 else ""
+    if not impacted_count:
+        return f"{total} changed file{plural}"
+    return f"{total} selected file{plural} ({impacted_count} by impact)"
+
+
+def run_suite(root: Path, suite: suites.Suite, files: list[str], *, impacted_count: int = 0) -> int:
+    count = _file_count(len(files), impacted_count)
     if not suite.run:
         print(
             f"changed_tests: {suite.name}: {count} not run, since the suite cannot run by file:"
@@ -91,21 +130,29 @@ def main(argv: list[str]) -> int:
     every, problems = suites.parse(binding)
     if every is None:
         return refuse(problems)
+    impacts, impact_problems = suites.parse_impacts(binding, every)
+    if impacts is None:
+        return refuse(impact_problems)
     base = options.base or gatelib.base_commit(root)
     if base is None:
         print("changed_tests: green: there is no commit to compare the tree with; nothing is run")
         return 0
     rows = project_bite.gate_rows(binding or "")
     scoped = in_scope(rows, every, everything=options.everything == ALL)
-    by_suite, clashes = sort(changed_files(root, base), scoped, every)
-    if clashes:
-        return refuse(clashes)
+    changed = changed_files(root, base)
+    by_suite, clashes = sort(changed, scoped, every)
+    tracked = tracked_files(root) if impacts else []
+    impact_counts, impact_clashes = merge_impacts(
+        by_suite, suites.impacted(impacts, changed, tracked), every
+    )
+    if clashes or impact_clashes:
+        return refuse([*clashes, *impact_clashes])
     status = 0
     ran = 0
     for suite in scoped:
         if files := by_suite[suite.name]:
             ran += 1
-            result = run_suite(root, suite, files)
+            result = run_suite(root, suite, files, impacted_count=impact_counts.get(suite.name, 0))
             status = status or result
     if not ran:
         names = ", ".join(suite.name for suite in scoped) or "none"
