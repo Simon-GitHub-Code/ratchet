@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 import application_types
 import documents
+import expect_outputs
 import feature_preflight as preflight
 import flags as registry
 import gatelib
@@ -70,6 +71,7 @@ TIER_STATES = ("green", "red", "none")
 RED = "red"
 DOOR_EVENTS = frozenset({"deployed", "irreplaceable-data"})
 SURFACE_EVENTS = frozenset({"deployed"})
+EXPECT_EVENTS = frozenset({"depended-on"})
 FLAGS_QUESTION = "changed flags off and on"
 DOCS = "docs/"
 PRUNE_SLUG = "prune-pages"
@@ -1518,6 +1520,19 @@ def prune_reasons(change: Change) -> list[Reason]:
     ]
 
 
+def expect_reasons(change: Change) -> list[Reason]:
+    paths = expect_outputs.altered(change.root, change.fork, head=change.head)
+    if not paths:
+        return []
+    return [
+        Reason(
+            "expect-output",
+            f"{', '.join(paths)}: alters a recorded output the default branch holds, and"
+            " re-accepting an expected output is the owner's merge (ADR 0092)",
+        )
+    ]
+
+
 def judge(
     root: Path,
     base_ref: str,
@@ -1565,6 +1580,13 @@ def judge(
         ),
         *(flags if asked_flags else ()),
         *surface_reasons(change, manifest, found, asked_flags=asked_flags, notes=notes),
+        *waiting(
+            change,
+            expect_reasons(change),
+            needs=EXPECT_EVENTS,
+            notes=notes,
+            what="an altered recorded output",
+        ),
         *dispute_reasons(change),
         *expiry_reasons(change),
         *lost_headings(change),
