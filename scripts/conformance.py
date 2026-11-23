@@ -327,9 +327,15 @@ WORKFLOWS = Path(".github/workflows")
 CACHE_USES = "uses: actions/cache"
 CACHE_KEY = re.compile(r"^(?P<head>\s*key:\s*)(?P<value>.*?)(?P<note>\s+#.*)?$")
 CACHE_ACTION = re.compile(r"^actions/cache(?:/(?:restore|save))?@\S+$")
+CACHE_RESTORE_PREFIX = "actions/cache/restore@"
 FLOW_MATRIX = re.compile(r"\bmatrix\s*:")
 GHA_EXPR = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
-MATRIX_EXPR = re.compile(r"\bmatrix\s*(?:\.[A-Za-z_][A-Za-z0-9_-]*|\[\s*['\"][^'\"]+['\"]\s*\])")
+MATRIX_TARGET = r"matrix\s*(?:\.[A-Za-z_][A-Za-z0-9_-]*|\[\s*['\"][^'\"]+['\"]\s*\])"
+MATRIX_EXPR = re.compile(rf"\b{MATRIX_TARGET}")
+SINGLE_LITERAL = r"(?:'[^']*'|\"[^\"]*\"|\d+(?:\.\d+)?|true|false)"
+MATRIX_LITERAL_EQ = re.compile(
+    rf"(?:\b{MATRIX_TARGET}\s*==\s*{SINGLE_LITERAL}|{SINGLE_LITERAL}\s*==\s*\b{MATRIX_TARGET})"
+)
 YAML_JOB_KEY = re.compile(r"^([A-Za-z_][\w-]*):(?:\s|$)")
 MULTILINE_KEY = frozenset({"|", ">", "|-", ">-", "|+", ">+"})
 PER_RUN_PARTS = ("github.sha", "github.run_id")
@@ -2219,15 +2225,53 @@ def step_cache_key(step_lines: list[str]) -> tuple[bool, str | None]:
     return flow_cache_key(first) if first.startswith("{") else block_cache_key(step_lines)
 
 
+def step_field(step_lines: list[str], field: str) -> str | None:
+    first = step_lines[0].lstrip(" ")
+    if first.startswith("{"):
+        value = flow_value(first, field)
+        return (unquote_yaml(value) or None) if value else None
+    section = mapping_section(step_lines, field)
+    if section is None:
+        return None
+    inline, body = section
+    if inline in MULTILINE_KEY:
+        return " ".join(strip_yaml_comment(line).strip() for line in body).strip() or None
+    return unquote_yaml(inline) or None
+
+
+def is_single_leg_matrix_if(cond: str | None) -> bool:
+    if not cond:
+        return False
+    expr = GHA_EXPR.sub(lambda match: match.group(1), cond).strip()
+    if "||" in expr:
+        return False
+    for raw_part in expr.split("&&"):
+        part = raw_part.strip()
+        while part.startswith("(") and part.endswith(")"):
+            part = part[1:-1].strip()
+        if MATRIX_LITERAL_EQ.fullmatch(part):
+            return True
+    return False
+
+
 def matrix_cache_finding(root: Path, path: Path, content: str) -> Iterable[Finding]:
     rel = str(path.relative_to(root))
     for job, job_lines in workflow_job_blocks(content):
         if not job_has_matrix(job_lines):
             continue
+        seen: set[str | None] = set()
         steps = mapping_section(job_lines, "steps")
         for step_lines in step_items(steps[1] if steps else []):
+            uses = step_field(step_lines, "uses")
+            if uses is not None and uses.startswith(CACHE_RESTORE_PREFIX):
+                continue
+            if is_single_leg_matrix_if(step_field(step_lines, "if")):
+                continue
             is_cache, key = step_cache_key(step_lines)
             if is_cache and (key is None or not has_matrix_expr(key)):
+                if key in seen:
+                    continue
+                seen.add(key)
                 what = (
                     f"cache key `{key}` names no matrix value"
                     if key is not None
