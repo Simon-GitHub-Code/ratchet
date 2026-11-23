@@ -2096,29 +2096,32 @@ def test_bite_and_bite_all_shard_across_slices_and_deep_shape_checks_partition(
     assert "bite" in gate_list("tier1_sharded")
     assert "bite-all" in gate_list("tier2_sharded")
 
-    assert 'scripts/project_bite.py" --changed --shard 1/1' in dry_run("bite")
-    assert 'scripts/project_bite.py" --changed --shard 2/4' in dry_run_env(
-        "bite", {"SHARD": "2", "SHARDS": "4"}
+    assert 'scripts/project_bite.py" --changed --shard "${SHARD:-1}/${SHARDS:-1}"' in dry_run(
+        "bite"
     )
-
-    slice_one = dry_run_env("bite-all", {"SHARD": "1", "SHARDS": "3"})
-    assert 'if [ "1" = "1" ]; then' in slice_one
-    assert 'scripts/bite.py"' in slice_one
-    assert 'scripts/project_bite.py" --shard 1/3' in slice_one
-
-    slice_two = dry_run_env("bite-all", {"SHARD": "2", "SHARDS": "3"})
-    assert 'if [ "2" = "1" ]; then' in slice_two
-    assert 'scripts/project_bite.py" --shard 2/3' in slice_two
+    bite_all = dry_run("bite-all")
+    assert 'if [ "${SHARD:-1}" = "1" ]; then' in bite_all
+    assert 'scripts/bite.py"' in bite_all
+    assert 'scripts/project_bite.py" --shard "${SHARD:-1}/${SHARDS:-1}"' in bite_all
 
     bash = shutil.which("bash")
     assert bash
-    ran = subprocess.run(  # noqa: S603
-        [bash, "-ec", 'if [ "2" = "1" ]; then echo RAN_BITE; fi; echo RAN_SLICE'],
+    script = (
+        'if [ "${SHARD:-1}" = "1" ]; then echo RAN_BITE; fi; echo "SLICE=${SHARD:-1}/${SHARDS:-1}"'
+    )
+    clean_env = {k: v for k, v in os.environ.items() if k not in {"SHARD", "SHARDS"}}
+    default = subprocess.run(  # noqa: S603
+        [bash, "-ec", script], env=clean_env, capture_output=True, text=True, check=True
+    )
+    assert default.stdout.splitlines() == ["RAN_BITE", "SLICE=1/1"]
+    slice_two = subprocess.run(  # noqa: S603
+        [bash, "-ec", script],
+        env={**clean_env, "SHARD": "2", "SHARDS": "4"},
         capture_output=True,
         text=True,
         check=True,
     )
-    assert ran.stdout.splitlines() == ["RAN_SLICE"]
+    assert slice_two.stdout.splitlines() == ["SLICE=2/4"]
 
     deep = WORKFLOWS["deep.yml"]
     shape_block = deep.split("\n  shape:\n", 1)[1].split("\n  tier2:\n", 1)[0]

@@ -123,7 +123,11 @@ DEEP_SLICE_REQUIREMENTS = (
     ("SHARD: ${{ matrix.shard }}", "passes `SHARD` to each slice"),
     ("SHARDS: ${{ needs.shape.outputs.count }}", "passes `SHARDS` to each slice"),
 )
-SHARD_FLAG = re.compile(r"--shard(?:=|[ \t]+)\{\{[ \t]*shard[ \t]*\}\}/\{\{[ \t]*shards[ \t]*\}\}")
+SHARD_FLAG = re.compile(
+    r"""--shard(?:=|[ \t]+)(?:"""
+    r"""["']?\$\{SHARD:-1\}/\$\{SHARDS:-1\}["']?"""
+    r"""|\{\{[ \t]*shard[ \t]*\}\}/\{\{[ \t]*shards[ \t]*\}\})"""
+)
 SHARDED_BITE_RECIPES = (
     ("tier1_sharded", "bite"),
     ("tier2_sharded", "bite-all"),
@@ -4567,13 +4571,13 @@ def bite_recipe_sharding(justfile: str) -> Iterable[Finding]:
             continue
         problem = (
             f"`{recipe}` is in `{variable}`, but its recipe does not pass"
-            " `--shard {{shard}}/{{shards}}` (so each shard would run every fault)"
+            ' `--shard "${SHARD:-1}/${SHARDS:-1}"` (so each shard would run every fault)'
         )
         reasons = justfile_text.unmet(template, justfile, recipe)
         agent_fix = Agent(start=template_definition(recipe), then=reasons)
         if not reasons and "\n".join(justfile_text.uncommented(defn)) == OLD_BITE_RECIPES[recipe]:
             does = (
-                f"pass `--shard {{{{shard}}}}/{{{{shards}}}}` in `{recipe}`, as the template does"
+                f'pass `--shard "${{SHARD:-1}}/${{SHARDS:-1}}"` in `{recipe}`, as the template does'
             )
             fix: Fix = Edit(does, justfile_text.with_template_recipe(template, recipe), agent_fix)
         else:
@@ -5263,7 +5267,7 @@ def speed_mutations() -> list[Mutation]:
             "sharded bite recipe that omits --shard",
             rewrite(
                 "justfile",
-                'project_bite.py" --changed --shard {{shard}}/{{shards}}',
+                'project_bite.py" --changed --shard "${SHARD:-1}/${SHARDS:-1}"',
                 'project_bite.py" --changed',
             ),
         ),
@@ -5271,7 +5275,7 @@ def speed_mutations() -> list[Mutation]:
             "sharded bite-all recipe that omits --shard",
             rewrite(
                 "justfile",
-                'project_bite.py" --shard {{shard}}/{{shards}}',
+                'project_bite.py" --shard "${SHARD:-1}/${SHARDS:-1}"',
                 'project_bite.py"',
             ),
         ),

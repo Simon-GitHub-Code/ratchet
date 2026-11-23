@@ -2124,7 +2124,7 @@ def test_sharded_bite_recipes_must_pass_shard_and_deep_must_cover_all_slices(
     original_just = (repo / JUSTFILE).read_text(encoding="utf-8")
     original_deep = (repo / deep).read_text(encoding="utf-8")
 
-    replace(JUSTFILE, " --shard {{shard}}/{{shards}}", "")(repo)
+    replace(JUSTFILE, ' --shard "${SHARD:-1}/${SHARDS:-1}"', "")(repo)
     found = conformance.findings(repo)
     assert len(found) == 2
     by_problem = {f.problem: f for f in found}
@@ -2136,12 +2136,13 @@ def test_sharded_bite_recipes_must_pass_shard_and_deep_must_cover_all_slices(
     assert isinstance(bite_all_finding.fix, conformance.Agent)
     (repo / JUSTFILE).write_text(original_just, encoding="utf-8")
 
-    replace(JUSTFILE, 'shard := env_var_or_default("SHARD", "1")\n', "")(repo)
-    replace(JUSTFILE, " --shard {{shard}}/{{shards}}", "")(repo)
+    replace(JUSTFILE, ' --shard "${SHARD:-1}/${SHARDS:-1}"', "")(repo)
+    replace(JUSTFILE, 'ratchet_plugin := "$RATCHET_PLUGIN_DIR"\n', "")(repo)
     found = conformance.findings(repo)
-    assert all(isinstance(f.fix, conformance.Agent) for f in found)
     assert any(
-        isinstance(f.fix, conformance.Agent) and f.fix.then for f in found if "bite" in f.problem
+        isinstance(f.fix, conformance.Agent) and f.fix.then
+        for f in found
+        if "`bite` is in `tier1_sharded`" in f.problem
     )
     (repo / JUSTFILE).write_text(original_just, encoding="utf-8")
 
