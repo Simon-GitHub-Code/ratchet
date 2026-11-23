@@ -897,3 +897,11 @@ def test_adopt_binding_and_method_docs_cover_expect_tests_and_recorded_outputs()
     guards_doc = flat("method/guards.md")
     assert "expect-output" in guards_doc
     assert "scripts/expect_outputs.py" in guards_doc
+
+
+def test_the_safeguard_skill_requires_acceptance_criteria_on_filed_tickets() -> None:
+    safeguard = flat("safeguard/SKILL.md")
+    defect = safeguard.split("**A defect at binding.**", 1)[1].split("4. **Record", 1)[0]
+    round_upkeep = safeguard.split("## A round of the formal model's upkeep", 1)[1]
+    assert "## Acceptance criteria" in defect
+    assert "## Acceptance criteria" in round_upkeep
