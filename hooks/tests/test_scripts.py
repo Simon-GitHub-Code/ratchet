@@ -6,12 +6,14 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from typing import Self
 
 import pytest
 
 import adapter
 import budget
 import lowered
+import machine
 from tests.repos import branch, commit, repository, write
 
 THRESHOLDS = """# thresholds
@@ -48,6 +50,7 @@ def test_ceiling_is_read_from_the_ceilings_table() -> None:
     assert budget.ceiling_of(THRESHOLDS, "tier1") == 600.0
     assert budget.ceiling_of(THRESHOLDS, "tier2") is None
     assert budget.ceiling_of("", "tier0") is None
+    assert budget.ceiling_of("[ceilings.seconds", "tier0") is None
     assert budget.ceiling_of("[ceilings.seconds]\ntier0 = true\n", "tier0") is None
     assert budget.ceiling_of("[ceilings]\nseconds = 3\n", "tier0") is None
 
@@ -66,18 +69,17 @@ def test_with_ceiling_adds_replaces_and_keeps_other_tables() -> None:
 
 
 def test_a_ceiling_is_only_ever_lowered() -> None:
-    assert budget.lowered_ceiling(None, 100.0, 1.5) == 150.0
-    assert budget.lowered_ceiling(200.0, 100.0, 1.5) == 150.0
-    assert budget.lowered_ceiling(150.0, 100.0, 1.5) is None
-    assert budget.lowered_ceiling(140.0, 100.0, 1.5) is None
-    assert budget.lowered_ceiling(None, 0.4, 1.5) == 1.0
-
-
-def test_a_tier_ceiling_starts_no_tighter_than_the_tier_budget() -> None:
-    assert budget.lowered_ceiling(None, 9.0, 1.5, floor=budget.TIER_BUDGETS["tier1"]) == 900.0
-    assert budget.lowered_ceiling(None, 1000.0, 1.5, floor=900.0) == 1500.0
-    assert budget.lowered_ceiling(14.0, 9.0, 1.5, floor=900.0) is None, "an existing ceiling stands"
-    assert budget.lowered_ceiling(1500.0, 100.0, 1.5, floor=900.0) == 900.0
+    assert budget.DEFAULT_HEADROOM == 1.25
+    assert budget.MIN_RUNS == 5
+    assert budget.MAX_RUNS == 10
+    assert budget.LOWER_SHARE == 0.8
+    assert not hasattr(budget, "TIER_BUDGETS")
+    assert budget.lowered_ceiling(None, 100.0, 1.25) == 125.0
+    assert budget.lowered_ceiling(200.0, 100.0, 1.25) == 125.0
+    assert budget.lowered_ceiling(125.0, 100.0, 1.25) is None
+    assert budget.lowered_ceiling(110.0, 100.0, 1.25) is None
+    assert budget.lowered_ceiling(None, 0.4, 1.25) == 1.0
+    assert budget.lowered_ceiling(None, 4.0, 1.25) == 5.0
 
 
 @pytest.mark.parametrize(
@@ -164,7 +166,8 @@ def test_main_holds_a_gate_to_its_tier_and_only_reports_when_told(
     records = [json.loads(line) for line in (tmp_path / "t.jsonl").read_text().splitlines()]
     assert [(r["ceiling"], r["status"], r["exit"]) for r in records] == [(0.0, "red", 0)] * 2
     assert budget.main([*argv, "--set", *command]) == 1
-    assert "ceilings.seconds.test set to" in capsys.readouterr().out, "--set records the gate's own"
+    assert "needs 5 green runs to set, has 0" in capsys.readouterr().out
+    assert budget.ceiling_of(thresholds.read_text(), "test") is None
     assert budget.ceiling_of(thresholds.read_text(), "tier1") == 0.0
 
 
@@ -227,12 +230,31 @@ def test_a_command_whose_output_is_not_utf_8_is_timed_and_does_not_crash(
     assert budget.main(["budget", "test", "--root", str(tmp_path), *command]) == 0
 
 
-def test_main_times_a_command_reports_and_sets(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def write_timing(path: Path, entries: list[dict[str, object]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(entry) + "\n" for entry in entries), encoding="utf-8")
+
+
+def test_main_times_a_command_reports_and_sets_from_five_to_ten_runs_without_floor(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (tmp_path / "quality").mkdir()
     without_tier0 = THRESHOLDS.replace("tier0 = 60\n", "")
-    (tmp_path / "quality/thresholds.toml").write_text(without_tier0, encoding="utf-8")
+    thresholds = tmp_path / "quality/thresholds.toml"
+    thresholds.write_text(without_tier0, encoding="utf-8")
+    timing_path = tmp_path / "timing/tier0.jsonl"
+    prior = [
+        {"key": "tier0", "seconds": 2.0, "status": "unbounded", "exit": 0} for _ in range(3)
+    ] + [
+        {"kind": "tier", "key": "tier0", "seconds": 99.0, "status": "green", "exit": 0},
+        {"key": "tier0", "seconds": 99.0, "status": "red", "exit": 0},
+        {"key": "tier0", "seconds": 99.0, "status": "green", "exit": 1},
+        {"key": "tier0", "seconds": -1.0, "status": "green", "exit": 0},
+        {"key": "tier0", "seconds": True, "status": "green", "exit": 0},
+        {"key": "other", "seconds": 99.0, "status": "green", "exit": 0},
+    ]
+    write_timing(timing_path, prior)
+    monkeypatch.setattr(budget, "timed", lambda _command, _cwd: (1.6, 0))
     argv = [
         "budget",
         "tier0",
@@ -242,25 +264,43 @@ def test_main_times_a_command_reports_and_sets(
         "timing/tier0.jsonl",
         "--set",
         "--",
-        sys.executable,
-        "-c",
-        "pass",
+        "ignored",
     ]
     assert budget.main(argv) == 0
     out = capsys.readouterr().out
     assert "ratchet-budget: tier0 took" in out
-    assert "ceilings.seconds.tier0 set to" in out
-    record = json.loads((tmp_path / "timing/tier0.jsonl").read_text().splitlines()[0])
-    assert record["key"] == "tier0"
-    assert record["status"] == "unbounded", "the first adoption has no ceiling yet"
-    assert budget.ceiling_of((tmp_path / "quality/thresholds.toml").read_text(), "tier0") == 60.0
+    assert "ceilings.seconds.tier0 needs 5 green runs to set, has 4" in out
+    assert budget.ceiling_of(thresholds.read_text(), "tier0") is None
+
+    assert budget.main(argv) == 0
+    out = capsys.readouterr().out
+    assert "ceilings.seconds.tier0 set to 3" in out
+    assert budget.ceiling_of(thresholds.read_text(), "tier0") == 3.0
+
     assert budget.main(argv) == 0
     assert "set to" not in capsys.readouterr().out, "a ceiling is set only when it lowers"
+
+    many = [
+        {"key": "tier0", "seconds": 100.0, "status": "green", "exit": 0},
+        *({"key": "tier0", "seconds": 1.0, "status": "green", "exit": 0} for _ in range(10)),
+    ]
+    write_timing(timing_path, many)
+    assert (
+        budget.main(
+            ["budget", "tier0", "--root", str(tmp_path), "--report", "timing/tier0.jsonl", "--set"]
+        )
+        == 0
+    )
+    assert "ceilings.seconds.tier0 set to 2" in capsys.readouterr().out
+    assert budget.ceiling_of(thresholds.read_text(), "tier0") == 2.0
+
+    monkeypatch.undo()
     failing = [
         "budget",
         "tier0",
         "--root",
         str(tmp_path),
+        "--set",
         "--",
         sys.executable,
         "-c",
@@ -268,11 +308,149 @@ def test_main_times_a_command_reports_and_sets(
     ]
     assert budget.main(failing) == 4
     over = budget.with_ceiling("", "tiny", 0.0)
-    (tmp_path / "quality/thresholds.toml").write_text(over, encoding="utf-8")
+    thresholds.write_text(over, encoding="utf-8")
     assert (
         budget.main(["budget", "tiny", "--root", str(tmp_path), "--", sys.executable, "-c", "pass"])
         == 1
     )
+
+
+def test_set_without_command_reads_default_timing_log_and_skips_bite(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "quality").mkdir()
+    thresholds = tmp_path / "quality/thresholds.toml"
+    thresholds.write_text("", encoding="utf-8")
+    timing = tmp_path / ".ratchet/timing.jsonl"
+    write_timing(
+        timing,
+        [
+            {"key": "bite-all", "seconds": s, "status": "green", "exit": 0}
+            for s in (10.0, 12.0, 11.0, 14.0)
+        ],
+    )
+    assert budget.main(["budget", "bite-all", "--root", str(tmp_path), "--set"]) == 0
+    assert "needs 5 green runs to set, has 4" in capsys.readouterr().out
+    assert budget.ceiling_of(thresholds.read_text(), "bite-all") is None
+
+    write_timing(
+        timing,
+        [
+            {"key": "bite-all", "seconds": s, "status": "green", "exit": 0}
+            for s in (10.0, 12.0, 11.0, 14.0, 16.0)
+        ],
+    )
+    assert budget.main(["budget", "bite-all", "--root", str(tmp_path), "--set"]) == 0
+    assert "ceilings.seconds.bite-all set to 20" in capsys.readouterr().out
+    assert budget.ceiling_of(thresholds.read_text(), "bite-all") == 20.0
+
+    assert budget.main(["budget", "bite", "--root", str(tmp_path), "--set"]) == 0
+    assert "the owner records ceilings.seconds.bite by hand" in capsys.readouterr().out
+
+
+def test_green_run_offers_lowering_when_five_runs_fit_at_most_80_percent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "quality").mkdir()
+    thresholds = tmp_path / "quality/thresholds.toml"
+    thresholds.write_text(budget.with_ceiling("", "bite-all", 100.0), encoding="utf-8")
+    timing = tmp_path / "t.jsonl"
+    monkeypatch.setattr(budget, "timed", lambda _command, _cwd: (10.0, 0))
+    argv = ["budget", "bite-all", "--root", str(tmp_path), "--report", "t.jsonl", "--", "x"]
+    for _ in range(4):
+        assert budget.main(argv) == 0
+        assert "can be lowered" not in capsys.readouterr().out
+
+    assert budget.main(argv) == 0
+    out = capsys.readouterr().out
+    assert (
+        "ratchet-budget: ceilings.seconds.bite-all can be lowered from 100s to 13s (5 green runs)"
+        in out
+    )
+    assert budget.lowering_offers("", timing) == []
+    assert budget.lowering_offers(thresholds.read_text(), timing) == [("bite-all", 100.0, 13.0, 5)]
+
+    thresholds.write_text(budget.with_ceiling("", "bite-all", 15.0), encoding="utf-8")
+    assert budget.main(argv) == 0
+    assert "can be lowered" not in capsys.readouterr().out
+    assert budget.lowering_offers(thresholds.read_text(), timing) == []
+
+
+def test_blocking_overrun_excuses_only_when_machine_explains_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "quality").mkdir()
+    (tmp_path / "quality/thresholds.toml").write_text(
+        budget.with_ceiling("", "bite-all", 100.0), encoding="utf-8"
+    )
+    recorded: list[machine.Machine] = []
+
+    class FakeMonitor:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        @contextlib.contextmanager
+        def spawning(self) -> object:
+            yield
+
+        def register(self, _pid: int) -> None:
+            pass
+
+        def unregister(self, _pid: int) -> None:
+            pass
+
+        def result(self) -> machine.Machine:
+            return recorded[-1]
+
+    monkeypatch.setattr(machine, "Monitor", FakeMonitor)
+    argv = [
+        "budget",
+        "bite-all",
+        "--tier",
+        "tier2",
+        "--root",
+        str(tmp_path),
+        "--report",
+        "t.jsonl",
+        "--",
+        sys.executable,
+        "-c",
+        "pass",
+    ]
+
+    orig_timed = budget.timed
+
+    def run_with(seconds: float, m_val: float, *, read_ok: bool) -> tuple[int, str]:
+        recorded.append(machine.Machine(4, 1.0, m_val, m_val, m_val, read_ok))
+
+        def fake_timed(cmd: list[str], cwd: Path) -> tuple[float, int]:
+            _, code = orig_timed(cmd, cwd)
+            return seconds, code
+
+        monkeypatch.setattr(budget, "timed", fake_timed)
+        code = budget.main(argv)
+        return code, capsys.readouterr().out
+
+    code, out = run_with(120.0, 1.5, read_ok=True)
+    assert code == 0
+    assert "not judged: the machine" in out
+    assert "::warning title=ratchet-budget::" in out
+    assert json.loads((tmp_path / "t.jsonl").read_text().splitlines()[-1])["status"] == "not judged"
+
+    code_low_m, out_low_m = run_with(120.0, 1.05, read_ok=True)
+    assert code_low_m == 1
+    assert ": red\n" in out_low_m
+
+    code_small_m, out_small_m = run_with(120.0, 1.15, read_ok=True)
+    assert code_small_m == 1
+    assert ": red\n" in out_small_m
+
+    code_unread, out_unread = run_with(120.0, 2.0, read_ok=False)
+    assert code_unread == 1
+    assert ": red\n" in out_unread
 
 
 def test_parse_requires_the_separator_and_a_command() -> None:
