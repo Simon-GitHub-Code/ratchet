@@ -21,6 +21,8 @@ RECORDS = [
     "docs/disputes/**/*.md",
     ".scratch/**/*.md",
     str(owed.LEDGER),
+    "quality/snapshots/**",
+    ".mise/locks/**",
 ]
 SECTION = "## Test paths"
 LABEL = "Tests"
