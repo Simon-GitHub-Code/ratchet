@@ -692,3 +692,14 @@ def test_evaluate_run_supports_places_unread_detail_and_forced_exclusion(
     )
 
     assert loop_budget.forced_from_records(root, [], run="run-pr", tree="t1") is None
+
+
+def test_judge_work_is_within_or_over_with_no_excuse() -> None:
+    assert loop_budget.judge_work(12.0, 10.51) == WITHIN
+    assert loop_budget.judge_work(12.0, 12.0) == WITHIN
+    assert loop_budget.judge_work(12.0, 12.01) == OVER
+    assert loop_budget.judge_work(12.0, None) == OVER
+    assert loop_budget.judge_work(12.0, 0.0) == OVER
+    assert loop_budget.judge_work(12.0, -1.0) == OVER
+    assert loop_budget.judge_work(12.0, float("nan")) == OVER
+    assert loop_budget.judge_work(12.0, float("inf")) == OVER

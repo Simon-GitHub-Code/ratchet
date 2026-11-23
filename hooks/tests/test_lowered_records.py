@@ -181,3 +181,30 @@ def test_a_deleted_steering_file_whose_answer_the_brief_lacks_is_red(
     assert judge(root) == code
     said = capsys.readouterr().out
     assert ("its answer `- the owner said so` is not in" in said) == bool(code)
+
+
+def test_raising_a_work_ceiling_is_a_loosening_and_accepted_with_relaxes_adr(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    base = "[ceilings.work.mutation]\ntests-per-mutant = 12\n"
+    repo = repository(tmp_path / "work", {THRESHOLDS: base})
+    branch(repo, "raise-work")
+    write(repo, THRESHOLDS, "[ceilings.work.mutation]\ntests-per-mutant = 10\n")
+    commit(repo, "chore: tighten work ceiling")
+    assert judge(repo) == 0
+
+    write(repo, THRESHOLDS, "[ceilings.work.mutation]\ntests-per-mutant = 15\n")
+    commit(repo, "chore: raise work ceiling")
+    assert judge(repo) == 1
+    assert "ceilings.work.mutation.tests-per-mutant: ceiling raised from 12.0 to 15.0" in (
+        capsys.readouterr().out
+    )
+
+    write(
+        repo,
+        "docs/adr/0900-work.md",
+        "# Work\n\nRelaxes: ceilings.work.mutation.tests-per-mutant from 12 to 15\n",
+    )
+    commit(repo, "docs(adr): relax work ceiling")
+    assert judge(repo) == 0
+    assert "relaxed by docs/adr/0900-work.md" in capsys.readouterr().out

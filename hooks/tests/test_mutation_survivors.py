@@ -864,3 +864,34 @@ def test_malformed_optional_profile_fields_are_ignored(
         "mutation: profile: slowest 10% of mutants took 100% of the time; "
         "slowest files: src/a.src 4.0s (100%); mean 6.00 tests per mutant\n"
     ) in combined_out
+
+
+def test_tests_completed_emits_ratchet_work_line_and_omits_when_absent(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = tmp_path
+    write(root, "src/a.src", SOURCE_TEXT)
+    no_tests = record(file="src/a.src", status="killed", start=[4, 10], end=[4, 11])
+    write(root, "mutants.jsonl", no_tests + "\n")
+    assert any_tool(root) == 0
+    assert "ratchet-work:" not in capsys.readouterr().out
+
+    counts = [19, 19, 19, 19, 19, 19, 19, 19, 19, 19.3]
+    lines = [
+        record(
+            file="src/a.src",
+            status="killed",
+            start=[4, 10 + n],
+            end=[4, 11 + n],
+            tests_completed=c,
+        )
+        for n, c in enumerate(counts)
+    ]
+    write(root, "mutants.jsonl", "\n".join(lines) + "\n")
+    assert any_tool(root) == 0
+    assert "ratchet-work: tests-per-mutant 19.03\n" in capsys.readouterr().out
+
+    zero = record(file="src/a.src", status="killed", start=[4, 10], end=[4, 11], tests_completed=0)
+    write(root, "mutants.jsonl", zero + "\n")
+    assert any_tool(root) == 0
+    assert "ratchet-work: tests-per-mutant 0\n" in capsys.readouterr().out

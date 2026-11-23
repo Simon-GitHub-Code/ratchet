@@ -1,4 +1,5 @@
 import contextlib
+import io
 import json
 import os
 import re
@@ -761,3 +762,331 @@ def test_the_change_ceiling_moves_to_its_product_keys_without_loosening(tmp_path
     assert moved(41, 1500) == 1
     write(root, "quality/thresholds.toml", "[ceilings.change]\ntest_lines = 3000\n")
     assert lowered.main(["lowered", "--root", str(root)]) == 1, "the old keys cannot just go"
+
+
+def test_parse_work_and_work_ceilings_handle_valid_and_malformed_inputs() -> None:
+    sample = (
+        "normal output\n"
+        "ratchet-work: builds-per-check 1\n"
+        "ratchet-work: tests-per-mutant 19.03\n"
+        "ratchet-work: tests-per-mutant 10.51\n"
+        "ratchet-work: zero 0\n"
+        "ratchet-work: bad -1\n"
+        "ratchet-work: bad2 nan\n"
+        "ratchet-work: bad3 inf\n"
+        f"ratchet-work: huge {'9' * 400}\n"
+        "ratchet-work: 1bad 5\n"
+        "  ratchet-work: indented 5\n"
+    )
+    assert budget.parse_work(sample) == {
+        "builds-per-check": 1.0,
+        "tests-per-mutant": 10.51,
+        "zero": 0.0,
+    }
+    toml = (
+        "[ceilings.work.mutation]\n"
+        "tests-per-mutant = 12\n"
+        "bad_bool = true\n"
+        "bad_neg = -1\n"
+        "[ceilings.work]\n"
+        "not_a_table = 1\n"
+    )
+    assert budget.work_ceilings(toml, "mutation") == {"tests-per-mutant": 12.0}
+    assert budget.work_ceilings(toml, "other") == {}
+    assert budget.work_ceilings("[ceilings]\nwork = 3\n", "mutation") == {}
+    assert budget.work_ceilings("[broken", "mutation") == {}
+    added = budget.with_work_ceiling(
+        "[ceilings.work.mutation]\nother = 1\n\n[other]\nx = 1\n",
+        "mutation",
+        count="tests-per-mutant",
+        value=12.0,
+    )
+    assert budget.work_ceilings(added, "mutation") == {"other": 1.0, "tests-per-mutant": 12.0}
+    assert budget.with_work_ceiling("", "mutation", count="tests-per-mutant", value=12.0) == (
+        "[ceilings.work.mutation]\ntests-per-mutant = 12\n"
+    )
+
+
+def test_budget_timed_pipes_stdout_unchanged_and_records_work_counts(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "quality").mkdir()
+    script = (
+        "import sys\n"
+        "print('hello')\n"
+        "print('ratchet-work: tests-per-mutant 10.51')\n"
+        "print('err-line', file=sys.stderr)\n"
+    )
+    argv = [
+        "budget",
+        "mutation",
+        "--root",
+        str(tmp_path),
+        "--report",
+        "t.jsonl",
+        "--",
+        sys.executable,
+        "-c",
+        script,
+    ]
+    assert budget.main(argv) == 0
+    captured = capfd.readouterr()
+    assert "hello\nratchet-work: tests-per-mutant 10.51\n" in captured.out
+    assert "err-line\n" in captured.err
+    [rec] = [json.loads(line) for line in (tmp_path / "t.jsonl").read_text().splitlines()]
+    assert rec["work"] == {"tests-per-mutant": 10.51}
+
+    plain_argv = [
+        "budget",
+        "lint",
+        "--root",
+        str(tmp_path),
+        "--report",
+        "t2.jsonl",
+        "--",
+        sys.executable,
+        "-c",
+        "print('plain')",
+    ]
+    assert budget.main(plain_argv) == 0
+    capfd.readouterr()
+    [plain_rec] = [json.loads(line) for line in (tmp_path / "t2.jsonl").read_text().splitlines()]
+    assert "work" not in plain_rec
+
+    buf = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", buf)
+    _, code = budget.timed([sys.executable, "-c", "print('via-stringio')"], tmp_path)
+    assert code == 0
+    assert buf.getvalue() == "via-stringio\n"
+
+
+def test_work_ceilings_are_red_everywhere_including_missing_zero_over_report_and_group(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "quality").mkdir()
+    (tmp_path / "quality/thresholds.toml").write_text(
+        "[ceilings.work.mutation]\ntests-per-mutant = 12\n", encoding="utf-8"
+    )
+
+    class FakeMonitor:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        @contextlib.contextmanager
+        def spawning(self) -> object:
+            yield
+
+        def register(self, _pid: int) -> None:
+            pass
+
+        def unregister(self, _pid: int) -> None:
+            pass
+
+        def result(self) -> machine.Machine:
+            return machine.Machine(4, 1.0, 2.5, 2.5, 2.5, machine_read=True)
+
+    monkeypatch.setattr(machine, "Monitor", FakeMonitor)
+
+    def run_cmd(stdout_code: str, *extra_flags: str) -> tuple[int, str]:
+        argv = [
+            "budget",
+            "mutation",
+            "--root",
+            str(tmp_path),
+            *extra_flags,
+            "--",
+            sys.executable,
+            "-c",
+            stdout_code,
+        ]
+        return budget.main(argv), capsys.readouterr().out
+
+    code_ok, out_ok = run_cmd("print('ratchet-work: tests-per-mutant 10.51')", "--over", "report")
+    assert code_ok == 0
+    assert "ratchet-budget: work mutation.tests-per-mutant was 10.51 (ceiling 12): green" in out_ok
+
+    code_over, out_over = run_cmd(
+        "print('ratchet-work: tests-per-mutant 19.03')", "--over", "report"
+    )
+    assert code_over == 1
+    assert "ratchet-budget: work mutation.tests-per-mutant was 19.03 (ceiling 12): red" in out_over
+
+    for snippet in ("print('done')", "print('ratchet-work: tests-per-mutant 0')"):
+        code_miss, out_miss = run_cmd(snippet, "--over", "report")
+        assert code_miss == 1
+        assert "ratchet-budget: work mutation.tests-per-mutant missing (ceiling 12): red" in (
+            out_miss
+        )
+
+    monkeypatch.undo()
+    group_script = (
+        "import json, os, pathlib, sys\n"
+        "record = {'key': 'mutation', 'seconds': 1.0, 'status': 'unbounded', 'exit': 0,"
+        " 'work': {'tests-per-mutant': 15.0}}\n"
+        "manifest = {'kind': 'group', 'job': 'tier1', 'gates': ['mutation']}\n"
+        "with open(sys.argv[1], 'a', encoding='utf-8') as f:\n"
+        "    f.write(json.dumps(record) + '\\n')\n"
+        "with open(os.environ['RATCHET_BUDGET_GROUP'], 'a', encoding='utf-8') as f:\n"
+        "    f.write(json.dumps(record) + '\\n' + json.dumps(manifest) + '\\n')\n"
+    )
+    group_argv = [
+        "budget",
+        "tier1",
+        "--root",
+        str(tmp_path),
+        "--tier",
+        "tier1",
+        "--over",
+        "report",
+        "--report",
+        "group.jsonl",
+        "--",
+        sys.executable,
+        "-c",
+        group_script,
+        str(tmp_path / "group.jsonl"),
+    ]
+    assert budget.main(group_argv) == 1
+    assert "ratchet-budget: work mutation.tests-per-mutant was 15 (ceiling 12): red" in (
+        capsys.readouterr().out
+    )
+
+
+def test_work_ceiling_set_requires_five_runs_uses_1_1_headroom_and_never_raises(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert budget.WORK_HEADROOM == 1.1
+    (tmp_path / "quality").mkdir()
+    thresholds = tmp_path / "quality/thresholds.toml"
+    thresholds.write_text("", encoding="utf-8")
+    timing = tmp_path / ".ratchet/timing.jsonl"
+    prior = [
+        {"key": "mutation", "seconds": 1.0, "status": "unbounded", "exit": 0, "work": {"t": 10.0}}
+        for _ in range(3)
+    ] + [
+        {"key": "mutation", "seconds": 1.0, "status": "green", "exit": 0, "work": {"t": 0.0}},
+        {"key": "mutation", "seconds": 1.0, "status": "green", "exit": 1, "work": {"t": 99.0}},
+        {"key": "mutation", "seconds": 1.0, "status": "red", "exit": 0, "work": {"t": 99.0}},
+        {"key": "mutation", "seconds": 1.0, "status": "green", "exit": False, "work": {"t": 99.0}},
+        {"kind": "tier", "key": "mutation", "status": "green", "exit": 0, "work": {"t": 99.0}},
+    ]
+    write_timing(timing, prior)
+    assert budget.main(["budget", "mutation", "--root", str(tmp_path), "--work", "t", "--set"]) == 0
+    assert "ceilings.work.mutation.t needs 5 green runs to set, has 3" in capsys.readouterr().out
+    assert budget.work_ceilings(thresholds.read_text(), "mutation") == {}
+
+    more = [
+        {
+            "key": "mutation",
+            "seconds": 1.0,
+            "status": "green",
+            "exit": 0,
+            "work": {"t": 99.0},
+        },
+        *(
+            {
+                "key": "mutation",
+                "seconds": 1.0,
+                "status": "green",
+                "exit": 0,
+                "work": {"t": val},
+            }
+            for val in (10.0, 10.5, 11.0, 10.2, 10.8, 10.0, 10.0, 10.0, 10.0, 10.0)
+        ),
+    ]
+    write_timing(timing, more)
+    assert budget.main(["budget", "mutation", "--root", str(tmp_path), "--work", "t", "--set"]) == 0
+    out = capsys.readouterr().out
+    assert "ceilings.work.mutation.t set to 13" in out
+    assert budget.work_ceilings(thresholds.read_text(), "mutation") == {"t": 13.0}
+
+    write_timing(
+        timing,
+        [
+            {"key": "mutation", "seconds": 1.0, "status": "green", "exit": 0, "work": {"t": 12.5}}
+            for _ in range(5)
+        ],
+    )
+    assert budget.main(["budget", "mutation", "--root", str(tmp_path), "--work", "t", "--set"]) == 0
+    assert "set to" not in capsys.readouterr().out
+    assert budget.work_ceilings(thresholds.read_text(), "mutation") == {"t": 13.0}
+
+    write_timing(
+        timing,
+        [
+            {"key": "mutation", "seconds": 1.0, "status": "green", "exit": 0, "work": {"t": 5.0}}
+            for _ in range(4)
+        ],
+    )
+    cmd = ["--", sys.executable, "-c", "print('ratchet-work: t 5.0')"]
+    assert (
+        budget.main(["budget", "mutation", "--root", str(tmp_path), "--work", "t", "--set", *cmd])
+        == 0
+    )
+    assert "ceilings.work.mutation.t set to 6" in capsys.readouterr().out
+    assert budget.work_ceilings(thresholds.read_text(), "mutation") == {"t": 6.0}
+
+    thresholds.write_text("[ceilings.work.mutation]\nt = 100\n", encoding="utf-8")
+    lower_argv = [
+        "budget",
+        "mutation",
+        "--root",
+        str(tmp_path),
+        "--report",
+        ".ratchet/timing.jsonl",
+        *cmd,
+    ]
+    assert budget.main(lower_argv) == 0
+    assert (
+        "ratchet-budget: ceilings.work.mutation.t can be lowered from 100 to 6 (6 green runs)"
+        in capsys.readouterr().out
+    )
+
+    thresholds.write_text("[ceilings.work.mutation]\nt = 7\n", encoding="utf-8")
+    assert budget.main(lower_argv) == 0
+    assert "can be lowered" not in capsys.readouterr().out
+
+    thresholds.write_text(
+        "[ceilings.seconds]\nmutation = 0\n\n[ceilings.work.mutation]\nt = 7\n",
+        encoding="utf-8",
+    )
+    assert budget.main([*lower_argv[:6], "--over", "report", *lower_argv[6:]]) == 0
+    assert "can be lowered" not in capsys.readouterr().out
+
+
+def test_budget_offers_removing_pre_tier2_seconds_ceiling_when_work_key_exists(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "quality").mkdir()
+    (tmp_path / "quality/thresholds.toml").write_text(
+        "[ceilings.seconds]\nmutation = 120\n\n[ceilings.work.mutation]\ntests-per-mutant = 12\n",
+        encoding="utf-8",
+    )
+    cmd = ["--", sys.executable, "-c", "print('ratchet-work: tests-per-mutant 10')"]
+    assert (
+        budget.main(
+            [
+                "budget",
+                "mutation",
+                "--root",
+                str(tmp_path),
+                "--tier",
+                "tier1",
+                "--over",
+                "report",
+                *cmd,
+            ]
+        )
+        == 0
+    )
+    tier1_out = capsys.readouterr().out
+    assert "Relaxes: ceilings.seconds.mutation from 120 to removed" in tier1_out
+    assert "ADR 0088" in tier1_out
+
+    assert (
+        budget.main(["budget", "mutation", "--root", str(tmp_path), "--tier", "tier2", *cmd]) == 0
+    )
+    assert "from 120 to removed" not in capsys.readouterr().out

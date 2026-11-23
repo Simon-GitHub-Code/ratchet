@@ -243,6 +243,10 @@ def judge(budget: float | None, reading: Reading) -> Judgement:
     return NotJudged(Reason.MACHINE)
 
 
+def judge_work(ceiling: float, value: float | None) -> Judgement:
+    return WITHIN if value is not None and math.isfinite(value) and 0 < value <= ceiling else OVER
+
+
 def budget_of(root: Path) -> float | None:
     try:
         data = gatelib.thresholds(root)

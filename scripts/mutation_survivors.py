@@ -434,7 +434,15 @@ def judge(
     )
     if profile := _profile_line(mutants):
         print(profile)
+    if (mean_tests := _mean_tests_completed(mutants)) is not None:
+        formatted = f"{mean_tests:.2f}" if mean_tests > 0 else "0"
+        print(f"ratchet-work: tests-per-mutant {formatted}")
     return problems
+
+
+def _mean_tests_completed(mutants: list[Mutant]) -> float | None:
+    tests = [m.tests_completed for m in mutants if m.tests_completed is not None]
+    return sum(tests) / len(tests) if tests else None
 
 
 def _duration_parts(mutants: list[Mutant]) -> list[str]:
@@ -465,9 +473,7 @@ def _duration_parts(mutants: list[Mutant]) -> list[str]:
 
 def _profile_line(mutants: list[Mutant]) -> str | None:
     parts = _duration_parts(mutants)
-    tests = [m.tests_completed for m in mutants if m.tests_completed is not None]
-    if tests:
-        mean_tests = sum(tests) / len(tests)
+    if (mean_tests := _mean_tests_completed(mutants)) is not None:
         parts.append(f"mean {mean_tests:.2f} tests per mutant")
     return f"mutation: profile: {'; '.join(parts)}" if parts else None
 
