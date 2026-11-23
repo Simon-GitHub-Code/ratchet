@@ -24,6 +24,7 @@ import machine
 import parallel
 import runrecord
 import schedule
+from tests import repos
 from tests.repos import git
 from tests.servers import gone
 
@@ -1864,3 +1865,471 @@ def test_parallel_records_work_counts_and_judges_work_ceilings_red_everywhere(
         assert "ratchet-budget: work mutation.tests-per-mutant missing (ceiling 12): red" in (
             miss_out
         )
+
+
+def test_after_orders_consumers_after_producer_and_runs_consumers_in_parallel(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    log, a, b = tmp_path / "log", tmp_path / "a", tmp_path / "b"
+    order_script = (
+        "import os, pathlib, sys, time\n"
+        "log, name = sys.argv[1], sys.argv[2]\n"
+        "os.write(os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT), f'+{name}\\n'.encode())\n"
+        "if len(sys.argv) == 5:\n"
+        "    mine, theirs = map(pathlib.Path, sys.argv[3:5])\n"
+        "    mine.touch()\n"
+        "    deadline = time.monotonic() + 10\n"
+        "    while not theirs.exists() and time.monotonic() < deadline:\n"
+        "        time.sleep(0.01)\n"
+        "    assert theirs.exists()\n"
+        "os.write(os.open(log, os.O_WRONLY | os.O_APPEND), f'-{name}\\n'.encode())\n"
+    )
+    build = gate(order_script, log, "build")
+    smoke = gate(order_script, log, "smoke", a, b)
+    e2e = gate(order_script, log, "e2e", b, a)
+    assert (
+        run(
+            "--jobs",
+            "3",
+            "--after",
+            f"{smoke}:{build}",
+            "--after",
+            f"{e2e}:{build}",
+            "--after",
+            "missing:other",
+            "--",
+            smoke,
+            e2e,
+            build,
+        )
+        == 0
+    )
+    events = log.read_text().splitlines()
+    assert events[:2] == ["+build", "-build"]
+    assert set(events[2:]) == {"+smoke", "+e2e", "-smoke", "-e2e"}
+    out = capsys.readouterr().out
+    assert "--serial" not in out
+    assert "parallel: green (3 ran)\n" in out
+
+
+def test_binding_build_consumers_wait_for_build_once_and_run_in_parallel(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    speed = (
+        "- Build: gate `build`; caches `.cache`; cold 10s; warm 1s;"
+        " reuse moved; consumers `smoke`, `e2e`, `missing`\n"
+    )
+    root = binding(tmp_path, {"build": "builder", "smoke": "tester", "e2e": "tester"}, speed=speed)
+    (root / ".cache").mkdir()
+    log = tmp_path / "log"
+    meet_runner = shlex.join([sys.executable, "-c", PAIRED, str(log)])
+    code = run(
+        "--root",
+        str(root),
+        "--runner",
+        meet_runner,
+        "--jobs",
+        "4",
+        "--",
+        "smoke",
+        "e2e",
+        "build",
+    )
+    assert code == 0
+    events = log.read_text().splitlines()
+    assert events[:2] == ["+build", "-build"]
+    met = ran_at_once(log)
+    assert frozenset(("smoke", "e2e")) in met
+    out = capsys.readouterr().out
+    assert "--serial" not in out
+
+    assert (
+        run("--root", str(root), "--runner", meet_runner, "--jobs", "2", "--", "smoke", "e2e") == 0
+    )
+    capsys.readouterr()
+
+
+def test_after_validation_and_diamond_dag(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for bad in ("smoke", ":build", "smoke:", "   :build"):
+        with pytest.raises(SystemExit) as caught:
+            run("--after", bad, "--", "build", "smoke")
+        assert caught.value.code == 2
+        assert "--after" in capsys.readouterr().err
+
+    for cycle in (["--after", "a:b", "--after", "b:a"], ["--after", "a:a"]):
+        with pytest.raises(SystemExit) as caught:
+            run(*cycle, "--", "a", "b")
+        assert caught.value.code == 2
+        assert "cyclic dependency" in capsys.readouterr().err
+
+    log = tmp_path / "diamond.log"
+    a, b, c, d = (gate(LOG, log, name) for name in "abcd")
+    code = run(
+        "--jobs",
+        "4",
+        "--after",
+        f"{b}:{a}",
+        "--after",
+        f"{c}:{a}",
+        "--after",
+        f"{d}:{b}",
+        "--after",
+        f"{d}:{c}",
+        "--",
+        d,
+        c,
+        b,
+        a,
+    )
+    assert code == 0
+    events = log.read_text().splitlines()
+    assert events[:2] == ["+a", "-a"]
+    assert events[-2:] == ["+d", "-d"]
+
+
+def test_failed_dependency_skips_transitive_consumers_without_cascading_failures(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    build = gate(EXIT, 2)
+    smoke = gate(SAY, "smoke-ran", "")
+    deploy = gate(SAY, "deploy-ran", "")
+    independent = gate(SAY, "independent-ran", "")
+    code = run(
+        "--jobs",
+        "4",
+        "--after",
+        f"{smoke}:{build}",
+        "--after",
+        f"{deploy}:{smoke}",
+        "--",
+        build,
+        smoke,
+        deploy,
+        independent,
+    )
+    assert code == 1
+    out = capsys.readouterr().out
+    assert "independent-ran\n" in out
+    assert "smoke-ran\n" not in out
+    assert "deploy-ran\n" not in out
+    assert f"parallel: {smoke}: started" not in out
+    assert f"parallel: {deploy}: started" not in out
+    assert "2 of 4 checks finished" in out
+    assert f"{smoke}: skipped (dependency {build} failed)\n" in out
+    assert f"{deploy}: skipped (dependency {build} failed)\n" in out
+    assert "--fail-fast" not in out
+
+    unjudged = gate(EXIT, 3)
+    code_unjudged = run(
+        "--after",
+        f"{smoke}:{unjudged}",
+        "--",
+        unjudged,
+        smoke,
+    )
+    assert code_unjudged == 3
+    out_unjudged = capsys.readouterr().out
+    assert f"{smoke}: skipped (dependency {unjudged} failed)\n" in out_unjudged
+    assert out_unjudged.endswith("parallel: could not judge\n")
+
+
+def test_wall_clock_line_with_dependencies_never_blames_serial_or_order(
+    tmp_path: Path,
+) -> None:
+    constraints = parallel.Constraints(
+        deps={"smoke": frozenset({"build"}), "e2e": frozenset({"build"})}
+    )
+    options = argparse.Namespace(
+        root=tmp_path,
+        jobs=4,
+        fail_fast=False,
+        report=None,
+        alone=[],
+        wide=[],
+        constraints=constraints,
+    )
+    sched = parallel.Scheduler(
+        [("build",), ("smoke",), ("e2e",)],
+        [],
+        options,
+        kept=schedule.Schedule(),
+    )
+    sched.finished = [
+        parallel.Finished("build", 10.0, 0, ""),
+        parallel.Finished("smoke", 10.0, 0, ""),
+        parallel.Finished("e2e", 10.0, 0, ""),
+    ]
+    line = parallel.wall_clock_line(sched, 20.0)
+    assert "--serial" not in line
+    assert "order lost" not in line
+    assert line == "parallel: the lanes were full (4 lanes, 30.0s of check time in 20.0s)"
+    assert not parallel.matches_gate("a 'b", "b")
+    assert not parallel.matches_gate("", "b")
+    assert parallel.matches_gate("b", "b")
+
+
+def test_first_runs_fast_gates_before_heavy_and_allows_later_or_none(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = binding(tmp_path / "repo", {"later": "later: code:source", "none": "none: skipped"})
+    log = tmp_path / "first.log"
+    heavy_a = gate(LOG, log, "heavy-a")
+    heavy_b = gate(LOG, log, "heavy-b")
+    fast_ok = gate(LOG, log, "fast-ok")
+    fast_later = named(SAY, "later: code:source", "", name="later")
+    fast_none = named(SAY, "none: skipped", "", name="none")
+    code = run(
+        "--root",
+        str(root),
+        "--jobs",
+        "4",
+        "--first",
+        fast_ok,
+        fast_later,
+        fast_none,
+        "not-in-run",
+        "--",
+        heavy_a,
+        heavy_b,
+        fast_ok,
+        fast_later,
+        fast_none,
+    )
+    assert code == 0
+    events = log.read_text().splitlines()
+    assert events[:2] == ["+fast-ok", "-fast-ok"]
+    assert set(events[2:]) == {"+heavy-a", "-heavy-a", "+heavy-b", "-heavy-b"}
+    assert "parallel: green (3 ran, 1 not run yet, 1 not applicable)\n" in capsys.readouterr().out
+
+    log_no_match = tmp_path / "nomatch.log"
+    assert (
+        run(
+            "--first",
+            "absent",
+            "--",
+            gate(LOG, log_no_match, "one"),
+            gate(LOG, log_no_match, "two"),
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+
+def test_first_stops_before_heavy_gates_on_red_or_unjudged_and_validates_deps(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fast_red = gate(EXIT, 2)
+    fast_ok = gate(SAY, "fast-ok", "")
+    heavy = gate(SAY, "heavy-ran", "")
+    assert (
+        run(
+            "--jobs",
+            "3",
+            "--first",
+            fast_red,
+            fast_ok,
+            "--",
+            heavy,
+            fast_red,
+            fast_ok,
+        )
+        == 1
+    )
+    out = capsys.readouterr().out
+    assert "heavy-ran\n" not in out
+    assert f"parallel: {heavy}: started" not in out
+    assert f"parallel: stopped before heavy gates after fast failure: {heavy}\n" in out
+    assert "fast-ok\n" in out
+    assert out.endswith("parallel: red\n")
+
+    fast_unjudged = gate(EXIT, 3)
+    assert run("--first", fast_unjudged, "--", heavy, fast_unjudged) == 3
+    out_unjudged = capsys.readouterr().out
+    assert f"parallel: stopped before heavy gates after fast failure: {heavy}\n" in out_unjudged
+    assert out_unjudged.endswith("parallel: could not judge\n")
+
+    fast_dep = gate(SAY, "fast-dep", "")
+    assert (
+        run(
+            "--jobs",
+            "1",
+            "--first",
+            fast_red,
+            fast_dep,
+            "--after",
+            f"{fast_dep}:{fast_red}",
+            "--",
+            fast_red,
+            fast_dep,
+            heavy,
+        )
+        == 1
+    )
+    out_dep = capsys.readouterr().out
+    assert f"{fast_dep}: skipped (dependency {fast_red} failed)\n" in out_dep
+    assert f"parallel: stopped before heavy gates after fast failure: {heavy}\n" in out_dep
+
+    with pytest.raises(SystemExit) as caught:
+        run("--first", "smoke", "--after", "smoke:build", "--", "build", "smoke")
+    assert caught.value.code == 2
+    assert "--first gate 'smoke' depends on 'build'" in capsys.readouterr().err
+
+    constraints = parallel.Constraints(first=frozenset({"fast"}))
+    options = argparse.Namespace(
+        root=tmp_path,
+        jobs=4,
+        fail_fast=False,
+        report=None,
+        alone=[],
+        wide=[],
+        constraints=constraints,
+    )
+    sched = parallel.Scheduler(
+        [("fast",), ("heavy1",), ("heavy2",)], [], options, kept=schedule.Schedule()
+    )
+    sched.finished = [
+        parallel.Finished("fast", 2.0, 0, ""),
+        parallel.Finished("heavy1", 5.0, 0, ""),
+        parallel.Finished("heavy2", 5.0, 0, ""),
+    ]
+    line = parallel.wall_clock_line(sched, 7.0)
+    assert "order lost" not in line
+    assert line == "parallel: the lanes were full (4 lanes, 12.0s of check time in 7.0s)"
+
+
+def test_cold_build_detection_reports_no_cache_fresh_tree_and_cache_rejected(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    moved_speed = (
+        "- Build: gate `build`; caches `.build-cache`; cold 0.2s; warm 0.02s; reuse moved\n"
+    )
+    root = repos.repository(
+        tmp_path / "moved",
+        {
+            "README.md": "# R\n",
+            str(gatelib.BINDING): (
+                "# Binding\n\n## Gates\n\n| Q | T | Tier | Threshold source | Entry point |\n"
+                "|---|---|---|---|---|\n"
+                "| b | builder | 1 | | `just build` |\n\n"
+                f"## Speed\n\n{moved_speed}"
+            ),
+        },
+    )
+    report = root / ".ratchet/timing.jsonl"
+    cold_gate = named("import time; time.sleep(0.16)", name="build")
+    warm_gate = named("pass", name="build")
+
+    assert run("--root", str(root), "--report", str(report), "--", cold_gate) == 0
+    out_no_cache = capsys.readouterr().out.splitlines()
+    expected_no_cache = next(line for line in out_no_cache if "cold build:" in line)
+    assert re.fullmatch(
+        r"parallel: cold build: build took \d+\.\ds \(recorded warm 0\.02s, cold 0\.2s\): no cache",
+        expected_no_cache,
+    )
+    assert out_no_cache[-1] == "parallel: green (1 ran)"
+    rows = [json.loads(line) for line in report.read_text().splitlines()]
+    cold_rows = [row for row in rows if row.get("kind") == runrecord.COLD_BUILD]
+    assert len(cold_rows) == 1
+    assert (cold_rows[0]["gate"], cold_rows[0]["cause"]) == ("build", "no cache")
+    assert (cold_rows[0]["warm"], cold_rows[0]["cold"]) == (0.02, 0.2)
+
+    (root / ".build-cache").mkdir()
+    report.unlink()
+    assert run("--root", str(root), "--report", str(report), "--", cold_gate) == 0
+    out_fresh = capsys.readouterr().out
+    assert "): fresh tree\n" in out_fresh
+
+    report.write_text("", encoding="utf-8")
+    tree = runrecord.tree_id(root)
+    prior_records = [
+        {"kind": runrecord.TIER, "tree": tree, "status": "green"},
+        {"key": cold_gate, "tree": "other-tree", "status": "green", "exit": 0},
+        {"key": cold_gate, "tree": tree, "status": "failed", "exit": 1},
+        {"key": "other", "tree": tree, "status": "green", "exit": 0},
+        {"key": cold_gate, "tree": tree, "status": "unbounded", "exit": 0},
+    ]
+    report.write_text("\n".join(json.dumps(r) for r in prior_records) + "\n", encoding="utf-8")
+    assert run("--root", str(root), "--report", str(report), "--", cold_gate) == 0
+    out_rejected = capsys.readouterr().out
+    assert "): cache rejected\n" in out_rejected
+    rows = [json.loads(line) for line in report.read_text().splitlines()]
+    assert rows[-1]["kind"] == runrecord.COLD_BUILD
+    assert rows[-1]["cause"] == "cache rejected"
+
+    assert run("--root", str(root), "--", cold_gate) == 0
+    assert "): cache rejected\n" not in capsys.readouterr().out
+
+    slow_spec = "- Build: gate `build`; caches `.build-cache`; cold 30s; warm 0.02s; reuse moved\n"
+    (root / gatelib.BINDING).write_text(
+        "# Binding\n\n## Gates\n\n| Q | T | Tier | Threshold source | Entry point |\n"
+        "|---|---|---|---|---|\n| b | builder | 1 | | `just build` |\n\n"
+        f"## Speed\n\n{slow_spec}",
+        encoding="utf-8",
+    )
+    assert run("--root", str(root), "--report", str(report), "--", warm_gate) == 0
+    assert "cold build:" not in capsys.readouterr().out
+
+    bare_no_git = binding(tmp_path / "nogit", {"build": "builder"}, speed=moved_speed)
+    (bare_no_git / ".build-cache").mkdir()
+    assert (
+        run("--root", str(bare_no_git), "--report", ".ratchet/timing.jsonl", "--", cold_gate) == 0
+    )
+    assert "): fresh tree\n" in capsys.readouterr().out
+
+
+def test_cold_build_shared_none_and_edge_cases(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shared_speed = (
+        "- Build: gate `build`; caches `out`; cold 10s; warm 1s;"
+        " reuse shared `MY_BUILD_CACHE=.shared`\n"
+    )
+    root = binding(tmp_path / "shared", {"build": "builder"}, speed=shared_speed)
+    options = argparse.Namespace(root=root, jobs=1, fail_fast=False, report=None, alone=[], wide=[])
+    monkeypatch.delenv("MY_BUILD_CACHE", raising=False)
+    sched = parallel.Scheduler([], [], options, kept=schedule.Schedule())
+    sched.finished = [parallel.Finished("build", 8.0, 0, "")]
+    parallel.record(sched, 8.0, exit_code=0, gates=["build"])
+    assert "no cache" in capsys.readouterr().out
+
+    monkeypatch.setenv("MY_BUILD_CACHE", ".shared")
+    parallel.record(sched, 8.0, exit_code=0, gates=["build"])
+    assert "no cache" in capsys.readouterr().out
+
+    (root / ".shared").mkdir()
+    parallel.record(sched, 8.0, exit_code=0, gates=["build"])
+    assert "fresh tree" in capsys.readouterr().out
+
+    abs_cache = tmp_path / "abs-cache"
+    abs_cache.mkdir()
+    monkeypatch.setenv("MY_BUILD_CACHE", str(abs_cache))
+    parallel.record(sched, 8.0, exit_code=0, gates=["build"])
+    assert "fresh tree" in capsys.readouterr().out
+
+    none_speed = (
+        "- Build: gate `build`; caches none; cold 10s; warm 1s;"
+        " reuse none: compiler has no incremental mode\n"
+    )
+    none_root = binding(tmp_path / "none", {"build": "builder"}, speed=none_speed)
+    none_opts = argparse.Namespace(
+        root=none_root, jobs=1, fail_fast=False, report=None, alone=[], wide=[]
+    )
+    none_sched = parallel.Scheduler([], [], none_opts, kept=schedule.Schedule())
+    none_sched.finished = [parallel.Finished("build", 8.0, 0, "")]
+    parallel.record(none_sched, 8.0, exit_code=0, gates=["build"])
+    assert "no cache" in capsys.readouterr().out
+
+    equal_speed = "- Build: gate `build`; caches `out`; cold 5s; warm 5s; reuse moved\n"
+    eq_root = binding(tmp_path / "equal", {"build": "builder"}, speed=equal_speed)
+    eq_opts = argparse.Namespace(
+        root=eq_root, jobs=1, fail_fast=False, report=None, alone=[], wide=[]
+    )
+    eq_sched = parallel.Scheduler([], [], eq_opts, kept=schedule.Schedule())
+    eq_sched.finished = [parallel.Finished("build", 6.0, 0, "")]
+    assert parallel.cold_build_info(eq_sched) is None
+
+    other_sched = parallel.Scheduler([], [], options, kept=schedule.Schedule())
+    other_sched.finished = [parallel.Finished("lint", 8.0, 0, "")]
+    assert parallel.cold_build_info(other_sched) is None

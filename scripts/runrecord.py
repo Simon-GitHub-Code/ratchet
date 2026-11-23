@@ -28,6 +28,7 @@ TIER = "tier"
 PRODUCER = "report-producer"
 CACHE_MISSING = "cache-missing"
 CACHE_RESTORE = "cache-restore"
+COLD_BUILD = "cold-build"
 FAULT = "fault"
 MACHINE_FIELDS = ("cores", "load", "k", "share", "m", "machine_read")
 GATE_FIELDS = ("lane", "start", "cpu", "alone")

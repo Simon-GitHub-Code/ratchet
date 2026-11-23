@@ -720,5 +720,6 @@ def test_facts_counts_producer_and_gate_records_per_real_run_and_tracks_latest(
     assert facts.producer_counts[("r2", "suite-report")] == 1
     assert facts.latest_producer_run["suite-report"] == "r2"
     assert facts.restored == {(".cache",): 100}
+    assert runrecord.COLD_BUILD == "cold-build"
     assert runrecord.ci_cache_paths("## Speed\n\n- Cache: none: no cache\n") == []
     assert all(run_id != runrecord.NO_RUN for run_id, _ in facts.producer_counts)
