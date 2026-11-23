@@ -489,18 +489,112 @@ def cut_after_signal(
         return smoke("--until-stopped", "--url", f"{url}/", *args, capsys=capsys)
 
 
+@pytest.mark.parametrize("held_req", [False, True], ids=["older", "held"])
 def test_a_connection_the_gate_took_and_reset_is_not_counted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    held_req: bool,
 ) -> None:
+    if held_req:
+        _, sending = until_stopped(tmp_path, monkeypatch)
+        load_smoke.holding(sending).write_text(load_smoke.HELD, encoding="utf-8")
     code, out = cut_after_signal(tmp_path, monkeypatch, capsys, as_gate=True)
+    if held_req:
+        assert out == (
+            "load-smoke: 4 connection(s) reset after the stop signal are not counted, since the "
+            "service never accepted them. The gate held the service's listener and, once no "
+            "process of the service held it, took each connection waiting there and reset it. "
+            "Each was waiting when the service stopped listening, or arrived after.\n"
+            "load-smoke: 0 request(s) had been accepted and not yet answered at the stop signal\n"
+            "load-smoke: green\n"
+        )
+        assert code == 0
+        return
     assert out == (
         "load-smoke: 4 connection(s) reset after the stop signal are not counted, since the "
         "service never accepted them. The gate held the service's listener and, once no process "
         "of the service held it, took each connection waiting there and reset it. Each was "
         "waiting when the service stopped listening, or arrived after.\n"
-        "load-smoke: green\n"
+        "load-smoke: 0 request(s) had been accepted and not yet answered at the stop signal\n"
+        "nothing accepted was in flight at the stop signal, so the stop could not be judged\n"
+        "load-smoke: could not judge\n"
     )
-    assert code == 0
+    assert code == gatelib.UNJUDGED
+
+
+def test_an_older_run_with_accepted_in_flight_requests_beside_taken_resets_is_green(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    marker, _ = until_stopped(tmp_path, monkeypatch)
+    taken: set[gatelib.Connection] = set()
+    lock = threading.Lock()
+    entered = threading.Event()
+    answered = threading.Event()
+
+    def handle_mix(handler: http.server.BaseHTTPRequestHandler) -> None:
+        if not entered.is_set():
+            entered.set()
+            answered.wait(5)
+            servers.reply(handler, 200)
+            return
+        with lock:
+            taken.add(gatelib.connection(handler.connection.getsockname(), handler.client_address))
+            gatelib.write_stopping(marker, held(url, *taken))
+        handler.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, listeners.RESET)
+        handler.connection.close()
+
+    with servers.server(handle_mix) as url:
+
+        def signal_once_in_flight() -> None:
+            entered.wait(5)
+            gatelib.write_stopping(marker, held(url))
+            answered.set()
+
+        signaller = threading.Thread(target=signal_once_in_flight, daemon=True)
+        signaller.start()
+        args = ["--seconds", "0.3", "--concurrency", "4", "--min-requests", "0"]
+        code, out = smoke("--until-stopped", "--url", f"{url}/", *args, capsys=capsys)
+        signaller.join()
+    assert code == 0, out
+    assert "request(s) had been accepted and not yet answered at the stop signal" in out
+    assert "0 request(s) had been accepted" not in out
+    assert out.endswith("load-smoke: green\n")
+
+
+def test_an_older_run_with_red_error_beside_zero_in_flight_taken_resets_stays_red(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    marker, _ = until_stopped(tmp_path, monkeypatch)
+    taken: set[gatelib.Connection] = set()
+    lock = threading.Lock()
+
+    def handle_taken(handler: http.server.BaseHTTPRequestHandler) -> None:
+        with lock:
+            taken.add(gatelib.connection(handler.connection.getsockname(), handler.client_address))
+            gatelib.write_stopping(marker, held(url, *taken))
+        handler.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, listeners.RESET)
+        handler.connection.close()
+
+    with servers.server(handle_taken) as url:
+        gatelib.write_stopping(marker, held(url))
+        args = ["--seconds", "0.3", "--concurrency", "4", "--min-requests", "10"]
+        code, out = smoke("--until-stopped", "--url", f"{url}/", *args, capsys=capsys)
+    assert code == 1
+    assert "under the floor of 10" in out
+    assert out.endswith("load-smoke: red\n")
+
+
+def test_judge_counts_early_untaken_cuts_as_accepted_in_flight() -> None:
+    told = gatelib.Stopping({80: None}, listeners.ELSEWHERE, frozenset(), answered=True)
+    cuts = [
+        load_smoke.Cut("GET u", "ConnectionResetError", 80, named=True, late=True, lost=True),
+        load_smoke.Cut("GET u", "ConnectionResetError", 80, named=False, late=False, lost=True),
+    ]
+    errors, notes = load_smoke.judge(cuts, told, [80])
+    assert errors == {"GET u: ConnectionResetError": 1}
+    assert any("1 request(s) had been accepted and not yet answered" in note for note in notes)
 
 
 def test_a_connection_the_service_accepted_and_reset_after_the_signal_is_red(
