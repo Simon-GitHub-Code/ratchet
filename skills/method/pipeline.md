@@ -27,7 +27,7 @@ Each role does its work with the other plugins' skills. The method fixes what a 
 - `## Neighbouring cases`: for each set of values a neighbouring test repeats its checks over, the test, the values, and which of them the new behaviour holds for, every value unless an assumption says otherwise;
 - out of scope.
 
-**The failing tests.** Each fails for the right reason, and its failure content is quoted in the result and in the spec. The spec runs `tier0` and only its own tests, never `check`.
+**The failing tests.** Each fails for the right reason, and its failure content is quoted in the result and in the spec. Where behaviour shows as readable output (a rendered page, CLI output, a structured response, a formatted report), the spec role writes an expect test with the recorded-output facility `binding.md`'s `## Tests` names, placing any recorded files beside the tests (never under `quality/**`) and writing the expected text by hand from the ticket so the test fails first — never recording from a run. Once `depended-on` is declared, altering an existing recorded output sends the merge to the owner (`expect-output`), like `unflagged` for new surface. The spec runs `tier0` and only its own tests, never `check`.
 
 **What it decides and what it asks.**
 
@@ -64,6 +64,7 @@ Done when every promise of the ticket has its reading in `ticketPromises`, and e
 - **Works with:** `mattpocock-skills:tdd`, one slice at a time; `impeccable` (`shape`, then `polish`) for any user interface.
 - **Sees:** the spec and its tests, the paths named, and each promise the run kept from the ticket and each input case it assumed after the amend.
 - **Never sees:** the ticket, the spec author's reasoning.
+- The spec's tests and expected text are fixed inputs: only where an expected output is too large to state by hand may implement record it with the recorded-output tool, placing any recorded files beside the tests (never under `quality/**`) and returning each such path in `recordedOutputs` for the reviewer; it never re-accepts an existing recorded output silently.
 - A test that cannot be made to pass is left red.
 
 Done when every listed test passes and `check` exits 0, or the test that cannot be made to pass is left red and the result says so.
@@ -76,7 +77,7 @@ The critic runs only once the binding's `- Life events:` line declares `depended
 - **Sees:** the spec, its tests, the changed files, the fitness tests, the fuzz harness.
 - **Never sees:** the implementer's notes, the ticket.
 - **Attacks:**
-  - property and edge-case tests written;
+  - property and edge-case tests written; where behaviour shows as readable output, edge-case tests may be expect tests under the same rule (expected text written by hand from the spec, never recorded from a run, placed beside the critique tests and never under `quality/**`);
   - changed-code mutation run, or "not applicable" and why where the binding names no mutation gate;
   - fuzzing run, or "not applicable" and why where the binding names no fuzz harness;
   - every new entry point attacked and overloaded, its telemetry read for a secret, its flag flipped;
@@ -94,7 +95,7 @@ Done when every attack above is done, every finding carries the command and outp
 - **Sees:** the ticket with its comments and `## Answers`, its parent's `## Conjecture`, `## Operability` and `## Answers`, whether the project is deployed as the preflight read it, the readings the ticket check settled, the spec, the uncommitted diff, `AGENTS.md`, the glossary, `docs/adr/`, the binding, `docs/disputes/`, `DESIGN.md`, generated contract artefacts.
 - **Never sees:** the implementer's notes, the critic's findings.
 - **Judges:**
-  - axis A, the spec: criteria narrowed, tests weakened, behaviour added;
+  - axis A, the spec: criteria narrowed, tests weakened, behaviour added; holds each recorded output added-by-recording or altered (from `recordedOutputs` and `scripts/expect_outputs.py`) to a justifying spec criterion, grading one with no justifying criterion as a `blocker`; once `depended-on` is declared, altering an existing recorded output sends the merge to the owner (`expect-output`), like `unflagged` for new surface;
   - axis B, the standards, the telemetry and the flag among them;
   - axis C, guard paths;
   - axis D, the ticket, and axis E, the inputs: starting from the readings the ticket check settled, and not arguing them again, whether the change as built still keeps each promise and decides each input case as `spec.md` states, or as the settled reading states where the run kept the promise from the ticket or assumed the case;

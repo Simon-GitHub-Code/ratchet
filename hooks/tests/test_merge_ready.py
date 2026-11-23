@@ -764,25 +764,36 @@ def test_new_surface_and_doors_wait_until_an_event_is_declared(tmp_path: Path) -
     [
         ("deployed", {"door", "unflagged"}),
         ("irreplaceable-data", {"door"}),
-        ("depended-on", set()),
-        ("depended-on, irreplaceable-data", {"door"}),
+        ("depended-on", {"expect-output"}),
+        ("depended-on, irreplaceable-data", {"door", "expect-output"}),
     ],
 )
 def test_each_event_wakes_only_the_judgement_it_guards(
     tmp_path: Path, events: str, woken: set[str]
 ) -> None:
+    recorded_table = (
+        "\n## Recorded outputs\n\n| Paths | Pattern |\n| --- | --- |\n"
+        "| `tests/__snapshots__/**` | |\n"
+    )
     files = {path: text for path, text in BASE.items() if path != BINDING} | {
-        BINDING: EVENTS.format(events=events),
+        BINDING: EVENTS.format(events=events) + recorded_table,
         THING_TICKET: APPEARS_TICKET,
+        "tests/__snapshots__/out.txt": "before\n",
     }
     repo = tmp_path / "first"
     repository(repo, files)
     branch(repo, "feature/4-thing")
     change(repo, SURFACE_CHANGE)
     assert ("unflagged" in codes(repo)) is ("unflagged" in woken)
-    repo = young(tmp_path / "second", EVENTS.format(events=events))
+    assert "expect-output" not in codes(repo)
+    repo = young(tmp_path / "second", EVENTS.format(events=events) + recorded_table)
     change(repo, DOOR_CHANGE)
     assert ("door" in codes(repo)) is ("door" in woken)
+    repo = tmp_path / "third"
+    repository(repo, files)
+    branch(repo, "feature/4-expect")
+    change(repo, {"tests/__snapshots__/out.txt": "after\n"})
+    assert ("expect-output" in codes(repo)) is ("expect-output" in woken)
 
 
 def test_a_head_that_declares_the_event_does_not_wake_the_judge(tmp_path: Path) -> None:
@@ -3077,3 +3088,86 @@ def test_row_bound_none_lets_new_surface_through_before_deployment_and_keeps_doo
         "a one-way door",
         "new surface with no flag that is off",
     ]
+
+
+RECORDED_BINDING = (
+    "# Binding\n\n- Application types: cli\n- Life events: {events}\n\n"
+    "## Recorded outputs\n\n| Paths | Pattern |\n| --- | --- |\n"
+    "| `tests/__snapshots__/**` | |\n"
+    "| `tests/**/test_*.py` | `assert_inline\\(` |\n"
+)
+
+
+def test_altered_recorded_output_waits_for_depended_on_and_notes_before(tmp_path: Path) -> None:
+    young_files = {path: text for path, text in BASE.items() if path != BINDING} | {
+        BINDING: RECORDED_BINDING.format(events="none"),
+        "tests/__snapshots__/out.txt": "v1\n",
+        "tests/test_cli.py": "def test_x():\n    assert_inline('a')\n",
+    }
+    young_repo = tmp_path / "young"
+    repository(young_repo, young_files)
+    branch(young_repo, "feature/4-expect")
+    change(young_repo, {"tests/__snapshots__/out.txt": "v2\n"})
+    notes: list[str] = []
+    assert merge_ready.judge(young_repo, "main", "HEAD", notes=notes) == []
+    assert [note.split(" let through")[0] for note in notes] == ["an altered recorded output"]
+
+    depended_repo = tmp_path / "depended"
+    repository(
+        depended_repo,
+        young_files | {BINDING: RECORDED_BINDING.format(events="depended-on")},
+    )
+    branch(depended_repo, "feature/4-expect")
+    change(depended_repo, {"tests/__snapshots__/out.txt": "v2\n"})
+    reasons = merge_ready.judge(depended_repo, "main", "HEAD")
+    assert [r.code for r in reasons] == ["expect-output"]
+    assert "tests/__snapshots__/out.txt" in reasons[0].text
+    assert merge_ready.verdict(reasons) == merge_ready.OWNER
+
+
+def test_expect_output_reads_tip_event_and_merge_base_table_and_passes_new_outputs(
+    tmp_path: Path,
+) -> None:
+    base_files = {path: text for path, text in BASE.items() if path != BINDING} | {
+        BINDING: RECORDED_BINDING.format(events="none"),
+        "tests/__snapshots__/out.txt": "v1\n",
+        "tests/test_cli.py": "def test_x():\n    assert_inline('a')\n",
+    }
+    repo = tmp_path / "tip"
+    repository(repo, base_files)
+    branch(repo, "feature/4-expect")
+    change(
+        repo,
+        {
+            BINDING: "# Binding\n\n- Application types: cli\n- Life events: none\n",
+            "tests/test_cli.py": "def test_x():\n    assert_inline('b')\n",
+        },
+    )
+    git(repo, "switch", "-q", "main")
+    write(repo, BINDING, RECORDED_BINDING.format(events="depended-on"))
+    commit(repo, "chore(method): declare depended-on")
+    git(repo, "switch", "-q", "feature/4-expect")
+    assert codes(repo) == ["guard", "expect-output"]
+
+    clean_repo = tmp_path / "clean"
+    repository(
+        clean_repo,
+        base_files | {BINDING: RECORDED_BINDING.format(events="depended-on")},
+    )
+    branch(clean_repo, "feature/4-new")
+    change(
+        clean_repo,
+        {
+            "tests/__snapshots__/added.txt": "new\n",
+            "tests/test_cli.py": (
+                "def test_x():\n    assert_inline('a')\n\ndef test_y():\n    assert_inline('b')\n"
+            ),
+        },
+    )
+    assert judged(clean_repo) == []
+
+    no_decl_repo = tmp_path / "nodecl"
+    repository(no_decl_repo, base_files | {BINDING: EVENTS.format(events="depended-on")})
+    branch(no_decl_repo, "feature/4-nodecl")
+    change(no_decl_repo, {"tests/__snapshots__/added.txt": "new\n"})
+    assert judged(no_decl_repo) == []

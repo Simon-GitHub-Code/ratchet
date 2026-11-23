@@ -239,6 +239,7 @@ IMPLEMENTED = {
     "filesChanged": ["src/links.py"],
     "allNewTestsPass": True,
     "checkPasses": True,
+    "recordedOutputs": [],
     "namedGatesRun": [],
     "checkOutput": "check: green",
     "disputes": [],
@@ -2834,3 +2835,35 @@ def test_the_schemas_carry_breaks_unstated_departures_and_the_quote_output() -> 
     assert departure["properties"]["from"]["enum"] == ["criterion", "assumption"]
     assert not _valid({**_case("owner"), "whose": "team", "of": None}, unstated)
     assert not _valid({**_case("owner"), "options": ["only one"], "of": None}, unstated)
+
+
+def test_prompts_steer_expect_tests_and_hold_recorded_outputs_to_spec_criteria() -> None:
+    ran = _built_run(
+        implement={**IMPLEMENTED, "recordedOutputs": ["tests/__snapshots__/help.txt"]},
+        critique=_critique(MAJOR),
+        **{"fix-1": {**IMPLEMENTED, "recordedOutputs": ["tests/__snapshots__/err.txt"]}},
+        **{"critique-1": CRITIQUED},
+    )
+    prompts = ran["prompts"]
+    assert "expect test" in prompts["spec"]
+    assert "expect-output" in prompts["spec"]
+    assert "unflagged" in prompts["spec"]
+    assert "never record from a run" in prompts["spec"]
+    assert "recordedOutputs" in prompts["implement"]
+    assert "recordedOutputs" in prompts["fix-1"]
+    assert "expect test" in prompts["critique"]
+    assert "expect-output" in prompts["review"]
+    assert "unflagged" in prompts["review"]
+    assert "scripts/expect_outputs.py" in prompts["review"]
+    assert "tests/__snapshots__/help.txt" in prompts["review"]
+    assert "tests/__snapshots__/err.txt" in prompts["review"]
+    assert ran["result"]["recordedOutputs"] == [
+        "tests/__snapshots__/err.txt",
+        "tests/__snapshots__/help.txt",
+    ]
+    blocker = prompts["review"].split("- Blocker:", 1)[1].split("- Major:", 1)[0]
+    assert "recorded output added-by-recording or altered with no justifying criterion" in blocker
+    for label in ("implement", "fix-1"):
+        assert "recordedOutputs" in ran["schemas"][label]["required"], label
+        without = {k: v for k, v in IMPLEMENTED.items() if k != "recordedOutputs"}
+        assert not _valid(without, ran["schemas"][label]), label

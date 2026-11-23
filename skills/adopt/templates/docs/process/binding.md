@@ -278,7 +278,9 @@ Every tracked Markdown file has a kind, which says how long it lives and whether
 
 ## Tests
 
-<The test frameworks and directories every role writes tests with, chosen and installed at adoption so the first feature has nothing to install: the test runner and its configuration file; the property-testing library, or `built in` where the runner has one; where unit and property tests live and how their files are named. The `unit, property and fitness tests` row stays `later: code:source` until the first module of logic arrives: no gate runs these tests until then, each role runs its own with `just test-files <file>...`, and `/ratchet:safeguard` binds the row to what this section names.>
+<The test frameworks and directories every role writes tests with, chosen and installed at adoption so the first feature has nothing to install: the test runner and its configuration file; the property-testing library, or `built in` where the runner has one; the recorded-output facility for expect tests, or `built in` where the runner has one; where unit, property and expect tests live and how their files and recorded outputs are named. The `unit, property and fitness tests` row stays `later: code:source` until the first module of logic arrives: no gate runs these tests until then, each role runs its own with `just test-files <file>...`, and `/ratchet:safeguard` binds the row to what this section names.>
+
+- Recorded-output facility: <the expect or snapshot-testing library, or `built in` where the test runner includes one>
 
 ### Suites
 
@@ -297,6 +299,14 @@ What the change-size gate reads to count tests apart from product code (ADR 0045
 ## Critique tests
 
 <The one flat directory the pipeline's critic keeps its tests in, apart from the unit tests, with the file name pattern: `tests/critique/<slug>.<layer>.critique.test.<ext>`, one file per layer a feature touches. A critique file is organised by feature, not by module, and often reaches past one unit, so it never sits beside the code. The test runner's configuration must include this directory.>
+
+## Recorded outputs
+
+Where expect tests keep recorded outputs (files or inline snapshots) beside the tests, never under `quality/**` (ADR 0092). `Paths` are comma-separated globs over tracked files, each in backticks, or `none: <reason>` where no separate recorded-output files or inline patterns exist. `Pattern` is an optional regular expression (Python's `re`; a literal `|` is written `\|`) matching an inline recorded-output line inside a test file; leave it empty when every matching file is a recorded output on its own. Once `- Life events:` declares `depended-on`, altering a recorded output that existed at the merge base sends the merge to the owner (`expect-output`), read from this table at the merge base.
+
+| Paths | Pattern |
+| --- | --- |
+| <`globs` of recorded outputs, or `none: <reason>`> | <optional regex> |
 
 ## Limits
 
