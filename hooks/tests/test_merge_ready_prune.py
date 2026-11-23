@@ -36,7 +36,7 @@ NOTES_TABLE = (
     "| notes | `notes/*.md` | pass keeping `## Purpose` |\n\n"
 )
 SPEC = "docs/features/thing/spec.md"
-LOCAL = ".scratch/f/spec.md"
+LOCAL = ".scratch/thing/spec.md"
 
 
 def held(tmp_path: Path, **extra: str) -> Path:

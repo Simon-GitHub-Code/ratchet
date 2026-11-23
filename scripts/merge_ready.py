@@ -1233,7 +1233,7 @@ def decision(change: Change, path: str) -> Reason:
     return Reason("record", f'{path} records a decision: "{title}". Yours to agree.')
 
 
-def records_alone(change: Change, manifest: Manifest) -> list[Reason]:
+def records_checked(change: Change, manifest: Manifest) -> tuple[dict[str, str], list[Reason]]:
     sides = modes(change)
     refused: dict[str, str] = {}
     decided = []
@@ -1244,6 +1244,11 @@ def records_alone(change: Change, manifest: Manifest) -> list[Reason]:
             refused[path] = why
         elif kind is not None and kind.decides:
             decided.append(decision(change, path))
+    return refused, decided
+
+
+def records_alone(change: Change, manifest: Manifest) -> list[Reason]:
+    refused, decided = records_checked(change, manifest)
     text = (
         "no verdict record (docs/features/<slug>/verdict.json) is part of the change, so it is"
         " not the product of the pipeline"
@@ -1520,6 +1525,89 @@ def prune_reasons(change: Change) -> list[Reason]:
     ]
 
 
+def own_units(change: Change, found: FoundTicket | None) -> frozenset[str]:
+    units: set[str] = set()
+    slug = verdict_slug(change)
+    if slug is not None and change.kept(f"docs/features/{slug}/{documents.VERDICT}"):
+        units |= {f"docs/features/{slug}", f".scratch/{slug}"}
+    if found is not None:
+        units.add(documents.unit_of(found.ticket.ref))
+    units.update(
+        documents.unit_of(path)
+        for path in change.paths
+        if documents.is_ticket(path) and status_resolved(change, path)
+    )
+    return frozenset(units)
+
+
+def removed_lines(change: Change, path: str) -> bool:
+    if not change.kept(path):
+        return True
+    compared = ("diff", "-U0", "--no-renames", change.fork, change.head)
+    diff = git(change.root, "--literal-pathspecs", *compared, "--", path) or ""
+    return any(line.startswith("-") and not line.startswith("---") for line in diff.splitlines())
+
+
+def has_tickets(change: Change, unit: str) -> bool:
+    folder = f"{unit}/{documents.TICKETS}/"
+    return any(
+        git(change.root, "ls-tree", "--name-only", "-z", ref, "--", folder)
+        for ref in (change.fork, change.head)
+    )
+
+
+def drafting_spec(change: Change, path: str) -> bool:
+    if documents.is_ticket(path) or documents.BRIEF in change.paths:
+        return False
+    unit = documents.unit_of(path)
+    steering_units = {documents.unit_of(p) for p in change.paths if documents.is_steering(p)}
+    return steering_units == {unit} and not has_tickets(change, unit)
+
+
+def steering_cut(
+    change: Change,
+    path: str,
+    *,
+    owned: frozenset[str],
+    records: bool,
+    refused: Mapping[str, str],
+) -> bool:
+    if not (documents.is_steering(path) and change.held(path)):
+        return False
+    if documents.unit_of(path) in owned:
+        return False
+    if not change.kept(path) and path in expiring(change):
+        return False
+    if records and (
+        not change.kept(path)
+        or (documents.is_ticket(path) and link_only(change, path))
+        or drafting_spec(change, path)
+        or path in refused
+    ):
+        return False
+    return removed_lines(change, path)
+
+
+def steering_reasons(change: Change, manifest: Manifest, found: FoundTicket | None) -> list[Reason]:
+    records = records_only(change, manifest)
+    owned = frozenset() if records else own_units(change, found)
+    refused = records_checked(change, manifest)[0] if records else {}
+    cut = [
+        path
+        for path in change.paths
+        if steering_cut(change, path, owned=owned, records=records, refused=refused)
+    ]
+    if not cut:
+        return []
+    return [
+        Reason(
+            "steering-cut",
+            f"{', '.join(cut)}: removes lines from another unit's steering file, which is the"
+            " owner's merge (ADR 0093)",
+        )
+    ]
+
+
 def expect_reasons(change: Change) -> list[Reason]:
     paths = expect_outputs.altered(change.root, change.fork, head=change.head)
     if not paths:
@@ -1591,6 +1679,7 @@ def judge(
         *expiry_reasons(change),
         *lost_headings(change),
         *prune_reasons(change),
+        *steering_reasons(change, manifest, found),
         *agreement_reasons(change, manifest, found),
         *record_reasons(change, manifest),
     ]
