@@ -292,6 +292,14 @@ One row per suite (ADR 0073): its name, the gate of the Gates table that runs it
 | --- | --- | --- | --- |
 | <suite name> | <`just <gate>`, the entry point that runs the whole suite> | <`globs` of its test files> | <`just <recipe>` taking the files as arguments, or `none: <reason>`> |
 
+### Impact triggers
+
+Optional (ADR 0096): when a change edits shared files (such as shell, layout, router, or middleware) without editing test files, `just tests-changed` runs every tracked test file matching `Tests` for that declared `Suite` (or reports with `none: <reason>` when the suite cannot run by file). Leave the placeholder row or write `none: <reason>` when no shared source needs impact selection.
+
+| Sources | Suite | Tests |
+| --- | --- | --- |
+| <`globs` of shared sources, or `none: <reason>`> | <suite name> | <`globs` of tests> |
+
 ## Test paths
 
 What the change-size gate reads to count tests apart from product code (ADR 0045): the ceiling on product lines and files bounds the unguarded code a change brings, and test lines have a ceiling of their own that only stops a runaway. The method knows no stack, so name the files of this one, from what you know of its tools. The gate reads this section at the merge base, so a change cannot widen what it exempts; until it is filled every changed line counts as product.

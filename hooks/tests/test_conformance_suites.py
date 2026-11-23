@@ -268,3 +268,58 @@ def test_the_ci_template_s_later_tier_marker_is_red_until_the_project_answers_it
     assert len(found) == 1
     assert "in job `tier1` still says 'bind: the setup each later-tier suite needs'" in found[0]
     shutil.rmtree(scratch)
+
+
+IMPACT_PLACEHOLDER = (
+    "| <`globs` of shared sources, or `none: <reason>`> | <suite name> | <`globs` of tests> |"
+)
+
+
+def test_impact_triggers_passes_when_absent_placeholder_none_or_valid_and_rejects_invalid(
+    repo: Path,
+) -> None:
+    suites_row(repo, UNIT)
+    assert IMPACT_PLACEHOLDER in (repo / BINDING).read_text(encoding="utf-8")
+    assert red(repo) == []
+
+    replace(
+        BINDING,
+        IMPACT_PLACEHOLDER,
+        "| none: no shared layout files cross suites | none | none |",
+    )(repo)
+    assert red(repo) == []
+
+    replace(
+        BINDING,
+        "| none: no shared layout files cross suites | none | none |",
+        "| `src/layout/**` | unit | `tests/unit/**` |",
+    )(repo)
+    assert red(repo) == []
+
+    replace(
+        BINDING,
+        "| `src/layout/**` | unit | `tests/unit/**` |",
+        "| `src/layout/**` | missing | `tests/unit/**` |",
+    )(repo)
+    [finding] = [f for f in conformance.findings(repo) if f.rule == "changed_tests"]
+    assert finding.problem == (
+        "the impact triggers row for 'missing' needs backticked source globs,"
+        " a known suite name and backticked test globs"
+    )
+    assert finding.stops == conformance.CHANGED_TESTS_STOPS
+
+    replace(
+        BINDING,
+        "| `src/layout/**` | missing | `tests/unit/**` |",
+        "| none: x | none | none |",
+    )(repo)
+    assert red(repo) == [f"{BINDING}: an impact triggers row says none with no reason: say why"]
+
+    text = (repo / BINDING).read_text(encoding="utf-8")
+    without_impacts = (
+        text.split("\n### Impact triggers\n", 1)[0]
+        + "\n## Test paths\n"
+        + text.split("\n## Test paths\n", 1)[1]
+    )
+    (repo / BINDING).write_text(without_impacts, encoding="utf-8")
+    assert red(repo) == []

@@ -1823,6 +1823,10 @@ def check_changed_tests(root: Path) -> Iterable[Finding]:
         yield missing_recipe(justfile, "tests-changed", CHANGED_TESTS_STOPS, needed=needed)
     for suite in found or []:
         yield from suite_findings(text, justfile, suite)
+    if found is not None:
+        _, impact_problems = suites.parse_impacts(text, found)
+        for problem in impact_problems:
+            yield replace(agent(f"{BINDING_PATH}: {problem}"), stops=CHANGED_TESTS_STOPS)
     yield from clashing_suites(root, found or [])
     yield from later_tier_setup(root, text, found or [])
 
@@ -5726,6 +5730,9 @@ def changed_tests_mutations() -> list[Mutation]:
     row = SELF_TEST_SUITES
     unit = "| unit | `just test` | `tests/**` | `just test-files` |"
     header = "| Suite | Gate | Files | Run files |"
+    impact_placeholder = (
+        "| <`globs` of shared sources, or `none: <reason>`> | <suite name> | <`globs` of tests> |"
+    )
     ungated = unit.replace("just test`", "just no-such-gate`")
     unreasoned = unit.replace("`just test-files`", "")
     filesless = rewrite("justfile", "test-files *files:", "test-files:")
@@ -5744,6 +5751,10 @@ def changed_tests_mutations() -> list[Mutation]:
         ("suites row naming a gate the Gates table lacks", rebind(row, ungated)),
         ("suites row with neither a way to run files nor a reason", rebind(row, unreasoned)),
         ("suites row whose recipe takes no files", taking_none),
+        (
+            "impact triggers row naming an unknown suite",
+            rebind(impact_placeholder, "| `src/**` | missing | `tests/**` |"),
+        ),
         (
             "justfile without the tests-changed recipe",
             rewrite("justfile", "tests-changed *suites: _plugin", "tests-moved *suites: _plugin"),
