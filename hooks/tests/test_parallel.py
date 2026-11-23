@@ -1711,3 +1711,103 @@ def test_slower_than_usual_handles_no_run_and_no_gate_growth(
     sched.finished = [parallel.Finished("a", 5.0, 0, ""), parallel.Finished("b", 5.0, 0, "")]
     line = parallel.slower_than_usual(sched, 10.0, gates=["a", "b"])
     assert line == "parallel: slower than usual: 10.0s vs 5.0s median"
+
+
+def test_parallel_records_work_counts_and_judges_work_ceilings_red_everywhere(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "quality").mkdir()
+    report = tmp_path / ".ratchet/timing.jsonl"
+    plain = "plain"
+    worker = "mutation"
+    script = (
+        "import pathlib, sys\n"
+        "g = sys.argv[1]\n"
+        "if g == 'mutation':\n"
+        "    print(pathlib.Path('work.txt').read_text(), end='')\n"
+        "else:\n"
+        "    print('ok')\n"
+    )
+    script_runner = shlex.join([sys.executable, "-c", script])
+    (tmp_path / "work.txt").write_text("ratchet-work: tests-per-mutant 10.5\n", encoding="utf-8")
+    assert (
+        run(
+            "--root",
+            str(tmp_path),
+            "--report",
+            ".ratchet/timing.jsonl",
+            "--runner",
+            script_runner,
+            "--",
+            plain,
+            worker,
+        )
+        == 0
+    )
+    capsys.readouterr()
+    rows = [json.loads(line) for line in report.read_text().splitlines()]
+    by_key = {row["key"]: row for row in rows if "key" in row}
+    assert by_key[worker]["work"] == {"tests-per-mutant": 10.5}
+    assert "work" not in by_key[plain]
+
+    (tmp_path / "quality/thresholds.toml").write_text(
+        "[ceilings.work.mutation]\ntests-per-mutant = 12\n", encoding="utf-8"
+    )
+    assert (
+        run(
+            "--root",
+            str(tmp_path),
+            "--report",
+            ".ratchet/timing.jsonl",
+            "--runner",
+            script_runner,
+            "--",
+            plain,
+            worker,
+        )
+        == 0
+    )
+    ok_out = capsys.readouterr().out
+    assert "ratchet-budget: work mutation.tests-per-mutant was 10.5 (ceiling 12): green" in ok_out
+
+    (tmp_path / "work.txt").write_text("ratchet-work: tests-per-mutant 19.03\n", encoding="utf-8")
+    assert (
+        run(
+            "--root",
+            str(tmp_path),
+            "--report",
+            ".ratchet/timing.jsonl",
+            "--runner",
+            script_runner,
+            "--",
+            plain,
+            worker,
+        )
+        == 1
+    )
+    over_out = capsys.readouterr().out
+    assert "ratchet-budget: work mutation.tests-per-mutant was 19.03 (ceiling 12): red" in over_out
+    assert over_out.endswith("parallel: red\n")
+    tier = [json.loads(line) for line in report.read_text().splitlines()][-1]
+    assert (tier["status"], tier["exit"]) == ("red", 1)
+
+    for text in ("nothing here\n", "ratchet-work: tests-per-mutant 0\n"):
+        (tmp_path / "work.txt").write_text(text, encoding="utf-8")
+        assert (
+            run(
+                "--root",
+                str(tmp_path),
+                "--report",
+                ".ratchet/timing.jsonl",
+                "--runner",
+                script_runner,
+                "--",
+                plain,
+                worker,
+            )
+            == 1
+        )
+        miss_out = capsys.readouterr().out
+        assert "ratchet-budget: work mutation.tests-per-mutant missing (ceiling 12): red" in (
+            miss_out
+        )

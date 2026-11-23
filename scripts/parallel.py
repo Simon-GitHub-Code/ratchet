@@ -226,6 +226,7 @@ class Finished:
     lane: int = 0
     start: float = 0.0
     cpu: float | None = None
+    work: Mapping[str, float] = MappingProxyType({})
 
     @property
     def green(self) -> bool:
@@ -469,6 +470,8 @@ class Scheduler:
                 "cpu": None if result.cpu is None else round(result.cpu, 3),
                 "alone": alone,
             }
+            if result.work:
+                extra["work"] = dict(result.work)
             outcome = budget.Outcome(
                 result.name, result.seconds, None, result.exit_code, extra=extra
             )
@@ -515,6 +518,7 @@ def collect(gate: Live, code: int) -> Finished:
         gate.lane,
         gate.offset,
         gate.cpu,
+        budget.parse_work(output),
     )
 
 
@@ -801,6 +805,13 @@ def closing(scheduler: Scheduler, wall: float) -> list[str]:
         for result in scheduler.finished
         if not result.green
     ]
+    thresholds = gatelib.read_text(scheduler.root / gatelib.THRESHOLDS) or ""
+    for result in scheduler.finished:
+        for work_outcome in budget.work_outcomes(thresholds, result.name, result.work):
+            if work_outcome.verdict:
+                problems.append(work_outcome.line())
+            else:
+                say(work_outcome.line())
     if scheduler.stopped:
         problems.append(f"stopped by --fail-fast: {', '.join(scheduler.stopped)}")
     if scheduler.not_started():
