@@ -9,8 +9,6 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
-  # Why: runners vary, so a ceiling reports on a pull request and blocks on the default branch.
-  OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}
   # Why: a ceiling in quality/thresholds.toml is the wall clock of one job. Each shard job of
   # `test` and `test-floor` is held to its gate's ceiling, not the sum of its shards.
 jobs:
@@ -73,7 +71,7 @@ jobs:
         if: needs.lane.outputs.lane == 'full'
       - run: uv sync --frozen
         if: needs.lane.outputs.lane == 'full'
-      - run: python3 scripts/budget.py "${{ matrix.gate }}" --over "$OVER" --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
+      - run: python3 scripts/budget.py "${{ matrix.gate }}" --over report --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
         if: needs.lane.outputs.lane == 'full'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always() && needs.lane.outputs.lane == 'full'
@@ -131,7 +129,7 @@ jobs:
         if: needs.lane.outputs.lane == 'full'
       - run: uv sync --frozen
         if: needs.lane.outputs.lane == 'full'
-      - run: python3 scripts/budget.py "${{ matrix.gate }}" --over "$OVER" --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
+      - run: python3 scripts/budget.py "${{ matrix.gate }}" --over report --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
         if: needs.lane.outputs.lane == 'full'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always() && needs.lane.outputs.lane == 'full'

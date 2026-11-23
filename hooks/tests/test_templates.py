@@ -589,24 +589,92 @@ def test_the_ci_templates_are_green_on_the_pins_gate() -> None:
         assert "RATCHET_PLUGIN: ${{ github.workspace }}/ratchet" in text
 
 
-def test_ci_reports_a_ceiling_on_a_pull_request_and_holds_each_job_to_its_tier() -> None:
+def test_ci_reports_tier0_and_tier1_ceilings_on_every_event_and_caches_timing_log() -> None:
     ci, deep = WORKFLOWS["ci.yml"], WORKFLOWS["deep.yml"]
-    assert "  OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}\n" in ci
-    assert ci.count('budget.py" tier0 --over "$OVER" --report') == 1
-    assert ci.count('budget.py" "${{ matrix.gate }}" --tier tier1 --over "$OVER" --report') == 2
+    assert "  OVER:" not in ci
+    assert '"$OVER"' not in ci
+    assert ci.count('budget.py" tier0 --over report --report') == 1
+    assert ci.count('budget.py" "${{ matrix.gate }}" --tier tier1 --over report --report') == 2
     assert ci.count("budget.py") == 3
+    for job_name in ("tier0", "tier1", "tier1-long"):
+        after_head = ci.split(f"\n  {job_name}:\n", 1)[1]
+        section = re.split(r"\n  (?=[A-Za-z_][\w-]*:)", after_head, maxsplit=1)[0]
+        assert (
+            ".ratchet/timing.jsonl"
+            in section.split("uses: actions/cache@", 1)[1].split("key:", 1)[0]
+        )
     assert deep.count('budget.py" "${{ matrix.gate }}" --tier tier2 --report') == 2
     assert "--over" not in deep, "the nightly and the default branch block"
     assert deep.count("budget.py") == 2
+    for job_name in ("tier2", "tier2-long"):
+        after_head = deep.split(f"\n  {job_name}:\n", 1)[1]
+        section = re.split(r"\n  (?=[A-Za-z_][\w-]*:)", after_head, maxsplit=1)[0]
+        assert (
+            ".ratchet/timing.jsonl"
+            in section.split("uses: actions/cache@", 1)[1].split("key:", 1)[0]
+        )
 
 
-def test_the_plugins_own_ci_reports_a_ceiling_on_a_pull_request_as_the_template_does() -> None:
+def test_the_plugins_own_ci_reports_a_ceiling_on_every_event_as_the_template_does() -> None:
     own = (PLUGIN_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    over = "  OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}\n"
-    assert over in WORKFLOWS["ci.yml"]
-    assert over in own
-    assert own.count('budget.py "${{ matrix.gate }}" --over "$OVER" --report') == 2
+    assert "  OVER:" not in own
+    assert own.count('budget.py "${{ matrix.gate }}" --over report --report') == 2
     assert own.count("budget.py") == 2
+
+
+def test_budget_recipe_reads_timing_log_with_set_and_runs_gate_without_it(tmp_path: Path) -> None:
+    needs_just()
+    copy = repos.installed_copy()
+    pin = f"- Ratchet plugin: {plugin_pin.version_of(copy)} at {'1' * 40}"
+    binding = tmp_path / "docs/process/binding.md"
+    binding.parent.mkdir(parents=True)
+    binding.write_text(f"{pin} tree {plugin_pin.copy_tree_id(copy)}\n", encoding="utf-8")
+    (tmp_path / "quality").mkdir()
+    (tmp_path / "quality/thresholds.toml").write_text("", encoding="utf-8")
+    (tmp_path / ".ratchet").mkdir()
+    (tmp_path / ".ratchet/timing.jsonl").write_text(
+        "".join(
+            json.dumps({"key": "bite-all", "seconds": 10.0, "status": "green", "exit": 0}) + "\n"
+            for _ in range(5)
+        ),
+        encoding="utf-8",
+    )
+    done = subprocess.run(  # noqa: S603 # -- a fixed argv; the justfile is the template's own
+        [
+            shutil.which("just") or "just",
+            "--justfile",
+            str(TEMPLATES / "justfile"),
+            "-d",
+            str(tmp_path),
+            "budget",
+            "bite-all",
+            "--set",
+        ],
+        cwd=tmp_path,
+        env={**os.environ, "RATCHET_PLUGIN": str(copy)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    assert "ceilings.seconds.bite-all set to 13" in done.stdout
+    assert "no ceiling recorded" not in done.stdout
+    assert "just bite-all" not in done.stdout
+    no_set = subprocess.run(  # noqa: S603 # -- a fixed argv; the justfile is the template's own
+        [
+            shutil.which("just") or "just",
+            "--justfile",
+            str(TEMPLATES / "justfile"),
+            "--dry-run",
+            "budget",
+            "tier0",
+        ],
+        env={**os.environ, "RATCHET_PLUGIN": "/plugin"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "-- just tier0" in no_set.stderr
 
 
 def test_the_plugins_own_checkers_are_held_at_every_line_with_only_tests_omitted() -> None:
