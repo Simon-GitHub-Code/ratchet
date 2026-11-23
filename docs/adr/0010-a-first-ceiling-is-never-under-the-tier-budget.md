@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: superseded
+superseded-by: 0088
 ---
 # A first ceiling is never under the tier's budget
 
