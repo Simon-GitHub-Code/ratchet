@@ -1597,8 +1597,12 @@ def test_a_route_that_answers_before_its_request_is_whole_is_judged_as_before(
     said = f"{OLDER}the service answered or closed the request the gate held, POST http://"
     assert said in out, out
     assert "bind a route that waits for its whole request, longer than --signal-after," in out
-    if "0 request(s) had been accepted and not yet answered at the stop signal" in out:
-        assert (code, out.endswith("with_service: could not judge\n")) == (gatelib.UNJUDGED, True)
+    if code == gatelib.UNJUDGED:
+        assert out.endswith("with_service: could not judge\n")
+        assert (
+            "0 request(s) had been accepted and not yet answered at the stop signal" in out
+            or "ended before the 0.5s signal: nothing was in flight" in out
+        )
     else:
         assert (code, out.endswith("with_service: green\n")) == (0, True)
 

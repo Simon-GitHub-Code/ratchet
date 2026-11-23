@@ -2,6 +2,11 @@ import re
 from collections.abc import Sequence
 
 PROMISE = re.compile(r"^[ \t]*[-*][ \t]*\[[ xX]\][ \t]*(\S.*?)[ \t]*$", re.MULTILINE)
+CRITERIA_SECTION = re.compile(
+    r"^## Acceptance criteria[ \t]*$\n(.*?)(?=^#{1,2}\s|\Z)",
+    re.MULTILINE | re.DOTALL | re.IGNORECASE,
+)
+CRITERION_ITEM = re.compile(r"^[ \t]*(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]*)?(\S.*?)[ \t]*$")
 SPLIT_FROM = re.compile(
     r"^\*{0,2}split from:?\*{0,2}:?[ \t]*(\S.*?)[ \t]*$", re.MULTILINE | re.IGNORECASE
 )
@@ -9,8 +14,26 @@ STATUS = re.compile(r"^\*{0,2}status:?\*{0,2}:?\s*`?([^`\n]+?)`?\s*$", re.MULTIL
 REF = re.compile(r"[^`\s,()]+\.md|#\d+")
 
 
+def _criteria_items(block: str) -> list[str]:
+    items: list[str] = []
+    for line in block.splitlines():
+        item = CRITERION_ITEM.match(line)
+        if item:
+            items.append(item.group(1))
+        elif items and line.strip() and line[:1] in " \t":
+            items[-1] += " " + line.strip()
+    return items
+
+
 def promises(text: str) -> list[str]:
-    return PROMISE.findall(text)
+    found: list[str] = []
+    pos = 0
+    for match in CRITERIA_SECTION.finditer(text):
+        found.extend(PROMISE.findall(text[pos : match.start()]))
+        found.extend(_criteria_items(match.group(1)))
+        pos = match.end()
+    found.extend(PROMISE.findall(text[pos:]))
+    return found
 
 
 def split_from(text: str) -> str | None:

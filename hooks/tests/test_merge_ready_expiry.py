@@ -1,3 +1,4 @@
+import io
 import json
 from pathlib import Path
 
@@ -291,3 +292,82 @@ def test_a_work_tree_with_nothing_to_read_holds_no_record(tmp_path: Path, head: 
     root = unit(tmp_path)
     paths = [BRIEF] if not head else ["nowhere/a.md"]
     assert merge_ready.not_records(root, "refs/heads/missing", paths) == paths
+
+
+def test_record_refuses_when_feature_spec_would_expire_on_recording(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = unit(tmp_path)
+    write(root, "docs/features/f/spec.md", "# F\n")
+    commit(root, "feat: the change, its spec left")
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({**_verdict(), "slug": "f"})))
+    assert merge_ready.main(["merge_ready", "record", "--root", str(root)]) == 1
+    out = capsys.readouterr().out
+    assert "documents.py expire" in out
+    assert "docs/features/f" in out
+    assert not (root / "docs/features/f/verdict.json").exists()
+
+
+def test_record_refuses_when_resolved_unit_is_still_in_head(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = unit(tmp_path)
+    write(root, BETA, ticket(2, "Beta", "resolved"))
+    commit(root, "feat: the second ticket")
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({**_verdict(), "slug": "beta"})))
+    assert merge_ready.main(["merge_ready", "record", "--root", str(root)]) == 1
+    out = capsys.readouterr().out
+    assert "documents.py expire" in out
+    assert ".scratch/f" in out
+    assert not (root / "docs/features/beta/verdict.json").exists()
+
+
+def test_record_allows_unit_already_expired_at_merge_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = unit(tmp_path, beta="resolved")
+    write(root, "src/a.py", "x = 2\n")
+    commit(root, "feat: another thing")
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({**_verdict(), "slug": "thing"})))
+    assert merge_ready.main(["merge_ready", "record", "--root", str(root)]) == 0
+    assert (root / "docs/features/thing/verdict.json").is_file()
+
+
+def test_record_allows_when_base_branch_does_not_exist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = unit(tmp_path)
+    write(root, "docs/features/f/spec.md", "# F\n")
+    commit(root, "feat: the change")
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({**_verdict(), "slug": "f"})))
+    argv = ["merge_ready", "record", "--root", str(root), "--base", "missing"]
+    assert merge_ready.main(argv) == 0
+    assert (root / "docs/features/f/verdict.json").is_file()
+
+
+def test_record_reports_uncommitted_deletion_as_dirty_rather_than_unexpired(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = unit(tmp_path)
+    write(root, BETA, ticket(2, "Beta", "resolved"))
+    commit(root, "feat: the second ticket")
+    for path in (ALPHA, BETA, SPEC):
+        (root / path).unlink()
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({**_verdict(), "slug": "beta"})))
+    assert merge_ready.main(["merge_ready", "record", "--root", str(root)]) == 1
+    assert "commit the change first" in capsys.readouterr().out
+    assert not (root / "docs/features/beta/verdict.json").exists()
+
+
+@pytest.mark.parametrize("text", ["not json", '{"slug": "../bad"}'])
+def test_record_main_passes_invalid_input_to_write_record(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    text: str,
+) -> None:
+    root = unit(tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO(text))
+    assert merge_ready.main(["merge_ready", "record", "--root", str(root)]) == 1
+    assert "stdin is not the pipeline's verdictRecord" in capsys.readouterr().out

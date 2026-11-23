@@ -1443,9 +1443,11 @@ def waiting(
     return []
 
 
-def expiry_reasons(change: Change) -> list[Reason]:
+def expiry_reasons(change: Change, *, extra: Mapping[str, str] | None = None) -> list[Reason]:
     before = documents.snapshot(gatelib.tracked_paths(change.root, change.fork), change.before)
     after = documents.snapshot(gatelib.tracked_paths(change.root, change.head), change.after)
+    if extra:
+        after.update(extra)
     return [
         Reason(
             "expired",
@@ -1712,6 +1714,30 @@ dirty = gatelib.dirty
 write_record = gatelib.write_record
 
 
+def record_slug(raw: str) -> str | None:
+    try:
+        data: object = json.loads(raw)
+    except ValueError:
+        return None
+    slug = data.get("slug") if isinstance(data, dict) else None
+    if isinstance(slug, str) and re.fullmatch(SLUG, slug):
+        return slug
+    return None
+
+
+def pending_expiry(root: Path, raw: str, *, base_ref: str, head_ref: str) -> list[Reason]:
+    slug = record_slug(raw)
+    if slug is None:
+        return []
+    record = f"docs/features/{slug}/{documents.VERDICT}"
+    if dirty(root, record):
+        return []
+    change = read(root, base_ref, head_ref)
+    if isinstance(change, Reason):
+        return []
+    return expiry_reasons(change, extra={record: raw})
+
+
 def main(argv: list[str]) -> int:
     recording = argv[1:2] == ["record"]
     parser = argparse.ArgumentParser()
@@ -1727,9 +1753,14 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--report", type=Path)
     options = parser.parse_args(argv[2:] if recording else argv[1:])
     root = Path(options.root).resolve()
-    if recording:
-        return write_record(root, sys.stdin.read())
     base = options.base or default_ref(root)
+    if recording:
+        raw = sys.stdin.read()
+        if reasons := pending_expiry(root, raw, base_ref=base, head_ref=options.head):
+            for reason in reasons:
+                print(f"record: {reason.text}")
+            return 1
+        return write_record(root, raw)
     deep = None if options.deep is None else unproven.read(options.deep)
     tier2 = options.tier2 or "none"
     asked = Asked(options.target, options.current, tier1=options.tier1, tier2=tier2, deep=deep)

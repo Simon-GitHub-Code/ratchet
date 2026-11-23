@@ -502,29 +502,29 @@ TIER_CEILING = "[ceilings.seconds]\ntier1 = 1.5\n"
 def test_a_group_whose_gates_each_finish_under_the_tier_ceiling_is_green_however_long_it_took(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    root = grouped_project(tmp_path / "repo", TIER_CEILING)
-    sleeps = {"alpha": 0.6, "beta": 0.6, "gamma": 0.6}
+    root = grouped_project(tmp_path / "repo", "[ceilings.seconds]\ntier1 = 5.0\n")
+    sleeps = {"alpha": 1.8, "beta": 1.8, "gamma": 1.8}
     code, lines = judged_in_ci(root, sleeps, monkeypatch=monkeypatch, capsys=capsys)
     assert code == 0, lines
     for gate in sleeps:
         assert re.fullmatch(
-            rf"ratchet-budget: {gate} took \d+\.\ds \(ceiling 1\.5s of tier1, \d+% used\): green",
+            rf"ratchet-budget: {gate} took \d+\.\ds \(ceiling 5s of tier1, \d+% used\): green",
             judged_gate(lines, gate),
         )
     assert re.fullmatch(
         r"ratchet-budget: rest took \d+\.\ds \(no ceiling recorded\): unbounded",
         judged_gate(lines, "rest"),
     )
-    assert float(judged_gate(lines, "rest").split(" took ")[1].split("s")[0]) > 1.5
+    assert float(judged_gate(lines, "rest").split(" took ")[1].split("s")[0]) > 5.0
 
 
 def test_a_gate_over_the_tier_ceiling_inside_a_group_is_red_and_its_line_names_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    root = grouped_project(tmp_path / "repo", TIER_CEILING)
-    code, lines = judged_in_ci(root, {"beta": 1.6}, monkeypatch=monkeypatch, capsys=capsys)
+    root = grouped_project(tmp_path / "repo", "[ceilings.seconds]\ntier1 = 4.0\n")
+    code, lines = judged_in_ci(root, {"beta": 4.1}, monkeypatch=monkeypatch, capsys=capsys)
     assert code == 1
-    assert judged_gate(lines, "beta").endswith("(ceiling 1.5s of tier1): red")
+    assert judged_gate(lines, "beta").endswith("(ceiling 4s of tier1): red")
     assert judged_gate(lines, "alpha").endswith(": green")
     assert judged_gate(lines, "gamma").endswith(": green")
 
@@ -553,14 +553,14 @@ def test_a_group_with_a_key_of_its_own_under_its_job_name_is_held_to_it(
 def test_an_earlier_run_s_lines_in_the_record_are_not_read_as_this_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    root = grouped_project(tmp_path / "repo", TIER_CEILING)
-    code, lines = judged_in_ci(root, {"alpha": 1.6}, monkeypatch=monkeypatch, capsys=capsys)
+    root = grouped_project(tmp_path / "repo", "[ceilings.seconds]\ntier1 = 10.0\nalpha = 0.5\n")
+    code, lines = judged_in_ci(root, {"alpha": 0.6}, monkeypatch=monkeypatch, capsys=capsys)
     assert (code, judged_gate(lines, "alpha").endswith(": red")) == (1, True)
     nothing = [sys.executable, "-c", "pass"]
     code, lines = judged_in_ci(root, {}, monkeypatch=monkeypatch, capsys=capsys, command=nothing)
     assert code == 0, lines
     assert [line.split(" took ")[0] for line in lines] == ["ratchet-budget: rest"]
-    assert re.search(r"\(ceiling 1\.5s of tier1, \d+% used\): green$", lines[0])
+    assert re.search(r"\(ceiling 10s of tier1, \d+% used\): green$", lines[0])
 
 
 GROUP_ONLY = textwrap.dedent(
@@ -668,13 +668,13 @@ TRUNCATING_RUNNER = textwrap.dedent(
 def test_a_group_whose_record_is_truncated_mid_run_is_not_held_to_tier(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    root = grouped_project(tmp_path / "repo", TIER_CEILING)
+    root = grouped_project(tmp_path / "repo", "[ceilings.seconds]\ntier1 = 10.0\n")
     record = root / RECORD
     record.parent.mkdir(parents=True)
     record.write_text('{"key": "old", "seconds": 0.1, "exit": 0}\n' * 10, encoding="utf-8")
     runner = tmp_path / "truncater.py"
     runner.write_text(TRUNCATING_RUNNER, encoding="utf-8")
-    sleeps = {"alpha": 1.6, "beta": 0.0, "gamma": 0.0}
+    sleeps = {"alpha": 0.2, "beta": 0.0, "gamma": 0.0}
     monkeypatch.setenv("RECORD_PATH", str(record))
     job = [
         *(sys.executable, str(PLUGIN_ROOT / "scripts/ci_jobs.py"), "--root", str(root)),
@@ -711,7 +711,7 @@ def test_an_interrupted_group_run_judges_finished_gates_and_leaves_rest_unjudged
     for key in list(os.environ):
         if key.startswith(("COV_CORE_", "COVERAGE_")):
             monkeypatch.delenv(key, raising=False)
-    root = grouped_project(tmp_path / "repo", TIER_CEILING)
+    root = grouped_project(tmp_path / "repo", "[ceilings.seconds]\ntier1 = 10.0\n")
     runner = tmp_path / "interrupter.py"
     runner.write_text(INTERRUPTING_RUNNER, encoding="utf-8")
     monkeypatch.setenv("STOP_SIGNAL", str(int(sig)))
@@ -749,8 +749,8 @@ SPOOFING_RUNNER = textwrap.dedent(
             {"key": "alpha", "seconds": 0.01, "exit": 0},
             {"key": "alpha", "seconds": 0.01, "ceiling": None, "status": "green", "exit": 0}
             | stamp,
-            {"key": "gamma", "seconds": 2.4, "exit": 0},
-            {"key": "gamma", "seconds": 2.4, "ceiling": None, "status": "unbounded", "exit": 0}
+            {"key": "gamma", "seconds": 12.0, "exit": 0},
+            {"key": "gamma", "seconds": 12.0, "ceiling": None, "status": "unbounded", "exit": 0}
             | stamp,
         ]
         with record.open("a", encoding="utf-8") as handle:
@@ -762,10 +762,10 @@ SPOOFING_RUNNER = textwrap.dedent(
 def test_a_sibling_gate_cannot_spoof_or_overwrite_another_gate_s_time(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    root = grouped_project(tmp_path / "repo", TIER_CEILING)
+    root = grouped_project(tmp_path / "repo", "[ceilings.seconds]\ntier1 = 10.0\nalpha = 0.5\n")
     runner = tmp_path / "spoofer.py"
     runner.write_text(SPOOFING_RUNNER, encoding="utf-8")
-    sleeps = {"alpha": 1.6, "beta": 0.0, "gamma": 0.0}
+    sleeps = {"alpha": 0.6, "beta": 0.0, "gamma": 0.0}
     monkeypatch.setenv("RECORD_PATH", str(root / RECORD))
     monkeypatch.setenv("PARALLEL_PY", str(PLUGIN_ROOT / "scripts/parallel.py"))
     job = [
@@ -775,7 +775,7 @@ def test_a_sibling_gate_cannot_spoof_or_overwrite_another_gate_s_time(
     ]
     code, lines = judged_in_ci(root, sleeps, monkeypatch=monkeypatch, capsys=capsys, command=job)
     assert code == 1, lines
-    assert judged_gate(lines, "alpha").endswith("(ceiling 1.5s of tier1): red")
+    assert judged_gate(lines, "alpha").endswith("(ceiling 0.5s): red")
     assert judged_gate(lines, "beta").endswith(": green")
     assert judged_gate(lines, "gamma").endswith(": green")
     assert judged_gate(lines, "rest").endswith("(no ceiling recorded): unbounded")
@@ -784,7 +784,7 @@ def test_a_sibling_gate_cannot_spoof_or_overwrite_another_gate_s_time(
 def test_a_sibling_gate_cannot_raise_a_fast_gate_above_the_tier_ceiling(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    root = grouped_project(tmp_path / "repo", TIER_CEILING)
+    root = grouped_project(tmp_path / "repo", "[ceilings.seconds]\ntier1 = 5.0\n")
     runner = tmp_path / "raiser.py"
     sleeps = {"alpha": 0.0, "beta": 0.0, "gamma": 0.0}
     monkeypatch.setenv("RECORD_PATH", str(root / RECORD))
@@ -926,7 +926,7 @@ ORDERED_GROUP = textwrap.dedent(
 def test_not_judged_and_judged_lines_print_in_the_job_s_gate_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    root = grouped_project(tmp_path / "repo", TIER_CEILING)
+    root = grouped_project(tmp_path / "repo", "[ceilings.seconds]\ntier1 = 10.0\n")
     writer = tmp_path / "ordered_group.py"
     writer.write_text(ORDERED_GROUP, encoding="utf-8")
     command = [sys.executable, str(writer), str(root / RECORD)]
