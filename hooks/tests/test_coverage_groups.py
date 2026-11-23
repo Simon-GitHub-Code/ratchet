@@ -347,3 +347,52 @@ def test_the_merge_bases_table_judges_not_the_changes_own(tmp_path: Path) -> Non
     write(root, "docs/process/binding.md", binding("none: nothing silences it here"))
     commit(root, "feat(core): loosen its own judge")
     assert coverage_groups.exclusion_patterns(root) == ["skip-marker|ignore-next"]
+
+
+def test_check_unrecorded_catches_missing_and_zero_line_files_in_absolute_groups(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    thresholds = THRESHOLDS.replace("line = 50.0", "line = 50.0\nbranch = 100.0")
+    root = project(tmp_path, thresholds=thresholds)
+    write(root, "src/core/missing.py", "z = 3\n")
+    write(root, "src/core/zero.py", "q = 5\n")
+    write(root, "src/core/empty.py", "   \n\t\n")
+    write(root, "src/core/data.json", '{"a": 1}\n')
+    (root / "src/core/blob.bin").write_bytes(b"\x00\x01\n")
+    write(root, "src/app/unmeasured.py", "w = 4\n")
+    xml = (
+        f"<coverage><sources><source>{root}</source></sources><packages><package><classes>"
+        '<class filename="src/core/a.py"><lines><line number="1" hits="1"/></lines></class>'
+        '<class filename="src/core/zero.py"><lines/></class>'
+        '<class filename="src/app/b.py"><lines><line number="1" hits="1"/>'
+        '<line number="2" hits="0"/></lines></class>'
+        "</classes></package></packages></coverage>"
+    )
+    (root / "coverage.xml").write_text(xml, encoding="utf-8")
+    assert coverage_groups.main(["x", "--root", str(root)]) == 0
+    capsys.readouterr()
+    assert coverage_groups.main(["x", "--root", str(root), "--check-unrecorded"]) == 1
+    out = capsys.readouterr().out
+    assert "src/core/missing.py in python.coverage.core has no recorded executable lines" in out
+    assert "src/core/zero.py in python.coverage.core has no recorded executable lines" in out
+    for ignored in ("src/core/a.py", "empty.py", "data.json", "blob.bin", "unmeasured.py"):
+        assert ignored not in out
+
+
+def test_check_unrecorded_catches_zero_da_lines_and_missing_files_in_lcov(tmp_path: Path) -> None:
+    thresholds = THRESHOLDS.replace("line = 50.0", "line = 50.0\nbranch = 100.0")
+    root = project(tmp_path, thresholds=thresholds)
+    info = root / "coverage.info"
+    info.write_text(
+        f"TN:\nSF:{root}/src/core/a.py\nend_of_record\nSF:src/app/b.py\nDA:1,1\nDA:2,0\n"
+        "end_of_record\n",
+        encoding="utf-8",
+    )
+    expected = (
+        "src/core/a.py in python.coverage.core has no recorded executable lines in the coverage"
+        " report"
+    )
+    assert coverage_groups.problems(root, [info]) == []
+    assert coverage_groups.problems(root, [info], check_unrecorded=True) == [expected]
+    info.write_text("TN:\nSF:src/app/b.py\nDA:1,1\nDA:2,0\nend_of_record\n", encoding="utf-8")
+    assert coverage_groups.problems(root, [info], check_unrecorded=True) == [expected]
