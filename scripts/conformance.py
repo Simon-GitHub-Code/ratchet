@@ -4178,7 +4178,7 @@ def ratchet_asks(justfile: str) -> Finding:
 def with_loop_budget(recipe: str) -> gatelib.Want:
     template = template_file("justfile")
     block = next((b for b in justfile_text.blocks(template.split("\n")) if b.name == recipe), None)
-    after = "\n".join(template.split("\n")[block.head : block.end]) if block is not None else ""
+    after = "\n".join(template.split("\n")[block.head + 1 : block.end]) if block is not None else ""
     before = after.replace(f" {LOOP_BUDGET_FLAG}", "", 1)
 
     def want(current: str | None) -> str:
@@ -4189,8 +4189,11 @@ def with_loop_budget(recipe: str) -> gatelib.Want:
         found = next((b for b in justfile_text.blocks(lines) if b.name == recipe), None)
         if found is None:
             return text
-        held = "\n".join(lines[found.head : found.end])
-        return text.replace(before, after, 1) if before in held else text
+        held = "\n".join(lines[found.head + 1 : found.end])
+        if before not in held:
+            return text
+        lines[found.head + 1 : found.end] = held.replace(before, after, 1).split("\n")
+        return "\n".join(lines)
 
     return want
 
