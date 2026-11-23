@@ -1864,3 +1864,205 @@ def test_parallel_records_work_counts_and_judges_work_ceilings_red_everywhere(
         assert "ratchet-budget: work mutation.tests-per-mutant missing (ceiling 12): red" in (
             miss_out
         )
+
+
+def test_after_orders_consumers_after_producer_and_runs_consumers_in_parallel(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    log, a, b = tmp_path / "log", tmp_path / "a", tmp_path / "b"
+    order_script = (
+        "import os, pathlib, sys, time\n"
+        "log, name = sys.argv[1], sys.argv[2]\n"
+        "os.write(os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT), f'+{name}\\n'.encode())\n"
+        "if len(sys.argv) == 5:\n"
+        "    mine, theirs = map(pathlib.Path, sys.argv[3:5])\n"
+        "    mine.touch()\n"
+        "    deadline = time.monotonic() + 10\n"
+        "    while not theirs.exists() and time.monotonic() < deadline:\n"
+        "        time.sleep(0.01)\n"
+        "    assert theirs.exists()\n"
+        "os.write(os.open(log, os.O_WRONLY | os.O_APPEND), f'-{name}\\n'.encode())\n"
+    )
+    build = gate(order_script, log, "build")
+    smoke = gate(order_script, log, "smoke", a, b)
+    e2e = gate(order_script, log, "e2e", b, a)
+    assert (
+        run(
+            "--jobs",
+            "3",
+            "--after",
+            f"{smoke}:{build}",
+            "--after",
+            f"{e2e}:{build}",
+            "--after",
+            "missing:other",
+            "--",
+            smoke,
+            e2e,
+            build,
+        )
+        == 0
+    )
+    events = log.read_text().splitlines()
+    assert events[:2] == ["+build", "-build"]
+    assert set(events[2:]) == {"+smoke", "+e2e", "-smoke", "-e2e"}
+    out = capsys.readouterr().out
+    assert "--serial" not in out
+    assert "parallel: green (3 ran)\n" in out
+
+
+def test_binding_build_consumers_wait_for_build_once_and_run_in_parallel(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    speed = (
+        "- Build: gate `build`; caches `.cache`; cold 10s; warm 1s;"
+        " reuse moved; consumers `smoke`, `e2e`, `missing`\n"
+    )
+    root = binding(tmp_path, {"build": "builder", "smoke": "tester", "e2e": "tester"}, speed=speed)
+    (root / ".cache").mkdir()
+    log = tmp_path / "log"
+    meet_runner = shlex.join([sys.executable, "-c", PAIRED, str(log)])
+    code = run(
+        "--root",
+        str(root),
+        "--runner",
+        meet_runner,
+        "--jobs",
+        "4",
+        "--",
+        "smoke",
+        "e2e",
+        "build",
+    )
+    assert code == 0
+    events = log.read_text().splitlines()
+    assert events[:2] == ["+build", "-build"]
+    met = ran_at_once(log)
+    assert frozenset(("smoke", "e2e")) in met
+    out = capsys.readouterr().out
+    assert "--serial" not in out
+
+    assert (
+        run("--root", str(root), "--runner", meet_runner, "--jobs", "2", "--", "smoke", "e2e") == 0
+    )
+    capsys.readouterr()
+
+
+def test_after_validation_and_diamond_dag(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for bad in ("smoke", ":build", "smoke:", "   :build"):
+        with pytest.raises(SystemExit) as caught:
+            run("--after", bad, "--", "build", "smoke")
+        assert caught.value.code == 2
+        assert "--after" in capsys.readouterr().err
+
+    for cycle in (["--after", "a:b", "--after", "b:a"], ["--after", "a:a"]):
+        with pytest.raises(SystemExit) as caught:
+            run(*cycle, "--", "a", "b")
+        assert caught.value.code == 2
+        assert "cyclic dependency" in capsys.readouterr().err
+
+    log = tmp_path / "diamond.log"
+    a, b, c, d = (gate(LOG, log, name) for name in "abcd")
+    code = run(
+        "--jobs",
+        "4",
+        "--after",
+        f"{b}:{a}",
+        "--after",
+        f"{c}:{a}",
+        "--after",
+        f"{d}:{b}",
+        "--after",
+        f"{d}:{c}",
+        "--",
+        d,
+        c,
+        b,
+        a,
+    )
+    assert code == 0
+    events = log.read_text().splitlines()
+    assert events[:2] == ["+a", "-a"]
+    assert events[-2:] == ["+d", "-d"]
+
+
+def test_failed_dependency_skips_transitive_consumers_without_cascading_failures(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    build = gate(EXIT, 2)
+    smoke = gate(SAY, "smoke-ran", "")
+    deploy = gate(SAY, "deploy-ran", "")
+    independent = gate(SAY, "independent-ran", "")
+    code = run(
+        "--jobs",
+        "4",
+        "--after",
+        f"{smoke}:{build}",
+        "--after",
+        f"{deploy}:{smoke}",
+        "--",
+        build,
+        smoke,
+        deploy,
+        independent,
+    )
+    assert code == 1
+    out = capsys.readouterr().out
+    assert "independent-ran\n" in out
+    assert "smoke-ran\n" not in out
+    assert "deploy-ran\n" not in out
+    assert f"parallel: {smoke}: started" not in out
+    assert f"parallel: {deploy}: started" not in out
+    assert "2 of 4 checks finished" in out
+    assert f"{smoke}: skipped (dependency {build} failed)\n" in out
+    assert f"{deploy}: skipped (dependency {build} failed)\n" in out
+    assert "--fail-fast" not in out
+
+    unjudged = gate(EXIT, 3)
+    code_unjudged = run(
+        "--after",
+        f"{smoke}:{unjudged}",
+        "--",
+        unjudged,
+        smoke,
+    )
+    assert code_unjudged == 3
+    out_unjudged = capsys.readouterr().out
+    assert f"{smoke}: skipped (dependency {unjudged} failed)\n" in out_unjudged
+    assert out_unjudged.endswith("parallel: could not judge\n")
+
+
+def test_wall_clock_line_with_dependencies_never_blames_serial_or_order(
+    tmp_path: Path,
+) -> None:
+    constraints = parallel.Constraints(
+        deps={"smoke": frozenset({"build"}), "e2e": frozenset({"build"})}
+    )
+    options = argparse.Namespace(
+        root=tmp_path,
+        jobs=4,
+        fail_fast=False,
+        report=None,
+        alone=[],
+        wide=[],
+        constraints=constraints,
+    )
+    sched = parallel.Scheduler(
+        [("build",), ("smoke",), ("e2e",)],
+        [],
+        options,
+        kept=schedule.Schedule(),
+    )
+    sched.finished = [
+        parallel.Finished("build", 10.0, 0, ""),
+        parallel.Finished("smoke", 10.0, 0, ""),
+        parallel.Finished("e2e", 10.0, 0, ""),
+    ]
+    line = parallel.wall_clock_line(sched, 20.0)
+    assert "--serial" not in line
+    assert "order lost" not in line
+    assert line == "parallel: the lanes were full (4 lanes, 30.0s of check time in 20.0s)"
+    assert not parallel.matches_gate("a 'b", "b")
+    assert not parallel.matches_gate("", "b")

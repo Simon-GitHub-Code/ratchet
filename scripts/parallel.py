@@ -11,7 +11,8 @@ yours to give. Python 3.11 standard library only, Linux and macOS.
 Usage::
 
     parallel.py [--runner "just"] [--jobs N] [--serial A B]... [--alone GATE...]
-                [--wide GATE...] [--fail-fast] [--root DIR] [--report PATH] -- GATE...
+                [--wide GATE...] [--after GATE:DEP]... [--fail-fast] [--root DIR]
+                [--report PATH] -- GATE...
 
 * Each ``GATE`` becomes ``RUNNER GATE`` and runs in ``--root`` (the current directory). The
   entry is split like a shell line, so ``"test-shard 1/4"`` passes two words. With no
@@ -126,6 +127,7 @@ from typing import IO, TYPE_CHECKING
 
 import application_types
 import budget
+import build_cache
 import gatelib
 import loop_budget
 import machine
@@ -135,7 +137,7 @@ import runrecord
 import schedule
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
     from collections.abc import Set as AbstractSet
 
 POLL = 0.05
@@ -154,7 +156,13 @@ PROFILE_BULLET = "Profile"
 WINDOW = 2**20
 UNREADABLE = (ValueError, TypeError, KeyError, OverflowError, RecursionError)
 NO_RECORD: Mapping[str, float] = MappingProxyType({})
+NO_DEPS: Mapping[str, frozenset[str]] = MappingProxyType({})
 WAITING = re.compile(r"(?P<standing>later|none): \S.*")
+
+
+@dataclass(frozen=True, slots=True)
+class Constraints:
+    deps: Mapping[str, frozenset[str]] = field(default_factory=dict)
 
 
 class Standing(Enum):
@@ -355,6 +363,102 @@ def shares(
     return {name: jobs if name in alone else each for name in wide}
 
 
+def matches_gate(name: str, gate: str) -> bool:
+    if name == gate:
+        return True
+    try:
+        words = shlex.split(name)
+    except ValueError:
+        return False
+    return bool(words) and words[-1] == gate
+
+
+def match_gate(target: str, gates: Sequence[str]) -> str | None:
+    if target in gates:
+        return target
+    return next((name for name in gates if matches_gate(name, target)), None)
+
+
+def parse_after(raw_after: Sequence[str], gates: AbstractSet[str]) -> dict[str, set[str]]:
+    edges: dict[str, set[str]] = {}
+    for item in raw_after:
+        matched = next(
+            (
+                (item[:idx], item[idx + 1 :])
+                for idx, ch in enumerate(item)
+                if ch == ":" and item[:idx] in gates and item[idx + 1 :] in gates
+            ),
+            None,
+        )
+        if matched is not None:
+            edges.setdefault(matched[0], set()).add(matched[1])
+            continue
+        gate, sep, dep = item.partition(":")
+        if not sep or not gate.strip() or not dep.strip():
+            message = f"--after {item!r}: expected GATE:DEP"
+            raise ValueError(message)
+    return edges
+
+
+def build_spec_deps(
+    spec: build_cache.BuildSpec | None, gates: Sequence[str]
+) -> dict[str, set[str]]:
+    if spec is None or not spec.consumers:
+        return {}
+    producer = match_gate(spec.gate, gates)
+    if producer is None:
+        return {}
+    edges: dict[str, set[str]] = {}
+    for raw_consumer in spec.consumers:
+        consumer = match_gate(raw_consumer, gates)
+        if consumer is not None and consumer != producer:
+            edges.setdefault(consumer, set()).add(producer)
+    return edges
+
+
+def check_acyclic(gates: Sequence[str], edges: Mapping[str, AbstractSet[str]]) -> None:
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(node: str) -> None:
+        if node in visiting:
+            message = f"cyclic dependency involving {node!r}"
+            raise ValueError(message)
+        if node in visited:
+            return
+        visiting.add(node)
+        for dep in sorted(edges.get(node, ())):
+            visit(dep)
+        visiting.remove(node)
+        visited.add(node)
+
+    for gate in gates:
+        if gate in edges:
+            visit(gate)
+
+
+def resolve_deps(
+    gates: Sequence[str],
+    raw_after: Sequence[str],
+    spec: build_cache.BuildSpec | None,
+) -> dict[str, frozenset[str]]:
+    edges = build_spec_deps(spec, gates)
+    for gate, deps in parse_after(raw_after, frozenset(gates)).items():
+        edges.setdefault(gate, set()).update(deps)
+    check_acyclic(gates, edges)
+    return {gate: frozenset(deps) for gate, deps in edges.items()}
+
+
+def take_ready(board: schedule.Board[str], is_ready: Callable[[str], bool]) -> str | None:
+    all_pending = list(board.pending)
+    board.pending[:] = [name for name in all_pending if is_ready(name)]
+    picked = board.take()
+    if picked is not None:
+        all_pending.remove(picked)
+    board.pending[:] = all_pending
+    return picked
+
+
 class Scheduler:
     def __init__(
         self,
@@ -381,6 +485,13 @@ class Scheduler:
         self.tools = tools(self.root)
         self.profile_commands = profile_commands(self.root)
         self.group_log = group_log
+        raw_constraints = getattr(options, "constraints", None)
+        constraints = raw_constraints if isinstance(raw_constraints, Constraints) else Constraints()
+        self.deps: dict[str, frozenset[str]] = {
+            gate: frozenset(reqs) for gate, reqs in constraints.deps.items() if reqs
+        }
+        self.green_done: set[str] = set()
+        self.skipped_deps: list[tuple[str, str]] = []
         self.live: dict[str, Live] = {}
         self.finished: list[Finished] = []
         self.stopped: list[str] = []
@@ -407,9 +518,12 @@ class Scheduler:
     def not_started(self) -> list[str]:
         return list(self.board.pending)
 
+    def _is_ready(self, name: str) -> bool:
+        return self.deps.get(name, frozenset()) <= self.green_done
+
     def start_ready(self) -> None:
         while not self.halted and len(self.live) < self.jobs:
-            name = self.board.take()
+            name = take_ready(self.board, self._is_ready) if self.deps else self.board.take()
             if name is None:
                 return
             self.begin(name)
@@ -467,6 +581,46 @@ class Scheduler:
                 del self.live[name]
                 self.settle(collect(gate, code))
 
+    def _record_gate(self, result: Finished, *, alone: bool) -> None:
+        if self.report_to is None:
+            return
+        extra: dict[str, object] = {
+            "lane": result.lane,
+            "start": round(result.start, 3),
+            "cpu": None if result.cpu is None else round(result.cpu, 3),
+            "alone": alone,
+        }
+        if result.work:
+            extra["work"] = dict(result.work)
+        outcome = budget.Outcome(result.name, result.seconds, None, result.exit_code, extra=extra)
+        stamp = runrecord.stamp(self.root, self.tree)
+        budget.report(
+            self.report_to,
+            outcome,
+            stamp,
+            root=self.root,
+            group_log=self.group_log,
+        )
+
+    def _skip_dependents(self, failed_gate: str) -> None:
+        if not self.deps:
+            return
+        failed = {failed_gate}
+        while failed:
+            next_failed: set[str] = set()
+            for pending in list(self.board.pending):
+                if self.deps.get(pending, frozenset()) & failed:
+                    self.board.pending.remove(pending)
+                    self.skipped_deps.append((pending, failed_gate))
+                    next_failed.add(pending)
+            failed = next_failed
+
+    def _advance_state(self, result: Finished) -> None:
+        if result.green:
+            self.green_done.add(result.name)
+        else:
+            self._skip_dependents(result.name)
+
     def settle(self, result: Finished) -> None:
         alone = not self.board.done(result.name)
         if result.output:
@@ -474,26 +628,8 @@ class Scheduler:
             say(result.output.rstrip("\n"))
         say(result.line())
         self.finished.append(result)
-        if self.report_to is not None:
-            extra: dict[str, object] = {
-                "lane": result.lane,
-                "start": round(result.start, 3),
-                "cpu": None if result.cpu is None else round(result.cpu, 3),
-                "alone": alone,
-            }
-            if result.work:
-                extra["work"] = dict(result.work)
-            outcome = budget.Outcome(
-                result.name, result.seconds, None, result.exit_code, extra=extra
-            )
-            stamp = runrecord.stamp(self.root, self.tree)
-            budget.report(
-                self.report_to,
-                outcome,
-                stamp,
-                root=self.root,
-                group_log=self.group_log,
-            )
+        self._record_gate(result, alone=alone)
+        self._advance_state(result)
         if self.fail_fast and not result.green:
             self.halted = True
 
@@ -539,16 +675,26 @@ def _simulate_board(
     groups: Sequence[tuple[str, ...]],
     seconds: Mapping[str, float],
     jobs: int,
+    constraints: Constraints | None = None,
 ) -> float:
+    deps = constraints.deps if constraints is not None else NO_DEPS
     board = schedule.Board(
         sorted(names, key=lambda name: (-seconds[name], name)),
         schedule.Schedule({schedule.APART: tuple(groups)}),
         str,
     )
     running: list[tuple[float, str]] = []
+    done: set[str] = set()
     now = 0.0
     while True:
-        while len(running) < jobs and (picked := board.take()) is not None:
+        while len(running) < jobs:
+            picked = (
+                take_ready(board, lambda name: deps.get(name, frozenset()) <= done)
+                if deps
+                else board.take()
+            )
+            if picked is None:
+                break
             running.append((now + seconds[picked], picked))
         if not running:
             return now
@@ -557,6 +703,7 @@ def _simulate_board(
         running = [(end, name) for end, name in running if end > now]
         for name in finished_now:
             board.done(name)
+            done.add(name)
 
 
 def best_schedule(
@@ -565,6 +712,7 @@ def best_schedule(
     groups: Sequence[tuple[str, ...]],
     alone: AbstractSet[str],
     jobs: int,
+    constraints: Constraints | None = None,
 ) -> float:
     seconds = {result.name: result.seconds for result in finished}
     alone_wall = sum(result.seconds for result in finished if result.name in alone)
@@ -576,10 +724,20 @@ def best_schedule(
         for group in groups
         if len(members := tuple(name for name in group if name in normal_names)) > 1
     ]
+    deps = constraints.deps if constraints is not None else NO_DEPS
+    active_deps = {
+        name: req & normal_names
+        for name, req in deps.items()
+        if name in normal_names and req & normal_names
+    }
     grouped_list = [name for group in active_groups for name in group]
-    if len(set(grouped_list)) != len(grouped_list):
+    if active_deps or len(set(grouped_list)) != len(grouped_list):
         return alone_wall + _simulate_board(
-            normal_names, groups=active_groups, seconds=seconds, jobs=jobs
+            normal_names,
+            groups=active_groups,
+            seconds=seconds,
+            jobs=jobs,
+            constraints=Constraints(deps=active_deps),
         )
     grouped = set(grouped_list)
     units = [*active_groups, *((name,) for name in normal_names if name not in grouped)]
@@ -666,6 +824,7 @@ def wall_clock_line(scheduler: Scheduler, wall: float) -> str:
         groups=scheduler.groups,
         alone=scheduler.measured_alone,
         jobs=jobs,
+        constraints=Constraints(deps=scheduler.deps),
     )
     lost = wall - best
     if lost >= max(MIN_ORDER_LOSS, ORDER_LOSS_SHARE * wall):
@@ -796,7 +955,12 @@ def slower_than_usual(scheduler: Scheduler, wall: float, *, gates: list[str]) ->
 def closing(scheduler: Scheduler, wall: float) -> list[str]:
     slowest = max(scheduler.finished, key=lambda result: result.seconds)
     work = sum(result.seconds for result in scheduler.finished)
-    total = len(scheduler.finished) + len(scheduler.stopped) + len(scheduler.not_started())
+    total = (
+        len(scheduler.finished)
+        + len(scheduler.stopped)
+        + len(scheduler.not_started())
+        + len(scheduler.skipped_deps)
+    )
     counts = Counter(result.standing for result in scheduler.finished)
     ran = f"{counts[Standing.GREEN]} {Standing.GREEN.value}"
     failed = f", {counts[Standing.RED]} {Standing.RED.value}" if counts[Standing.RED] else ""
@@ -835,6 +999,8 @@ def closing(scheduler: Scheduler, wall: float) -> list[str]:
                 say(work_outcome.line())
     if scheduler.stopped:
         problems.append(f"stopped by --fail-fast: {', '.join(scheduler.stopped)}")
+    for consumer, dep in scheduler.skipped_deps:
+        problems.append(f"{consumer}: skipped (dependency {dep} failed)")
     if scheduler.not_started():
         problems.append(f"not started, --fail-fast: {', '.join(scheduler.not_started())}")
     return problems
@@ -911,6 +1077,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--serial", action="append", nargs="+", default=[], metavar="GATE")
     parser.add_argument("--alone", nargs="+", default=[], metavar="GATE", help="measured alone")
     parser.add_argument("--wide", nargs="+", default=[], metavar="GATE", help="split the jobs")
+    parser.add_argument(
+        "--after",
+        action="append",
+        default=[],
+        metavar="GATE:DEP",
+        help="run GATE only after DEP passes",
+    )
     parser.add_argument("--fail-fast", action="store_true", help="stop at the first red gate")
     parser.add_argument("--root", type=Path, default=Path(), help="directory the gates run in")
     parser.add_argument("--report", type=Path, help="append one budget.py record per gate")
@@ -942,7 +1115,9 @@ def gates_exit_of(scheduler: Scheduler, problems: list[str]) -> int:
     if not problems:
         return 0
     unjudged_count = sum(1 for result in scheduler.finished if result.unjudged)
-    only_unjudged = unjudged_count > 0 and len(problems) == unjudged_count
+    only_unjudged = unjudged_count > 0 and len(problems) == unjudged_count + len(
+        scheduler.skipped_deps
+    )
     return gatelib.UNJUDGED if only_unjudged else 1
 
 
@@ -994,19 +1169,23 @@ def main(argv: list[str], *, group_log: Path | None = None) -> int:
             schedule.WIDE: tuple((name,) for name in gates if name in options.wide),
         }
     )
-    stated = schedule.stated(gatelib.read_text(options.root / gatelib.BINDING) or "")
+    binding_text = gatelib.read_text(options.root / gatelib.BINDING) or ""
+    stated = schedule.stated(binding_text)
     kept = given.joined(stated.among(gates))
+    spec = build_cache.parse_build_spec(binding_text)
     timings: Path | None = None if options.fail_fast else options.report
     seconds = NO_RECORD if timings is None else expected_seconds(timings)
     try:
         runner = shlex.split(options.runner)
         units = plan(gates, options.serial, frozenset(options.alone), seconds=seconds)
+        deps = resolve_deps(gates, options.after, spec)
     except ValueError as error:
         parser.error(str(error))
     options.alone = [name for name in gates if name in kept.alone]
     options.wide = [name for name in gates if name in kept.wide]
     for line in unstated(stated, given):
         say(line)
+    options.constraints = Constraints(deps=deps)
     scheduler = Scheduler(units, runner, options, kept=kept, group_log=group_log)
     started = time.monotonic()
     try:
