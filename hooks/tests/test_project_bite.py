@@ -2022,7 +2022,14 @@ def test_a_red_before_its_fault_beside_another_lane_names_what_ran_beside_it(
 def test_only_a_verdict_a_neighbour_could_cause_names_the_gates_beside_it() -> None:
     (planted,) = project_bite.read_registry(bite("lint", "a planted word"))[0].bites
     note = project_bite.BESIDE.format(gates="e2e, load", gate="lint")
-    neighbour = {"RED BEFORE THE FAULT", "RED FOR ANOTHER REASON", "NOT PROVEN", "TIMED OUT"}
+    neighbour = {
+        "RED BEFORE THE FAULT",
+        "COULD NOT JUDGE BEFORE THE FAULT (exit 3)",
+        "COULD NOT JUDGE (exit 3)",
+        "RED FOR ANOTHER REASON",
+        "NOT PROVEN",
+        "TIMED OUT",
+    }
     for verdict in project_bite.Verdict:
         lines = project_bite.Outcome(planted, verdict, "why", beside=("e2e", "load")).lines()
         assert (note in lines) is (verdict.value in neighbour), verdict
@@ -4700,3 +4707,28 @@ def test_changing_stage_in_registry_triggers_changed_proof(
     out = shown(capsys).splitlines()
     assert "bite: staged: bite `one` changed" in out
     assert proved(out) == ["staged"]
+
+
+def test_a_gate_that_exits_3_never_counts_as_biting_and_fails_before_or_after_fault(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gates = {
+        "unjudged": 'if grep -rl planted src; then echo "L001"; exit 3; fi',
+        "unjudged_before": "echo cannot set up; exit 3",
+        "format": "echo cannot judge format; exit 3",
+    }
+    registry = (
+        bite("unjudged", "on fault")
+        + bite("unjudged_before", "before fault")
+        + bite("format", "a planted word")
+    )
+    root = project(tmp_path / "repo", gates, registry)
+    assert prove(root) == 1
+    out = shown(capsys)
+    assert "bite: unjudged: on fault: COULD NOT JUDGE (exit 3)\n" in out
+    assert "the gate could not judge with the fault planted (exit 3)" in out
+    before_msg = "COULD NOT JUDGE BEFORE THE FAULT (exit 3)"
+    assert f"bite: unjudged_before: before fault: {before_msg}\n" in out
+    assert f"bite: format: a planted word: {before_msg}\n" in out
+    assert f"bite: format: accepts verdict record: {before_msg}\n" in out
+    assert "bite: red: 0 of 3 faults bit, over 3 gates in " in out
