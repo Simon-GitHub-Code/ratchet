@@ -148,7 +148,7 @@ The `guard-diff` entry point (tier 1) lists every changed path that matches the 
 
 A change reaches the default branch in one of two ways: the merge judge passes it and it merges itself, or the owner merges it. The judge is `scripts/merge_ready.py`, behind the `merge-ready` entry point.
 
-The owner merges when any of these holds, each under its own heading below: a guard path changed, a one-way door (from the first commit for an asked project's flag registry, and once `deployed` or holding `irreplaceable-data` for the rest), new surface with no flag (from the first commit in an asked project unless the ticket carries the owner's no with no open yes, or a `yes` ticket whose key is missing or on), an altered recorded output once `depended-on` (`expect-output`), a labelled ticket or its spec changed in any change (save a build closing its own ticket), a dispute, no clean approval, or the setting.
+The owner merges when any of these holds, each under its own heading below: a guard path changed, a one-way door (from the first commit for an asked project's flag registry, and once `deployed` or holding `irreplaceable-data` for the rest), new surface with no flag (from the first commit in an asked project unless the ticket carries the owner's no with no open yes, or a `yes` ticket whose key is missing or on), an altered recorded output once `depended-on` (`expect-output`), a line cut from or deletion of another unit's steering file (`steering-cut`), a labelled ticket or its spec changed in any change (save a build closing its own ticket), a dispute, no clean approval, or the setting.
 
 ### A guard path changed
 
@@ -185,6 +185,10 @@ The surface check reads the `on = "removal"` doors (a route, a command or an exp
 ### An altered recorded output
 
 Once the binding's `- Life events:` line declares `depended-on`, altering or removing a recorded output that existed at the merge base sends the merge to the owner (`expect-output`), because re-accepting an expected output changes what tests claim the software already promised. `scripts/expect_outputs.py` reads the binding's `## Recorded outputs` table at the merge base (so a branch cannot narrow what is watched): for a row with no `Pattern`, any modification, deletion or rename of a matching file that existed at the merge base counts as altered; for a row with a `Pattern` (inline expectations inside a test file), any change to or removal of a merge-base line matching `Pattern` counts as altered. Newly added recorded outputs pass, and before `depended-on` is declared the judge prints a `note:` letting the change through.
+
+### A cut to another unit's steering file
+
+Steering files (`.scratch/<unit>/spec.md`, `.scratch/<unit>/issues/*.md`, and `docs/features/<slug>/spec.md`) belong to their unit. Deleting or removing any line from an existing steering file of a unit the change does not own sends the merge to the owner (`steering-cut`, ADR 0093): a change owns the unit of its `verdict.json` (and any matching resolved or found ticket). Pure additions to another unit's steering file stay the agent's, link-only rewrites and sole unsplit local spec drafts in a records change stay the agent's, and whole-unit deletion of an expired unit (`documents.py expire`, ADR 0064) is exempt while partial line deletions are not. `never`-kind standing pages outside guard paths (`PRODUCT.md`, `DESIGN.md`) remain agent-mergeable.
 
 ### Before a life event is declared
 
@@ -276,6 +280,7 @@ Tier 2 with no forge is what `merge.py --deep` records. It proves the default br
   - a one-way door, once the project is `deployed` or holds `irreplaceable-data`, and the flag registry's doors from the first commit in an asked project
   - new surface with no flag once `deployed`, or before `deployed` when not under the owner's no with no open yes in flight, and any `yes` ticket whose key is missing, on, permanent, or unused
   - an altered recorded output once `depended-on` (`expect-output`)
+  - a line cut from or deletion of another unit's steering file (`steering-cut`, save whole-unit deletion under `documents.py expire`)
   - any change to a labelled ticket, the spec it inherits from, or a blocker's open state (save a build closing its own found ticket to `resolved`)
   - a dispute
   - a verdict that is not a clean approval
