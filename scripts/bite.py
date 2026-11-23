@@ -32,6 +32,7 @@ import markers
 import merge_ready
 import mutation_survivors
 import parallel
+import parser_fuzz
 import pins
 import plugin_pin
 import project_bite
@@ -315,6 +316,48 @@ def uncovered_in_lcov(root: Path) -> None:
     write(root, "coverage.info", LCOV.format(hits=0))
 
 
+def unrecorded_file(root: Path) -> None:
+    write(root, "src/b.py", "def g():\n    return 1\n")
+
+
+FUZZ_LISTER = "fuzz-lister.py"
+CLEAN_FUZZ_LISTER = (
+    "import sys\n"
+    "for path in sys.argv[1:]:\n"
+    "    with open(path, 'rb') as handle:\n"
+    "        for number, raw in enumerate(handle.read().splitlines(), 1):\n"
+    "            line = raw.decode('utf-8', errors='replace')\n"
+    "            if '#' in line:\n"
+    "                print(f'{path}\\t{number}\\tcomment\\t#')\n"
+)
+
+
+def parser_fuzz_gate(argv: list[str]) -> int:
+    root = Path(argv[2])
+    if not (root / FUZZ_LISTER).is_file():
+        write(root, FUZZ_LISTER, CLEAN_FUZZ_LISTER)
+    return parser_fuzz.main(
+        [
+            "parser-fuzz",
+            "--mode",
+            "lister",
+            "--",
+            *gatelib.interpreter(inline=True),
+            str(root / FUZZ_LISTER),
+        ]
+    )
+
+
+def fuzz_lister_crashes(root: Path) -> None:
+    write(
+        root,
+        FUZZ_LISTER,
+        "import os, signal, sys\n"
+        "if b'\\x00' in open(sys.argv[1], 'rb').read():\n"
+        "    os.kill(os.getpid(), signal.SIGKILL)\n",
+    )
+
+
 def lowered_threshold(root: Path) -> None:
     write(root, "quality/thresholds.toml", THRESHOLDS.replace("lines = 2", "lines = 3"))
     commit(root, "chore(quality): raise the ceiling")
@@ -561,6 +604,13 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("commits", commits.main, bad_subject, []),
     ("coverage", coverage_groups.main, uncovered, []),
     ("coverage: an LCOV report", coverage_groups.main, uncovered_in_lcov, IN_LCOV),
+    (
+        "coverage: an unrecorded file on an absolute path",
+        coverage_groups.main,
+        unrecorded_file,
+        ["--check-unrecorded"],
+    ),
+    ("parser-fuzz: a lister that crashes on null bytes", parser_fuzz_gate, fuzz_lister_crashes, []),
     ("mutation: a survivor", mutation_survivors.main, survivor, ANY_TOOL),
     ("mutation: a stale entry", mutation_survivors.main, stale_entry, ANY_TOOL),
     (
