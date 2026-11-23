@@ -17,18 +17,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import loop_budget
 import machine
 import runrecord
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
 CEILINGS_TABLE = "ceilings.seconds"
-DEFAULT_HEADROOM = 1.5
+DEFAULT_HEADROOM = 1.25
+MIN_RUNS = 5
+MAX_RUNS = 10
+LOWER_SHARE = 0.8
 WARN_SHARE = 75.0
 FULL_PROOF = "bite-all"
 PROOF = "bite"
-TIER_BUDGETS = {"tier0": 60.0, "tier1": 900.0}
 GROUP = "group"
 GROUP_ENV = "RATCHET_BUDGET_GROUP"
 _TIMED_ENV: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
@@ -50,6 +53,7 @@ class Outcome:
     tier: str | None = None
     blocks: bool = True
     extra: Mapping[str, object] | None = None
+    explained: float | None = None
 
     @property
     def over(self) -> bool:
@@ -69,15 +73,24 @@ class Outcome:
             return "failed"
         if self.ceiling is None:
             return "unbounded"
+        if self.explained is not None:
+            return "not judged"
         return "red" if self.over else "green"
 
     @property
     def verdict(self) -> int:
-        return self.exit_code if self.exit_code != 0 else int(self.over and self.blocks)
+        if self.exit_code != 0:
+            return self.exit_code
+        return int(self.over and self.blocks and self.explained is None)
 
     def line(self) -> str:
         whose = f" of {self.tier}" if self.tier else ""
         bound = "no ceiling recorded" if self.ceiling is None else f"ceiling {self.ceiling:g}s"
+        if self.explained is not None:
+            return (
+                f"ratchet-budget: {self.key} took {self.seconds:.1f}s ({bound}{whose}):"
+                f" not judged: the machine (the machine explains {self.explained:.1f}s)"
+            )
         green = self.status == "green" and self.share is not None
         used = f", {self.share:.0f}% used" if green else ""
         reported = self.status == "red" and not self.blocks
@@ -116,11 +129,23 @@ def held(text: str, key: str, tier: str | None) -> tuple[float | None, str | Non
     return own, None
 
 
-def ceiling_of(text: str, key: str) -> float | None:
-    table = tomllib.loads(text).get("ceilings", {})
+def seconds_ceilings(text: str) -> dict[str, float]:
+    try:
+        table = tomllib.loads(text).get("ceilings", {})
+    except tomllib.TOMLDecodeError:
+        return {}
     seconds = table.get("seconds", {}) if isinstance(table, dict) else {}
-    value = seconds.get(key) if isinstance(seconds, dict) else None
-    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+    if not isinstance(seconds, dict):
+        return {}
+    return {
+        key: float(value)
+        for key, value in seconds.items()
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value < math.inf
+    }
+
+
+def ceiling_of(text: str, key: str) -> float | None:
+    return seconds_ceilings(text).get(key)
 
 
 def with_ceiling(text: str, key: str, seconds: float) -> str:
@@ -143,10 +168,8 @@ def with_ceiling(text: str, key: str, seconds: float) -> str:
     return text[:start] + body + text[end:]
 
 
-def lowered_ceiling(
-    existing: float | None, measured: float, headroom: float, *, floor: float = 0.0
-) -> float | None:
-    proposed = max(float(math.ceil(measured * headroom)), floor)
+def lowered_ceiling(existing: float | None, measured: float, headroom: float) -> float | None:
+    proposed = float(math.ceil(measured * headroom))
     return proposed if existing is None or proposed < existing else None
 
 
@@ -176,11 +199,48 @@ def records(path: Path | None) -> list[dict[str, object]]:
     return [] if path is None else list(runrecord.read(path))
 
 
-def timing(record: dict[str, object]) -> Timed | None:
+def timing(record: Mapping[str, object]) -> Timed | None:
     seconds, code = record.get("seconds"), record.get("exit")
     if isinstance(seconds, bool) or not isinstance(seconds, int | float):
         return None
-    return (float(seconds), code) if 0 <= seconds < math.inf and isinstance(code, int) else None
+    return (float(seconds), code) if 0 <= seconds < math.inf and type(code) is int else None
+
+
+def qualifying_seconds(all_records: Sequence[Mapping[str, object]], key: str) -> list[float]:
+    found = [
+        measured[0]
+        for record in all_records
+        if "kind" not in record
+        and record.get("key") == key
+        and record.get("status") in ("green", "unbounded")
+        and (measured := timing(record)) is not None
+        and measured[1] == 0
+    ]
+    return found[-MAX_RUNS:]
+
+
+def lowering_offer(
+    key: str, existing: float, all_records: Sequence[Mapping[str, object]]
+) -> tuple[float, int] | None:
+    runs = qualifying_seconds(all_records, key)
+    if len(runs) < MIN_RUNS:
+        return None
+    proposed = float(math.ceil(max(runs) * DEFAULT_HEADROOM))
+    if proposed <= existing * LOWER_SHARE and proposed < existing:
+        return proposed, len(runs)
+    return None
+
+
+def lowering_offers(text: str, report_path: Path | None) -> list[tuple[str, float, float, int]]:
+    ceilings = seconds_ceilings(text)
+    if not ceilings:
+        return []
+    all_records = records(report_path)
+    offers: list[tuple[str, float, float, int]] = []
+    for key, current in sorted(ceilings.items()):
+        if (offer := lowering_offer(key, current, all_records)) is not None:
+            offers.append((key, current, offer[0], offer[1]))
+    return offers
 
 
 def grouped(this_run: list[dict[str, object]], job: str) -> list[tuple[str, Timed | None]] | None:
@@ -263,7 +323,7 @@ def said(outcome: Outcome | NotJudged) -> None:
     if isinstance(outcome, NotJudged):
         print(f"::warning title=ratchet-budget::{outcome.line()}")
         return
-    if outcome.status == "red" and not outcome.blocks:
+    if outcome.explained is not None or (outcome.status == "red" and not outcome.blocks):
         print(f"::warning title=ratchet-budget::{outcome.line()}")
     if outcome.near:
         print(
@@ -295,7 +355,50 @@ def report(
             handle.write(json.dumps(record) + "\n")
 
 
-def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
+def machine_excuse(
+    measured: machine.Machine,
+    *,
+    seconds: float,
+    ceiling: float | None,
+    exit_code: int,
+    blocks: bool,
+) -> float | None:
+    if exit_code != 0 or not blocks or ceiling is None or seconds <= ceiling:
+        return None
+    if not measured.machine_read or measured.m < machine.NOISE_FLOOR:
+        return None
+    excuse = loop_budget.explained_seconds(
+        loop_budget.Reading(seconds, measured.m, machine_read=True)
+    )
+    return excuse if seconds - excuse <= ceiling else None
+
+
+def apply_set(
+    thresholds: Path,
+    text: str,
+    *,
+    key: str,
+    headroom: float,
+    report_path: Path,
+) -> None:
+    if key == PROOF:
+        print(f"ratchet-budget: the owner records {CEILINGS_TABLE}.{PROOF} by hand; --set skips it")
+        return
+    runs = qualifying_seconds(records(report_path), key)
+    if len(runs) < MIN_RUNS:
+        print(
+            f"ratchet-budget: {CEILINGS_TABLE}.{key} needs {MIN_RUNS} green runs to set,"
+            f" has {len(runs)}"
+        )
+        return
+    new = lowered_ceiling(ceiling_of(text, key), max(runs), headroom)
+    if new is not None:
+        thresholds.parent.mkdir(parents=True, exist_ok=True)
+        thresholds.write_text(with_ceiling(text, key, new), encoding="utf-8")
+        print(f"ratchet-budget: {CEILINGS_TABLE}.{key} set to {new:g}")
+
+
+def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str] | None]:
     parser = argparse.ArgumentParser()
     parser.add_argument("key")
     parser.add_argument("--root", default=".")
@@ -304,21 +407,63 @@ def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--tier")
     parser.add_argument("--over", choices=("block", "report"), default="block")
     parser.add_argument("--set", nargs="?", const=DEFAULT_HEADROOM, type=float, dest="headroom")
-    if "--" not in argv:
+    if "--" in argv:
+        split = argv.index("--")
+        return parser.parse_args(argv[1:split]), argv[split + 1 :]
+    options = parser.parse_args(argv[1:])
+    if options.headroom is None:
         parser.error("the command to time follows '--'")
-    split = argv.index("--")
-    return parser.parse_args(argv[1:split]), argv[split + 1 :]
+    return options, None
+
+
+def settle_ceiling(
+    thresholds: Path,
+    text: str,
+    *,
+    options: argparse.Namespace,
+    outcome: Outcome,
+    report_path: Path | None,
+) -> None:
+    if options.headroom is not None and report_path is not None:
+        if outcome.exit_code == 0 or options.key == PROOF:
+            apply_set(
+                thresholds,
+                text,
+                key=options.key,
+                headroom=options.headroom,
+                report_path=report_path,
+            )
+    elif outcome.status == "green" and report_path is not None:
+        own = ceiling_of(text, options.key)
+        if own is not None and (offer := lowering_offer(options.key, own, records(report_path))):
+            print(
+                f"ratchet-budget: {CEILINGS_TABLE}.{options.key} can be lowered from"
+                f" {own:g}s to {offer[0]:g}s ({offer[1]} green runs)"
+            )
 
 
 def main(argv: list[str]) -> int:
     options, command = parse(argv)
-    if not command:
-        print("ratchet-budget: no command to time")
-        return 2
     root = Path(options.root).resolve()
     thresholds = root / options.file
     text = thresholds.read_text(encoding="utf-8") if thresholds.is_file() else ""
-    report_to = root / options.report if options.report else None
+    if command is None:
+        apply_set(
+            thresholds,
+            text,
+            key=options.key,
+            headroom=options.headroom,
+            report_path=root / (options.report or runrecord.TIMING),
+        )
+        return 0
+    if not command:
+        print("ratchet-budget: no command to time")
+        return 2
+    report_to = (
+        root / (options.report or runrecord.TIMING)
+        if (options.report or options.headroom is not None)
+        else None
+    )
     tree = runrecord.tree_id(root) if report_to else None
     earlier = len(records(report_to))
     holder: list[machine.Machine] = []
@@ -333,9 +478,24 @@ def main(argv: list[str]) -> int:
             _TIMED_ENV.reset(env_token)
         gates = run_gates(report_to, earlier, job=options.key, manifest=manifest)
     ceiling, tier = held(text, options.key, None if gates is not None else options.tier)
-    extra = (holder[-1] if holder else machine.unavailable()).fields()
+    measured = holder[-1] if holder else machine.unavailable()
+    extra = {**measured.fields(), **({"tier": options.tier} if options.tier else {})}
+    explained = machine_excuse(
+        measured,
+        seconds=seconds,
+        ceiling=ceiling,
+        exit_code=exit_code,
+        blocks=options.over == "block",
+    )
     outcome = Outcome(
-        options.key, seconds, ceiling, exit_code, tier, options.over == "block", extra=extra
+        options.key,
+        seconds,
+        ceiling,
+        exit_code,
+        tier,
+        options.over == "block",
+        extra=extra,
+        explained=explained,
     )
     said(outcome)
     each_gate = judged(outcome, gates or [], text=text, tier=options.tier)
@@ -343,16 +503,7 @@ def main(argv: list[str]) -> int:
         said(each)
     if report_to:
         report(report_to, outcome, runrecord.stamp(root, tree), root=root)
-    if options.headroom is not None and options.key == PROOF:
-        print(f"ratchet-budget: the owner records {CEILINGS_TABLE}.{PROOF} by hand; --set skips it")
-    elif options.headroom is not None and exit_code == 0:
-        floor = TIER_BUDGETS.get(options.key, 0.0)
-        own = ceiling_of(text, options.key)
-        new = lowered_ceiling(own, seconds, options.headroom, floor=floor)
-        if new is not None:
-            thresholds.parent.mkdir(parents=True, exist_ok=True)
-            thresholds.write_text(with_ceiling(text, options.key, new), encoding="utf-8")
-            print(f"ratchet-budget: {CEILINGS_TABLE}.{options.key} set to {new:g}")
+    settle_ceiling(thresholds, text, options=options, outcome=outcome, report_path=report_to)
     return next((each.verdict for each in (outcome, *each_gate) if each.verdict), 0)
 
 

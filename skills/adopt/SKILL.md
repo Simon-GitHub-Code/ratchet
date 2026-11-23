@@ -227,7 +227,7 @@ Tell the owner this before step 1. It is not a question.
     - Run `tier0-tree` and `tier1` three times each. A gate red in parallel and green alone shares state, which tiers.md says how to separate.
     - Fill each cache of the CI templates with this stack's caches, and keep their shape. Its `path` names, in place of `.cache`, the dependency directory and every tool cache its job writes: in `deep.yml` the mutation cache and the fuzz corpus too, and for a compiled stack the content-addressed compiler cache outside the tree. Its `key` hashes this stack's lockfiles and tool configs in place of `**/*.lock`.
     - Fill the binding's Speed section, one line per concept, saying how this stack will meet it where nothing is bound yet, and record each slow gate's profiling command under `- Profile:` as `gate: command` using the tool's own timing flag where one exists. Leave `- Shards: 1`.
-    - Write the owner's answer to `loop.wait` into `quality/thresholds.toml` under `[ceilings.loop]` as `seconds` before the first `check` runs (step 12). When that first `check` is already over its budget, say so with the way out and record no ceiling from a run that was over. On a shared machine, cap the gates with `RATCHET_JOBS`.
+    - Write the owner's answer to `loop.wait` into `quality/thresholds.toml` under `[ceilings.loop]` as `seconds` before the first `check` runs (step 12). When that first `check` is already over its budget, say so with the way out and record no ceiling from a run that was over. Adoption records no `tier0` or `tier1` seconds ceiling keys (ADR 0088 supersedes ADR 0010). On a shared machine, cap the gates with `RATCHET_JOBS`.
 
     Done when the parallel modes are on, every CI cache names this stack's paths and lockfiles, the Speed section has no placeholder, three runs of each are green, and `[ceilings.loop]` has `seconds`.
 
@@ -268,7 +268,7 @@ Tell the owner this before step 1. It is not a question.
 
     The rehearsal may reuse that compiler cache and nothing else; it still cannot supply a missing config or tool. Remove each worktree when its round ends.
 
-    Run `check-deep` once. Its last gate is the proof: the `bite-all` entry point plants each fault of `quality/bites.toml` in a scratch copy and is green only when each gate was green without its fault and red with it. Then run `just budget bite-all --set`.
+    Run `check-deep` once. Its last gate is the proof: the `bite-all` entry point plants each fault of `quality/bites.toml` in a scratch copy and is green only when each gate was green without its fault and red with it. Adoption records no `tier0` or `tier1` seconds ceiling keys and records no ceiling from an over-budget run; once at least five green runs are in `.ratchet/timing.jsonl`, `just budget <key> --set` sets a ceiling from them.
 
     Done when `check` is green in a fresh worktree of the commit, `conformance` and `check-deep` exit 0, no rehearsal worktree is left, and the rehearsal passed, or its second round ended with the edits it still needs named.
 

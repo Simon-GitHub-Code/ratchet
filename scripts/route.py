@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import application_types
+import budget
 import documents
 import feature_preflight as preflight
 import flags
@@ -18,6 +19,7 @@ import gatelib
 import hooks_installed
 import justfile_text
 import loop_budget
+import machine
 import merge
 import merge_ready
 import owed
@@ -1092,9 +1094,80 @@ def not_judged_proposals(records: list[dict[str, object]]) -> list[str]:
     return []
 
 
+def tier2_time_proposal(key: str, rec: dict[str, object]) -> str | None:
+    if rec.get("status") != "red":
+        return None
+    seconds = loop_budget.finite_seconds(rec.get("seconds"))
+    ceiling = loop_budget.finite_seconds(rec.get("ceiling"))
+    if seconds is None or ceiling is None or seconds <= ceiling:
+        return None
+    m_raw = loop_budget.finite_seconds(rec.get("m"))
+    read_ok = rec.get("machine_read") is True
+    m_val = 1.0 if m_raw is None else m_raw
+    explained = loop_budget.explained_seconds(loop_budget.Reading(seconds, m_val, read_ok))
+    if read_ok and m_val >= machine.NOISE_FLOOR and seconds - explained <= ceiling:
+        return None
+    if not read_ok:
+        note = "the machine could not be read, so a busy machine is a possible cause"
+    elif explained > 0:
+        note = f"the machine explains {explained:.1f}s of it"
+    else:
+        note = "the machine explains none of it"
+    return (
+        f"tier 2 is red on time alone: `{key}` took {seconds:.1f}s of {ceiling:g}s;"
+        f" {note}; every gate passed; way out: narrow the gate to what the change"
+        " reaches (## What each gate reads), make it less work, or raising the ceiling"
+        " is an owner's record"
+    )
+
+
+def tier2_time_proposals(root: Path, records: list[dict[str, object]]) -> list[str]:
+    justfile = gatelib.read_text(root / "justfile") or ""
+    tier2 = frozenset(justfile_text.listed(justfile, "tier2_gates"))
+
+    def is_tier2(rec: dict[str, object]) -> bool:
+        return "kind" not in rec and (
+            rec.get("tier") == "tier2" or rec.get("key") in tier2 or rec.get("key") == "tier2"
+        )
+
+    tier2_records = [rec for rec in records if is_tier2(rec)]
+    if not tier2_records:
+        return []
+    last_run = tier2_records[-1].get("run")
+    if isinstance(last_run, str) and last_run and last_run != runrecord.NO_RUN:
+        scope = [rec for rec in records if "kind" not in rec and rec.get("run") == last_run]
+    else:
+        scope = tier2_records
+    latest = {key: rec for rec in scope if isinstance(key := rec.get("key"), str)}
+    if any(rec.get("exit") != 0 or isinstance(rec.get("exit"), bool) for rec in latest.values()):
+        return []
+    return [
+        proposal
+        for key, rec in latest.items()
+        if is_tier2(rec) and (proposal := tier2_time_proposal(key, rec)) is not None
+    ]
+
+
+def ceiling_proposals(root: Path) -> list[str]:
+    text = gatelib.read_text(root / gatelib.THRESHOLDS)
+    if not text:
+        return []
+    return [
+        (
+            f"`ceilings.seconds.{key}` is {current:g}s and can be lowered to {proposed:g}s"
+            f" (from {count} green runs: run `just budget {key} --set` to tighten it)"
+        )
+        for key, current, proposed, count in budget.lowering_offers(text, root / runrecord.TIMING)
+    ]
+
+
 def loop_proposals(root: Path) -> list[str]:
     records = list(runrecord.read(root / runrecord.TIMING))
-    return loop_wait_proposal(root, records) + not_judged_proposals(records)
+    return (
+        loop_wait_proposal(root, records)
+        + not_judged_proposals(records)
+        + tier2_time_proposals(root, records)
+    )
 
 
 def main(argv: list[str]) -> int:
@@ -1114,6 +1187,7 @@ def main(argv: list[str]) -> int:
         + event_proposals(root)
         + expired_switches(root)
         + loop_proposals(root)
+        + ceiling_proposals(root)
     )
     if options.as_json:
         print(json.dumps({**asdict(step), "also": also}, indent=2))

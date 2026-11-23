@@ -23,7 +23,8 @@ from tests.test_owed import merged_upgrade
 JUSTFILE = "justfile"
 CI = ".github/workflows/ci.yml"
 DEEP = ".github/workflows/deep.yml"
-OVER = ' --over "$OVER"'
+OVER = " --over report"
+OLD_OVER = ' --over "$OVER"'
 OVER_LINES = "  OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}\n"
 FLAG_ROW = "| flag | `flags.toml` | `^\\[\\[flag\\]\\]` |"
 FLAG = (
@@ -51,7 +52,6 @@ def test_a_budget_call_an_older_template_wrote_gains_the_flags_the_template_pass
 ) -> None:
     replace(CI, ' -- just ci-job "', ' -- just "')(repo)
     before = {path: text(repo, path) for path in (CI, DEEP)}
-    replace(CI, OVER_LINES, "")(repo)
     replace(CI, f" --tier tier1{OVER} --report", " --report")(repo)
     replace(CI, f"{OVER} --report", " --report")(repo)
     replace(DEEP, " --tier tier2 --report", " --report")(repo)
@@ -60,9 +60,20 @@ def test_a_budget_call_an_older_template_wrote_gains_the_flags_the_template_pass
         (CI, conformance.Auto),
         (DEEP, conformance.Auto),
     }
-    assert len(found) == 3, "ci.yml lacks --over and --tier, deep.yml --tier"
+    assert len(found) == 3, "ci.yml lacks --over report and --tier, deep.yml --tier"
     assert settle(repo) == []
     assert {path: text(repo, path) for path in (CI, DEEP)} == before
+
+    replace(CI, "  RATCHET_RUN:", f"{OVER_LINES}  RATCHET_RUN:")(repo)
+    replace(CI, OVER, OLD_OVER)(repo)
+    assert [f.path for f in conformance.findings(repo)] == [CI]
+    assert settle(repo) == []
+    assert text(repo, CI) == before[CI]
+
+    replace(CI, f"tier0{OVER}", f"tier0{OLD_OVER}")(repo)
+    assert [f.path for f in conformance.findings(repo)] == [CI]
+    assert settle(repo) == []
+    assert text(repo, CI) == before[CI]
 
 
 def test_a_budget_call_the_project_wrote_itself_is_left_for_an_agent(repo: Path) -> None:
@@ -71,9 +82,41 @@ def test_a_budget_call_the_project_wrote_itself_is_left_for_an_agent(repo: Path)
     written = text(repo, CI)
     [found] = settle(repo)
     assert found.path == CI
-    assert "('--over' absent)" in found.problem
+    assert "('--over report' absent)" in found.problem
     assert isinstance(found.fix, conformance.Agent)
     assert text(repo, CI) == written
+
+
+def test_a_budget_job_cache_gains_the_timing_log_path_and_leaves_custom_cache_to_agent(
+    repo: Path,
+) -> None:
+    before_ci, before_deep = text(repo, CI), text(repo, DEEP)
+    replace(CI, "            .ratchet/timing.jsonl\n", "")(repo)
+    replace(DEEP, "            .ratchet/timing.jsonl\n", "")(repo)
+    assert settle(repo) == []
+    assert text(repo, CI) == before_ci
+    assert text(repo, DEEP) == before_deep
+
+    (repo / DEEP).write_text(
+        before_deep.replace("            .ratchet/timing.jsonl\n", "", 1), encoding="utf-8"
+    )
+    assert settle(repo) == []
+    assert text(repo, DEEP) == before_deep
+
+    replace(
+        DEEP,
+        "          path: |\n            .cache\n            .ratchet/timing.jsonl\n",
+        "          path: .cache\n",
+    )(repo)
+    assert settle(repo) == []
+    assert ".ratchet/timing.jsonl" in text(repo, DEEP)
+
+    replace(DEEP, "            .ratchet/timing.jsonl\n", "")(repo)
+    replace(DEEP, "          path: |\n            .cache\n", "          path: [~/.cache]\n")(repo)
+    left = settle(repo)
+    assert len(left) == 1
+    assert left[0].path == DEEP
+    assert isinstance(left[0].fix, conformance.Agent)
 
 
 def test_a_missing_shard_count_is_the_day_one_count_and_a_bad_one_is_an_agent_s(
@@ -864,9 +907,7 @@ def test_ci_gains_ratchet_run_and_loop_job_via_auto_edits_and_falls_back_when_ha
     assert text(repo, CI) == before
 
     no_env_src = without_both.replace(
-        "env:\n"
-        "  RATCHET_PLUGIN: ${{ github.workspace }}/ratchet\n"
-        "  OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}\n",
+        "env:\n  RATCHET_PLUGIN: ${{ github.workspace }}/ratchet\n",
         "",
     )
     no_env = conformance.with_ci_run("ci.yml")(no_env_src)

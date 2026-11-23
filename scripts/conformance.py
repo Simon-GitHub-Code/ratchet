@@ -258,8 +258,11 @@ TRIGGERS_PLACEHOLDER_ROW = (
     " | <optional regex> |"
 )
 MECHANICAL_TRIGGERS = {"flag": "| flag | `flags.toml` | `^\\[\\[flag\\]\\]` |"}
+OLD_OVER_ENV = "  OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}"
+OLD_OVER_FLAG = '--over "$OVER"'
+TIMING_LOG = ".ratchet/timing.jsonl"
 CEILING_SHAPE = (
-    ("ci.yml", "--over", "says that a ceiling reports on a pull request and blocks elsewhere"),
+    ("ci.yml", "--over report", "reports tier 0 and tier 1 seconds ceilings on every event"),
     ("ci.yml", "--tier", HELD_TO_TIER),
     ("deep.yml", "--tier", HELD_TO_TIER),
 )
@@ -1979,13 +1982,29 @@ def workflow_speed_findings(root: Path, path: Path) -> Iterable[Finding]:
             yield agent(f"{path.relative_to(root)}: nothing {meaning} ('{marker}' absent)")
     yield from tier_step_findings(root, path, content)
     yield from ci_loop_findings(root, path, content)
-    for name, marker, meaning in CEILING_SHAPE:
-        if path.name == name and marker not in content:
-            problem = f"nothing {meaning} ('{marker}' absent)"
-            does = "pass the template's budget flags to each budget call an older template wrote"
+    regroupable_ci = (
+        path.name == "ci.yml"
+        and JOB_LIST_SHAPE[0] not in content
+        and not isinstance(regroup(content), Kept)
+    )
+    if not regroupable_ci:
+        for name, marker, meaning in CEILING_SHAPE:
+            if path.name == name and marker not in content:
+                problem = f"nothing {meaning} ('{marker}' absent)"
+                does = (
+                    "pass the template's budget flags to each budget call an older template wrote"
+                )
+                yield Finding(
+                    str(path.relative_to(root)), problem, Edit(does, budget_flags(name), Agent())
+                )
+        if path.name == "ci.yml" and "--over report" in content and OLD_OVER_FLAG in content:
+            problem = f"still passes `{OLD_OVER_FLAG}` on a tier 0 or tier 1 budget call"
+            does = "pass `--over report` to every tier 0 and tier 1 budget call and drop `OVER:`"
             yield Finding(
-                str(path.relative_to(root)), problem, Edit(does, budget_flags(name), Agent())
+                str(path.relative_to(root)), problem, Edit(does, budget_flags(path.name), Agent())
             )
+        if path.name in TIER_WORKFLOWS:
+            yield from timing_cache_findings(root, path, content)
     yield from bare_cache_finding(root, path, content)
     yield from matrix_cache_finding(root, path, content)
     if path.name in TIER_WORKFLOWS and SHARD_MATRIX not in content:
@@ -2219,12 +2238,73 @@ def per_run_keys(current: str | None) -> str:
     return "\n".join(lines)
 
 
+def timing_cache_findings(root: Path, path: Path, content: str) -> Iterable[Finding]:
+    rel = str(path.relative_to(root))
+    for job, job_lines in workflow_job_blocks(content):
+        if "budget.py" not in "\n".join(job_lines):
+            continue
+        steps = mapping_section(job_lines, "steps")
+        cache_steps = [
+            step_lines
+            for step_lines in step_items(steps[1] if steps else [])
+            if step_cache_key(step_lines)[0]
+        ]
+        if cache_steps and not any(TIMING_LOG in "\n".join(step) for step in cache_steps):
+            problem = (
+                f"job `{job}` does not cache `{TIMING_LOG}`, so `budget --set` has no"
+                " runner history"
+            )
+            does = f"add `{TIMING_LOG}` to each budget job's cache path"
+            yield Finding(rel, problem, Edit(does, with_timing_cache(), Agent()))
+            return
+
+
+def with_timing_cache() -> gatelib.Want:
+    def want(current: str | None) -> str:
+        lines = (current or "").split("\n")
+        out: list[str] = []
+        in_cache = False
+        index = 0
+        while index < len(lines):
+            line = lines[index]
+            stripped = line.lstrip(" ")
+            if stripped.startswith("- "):
+                in_cache = CACHE_USES in line
+            if in_cache and stripped.startswith("path:"):
+                indent = line[: len(line) - len(stripped)]
+                value = stripped.partition(":")[2].strip()
+                if value == "|":
+                    out.append(line)
+                    index += 1
+                    body: list[str] = []
+                    while index < len(lines) and (
+                        not lines[index].strip()
+                        or len(lines[index]) - len(lines[index].lstrip(" ")) > len(indent)
+                    ):
+                        body.append(lines[index])
+                        index += 1
+                    if TIMING_LOG not in "\n".join(body) and body:
+                        child_indent = body[0][: len(body[0]) - len(body[0].lstrip(" "))]
+                        body.append(f"{child_indent}{TIMING_LOG}")
+                    out.extend(body)
+                    continue
+                if value and not value.startswith("[") and TIMING_LOG not in value:
+                    out.extend(
+                        [f"{indent}path: |", f"{indent}  {value}", f"{indent}  {TIMING_LOG}"]
+                    )
+                    index += 1
+                    continue
+            out.append(line)
+            index += 1
+        return "\n".join(out)
+
+    return want
+
+
 def budget_flags(workflow: str) -> gatelib.Want:
     tier = "tier2" if workflow == "deep.yml" else "tier1"
-    over = ' --over "$OVER"' if workflow == "ci.yml" else ""
+    over = " --over report" if workflow == "ci.yml" else ""
     flags = {OLD_TIER0_BUDGET: over, OLD_GATE_BUDGET: f" --tier {tier}{over}"}
-    template = template_file(f".github/workflows/{workflow}").splitlines()
-    said = [line for line in template if line.startswith("  OVER:")][:1]
 
     def want(current: str | None) -> str:
         lines = (current or "").split("\n")
@@ -2234,10 +2314,15 @@ def budget_flags(workflow: str) -> gatelib.Want:
                 lines[index] = (
                     f"{indent}- run: {run.replace(' --report ', f'{flags[run]} --report ', 1)}"
                 )
-        if over and said and not any(line.startswith("  OVER:") for line in lines):
-            at = next((i for i, line in enumerate(lines) if line.startswith(PLUGIN_ENV)), None)
-            if at is not None:
-                lines[at + 1 : at + 1] = said
+            elif (
+                not indent.strip()
+                and workflow == "ci.yml"
+                and "budget.py" in run
+                and OLD_OVER_FLAG in run
+            ):
+                lines[index] = f"{indent}- run: {run.replace(OLD_OVER_FLAG, '--over report')}"
+        if workflow == "ci.yml" and OLD_OVER_FLAG not in "\n".join(lines):
+            lines = [line for line in lines if line != OLD_OVER_ENV]
         return "\n".join(lines)
 
     return want
@@ -2825,6 +2910,7 @@ def regroup_hunks() -> tuple[Hunk, ...]:
     at = lines.index("      - id: shards")
     end = next(i for i in range(at + 1, len(lines)) if not lines[i].startswith(STEP_BODY))
     run = next(line for line in lines if line.endswith(NEW_RUN))
+    tier0_run = next(line for line in lines if '" tier0 ' in line)
     guard = next(line for line in lines if line.startswith("    if: needs.shape.outputs.tier1 "))
     proven_at = lines.index("  proven:")
     tier0_at = lines.index("  tier0:")
@@ -2833,6 +2919,8 @@ def regroup_hunks() -> tuple[Hunk, ...]:
     shape_at = lines.index("  shape:")
     shape_runs_at = lines.index("    runs-on: ubuntu-latest", shape_at)
     cache_uses = "      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6"
+    cache_path = ("          path: |", "            .cache")
+    cache_path_with_timing = (*cache_path, f"            {TIMING_LOG}")
     cache_step = (
         '      - run: python3 "$RATCHET_PLUGIN/scripts/cache_restore.py"'
         ' --report .ratchet/timing.jsonl --hit "${{ steps.cache.outputs.cache-hit }}" -- .cache'
@@ -2848,7 +2936,16 @@ def regroup_hunks() -> tuple[Hunk, ...]:
         ("the shape job's steps", OLD_SHAPE_STEP, tuple(lines[at - 2 : end])),
         ("the `tier1:` line", ("  tier1:",), ("  tier1:", guard)),
         ("the tier 1 jobs' `needs:` lines", (OLD_NEEDS,), (NEW_NEEDS,)),
-        ("the budget calls' run lines", (run.removesuffix(NEW_RUN) + OLD_RUN,), (run,)),
+        (
+            "the tier 0 budget call's run line",
+            (tier0_run.replace("--over report", OLD_OVER_FLAG),),
+            (tier0_run,),
+        ),
+        (
+            "the budget calls' run lines",
+            (run.removesuffix(NEW_RUN).replace("--over report", OLD_OVER_FLAG) + OLD_RUN,),
+            (run,),
+        ),
         (
             "the `proven:` job and `tier0:` guard",
             ("  tier0:",),
@@ -2865,12 +2962,13 @@ def regroup_hunks() -> tuple[Hunk, ...]:
             tuple(lines[shape_at:shape_runs_at]),
         ),
         ("the `actions/cache` step ids", (cache_uses,), (cache_uses, "        id: cache")),
+        ("the timing log cache path", cache_path, cache_path_with_timing),
         (
             "the cache restore steps",
             (TOOLCHAIN_PLACEHOLDER,),
             (cache_step, TOOLCHAIN_PLACEHOLDER),
         ),
-        ("the `RATCHET_RUN` env var", ("jobs:",), (run_line, "jobs:")),
+        ("the `RATCHET_RUN` env var", (OLD_OVER_ENV, "jobs:"), (run_line, "jobs:")),
         (
             "the `loop` job",
             (*lines[upload_at - 2 : upload_at + 1], ""),
@@ -2934,8 +3032,25 @@ def checkout_line() -> re.Pattern[str]:
     return re.compile(re.escape(template).replace(re.escape(PLUGIN_CHECKOUT_PLACEHOLDER), '[^"]*'))
 
 
+def without_post_release_budget_edits(lines: list[str]) -> list[str]:
+    text = "\n".join(lines)
+    if OLD_OVER_ENV not in text and CI_RUN_MARKER not in text and "jobs:" in lines:
+        jobs_at = lines.index("jobs:")
+        lines = [*lines[:jobs_at], OLD_OVER_ENV, *lines[jobs_at:]]
+        text = "\n".join(lines)
+    text = text.replace(
+        f"          path: |\n            .cache\n            {TIMING_LOG}\n",
+        "          path: |\n            .cache\n",
+    )
+    text = text.replace(
+        f" --over report --report {TIMING_LOG} -- just ",
+        f" {OLD_OVER_FLAG} --report {TIMING_LOG} -- just ",
+    )
+    return text.split("\n")
+
+
 def regroup(text: str) -> str | Kept:
-    lines = text.replace("\r\n", "\n").split("\n")
+    lines = without_post_release_budget_edits(text.replace("\r\n", "\n").split("\n"))
     checkout = checkout_line()
     plugin = next((line for line in lines if checkout.fullmatch(line)), None)
     if plugin is None:
@@ -2966,7 +3081,8 @@ def replaced(own: list[str], template: tuple[str, ...]) -> list[Span] | Kept:
         if placed != [job_at(wrote, at) for at in blocks_at(template, old)]:
             return Kept(f"{what} are not as a released template wrote them")
         after = [next((one for one in own[at + len(old) :] if one.strip()), "") for at in found]
-        if old[-1].startswith(STEP_BODY) and any(one.startswith(STEP_BODY) for one in after):
+        tail_indent = " " * (len(old[-1]) - len(old[-1].lstrip(" ")))
+        if old[-1].startswith(STEP_BODY) and any(one.startswith(tail_indent) for one in after):
             return Kept(f"a line the plugin did not write runs on from {what}")
         spans += [(at, old, new, job) for at, job in zip(found, placed, strict=True)]
     for job in dict.fromkeys(job for *_, job in spans if job):
@@ -4246,8 +4362,9 @@ def check_bite_all_ceiling(root: Path) -> Iterable[Finding]:
             Agent(
                 then=(
                     (
-                        "run `just check-deep` once on a quiet machine, then `just budget"
-                        " bite-all --set`, which records the ceiling from that measured run"
+                        "run `just budget bite-all --set`, which records the ceiling once at least"
+                        " five green runs are in `.ratchet/timing.jsonl` (from `just check-deep`"
+                        " or deep CI runs)"
                     ),
                 )
             ),
@@ -4941,7 +5058,11 @@ def speed_mutations() -> list[Mutation]:
     stated = "stated for this stack"
     ci, deep = str(WORKFLOWS / "ci.yml"), str(WORKFLOWS / "deep.yml")
     return [
-        ("CI whose ceilings block a pull request", rewrite(ci, ' --over "$OVER"', "")),
+        ("CI whose ceilings block a pull request", rewrite(ci, " --over report", "")),
+        (
+            "CI job without .ratchet/timing.jsonl in its cache path",
+            rewrite(ci, f"            {TIMING_LOG}\n", "", count=1),
+        ),
         ("nightly that holds no job to its tier's ceiling", rewrite(deep, " --tier tier2", "")),
         ("binding without a Speed section", rebind(SPEED_SECTION, "## Slowness")),
         ("Speed section without a part", rebind("- Cache: ", "- Store: ")),

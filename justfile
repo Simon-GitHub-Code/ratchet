@@ -94,4 +94,4 @@ first-hour-matrix plugin dir *flags:
     uv run evals/first-hour/run.py matrix --plugin {{plugin}} --dir {{dir}} {{flags}}
 
 budget key *flags:
-    python3 scripts/budget.py {{key}} --report .ratchet/timing.jsonl {{flags}} -- just {{key}}
+    cmd=(python3 scripts/budget.py {{key}} --report .ratchet/timing.jsonl {{flags}}); case " {{flags}} " in *" --set "*|*" --set="*|*" -- "*) ;; *) cmd+=(-- just {{key}}) ;; esac; "${cmd[@]}"

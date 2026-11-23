@@ -206,7 +206,7 @@ incidents: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/conformance.py" --incidents .
 
 budget key *flags: _plugin
-    {{plugin_py}} "{{ratchet_plugin}}/scripts/budget.py" {{key}} --report .ratchet/timing.jsonl {{flags}} -- just {{key}}
+    cmd=({{plugin_py}} "{{ratchet_plugin}}/scripts/budget.py" {{key}} --report .ratchet/timing.jsonl {{flags}}); case " {{flags}} " in *" --set "*|*" --set="*|*" -- "*) ;; *) cmd+=(-- just {{key}}) ;; esac; "${cmd[@]}"
 
 merge-ready *flags: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/merge_ready.py" {{flags}}

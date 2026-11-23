@@ -344,6 +344,8 @@ def test_a_seconds_table_with_no_bite_all_ceiling_is_an_agent_finding_naming_the
     assert (found.path, found.rule) == (THRESHOLDS, "bite_all_ceiling")
     assert isinstance(found.fix, conformance.Agent)
     assert "`just budget bite-all --set`" in " ".join(found.fix.then)
+    assert "five green" in " ".join(found.fix.then)
+    assert ".ratchet/timing.jsonl" in " ".join(found.fix.then)
     path.write_text(budget.with_ceiling(path.read_text(encoding="utf-8"), "bite-all", 3600.0))
     assert ceiling_findings(repo) == []
 

@@ -340,7 +340,7 @@ The `justfile`'s `serial` and `alone` variables say which gates never run at onc
 - Profile: <each slow gate's profiling command as `gate: command` in backticks, using the tool's own timing flag; leave this placeholder while none is>
 - Incremental: <the mutation tool's incremental mode: the option that has a local run reuse the last run's results and test only the mutants whose code or tests changed, which the `justfile`'s `mutation_incremental` holds and CI leaves out; or `none: <reason>` where the tool has none>
 - Affected only: <what a pull request does not run: the changed-code gates, the later-tier suites past the test files the change adds or edits (`tests-changed` runs those, and `test-stability-changed` shuffles changed test files), the path filters, the affected-only tool of a monorepo; the default branch runs everything>
-- Ceilings: <`quality/thresholds.toml` `[ceilings.seconds]`, one per tier, set by `just budget <tier> --set` from the first green run and only lowered since; the seconds one gate may take before it is sharded>
+- Ceilings: <`quality/thresholds.toml` `[ceilings.seconds]`, per-gate ceilings set by `just budget <gate> --set` from five or more green runs (up to the last ten) at 1.25 times the slowest run rounded up and only lowered since, reporting before tier 2 and blocking only in tier 2; the seconds one gate may take before it is sharded>
 
 ## Shared reports
 

@@ -95,12 +95,13 @@ def test_the_jobs_rewrite_replaces_the_released_line_with_code_alone() -> None:
     assert comments_in(made) == []
 
 
-def test_a_workflow_gains_the_budget_flags_and_the_variable_without_its_comment(
+def test_a_workflow_gains_the_budget_flags_without_any_comment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(conformance, "template_file", lambda _: WORKFLOW_TEMPLATE)
     after = conformance.budget_flags("ci.yml")(OLD_WORKFLOW)
-    assert "  OVER: report" in after
+    assert "tier0 --over report --report" in after
+    assert "OVER:" not in after
     assert comments_in(after) == []
 
 
