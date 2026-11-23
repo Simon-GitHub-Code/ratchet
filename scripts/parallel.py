@@ -505,6 +505,14 @@ class Scheduler:
         self.first_failed = False
         self.green_done: set[str] = set()
         self.skipped_deps: list[tuple[str, str]] = []
+        self.build_spec = build_cache.parse_build_spec(
+            gatelib.read_text(self.root / gatelib.BINDING) or ""
+        )
+        self.prior_build_green = (
+            has_prior_green(self.report_to, self.build_spec.gate, self.tree)
+            if (self.report_to is not None and self.build_spec is not None)
+            else False
+        )
         self.live: dict[str, Live] = {}
         self.finished: list[Finished] = []
         self.stopped: list[str] = []
@@ -1044,6 +1052,76 @@ def closing(scheduler: Scheduler, wall: float) -> list[str]:
     return problems
 
 
+def has_prior_green(report_to: Path, gate: str, tree: str | None) -> bool:
+    if not tree or tree == runrecord.NO_TREE:
+        return False
+    for rec in runrecord.read(report_to):
+        if "kind" in rec or rec.get("tree") != tree:
+            continue
+        if rec.get("status") not in ("green", "unbounded") or rec.get("exit", 0) != 0:
+            continue
+        key = rec.get("key")
+        if isinstance(key, str) and matches_gate(key, gate):
+            return True
+    return False
+
+
+def build_cache_exists(
+    root: Path, reuse: build_cache.ReusePolicy, cache_paths: tuple[str, ...]
+) -> bool:
+    if reuse.kind is build_cache.ReuseKind.NONE:
+        return False
+    if reuse.kind is build_cache.ReuseKind.MOVED:
+        return any((root / path).exists() for path in cache_paths)
+    env_val = os.environ.get(reuse.env_name, "").strip()
+    if not env_val:
+        return False
+    shared_dir = Path(env_val).expanduser()
+    if not shared_dir.is_absolute():
+        shared_dir = root / shared_dir
+    return shared_dir.exists()
+
+
+def cold_build_cause(scheduler: Scheduler, spec: build_cache.BuildSpec) -> str:
+    if not build_cache_exists(scheduler.root, spec.reuse, spec.cache_paths):
+        return "no cache"
+    return "cache rejected" if scheduler.prior_build_green else "fresh tree"
+
+
+def cold_build_info(
+    scheduler: Scheduler,
+) -> tuple[build_cache.BuildSpec, Finished, str] | None:
+    spec = scheduler.build_spec
+    if spec is None or spec.cold_seconds <= spec.warm_seconds:
+        return None
+    result = next((r for r in scheduler.finished if r.name == spec.gate), None)
+    if result is None:
+        result = next((r for r in scheduler.finished if matches_gate(r.name, spec.gate)), None)
+    if result is None or result.seconds < (spec.warm_seconds + spec.cold_seconds) / 2.0:
+        return None
+    return spec, result, cold_build_cause(scheduler, spec)
+
+
+def append_cold_build(
+    report_to: Path,
+    cold: tuple[build_cache.BuildSpec, Finished, str],
+    stamp: Mapping[str, str],
+    *,
+    root: Path,
+) -> None:
+    spec, result, cause = cold
+    entry: dict[str, object] = {
+        "kind": runrecord.COLD_BUILD,
+        "gate": spec.gate,
+        "seconds": round(result.seconds, 3),
+        "warm": spec.warm_seconds,
+        "cold": spec.cold_seconds,
+        "cause": cause,
+        **stamp,
+    }
+    runrecord.append(report_to, entry, root=root)
+
+
 def record(
     scheduler: Scheduler,
     wall: float,
@@ -1057,6 +1135,13 @@ def record(
         say(
             f"parallel: the binding's Local caches bullet names {path}, which does not exist"
             " after this run, so the tool that owns it ran without its cache"
+        )
+    cold = cold_build_info(scheduler)
+    if cold is not None:
+        spec, result, cause = cold
+        say(
+            f"parallel: cold build: {spec.gate} took {result.seconds:.1f}s"
+            f" (recorded warm {spec.warm_seconds:g}s, cold {spec.cold_seconds:g}s): {cause}"
         )
     if scheduler.report_to is None:
         return
@@ -1077,6 +1162,8 @@ def record(
     for path in missing:
         found: dict[str, object] = {"kind": runrecord.CACHE_MISSING, "path": path, **stamp}
         runrecord.append(scheduler.report_to, found, root=scheduler.root)
+    if cold is not None:
+        append_cold_build(scheduler.report_to, cold, stamp, root=scheduler.root)
 
 
 def verdict(scheduler: Scheduler, problems: list[str], *, exit_code: int = 1) -> str:

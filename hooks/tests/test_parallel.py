@@ -24,6 +24,7 @@ import machine
 import parallel
 import runrecord
 import schedule
+from tests import repos
 from tests.repos import git
 from tests.servers import gone
 
@@ -2066,6 +2067,7 @@ def test_wall_clock_line_with_dependencies_never_blames_serial_or_order(
     assert line == "parallel: the lanes were full (4 lanes, 30.0s of check time in 20.0s)"
     assert not parallel.matches_gate("a 'b", "b")
     assert not parallel.matches_gate("", "b")
+    assert parallel.matches_gate("b", "b")
 
 
 def test_first_runs_fast_gates_before_heavy_and_allows_later_or_none(
@@ -2195,3 +2197,139 @@ def test_first_stops_before_heavy_gates_on_red_or_unjudged_and_validates_deps(
     line = parallel.wall_clock_line(sched, 7.0)
     assert "order lost" not in line
     assert line == "parallel: the lanes were full (4 lanes, 12.0s of check time in 7.0s)"
+
+
+def test_cold_build_detection_reports_no_cache_fresh_tree_and_cache_rejected(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    moved_speed = (
+        "- Build: gate `build`; caches `.build-cache`; cold 0.2s; warm 0.02s; reuse moved\n"
+    )
+    root = repos.repository(
+        tmp_path / "moved",
+        {
+            "README.md": "# R\n",
+            str(gatelib.BINDING): (
+                "# Binding\n\n## Gates\n\n| Q | T | Tier | Threshold source | Entry point |\n"
+                "|---|---|---|---|---|\n"
+                "| b | builder | 1 | | `just build` |\n\n"
+                f"## Speed\n\n{moved_speed}"
+            ),
+        },
+    )
+    report = root / ".ratchet/timing.jsonl"
+    cold_gate = named("import time; time.sleep(0.16)", name="build")
+    warm_gate = named("pass", name="build")
+
+    assert run("--root", str(root), "--report", str(report), "--", cold_gate) == 0
+    out_no_cache = capsys.readouterr().out.splitlines()
+    expected_no_cache = next(line for line in out_no_cache if "cold build:" in line)
+    assert re.fullmatch(
+        r"parallel: cold build: build took \d+\.\ds \(recorded warm 0\.02s, cold 0\.2s\): no cache",
+        expected_no_cache,
+    )
+    assert out_no_cache[-1] == "parallel: green (1 ran)"
+    rows = [json.loads(line) for line in report.read_text().splitlines()]
+    cold_rows = [row for row in rows if row.get("kind") == runrecord.COLD_BUILD]
+    assert len(cold_rows) == 1
+    assert (cold_rows[0]["gate"], cold_rows[0]["cause"]) == ("build", "no cache")
+    assert (cold_rows[0]["warm"], cold_rows[0]["cold"]) == (0.02, 0.2)
+
+    (root / ".build-cache").mkdir()
+    report.unlink()
+    assert run("--root", str(root), "--report", str(report), "--", cold_gate) == 0
+    out_fresh = capsys.readouterr().out
+    assert "): fresh tree\n" in out_fresh
+
+    report.write_text("", encoding="utf-8")
+    tree = runrecord.tree_id(root)
+    prior_records = [
+        {"kind": runrecord.TIER, "tree": tree, "status": "green"},
+        {"key": cold_gate, "tree": "other-tree", "status": "green", "exit": 0},
+        {"key": cold_gate, "tree": tree, "status": "failed", "exit": 1},
+        {"key": "other", "tree": tree, "status": "green", "exit": 0},
+        {"key": cold_gate, "tree": tree, "status": "unbounded", "exit": 0},
+    ]
+    report.write_text("\n".join(json.dumps(r) for r in prior_records) + "\n", encoding="utf-8")
+    assert run("--root", str(root), "--report", str(report), "--", cold_gate) == 0
+    out_rejected = capsys.readouterr().out
+    assert "): cache rejected\n" in out_rejected
+    rows = [json.loads(line) for line in report.read_text().splitlines()]
+    assert rows[-1]["kind"] == runrecord.COLD_BUILD
+    assert rows[-1]["cause"] == "cache rejected"
+
+    assert run("--root", str(root), "--", cold_gate) == 0
+    assert "): cache rejected\n" not in capsys.readouterr().out
+
+    slow_spec = "- Build: gate `build`; caches `.build-cache`; cold 30s; warm 0.02s; reuse moved\n"
+    (root / gatelib.BINDING).write_text(
+        "# Binding\n\n## Gates\n\n| Q | T | Tier | Threshold source | Entry point |\n"
+        "|---|---|---|---|---|\n| b | builder | 1 | | `just build` |\n\n"
+        f"## Speed\n\n{slow_spec}",
+        encoding="utf-8",
+    )
+    assert run("--root", str(root), "--report", str(report), "--", warm_gate) == 0
+    assert "cold build:" not in capsys.readouterr().out
+
+    bare_no_git = binding(tmp_path / "nogit", {"build": "builder"}, speed=moved_speed)
+    (bare_no_git / ".build-cache").mkdir()
+    assert (
+        run("--root", str(bare_no_git), "--report", ".ratchet/timing.jsonl", "--", cold_gate) == 0
+    )
+    assert "): fresh tree\n" in capsys.readouterr().out
+
+
+def test_cold_build_shared_none_and_edge_cases(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shared_speed = (
+        "- Build: gate `build`; caches `out`; cold 10s; warm 1s;"
+        " reuse shared `MY_BUILD_CACHE=.shared`\n"
+    )
+    root = binding(tmp_path / "shared", {"build": "builder"}, speed=shared_speed)
+    options = argparse.Namespace(root=root, jobs=1, fail_fast=False, report=None, alone=[], wide=[])
+    monkeypatch.delenv("MY_BUILD_CACHE", raising=False)
+    sched = parallel.Scheduler([], [], options, kept=schedule.Schedule())
+    sched.finished = [parallel.Finished("build", 8.0, 0, "")]
+    parallel.record(sched, 8.0, exit_code=0, gates=["build"])
+    assert "no cache" in capsys.readouterr().out
+
+    monkeypatch.setenv("MY_BUILD_CACHE", ".shared")
+    parallel.record(sched, 8.0, exit_code=0, gates=["build"])
+    assert "no cache" in capsys.readouterr().out
+
+    (root / ".shared").mkdir()
+    parallel.record(sched, 8.0, exit_code=0, gates=["build"])
+    assert "fresh tree" in capsys.readouterr().out
+
+    abs_cache = tmp_path / "abs-cache"
+    abs_cache.mkdir()
+    monkeypatch.setenv("MY_BUILD_CACHE", str(abs_cache))
+    parallel.record(sched, 8.0, exit_code=0, gates=["build"])
+    assert "fresh tree" in capsys.readouterr().out
+
+    none_speed = (
+        "- Build: gate `build`; caches none; cold 10s; warm 1s;"
+        " reuse none: compiler has no incremental mode\n"
+    )
+    none_root = binding(tmp_path / "none", {"build": "builder"}, speed=none_speed)
+    none_opts = argparse.Namespace(
+        root=none_root, jobs=1, fail_fast=False, report=None, alone=[], wide=[]
+    )
+    none_sched = parallel.Scheduler([], [], none_opts, kept=schedule.Schedule())
+    none_sched.finished = [parallel.Finished("build", 8.0, 0, "")]
+    parallel.record(none_sched, 8.0, exit_code=0, gates=["build"])
+    assert "no cache" in capsys.readouterr().out
+
+    equal_speed = "- Build: gate `build`; caches `out`; cold 5s; warm 5s; reuse moved\n"
+    eq_root = binding(tmp_path / "equal", {"build": "builder"}, speed=equal_speed)
+    eq_opts = argparse.Namespace(
+        root=eq_root, jobs=1, fail_fast=False, report=None, alone=[], wide=[]
+    )
+    eq_sched = parallel.Scheduler([], [], eq_opts, kept=schedule.Schedule())
+    eq_sched.finished = [parallel.Finished("build", 6.0, 0, "")]
+    assert parallel.cold_build_info(eq_sched) is None
+
+    other_sched = parallel.Scheduler([], [], options, kept=schedule.Schedule())
+    other_sched.finished = [parallel.Finished("lint", 8.0, 0, "")]
+    assert parallel.cold_build_info(other_sched) is None
