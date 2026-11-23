@@ -2298,3 +2298,45 @@ def test_build_speed_line_validates_syntax_and_known_gates_when_filled(repo: Pat
         encoding="utf-8",
     )
     assert any("unknown gate `nonexistent`" in line for line in red(repo))
+
+
+def test_bound_accessibility_gate_requires_forced_colors_and_reduced_motion_proofs(
+    repo: Path,
+) -> None:
+    assert red(repo) == []
+    registry_path = str(project_bite.REGISTRY)
+    original_registry = (repo / registry_path).read_text(encoding="utf-8")
+
+    replace(registry_path, 'proof = "forced-colors"\n', "")(repo)
+    assert red(repo) == [
+        (
+            "quality/bites.toml: gate 'a11y' (accessibility) has no [[bite]] with"
+            ' proof = "forced-colors": an element that loses its visible border, outline, or'
+            " contrast under emulated forced-colors mode"
+        )
+    ]
+
+    (repo / registry_path).write_text(original_registry, encoding="utf-8")
+    replace(registry_path, 'proof = "reduced-motion"\n', "")(repo)
+    assert red(repo) == [
+        (
+            "quality/bites.toml: gate 'a11y' (accessibility) has no [[bite]] with"
+            ' proof = "reduced-motion": an animation or transition that remains active under'
+            " emulated reduced-motion preference"
+        )
+    ]
+
+    (repo / registry_path).write_text(
+        re.sub(
+            r'\[\[bite\]\]\ngate = "a11y"\n(?:(?!\[\[bite\]\]).*\n)*',
+            "",
+            original_registry,
+        ),
+        encoding="utf-8",
+    )
+    later_cell = "| accessibility | later: code:user-interface |"
+    replace(BINDING, "| accessibility | a tool |", later_cell)(repo)
+    assert red(repo) == []
+
+    replace(BINDING, later_cell, "| accessibility | none: not a web-ui or an app |")(repo)
+    assert red(repo) == []

@@ -138,6 +138,8 @@ guarded-crash = "a crash reached only when the input holds an exact value of fou
 related-fields = "a crash reached only when two fields of the input satisfy an arithmetic relation, such as one equal to the sum of the others"
 prose-comment = "a prose comment in a file of a `listed` row of the binding's Comments table"
 doc-comment = "a doc comment in a file outside the published interface"
+forced-colors = "an element that loses its visible border, outline, or contrast under emulated forced-colors mode"
+reduced-motion = "an animation or transition that remains active under emulated reduced-motion preference"
 code-departs-from-model = "a change to the code the model mirrors that breaks a property the model holds, with the model left as it was"
 
 [[question]]
@@ -240,6 +242,7 @@ name = "accessibility"
 trigger = "code:user-interface"
 applies-to = ["web-ui", "app"]
 collection = true
+proofs = ["forced-colors", "reduced-motion"]
 
 [[question]]
 name = "coverage, absolute and ratcheted"

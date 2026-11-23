@@ -67,6 +67,7 @@ def test_every_proof_a_question_requires_is_described_and_every_description_is_r
         "load smoke": ("erroring-route",),
         "fuzzing": ("guarded-crash",),
         "symbolic checking": ("related-fields",),
+        "accessibility": ("forced-colors", "reduced-motion"),
         "formal verification of concurrency": ("code-departs-from-model",),
         "formal verification of untrusted input": ("code-departs-from-model",),
         "formal verification of state": ("code-departs-from-model",),
