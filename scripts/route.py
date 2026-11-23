@@ -28,6 +28,7 @@ import project_bite
 import questions
 import queue_notes
 import runrecord
+import tier2_projection
 import triggers
 
 INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md")
@@ -1203,6 +1204,7 @@ def main(argv: list[str]) -> int:
             + loop_proposals(root)
             + ceiling_proposals(root)
             + slow_bite_proposals(root)
+            + tier2_projection.proposals(root)
         )
     if options.as_json:
         print(json.dumps({**asdict(step), "also": also}, indent=2))

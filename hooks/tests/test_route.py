@@ -1800,3 +1800,28 @@ def test_slow_unnarrowed_bite_surfaces_as_actionable_route_proposal(
     )
     assert route.main(["route", "--root", str(root), "--offline"]) == 0
     assert not any(line.startswith("also:") for line in capsys.readouterr().out.splitlines())
+
+
+def test_route_proposes_sharding_when_tier2_gate_approaches_ceiling(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    files = {
+        "AGENTS.md": "# Agents\n<!-- ratchet:method -->\n",
+        "docs/process/binding.md": (
+            "# Binding\n\n## Gates\n\n"
+            "| Question | Tool | Tier | Threshold source | Entry point |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            "| full mutation | mutator | 2 | `quality/mutation-register.toml` | `just mutation` |\n"
+            "\n## Speed\n\n- Shards: 1\n"
+        ),
+        "quality/thresholds.toml": "[ceilings.seconds]\ntier2 = 100\n",
+    }
+    root = repository(tmp_path, files)
+    write(
+        root,
+        ".ratchet/timing.jsonl",
+        json.dumps({"key": "mutation", "seconds": 85.0, "exit": 0}) + "\n",
+    )
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    also = [line for line in capsys.readouterr().out.splitlines() if line.startswith("also:")]
+    assert any("mutation" in line and "tier2_sharded" in line for line in also)
