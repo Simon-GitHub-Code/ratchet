@@ -416,6 +416,39 @@ def test_a_group_runs_each_of_its_gates_through_the_parallel_runner_and_names_th
     assert capsys.readouterr().out.endswith("justfile: `tier1_jobs` names no job `nothing`\n")
 
 
+def test_alone_job_preserves_shard_env_when_running_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path / "repo", '"bite rest"', WAITING)
+    seen = tmp_path / "shard_env.txt"
+    runner = tmp_path / "env_runner.py"
+    runner.write_text(
+        "import os, pathlib, sys\n"
+        f"pathlib.Path({str(seen)!r}).write_text(\n"
+        "    f\"{sys.argv[1]}:{os.environ.get('SHARD')}/{os.environ.get('SHARDS')}\",\n"
+        "    encoding='utf-8',\n"
+        ")\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SHARD", "2")
+    monkeypatch.setenv("SHARDS", "4")
+    assert (
+        ci_jobs.main(
+            [
+                "ci_jobs.py",
+                "--root",
+                str(root),
+                "--run",
+                "bite",
+                "--runner",
+                f"{sys.executable} {runner}",
+            ]
+        )
+        == 0
+    )
+    assert seen.read_text(encoding="utf-8") == "bite:2/4"
+
+
 SLEEPER = textwrap.dedent(
     """\
     import json, os, sys, time

@@ -685,7 +685,7 @@ def test_a_tier_list_a_workflow_reads_and_the_justfile_lacks_is_named_with_the_t
 
 
 def test_a_tier_list_may_be_empty_or_exported(repo: Path) -> None:
-    replace(JUSTFILE, 'tier1_sharded := "test mutation-changed"', 'tier1_sharded := ""')(repo)
+    replace(JUSTFILE, 'tier1_sharded := "test mutation-changed bite"', 'tier1_sharded := ""')(repo)
     replace(JUSTFILE, '"test mutation-changed bite rest"', '"bite rest"')(repo)
     replace(JUSTFILE, "tier2_gates :=", "export tier2_gates :=")(repo)
     assert red(repo) == []
@@ -1914,7 +1914,7 @@ def test_a_project_on_0_13_3_templates_yields_the_three_deep_edits_giving_new_te
         ".github/workflows/deep.yml",
         ".github/workflows/merge.yml",
     }
-    assert len({id(f.fix.want) for f in deep_edits}) == 4
+    assert len({id(f.fix.want) for f in deep_edits}) == 5
     found = conformance.findings(repo)
     assert found
     assert all(isinstance(f.fix, conformance.Auto) for f in found), found
@@ -2115,3 +2115,49 @@ def test_ci_loop_and_ratchet_run_conformance_findings(repo: Path) -> None:
     no_loop = original.split("\n  loop:\n", 1)[0] + "\n"
     (repo / ci).write_text(no_loop, encoding="utf-8")
     assert any(conformance.CI_LOOP_MARKER in line for line in red(repo))
+
+
+def test_sharded_bite_recipes_must_pass_shard_and_deep_must_cover_all_slices(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deep = ".github/workflows/deep.yml"
+    original_just = (repo / JUSTFILE).read_text(encoding="utf-8")
+    original_deep = (repo / deep).read_text(encoding="utf-8")
+
+    replace(JUSTFILE, ' --shard "${SHARD:-1}/${SHARDS:-1}"', "")(repo)
+    found = conformance.findings(repo)
+    assert len(found) == 2
+    by_problem = {f.problem: f for f in found}
+    bite_finding = next(f for p, f in by_problem.items() if "`bite` is in `tier1_sharded`" in p)
+    bite_all_finding = next(
+        f for p, f in by_problem.items() if "`bite-all` is in `tier2_sharded`" in p
+    )
+    assert isinstance(bite_finding.fix, conformance.Auto)
+    assert isinstance(bite_all_finding.fix, conformance.Agent)
+    (repo / JUSTFILE).write_text(original_just, encoding="utf-8")
+
+    replace(JUSTFILE, ' --shard "${SHARD:-1}/${SHARDS:-1}"', "")(repo)
+    replace(JUSTFILE, 'ratchet_plugin := "$RATCHET_PLUGIN_DIR"\n', "")(repo)
+    found = conformance.findings(repo)
+    assert any(
+        isinstance(f.fix, conformance.Agent) and f.fix.then
+        for f in found
+        if "`bite` is in `tier1_sharded`" in f.problem
+    )
+    (repo / JUSTFILE).write_text(original_just, encoding="utf-8")
+
+    replace(deep, "needs.shape.outputs.shards", "[1]")(repo)
+    assert any("does not cover every slice" in line for line in red(repo))
+    (repo / deep).write_text(original_deep, encoding="utf-8")
+
+    replace(deep, "SHARDS: ${{ needs.shape.outputs.count }}", "OTHER: 1")(repo)
+    assert any("does not cover every slice" in line for line in red(repo))
+    (repo / deep).write_text(original_deep, encoding="utf-8")
+
+    no_tier2_long = original_deep.replace("\n  tier2-long:\n", "\n  custom-long:\n")
+    (repo / deep).write_text(no_tier2_long, encoding="utf-8")
+    assert any("no `tier2-long` job runs each slice" in line for line in red(repo))
+    (repo / deep).write_text(original_deep, encoding="utf-8")
+
+    monkeypatch.setattr(conformance.project_bite, "slice_tasks", lambda _tasks, _shard: [])
+    assert any("shard check for 1 shards failed" in line for line in red(repo))
