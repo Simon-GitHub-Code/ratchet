@@ -1306,7 +1306,17 @@ def test_records_alone_are_asked_no_verdict_record(
 @pytest.mark.parametrize(
     ("files", "reasons"),
     [
-        ({SPEC: "# Thing\n", "src/a.py": "x = 2\n"}, [f"record: {SPEC} {INHERITED}", PLAIN_RECORD]),
+        (
+            {SPEC: "# Thing\n", "src/a.py": "x = 2\n"},
+            [
+                (
+                    f"steering-cut: {SPEC}: removes lines from another unit's steering file,"
+                    " which is the owner's merge (ADR 0093)"
+                ),
+                f"record: {SPEC} {INHERITED}",
+                PLAIN_RECORD,
+            ],
+        ),
         (
             {CHANGES: "## Summary\n", "lint.toml": "strict = false\n"},
             ["guard: lint.toml (tool-config)", PLAIN_RECORD],
@@ -3171,3 +3181,205 @@ def test_expect_output_reads_tip_event_and_merge_base_table_and_passes_new_outpu
     branch(no_decl_repo, "feature/4-nodecl")
     change(no_decl_repo, {"tests/__snapshots__/added.txt": "new\n"})
     assert judged(no_decl_repo) == []
+
+
+@pytest.mark.parametrize(
+    ("path", "before", "after"),
+    [
+        (
+            ".scratch/other/spec.md",
+            "# Other\n\n- [ ] Keep line.\n- [ ] Cut line.\n",
+            "# Other\n\n- [ ] Keep line.\n",
+        ),
+        (
+            ".scratch/other/issues/01-other.md",
+            "# 01: Other\n\nStatus: needs-triage\n\n- [ ] Cut criterion.\n",
+            "# 01: Other\n\nStatus: needs-triage\n",
+        ),
+        (
+            "docs/features/other/spec.md",
+            "# Other\n\n- [ ] Keep.\n- [ ] Cut.\n",
+            "# Other\n\n- [ ] Keep.\n",
+        ),
+        (
+            ".scratch/other/spec.md",
+            "# Other\n\n- [ ] Unexpired.\n",
+            None,
+        ),
+        (
+            "docs/features/other/spec.md",
+            "# Other\n\n- [ ] Unexpired.\n",
+            None,
+        ),
+    ],
+    ids=[
+        "local spec line cut",
+        "local ticket line cut",
+        "feature spec line cut",
+        "unexpired local spec deleted",
+        "unexpired feature spec deleted",
+    ],
+)
+def test_cutting_another_units_steering_file_is_the_owners(
+    tmp_path: Path, *, path: str, before: str, after: str | None
+) -> None:
+    repository(tmp_path, {**BASE, path: before})
+    branch(tmp_path, "feature/4-thing")
+    change(tmp_path, {path: after, "src/a.py": "x = 2\n"})
+    reasons = merge_ready.judge(tmp_path, "main", "HEAD")
+    assert [r.code for r in reasons] == ["steering-cut"]
+    assert path in reasons[0].text
+    assert merge_ready.verdict(reasons) == merge_ready.OWNER
+
+
+@pytest.mark.parametrize(
+    ("path", "before", "after"),
+    [
+        (
+            ".scratch/other/spec.md",
+            "# Other\n\n- [ ] Existing.\n",
+            "# Other\n\n- [ ] Existing.\n- [ ] Added note.\n",
+        ),
+        (
+            ".scratch/other/issues/01-other.md",
+            "# 01: Other\n\nStatus: needs-triage\n",
+            "# 01: Other\n\nStatus: needs-triage\n\n## Notes\n\n- Added.\n",
+        ),
+        (
+            "docs/features/other/spec.md",
+            "# Other\n\n- [ ] Existing.\n",
+            "# Other\n\n- [ ] Existing.\n\n## Notes\n\n- Added.\n",
+        ),
+    ],
+    ids=["local spec addition", "local ticket addition", "feature spec addition"],
+)
+def test_pure_additions_to_another_units_steering_file_are_the_agents(
+    tmp_path: Path, *, path: str, before: str, after: str
+) -> None:
+    repository(tmp_path, {**BASE, path: before})
+    branch(tmp_path, "feature/4-thing")
+    change(tmp_path, {path: after, "src/a.py": "x = 2\n"})
+    assert judged(tmp_path) == []
+
+
+def test_cutting_the_changes_own_unit_steering_files_is_the_agents(tmp_path: Path) -> None:
+    files = {
+        **BASE,
+        ".scratch/thing/spec.md": "# Thing\n\n- [ ] Old local line.\n",
+        ".scratch/thing/issues/02-open.md": "# 02: Open\n\nStatus: needs-triage\n",
+    }
+    repository(tmp_path, files)
+    branch(tmp_path, "feature/4-thing")
+    change(tmp_path, {".scratch/thing/spec.md": "# Thing\n", "src/a.py": "x = 2\n"})
+    assert judged(tmp_path) == []
+
+    feat_repo = tmp_path / "feat"
+    repository(feat_repo, {**BASE, "docs/features/thing/spec.md": "# Thing\n\n- [ ] Old.\n"})
+    branch(feat_repo, "feature/4-thing")
+    change(feat_repo, {"docs/features/thing/spec.md": None, "src/a.py": "x = 2\n"})
+    assert judged(feat_repo) == []
+
+    beta_ticket = ".scratch/f/issues/02-beta.md"
+    beta_open = ".scratch/f/issues/01-alpha.md"
+    beta_repo = tmp_path / "beta"
+    repository(
+        beta_repo,
+        {
+            **BASE,
+            beta_open: "# 01: Alpha\n\nStatus: needs-triage\n\n- [ ] Cuttable.\n",
+            beta_ticket: "# 02: Beta\n\nStatus: ready-for-agent\n",
+        },
+    )
+    branch(beta_repo, "feature/2-beta")
+    change(
+        beta_repo,
+        {
+            beta_open: "# 01: Alpha\n\nStatus: needs-triage\n",
+            beta_ticket: "# 02: Beta\n\nStatus: resolved\n",
+            "src/a.py": "x = 2\n",
+        },
+        record=False,
+    )
+    stamp(beta_repo, {**VERDICT, "slug": "beta"})
+    assert judged(beta_repo) == []
+
+
+def test_whole_unit_expiry_deletion_via_documents_expire_stays_the_agents(
+    tmp_path: Path,
+) -> None:
+    brief = "# Brief\n\n## In the owner's words\n\n## Purpose\n\nP.\n"
+    alpha = ".scratch/f/issues/01-alpha.md"
+    beta = ".scratch/f/issues/02-beta.md"
+    spec = ".scratch/f/spec.md"
+    files = {
+        **BASE,
+        "docs/design-brief.md": brief,
+        spec: "# F\n\n## Answers\n\n- Spec answer.\n",
+        alpha: "# 01: Alpha\n\nStatus: resolved\nLabel: ready-for-agent\n\n## Answers\n\n- A.\n",
+        beta: "# 02: Beta\n\nStatus: resolved\nLabel: ready-for-agent\n\n## Answers\n\n- B.\n",
+        "docs/features/alpha/verdict.json": json.dumps({"slug": "alpha"}),
+        "docs/features/beta/verdict.json": json.dumps({"slug": "beta"}),
+    }
+    repository(tmp_path, files)
+    branch(tmp_path, "records-expire")
+    assert merge_ready.documents.main(["documents.py", "expire", "--root", str(tmp_path)]) == 0
+    commit(tmp_path, "docs: expire spent unit")
+    reasons = merge_ready.judge(tmp_path, "main", "HEAD")
+    assert reasons == []
+    assert merge_ready.verdict(reasons) == merge_ready.AGENT
+
+
+@pytest.mark.parametrize(
+    ("extra", "edited", "after"),
+    [
+        (
+            {
+                ".scratch/other/spec.md": "# Other\n\n- [ ] Keep.\n- [ ] Cut.\n",
+                ".scratch/other/issues/01-other.md": "# 01: Other\n\nStatus: needs-triage\n",
+            },
+            ".scratch/other/spec.md",
+            "# Other\n\n- [ ] Keep.\n",
+        ),
+        (
+            {
+                ".scratch/other/issues/01-other.md": (
+                    "# 01: Other\n\nStatus: needs-triage\n\n- [ ] Cut me.\n"
+                ),
+            },
+            ".scratch/other/issues/01-other.md",
+            "# 01: Other\n\nStatus: needs-triage\n",
+        ),
+    ],
+    ids=["records partial spec cut", "records partial unlabelled ticket cut"],
+)
+def test_partial_line_deletion_in_records_only_change_is_still_steering_cut(
+    tmp_path: Path, *, extra: dict[str, str], edited: str, after: str
+) -> None:
+    brief = "# Brief\n\n## In the owner's words\n\n## Purpose\n\nP.\n"
+    alpha = ".scratch/f/issues/01-alpha.md"
+    spec = ".scratch/f/spec.md"
+    files = {
+        **BASE,
+        "docs/design-brief.md": brief,
+        spec: "# F\n",
+        alpha: "# 01: Alpha\n\nStatus: resolved\nLabel: ready-for-agent\n",
+        "docs/features/alpha/verdict.json": json.dumps({"slug": "alpha"}),
+        **extra,
+    }
+    repository(tmp_path, files)
+    branch(tmp_path, "records-expire-and-cut")
+    assert merge_ready.documents.main(["documents.py", "expire", "--root", str(tmp_path)]) == 0
+    write(tmp_path, edited, after)
+    commit(tmp_path, "docs: expire and partial cut")
+    reasons = merge_ready.judge(tmp_path, "main", "HEAD")
+    assert [r.code for r in reasons] == ["steering-cut"]
+    assert edited in reasons[0].text
+    assert merge_ready.verdict(reasons) == merge_ready.OWNER
+
+
+@pytest.mark.parametrize("page", ["PRODUCT.md", "DESIGN.md"])
+def test_cutting_never_kind_non_guard_pages_remains_the_agents(tmp_path: Path, page: str) -> None:
+    repository(tmp_path, {**BASE, page: f"# {page}\n\nLine one.\nLine two.\n"})
+    branch(tmp_path, "feature/4-thing")
+    change(tmp_path, {page: f"# {page}\n\nLine one.\n", "src/a.py": "x = 2\n"})
+    assert judged(tmp_path) == []
