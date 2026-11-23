@@ -2656,6 +2656,12 @@ def test_the_gates_table_is_read_row_by_row_and_a_tool_the_repository_chose_is_b
         ('include = ["../outside"]\n', "'include' names paths inside the repository"),
         (bite("lint", "x") + "tier = 0\n", "bite 1 (lint): unknown key 'tier'"),
         (bite("lint", "x") + 'commit = "yes"\n', "bite 1 (lint): 'commit' is true or false"),
+        (bite("lint", "x") + 'stage = "yes"\n', "bite 1 (lint): 'stage' is true or false"),
+        (bite("lint", "x") + "stage = 1\n", "bite 1 (lint): 'stage' is true or false"),
+        (
+            bite("lint", "x") + "stage = true\ncommit = true\n",
+            "bite 1 (lint): a bite sets 'stage' or 'commit', not both",
+        ),
         (bite("lint", "x") + 'args = "5"\n', "bite 1 (lint): 'args' is a list of non-empty"),
         (bite("lint", "x") + 'whole = ""\n', "bite 1 (lint): 'whole' is a non-empty string"),
         (
@@ -2728,6 +2734,11 @@ def test_a_well_formed_bite_is_read_whole_and_a_malformed_one_is_left_out() -> N
         0
     ].bites
     assert claimed.proof == "a-proof"
+    (staged_bite,) = project_bite.read_registry(bite("lint", "x", PLANT + "\nstage = true"))[
+        0
+    ].bites
+    assert staged_bite.stage is True
+    assert staged_bite.commit is False
     assert problems == ["bite 2 (lint): 'patch' is a non-empty string"]
     kept, problems = project_bite.read_registry("setup = [3]\n" + bite("lint", "x"))
     assert [b.name for b in kept.bites] == ["x"]
@@ -4607,3 +4618,85 @@ def test_faults_of_one_gate_share_lanes_and_keep_schedule_and_green_checks(
     fmt_out = shown(capsys)
     assert fmt_out.count("accepts verdict record: accepts verdict record") == 1
     assert "bite: green: 2 of 2 faults bit, over 1 gates in " in fmt_out
+
+
+def test_a_staged_fault_is_in_the_index_for_one_run_only(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    staged_gate = (
+        'test -z "$(git diff)" || { echo "unexpected unstaged"; exit 1; }\n'
+        "status=$(git diff --cached --name-status)\n"
+        "diff=$(git diff --cached)\n"
+        'if printf "%s" "$status" | grep -q "A\tsrc/_bite.txt" && '
+        'printf "%s" "$diff" | grep -q "+planted"; then\n'
+        '  echo "S001 staged write"; exit 1\n'
+        "fi\n"
+        'if printf "%s" "$status" | grep -q "M\tsrc/code.txt" && '
+        'printf "%s" "$diff" | grep -q "+planted"; then\n'
+        '  echo "S002 staged replace"; exit 1\n'
+        "fi\n"
+        'if printf "%s" "$status" | grep -q "D\ttests/one.t" && '
+        'printf "%s" "$diff" | grep -q -- "-a test"; then\n'
+        '  echo "S003 staged remove"; exit 1\n'
+        "fi\n"
+        'if printf "%s" "$status" | grep -q "M\tsrc/patch.txt" && '
+        'printf "%s" "$diff" | grep -q "+planted"; then\n'
+        '  echo "S004 staged patch"; exit 1\n'
+        "fi\n"
+        'git diff --cached --quiet || { echo "unexpected staged"; exit 1; }\n'
+    )
+    later_gate = (
+        'test -z "$(git status --porcelain)" && git diff --cached --quiet && '
+        'test -f tests/one.t && test "$(cat src/code.txt)" = clean\n'
+        f"{LINT}"
+    )
+    registry = (
+        bite("staged", "a write", f"{PLANT}\nstage = true", expect="S001 staged write")
+        + bite(
+            "staged",
+            "a replace",
+            'replace = { path = "src/code.txt", old = "clean", new = "planted" }\nstage = true',
+            expect="S002 staged replace",
+        )
+        + bite(
+            "staged",
+            "a remove",
+            'remove = ["tests/one.t"]\nstage = true',
+            expect="S003 staged remove",
+        )
+        + bite(
+            "staged",
+            "a patch",
+            'patch = "quality/bites/p.patch"\nstage = true',
+            expect="S004 staged patch",
+        )
+        + bite("later", "a planted word")
+    )
+    patch = "--- a/src/patch.txt\n+++ b/src/patch.txt\n@@ -1 +1 @@\n-clean\n+planted\n"
+    write(tmp_path / "repo", "src/patch.txt", "clean\n")
+    write(tmp_path / "repo", "quality/bites/p.patch", patch)
+    root = project(tmp_path / "repo", {"staged": staged_gate, "later": later_gate}, registry)
+    before = state(root)
+    assert prove(root) == 0
+    assert shown(capsys).count(": bites\n") == 5
+    assert state(root) == before
+
+
+def test_changing_stage_in_registry_triggers_changed_proof(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gates = {
+        "staged": 'if git diff --cached | grep -q planted; then echo "L001"; exit 1; fi',
+        "tests": LINT,
+    }
+    registry = bite("staged", "one") + bite("tests", "two")
+    root = project(tmp_path / "repo", gates, registry)
+    write(root, "guards/manifest.toml", COMMANDS_MANIFEST)
+    commit(root, "feat(core): a manifest")
+    branch(root)
+    replaced(root, REGISTRY, 'expect = "L001"', 'expect = "L001"\nstage = true')
+    commit(root, "test(bite): stage staged fault")
+    assert prove(root, "--changed") == 0
+    out = shown(capsys).splitlines()
+    assert "bite: staged: bite `one` changed" in out
+    assert proved(out) == ["staged"]
