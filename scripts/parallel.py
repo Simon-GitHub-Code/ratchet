@@ -118,7 +118,7 @@ import sys
 import tempfile
 import time
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
@@ -226,7 +226,7 @@ class Finished:
     lane: int = 0
     start: float = 0.0
     cpu: float | None = None
-    work: Mapping[str, float] = MappingProxyType({})
+    work: Mapping[str, float] = field(default_factory=dict)
 
     @property
     def green(self) -> bool:
