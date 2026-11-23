@@ -41,6 +41,7 @@ import settings_rules
 import snapshots
 import suppressions
 import telemetry_sink
+import tier2_projection
 import triggers
 import with_service
 
@@ -539,6 +540,35 @@ def tier_ceiling_passed(root: Path) -> None:
     path.write_text(budget.with_ceiling(path.read_text(), "tier1", 0.0))
 
 
+TIER2_ROW = "| full mutation | any-tool | 2 | | `sh own-gates.sh mutation` |\n"
+TIER2_SHARDS = "\n## Speed\n\n- Shards: 1\n"
+
+
+def tier2_projection_gate(argv: list[str]) -> int:
+    root = Path(argv[2])
+    if not (root / ".ratchet/timing.jsonl").is_file():
+        write(
+            root,
+            "docs/process/binding.md",
+            pinned(root, BINDING + TIER2_ROW + SUPPRESSIONS + TIER2_SHARDS),
+        )
+        write(root, "quality/thresholds.toml", budget.with_ceiling(THRESHOLDS, "tier2", 100.0))
+        write(
+            root,
+            ".ratchet/timing.jsonl",
+            json.dumps({"key": "mutation", "seconds": 50.0, "status": "green", "exit": 0}) + "\n",
+        )
+    return tier2_projection.main([*argv, "--strict"])
+
+
+def tier2_gate_near_ceiling(root: Path) -> None:
+    write(
+        root,
+        ".ratchet/timing.jsonl",
+        json.dumps({"key": "mutation", "seconds": 85.0, "status": "green", "exit": 0}) + "\n",
+    )
+
+
 def commit_after_the_review(root: Path) -> None:
     write(root, "src/b.py", "B = 2\n")
     commit(root, "fix(core): one more thing")
@@ -656,6 +686,12 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("queue: a ticket behind an open blocker", queue_gate, behind_an_open_blocker, []),
     ("plugin-pin: a plugin older than the pin", pin_gate, plugin_older_than_the_pin, []),
     ("budget: a gate over its tier's ceiling", budget.main, tier_ceiling_passed, IN_TIER),
+    (
+        "tier2-projection: a tier 2 gate near its ceiling",
+        tier2_projection_gate,
+        tier2_gate_near_ceiling,
+        [],
+    ),
 ]
 
 
