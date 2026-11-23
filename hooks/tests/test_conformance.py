@@ -1994,6 +1994,9 @@ def test_matrix_job_cache_key_without_matrix_value_is_a_finding(repo: Path) -> N
         "      - uses: actions/cache/restore@v4\n"
         "        with:\n"
         "          path: .cache\n"
+        "      - uses: actions/cache@v4\n"
+        "        with:\n"
+        "          path: .cache\n"
         "      - uses: actions/cache/save@v4\n"
     )
     findings = matrix_workflow(repo, bad)
