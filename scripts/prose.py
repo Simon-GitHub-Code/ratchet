@@ -16,6 +16,27 @@ AVOID = re.compile(r"^_Avoid_:\s*(.+?)\s*$")
 ALLOW = "glossary: allow"
 DOCUMENTS = (".md", ".txt", ".rst", ".adoc")
 COMMENT = re.compile(r"(?:^|\s)(?:#|//|/\*|\*|--|<!--)\s*(.*)$")
+FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})(.*)$")
+TICKS = re.compile(r"`+")
+
+
+def strip_code(line: str) -> str:
+    out: list[str] = []
+    at = 0
+    for match in TICKS.finditer(line):
+        if match.start() < at:
+            continue
+        out.append(line[at : match.start()])
+        ticks = match.group(0)
+        close = re.search(rf"(?<!`){re.escape(ticks)}(?!`)", line[match.end() :])
+        if close is None:
+            out.append(ticks)
+            at = match.end()
+        else:
+            out.append(" ")
+            at = match.end() + close.end()
+    out.append(line[at:])
+    return "".join(out)
 
 
 def avoided(glossary: str) -> dict[str, str]:
@@ -60,12 +81,26 @@ class Hit:
 
 def scan(path: str, text: str, *, found: re.Pattern[str], words: dict[str, str]) -> list[Hit]:
     document = is_document(path)
+    fence: tuple[str, int] | None = None
     hits = []
     for number, line in enumerate(text.splitlines(), 1):
+        if document:
+            if match := FENCE.match(line):
+                marker, rest = match.group(1), match.group(2)
+                if fence is None:
+                    if marker[0] == "~" or "`" not in rest:
+                        fence = (marker[0], len(marker))
+                        continue
+                elif marker[0] == fence[0] and len(marker) >= fence[1] and not rest.strip():
+                    fence = None
+                    continue
+            if fence is not None:
+                continue
         if ALLOW in line:
             continue
         comment = COMMENT.search(line)
-        subject = line if document else (comment.group(1) if comment else "")
+        raw = line if document else (comment.group(1) if comment else "")
+        subject = strip_code(raw)
         hits += [
             Hit(path, number, match.group(1), words[match.group(1).lower()])
             for match in found.finditer(subject)

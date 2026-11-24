@@ -267,6 +267,40 @@ def test_prose_counts_uses_in_a_path_holding_a_quote(tmp_path: Path) -> None:
     ]
 
 
+def test_prose_ignores_inline_code_spans_and_fenced_blocks(tmp_path: Path) -> None:
+    glossary = GLOSSARY + "\n**Delivered**:\nStored output.\n_Avoid_: cache\n"
+    doc = (
+        "- Build: gate `build`; caches `.next/cache`; warm 14s\n"
+        "A ``nested `cache` path`` beside a client.\n"
+        "```cache``` at line start beside buyer.\n"
+        "An unmatched ` backtick still flags client.\n"
+        "```bash\n"
+        "rm -rf .next/cache\n"
+        "```not-a-close\n"
+        "```\n"
+        "~~~yaml\n"
+        "key: cache\n"
+        "```\n"
+        "~~~\n"
+        "Prose cache outside `.next/cache` still fails.\n"
+    )
+    root = repository(
+        tmp_path,
+        {
+            "GLOSSARY.md": glossary,
+            "docs/binding.md": doc,
+            "src/a.py": "x = 1  # reads `.next/cache` for client\n",
+        },
+    )
+    assert prose.problems(root) == [
+        "docs/binding.md:2: 'client' is on the Avoid list of 'Customer'",
+        "docs/binding.md:3: 'buyer' is on the Avoid list of 'Customer'",
+        "docs/binding.md:4: 'client' is on the Avoid list of 'Customer'",
+        "docs/binding.md:13: 'cache' is on the Avoid list of 'Delivered'",
+        "src/a.py:1: 'client' is on the Avoid list of 'Customer'",
+    ]
+
+
 MANIFEST = (
     '[[group]]\nname = "tool-config"\nreason = "Rule sets."\n'
     'paths = ["lint.toml", "cfg/*.json", "~/.tool.toml"]\n'
