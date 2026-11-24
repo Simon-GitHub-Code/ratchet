@@ -216,6 +216,7 @@ def record_restore(record: dict[str, object], found: Facts) -> None:
         and size >= 0
         and isinstance(raw_paths, list)
         and all(isinstance(item, str) for item in raw_paths)
+        and not (size == 0 and record.get("miss") is True)
     ):
         found.restored[tuple(raw_paths)] = size
 

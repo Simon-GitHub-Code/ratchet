@@ -75,7 +75,11 @@ def main(argv: list[str]) -> int:
         return 0
     total = measure(root, patterns)
     joined = ", ".join(patterns)
-    detail = f"{joined}: nothing restored" if total == 0 else joined
+    if total == 0:
+        why = "cold miss" if options.hit == "" else "nothing restored"
+        detail = f"{joined}: {why}"
+    else:
+        detail = joined
     print(f"ratchet-cache: restored {total} bytes ({detail})", flush=True)
     if options.report:
         record: dict[str, object] = {
@@ -86,6 +90,8 @@ def main(argv: list[str]) -> int:
         }
         if options.hit in HIT_VALUES:
             record["hit"] = HIT_VALUES[options.hit]
+        elif options.hit == "":
+            record["miss"] = True
         runrecord.append(root / options.report, record, root=root, who="ratchet-cache")
     return 0
 
