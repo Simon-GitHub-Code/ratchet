@@ -85,6 +85,7 @@ class Plan:
     owes: bool = False
     workflow_diffs: tuple[tuple[str, str], ...] = ()
     opt_ins: tuple[tuple[str, str], ...] = ()
+    offered: tuple[AgentFinding | OwnerFinding, ...] = ()
 
     @property
     def edits(self) -> int:
@@ -353,6 +354,37 @@ def available_opt_ins(sandbox: Path) -> tuple[tuple[str, str], ...]:
     return tuple(opt_ins)
 
 
+def typed_findings(found: list[Finding], owed_ids: set[int]) -> list[AgentFinding | OwnerFinding]:
+    return [
+        *(
+            AgentFinding(f.path, f.problem, f.fix, f.rule, f.identity, f.stops, id(f) in owed_ids)
+            for f in found
+            if isinstance(f.fix, Agent)
+        ),
+        *(
+            OwnerFinding(f.path, f.problem, f.fix, f.rule, f.identity, f.stops, id(f) in owed_ids)
+            for f in found
+            if isinstance(f.fix, Owner)
+        ),
+    ]
+
+
+def split_findings(
+    found: list[Finding], owed_ids: set[int]
+) -> tuple[list[AgentFinding], list[OwnerFinding], tuple[AgentFinding | OwnerFinding, ...]]:
+    agent: list[AgentFinding] = []
+    owner: list[OwnerFinding] = []
+    offered: list[AgentFinding | OwnerFinding] = []
+    for finding in typed_findings(found, owed_ids):
+        if finding.identity in conformance.OFFERED:
+            offered.append(finding)
+        elif isinstance(finding, AgentFinding):
+            agent.append(finding)
+        else:
+            owner.append(finding)
+    return agent, owner, tuple(offered)
+
+
 def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
     reason = refusal(root, plugin)
     if reason is not None:
@@ -386,12 +418,11 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
         )
         if reason is not None:
             return Refused(reason)
-        red, _ = conformance.owed_split(sandbox, converged.left)
+        _, held = conformance.owed_split(sandbox, converged.left)
         waiting = tuple(conformance.not_running(sandbox, converged.left))
-        reds = {id(finding) for finding in red}
-        approved = sum(
-            editor(sandbox, f.path) != NOT_GUARDED for f in converged.left if id(f) not in reds
-        )
+        owed_found = [finding for finding in held if finding.identity not in conformance.OFFERED]
+        approved = sum(editor(sandbox, f.path) != NOT_GUARDED for f in owed_found)
+        agent, owner, offered = split_findings(converged.left, {id(f) for f in owed_found})
         owes = bool(owed.read(sandbox).entries)
         diffs = workflow_diffs(sandbox, plugin)
         opt_ins = available_opt_ins(sandbox)
@@ -400,16 +431,8 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
         new=plugin_pin.in_use(plugin),
         changes=changes,
         done={name: did for name, did in done.items() if name in changes},
-        agent=[
-            AgentFinding(f.path, f.problem, f.fix, f.rule, f.identity, f.stops, id(f) not in reds)
-            for f in converged.left
-            if isinstance(f.fix, Agent)
-        ],
-        owner=[
-            OwnerFinding(f.path, f.problem, f.fix, f.rule, f.identity, f.stops, id(f) not in reds)
-            for f in converged.left
-            if isinstance(f.fix, Owner)
-        ],
+        agent=agent,
+        owner=owner,
         was=version_now(root, plugin),
         now=plugin_pin.version_of(plugin) or "an unknown version",
         waiting=waiting,
@@ -421,6 +444,7 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
         owes=owes,
         workflow_diffs=diffs,
         opt_ins=opt_ins,
+        offered=offered,
     )
 
 
@@ -647,20 +671,24 @@ def opt_ins_block(opt_ins: tuple[tuple[str, str], ...]) -> str:
     return "\n".join(lines)
 
 
+def changes_block(result: Plan, *, applied: bool) -> str:
+    verb = "Wrote" if applied else "Would write"
+    hint = "" if applied else " (run with --apply)"
+    lines = [f"{verb} {len(result.changes)} files{hint}:"]
+    for name in write_order(result.changes):
+        lines.append(f"  {name}")
+        lines += [f"    - {did}" for did in result.done.get(name, [])]
+        moved = moved_lines(result.changes[name]) if name in INSTRUCTION_FILES else []
+        if moved:
+            lines.append(f"    - moved to '{conformance.MOVED}' for the owner to read:")
+            lines += [f"      {line}" for line in moved]
+    return "\n".join(lines)
+
+
 def render(root: Path, result: Plan, *, applied: bool) -> str:
     blocks = [f"upgrade: {root} from {result.old} to {result.new}."]
     if result.changes:
-        verb = "Wrote" if applied else "Would write"
-        hint = "" if applied else " (run with --apply)"
-        lines = [f"{verb} {len(result.changes)} files{hint}:"]
-        for name in write_order(result.changes):
-            lines.append(f"  {name}")
-            lines += [f"    - {did}" for did in result.done.get(name, [])]
-            moved = moved_lines(result.changes[name]) if name in INSTRUCTION_FILES else []
-            if moved:
-                lines.append(f"    - moved to '{conformance.MOVED}' for the owner to read:")
-                lines += [f"      {line}" for line in moved]
-        blocks.append("\n".join(lines))
+        blocks.append(changes_block(result, applied=applied))
     if result.red:
         title = (
             "Red until fixed (no owed entry excuses these, and only a change that moves the pin"
@@ -671,6 +699,9 @@ def render(root: Path, result: Plan, *, applied: bool) -> str:
     if owing:
         title = f"Owed, none of them red, for an agent to work through ({owed.LEDGER}):"
         blocks.append(items_block(root, title, owing))
+    if result.offered:
+        title = f"Offered (optional, not in {owed.LEDGER}):"
+        blocks.append(items_block(root, title, list(result.offered)))
     if result.opt_ins:
         blocks.append(opt_ins_block(result.opt_ins))
     if result.workflow_diffs:
@@ -680,9 +711,13 @@ def render(root: Path, result: Plan, *, applied: bool) -> str:
 
 
 def summary(root: Path, result: Plan, *, applied: bool) -> str:
+    counts = (
+        f"{result.owing} items are owed, {len(result.red)} red, and {len(result.offered)} offered"
+        if result.offered
+        else f"{result.owing} items are owed and {len(result.red)} red"
+    )
     left = (
-        f"{result.owing} items are owed and {len(result.red)} red; {len(result.owner)} of them"
-        " hold an assumption until the owner says otherwise."
+        f"{counts}; {len(result.owner)} of them hold an assumption until the owner says otherwise."
     )
     if not result.changes:
         return f"upgrade: nothing to write. {left}"

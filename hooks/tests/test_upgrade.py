@@ -1433,3 +1433,89 @@ def test_an_upgrade_renders_opt_ins_before_summary_without_altering_plain_or_owe
     assert upgrade.main(["upgrade.py", "--root", str(root)]) == 0
     clean = capsys.readouterr().out
     assert "Available opt-in capabilities" not in clean
+
+
+def test_an_offered_finding_is_separated_from_owed_and_matches_conformance(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = fixture("0.9.2", tmp_path)
+    justfile = root / "justfile"
+    justfile.write_text(
+        justfile.read_text(encoding="utf-8")
+        + '\ntier1_jobs := env_var_or_default("EXTRA", "bite rest")\n',
+        encoding="utf-8",
+    )
+    repos.git(root, "commit", "-q", "-am", "chore: keep own job list")
+    repos.branch(root, "upgrade")
+    result = planned(root)
+    assert [finding.identity for finding in result.offered] == [conformance.OWN_JOB_LIST]
+    assert all(finding.identity not in conformance.OFFERED for finding in result.items)
+    capsys.readouterr()
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    out = capsys.readouterr().out
+    entries = owed.read(root).entries
+    assert result.owing == len(entries)
+    assert result.left == len(entries)
+    assert not any(conformance.OWN_JOB_LIST in entry.problem for entry in entries)
+    owed_header = "Owed, none of them red, for an agent to work through (quality/owed.toml):"
+    offered_header = "Offered (optional, not in quality/owed.toml):"
+    owed_block = out.split(owed_header, 1)[1].split(offered_header, 1)[0]
+    offered_block = out.split(offered_header, 1)[1].split("\n\nupgrade: ", 1)[0]
+    assert conformance.OWN_JOB_LIST not in owed_block
+    assert conformance.OWN_JOB_LIST in offered_block
+    assert out.index(owed_header) < out.index(offered_header) < out.index("\n\nupgrade: ")
+    if "Available opt-in capabilities" in out:
+        assert out.index(offered_header) < out.index("Available opt-in capabilities")
+    assert f"{len(entries)} items are owed, 0 red, and 1 offered;" in verdict(out)
+    assert f"The project owes {len(entries)} things since the upgrade." in plain(out)
+    capsys.readouterr()
+    assert conformance.run(root) == 0
+    checked = capsys.readouterr().out
+    assert f"{len(entries)} owed since an upgrade, listed in quality/owed.toml" in checked
+    assert (
+        "offered: justfile: `tier1_jobs` is not one plain string, so the plugin left"
+        f" {conformance.OWN_JOB_LIST}"
+    ) in checked
+
+
+def test_a_repository_with_only_an_offered_finding_reports_zero_owed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = repos.repository(tmp_path / "repo")
+    shutil.copytree(pristine(), root, symlinks=True, dirs_exist_ok=True)
+    ci = root / ".github/workflows/ci.yml"
+    ci.write_text(
+        ci.read_text(encoding="utf-8").replace(
+            'python3 "$RATCHET_PLUGIN/scripts/ci_jobs.py" --output "$GITHUB_OUTPUT"',
+            'echo "tier1=$(./scripts/matrix $(just --evaluate tier1_jobs))" >> "$GITHUB_OUTPUT"',
+        ),
+        encoding="utf-8",
+    )
+    justfile = root / "justfile"
+    justfile.write_text(
+        re.sub(
+            r"^tier1_jobs := .*$",
+            'tier1_jobs := env_var_or_default("EXTRA", "bite rest")',
+            justfile.read_text(encoding="utf-8"),
+            count=1,
+            flags=re.MULTILINE,
+        ),
+        encoding="utf-8",
+    )
+    repos.git(root, "add", "-A")
+    repos.git(root, "commit", "-q", "-m", "chore: baseline with own job list")
+    repos.branch(root, "upgrade")
+    result = planned(root)
+    assert result.owing == 0
+    assert result.red == []
+    assert result.approved == 0
+    assert [finding.identity for finding in result.offered] == [conformance.OWN_JOB_LIST]
+    capsys.readouterr()
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    out = capsys.readouterr().out
+    assert owed.read(root).entries == ()
+    assert "Owed, none of them red" not in out
+    assert "Offered (optional, not in quality/owed.toml):" in out
+    assert conformance.OWN_JOB_LIST in out
+    assert "0 items are owed, 0 red, and 1 offered;" in verdict(out)
+    assert "The project owes" not in plain(out)
