@@ -2886,6 +2886,16 @@ def test_a_run_around_the_copy_hands_its_run_id_to_no_gate_in_it(
     assert "RATCHET_RUN" not in project_bite.environment()
 
 
+def test_a_sharded_bite_hands_no_shard_variables_to_an_inner_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SHARD", "3")
+    monkeypatch.setenv("SHARDS", "3")
+    env = project_bite.environment()
+    assert "SHARD" not in env
+    assert "SHARDS" not in env
+
+
 @pytest.mark.parametrize("path", ["link/planted.txt", "file-link"])
 def test_a_write_fault_does_not_follow_a_tracked_link_out_of_the_copy(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], path: str
