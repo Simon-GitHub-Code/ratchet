@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.15.5
+
+This patch release holds pull request #418, replacing hash-modulo bite sharding with deterministic static-weight LPT bin-packing to eliminate multi-minute shard skew in sharded `bite` / `bite-all` runs.
+
+Upgrade from 0.15.4 as the README's Upgrading section says. These changes reach the project:
+
+- **Balanced bite shards by static fault weight (#418).** `scripts/project_bite.py` (`slice_tasks`) now assigns faults across shards using deterministic Longest-Processing-Time-First (LPT) bin-packing weighted by tracked fault attributes (`tier == "2"` x2, `whole` or unnarrowed `not args` x4, `alone` x2; deterministic `sha256` tie-breaking). Every isolated CI runner computes the exact same 1-to-1 partition verified by `--shard-check`, spreading heavy whole-tree and `alone` faults evenly across shards instead of clustering them.
+
 ## 0.15.4
 
 This patch release holds pull requests #414, #415, and #416, adding fast-first fail-fast gating to grouped CI jobs, fixing shard-variable leakage inside sharded bite runs, and aligning `upgrade.py`'s `offered` vs `owed` reporting with `conformance.py`.
