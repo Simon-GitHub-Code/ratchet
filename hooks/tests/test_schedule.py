@@ -366,7 +366,36 @@ UNKNOWN_NAMES = ('"$X" -- a', '--serial a "$X" -- a', '--alone="$X" -- a', '"--$
 def test_a_quoted_parameter_is_never_a_flag_or_a_gate_of_its_own(words: str) -> None:
     text = f"check:\n    python3 parallel.py {words}\n"
     assert [missed.gates for missed in schedule.recipes(text)[1]] == [("a",)]
-    assert [m.gates for m in schedule.recipes('check:\n    parallel.py -- a "$G"\n')[1]] == [None]
+    assert [m.gates for m in schedule.recipes('check:\n    parallel.py "$X" -- a "$G"\n')[1]] == [
+        None
+    ]
+
+
+def test_unreadable_gate_lists_after_double_dash_never_mark_readable_flags_unread() -> None:
+    text = (
+        'tier0-staged:\n    python3 scripts/parallel.py --serial a b -- "${gates[@]}"\n'
+        '_rest:\n    python3 scripts/parallel.py -- "${rest[@]}"\n'
+        'jobs-dynamic:\n    python3 scripts/parallel.py --jobs "$N" -- "${gates[@]}"\n'
+        'quoted-gate:\n    parallel.py -- a "$G"\n'
+    )
+    kept, unread, assumed = schedule.recipes(text)
+    assert kept.apart == (("a", "b"),)
+    assert kept.alone == frozenset()
+    assert unread == []
+    assert assumed == [schedule.Assumed("jobs-dynamic", ("--jobs $N",))]
+
+
+def test_unreadable_flags_before_double_dash_keep_unread_and_scope_only_readable_gates() -> None:
+    dynamic_gates = 'check:\n    python3 scripts/parallel.py "$flags" -- "${gates[@]}"\n'
+    assert schedule.recipes(dynamic_gates)[1] == [schedule.Unread("check", ("$flags",), None)]
+    literal_gates = 'check:\n    python3 scripts/parallel.py "$flags" -- lint types\n'
+    assert schedule.recipes(literal_gates)[1] == [
+        schedule.Unread("check", ("$flags",), ("lint", "types"))
+    ]
+    no_double_dash = 'check:\n    python3 scripts/parallel.py --serial a b "${gates[@]}"\n'
+    kept, unread, _ = schedule.recipes(no_double_dash)
+    assert kept.apart == (("a", "b"),)
+    assert unread == [schedule.Unread("check", ("${gates[@]}",), None)]
 
 
 def test_an_unread_recipe_s_gates_are_unknown_when_the_shell_or_just_names_them_too() -> None:

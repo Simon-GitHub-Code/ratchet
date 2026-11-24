@@ -260,7 +260,6 @@ def passed(
     split = command.index("--") if "--" in command else len(command)
     given, missed, assumed = flagged(command[:split])
     gates = command[split + 1 :]
-    missed += [shown(word) for word in gates if unreadable(word)]
     known = split < len(command) and not any(map(unreadable, gates))
     return given, tuple(missed), tuple(gates) if known else None, tuple(assumed)
 
