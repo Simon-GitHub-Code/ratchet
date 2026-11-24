@@ -1236,7 +1236,7 @@ def test_loop_prints_runner_wait_over_tenth_of_run_and_records_wait_and_gate_his
     root = setup_loop_repo(tmp_path, budget=40.0)
     report = root / ".ratchet/timing.jsonl"
     artifacts1 = tmp_path / "a1"
-    write_artifact(artifacts1, "timing-test-1", [gate_rec("test", 10.0)])
+    write_artifact(artifacts1, "timing-test-1", [gate_rec("test", 10.0, status="unbounded")])
     jobs1 = {
         "jobs": [
             job_entry("tier0", (2, 12), created_s=0),

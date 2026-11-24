@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 RECENT = 10
 MIN_GROWTH_RATIO = 1.1
 MIN_GROWTH_SECONDS = 0.1
+PASSING_STATUSES = ("green", "unbounded")
 DEEP_HOLD_FLAG = "--deep"
 FORCED_CAUSE = "plugin-pin"
 PROOF_GATE = "bite"
@@ -361,7 +362,11 @@ def classify_runs(
         if not isinstance(run_id, str) or run_id == runrecord.NO_RUN:
             continue
         judgement = rec.get("judgement")
-        if judgement == "within" or ("judgement" not in rec and rec.get("status") == "green"):
+        green_without_budget = rec.get("status") == "green" and (
+            "judgement" not in rec
+            or (judgement == "not judged" and rec.get("reason") == Reason.NO_BUDGET.value)
+        )
+        if judgement == "within" or green_without_budget:
             within_runs.add(run_id)
         elif judgement == "over":
             over_runs.add(run_id)
@@ -379,7 +384,7 @@ def gate_medians(
     within_times: dict[str, list[float]] = {}
     fallback_times: dict[str, list[float]] = {}
     for rec in records:
-        if "kind" in rec or rec.get("status") != "green":
+        if "kind" in rec or rec.get("status") not in PASSING_STATUSES:
             continue
         key, seconds, run_id = rec.get("key"), finite_seconds(rec.get("seconds")), rec.get("run")
         if not isinstance(key, str) or seconds is None:

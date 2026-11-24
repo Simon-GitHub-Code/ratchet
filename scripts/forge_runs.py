@@ -78,6 +78,7 @@ RETARGETS = frozenset({"base_ref_changed", "automatic_base_change_succeeded"})
 UNCOUNTED = frozenset({"cancelled", "skipped"})
 COMMIT = re.compile(r"^[0-9a-f]{40,64}$")
 GREEN, RED, NONE = "green", "red", "none"
+PASSING = (GREEN, "unbounded")
 DONE = ("completed", "success")
 UNREADABLE = "the forge's answer could not be read"
 MARKER = "<!-- ratchet:merge -->"
@@ -516,7 +517,7 @@ def read_artifacts(artifacts_dir: Path | None, root: Path, *, run: str, tree: st
             key, sec = rec.get("key"), loop_budget.finite_seconds(rec.get("seconds"))
             if not isinstance(key, str) or sec is None:
                 continue
-            green = rec.get("status") == GREEN
+            green = rec.get("status") in PASSING
             prev = gates_map.get(key)
             gates_map[key] = (
                 max(prev[0], sec) if prev is not None else sec,
