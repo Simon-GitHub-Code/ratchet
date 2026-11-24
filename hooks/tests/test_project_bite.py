@@ -2312,7 +2312,12 @@ def test_a_slow_fault_is_named_however_many_records_follow_it(tmp_path: Path) ->
 def test_conformance_reads_the_record_once_for_all_it_takes_from_it(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "whole"))
+    root = project(
+        tmp_path / "repo",
+        {"lint": LINT},
+        bite("lint", "whole"),
+        speed="- Local caches: `deps.lock`\n",
+    )
     write(root, "quality/thresholds.toml", ceilings(tier0=0.5, tier2=3000))
     fault = {"kind": "fault", "gate": "lint", "bite": "whole", "seconds": 9.0, "narrowed": False}
     records = [

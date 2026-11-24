@@ -264,6 +264,40 @@ def test_the_finding_is_raised_by_the_gate_from_the_record(work: Path) -> None:
     assert isinstance(found.fix, conformance.Agent)
 
 
+def test_conformance_ignores_stale_missing_cache_paths_removed_from_binding(work: Path) -> None:
+    record = work / ".ratchet/timing.jsonl"
+    record.parent.mkdir(exist_ok=True)
+    rows = [
+        {"kind": runrecord.TIER},
+        {"kind": runrecord.CACHE_MISSING, "path": "~/.dartServer"},
+        {"kind": runrecord.CACHE_MISSING, "path": "deps.lock"},
+    ]
+    record.write_text("\n".join(json.dumps(each) for each in rows) + "\n", encoding="utf-8")
+    assert [found.problem for found in conformance.check_cache_written(work)] == [
+        "the Local caches bullet names deps.lock, which did not exist after the last tier run"
+    ]
+    repos.write(work, str(gatelib.BINDING), "## Speed\n\n- Parallel: all\n- Shards: 1\n")
+    assert list(conformance.check_cache_written(work)) == []
+
+
+def test_partial_runner_skips_local_caches_check_and_still_writes_tier_record(
+    work: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    record = work / ".ratchet/timing.jsonl"
+    record.parent.mkdir(exist_ok=True)
+    stale = [{"kind": runrecord.TIER}, {"kind": runrecord.CACHE_MISSING, "path": "deps.lock"}]
+    record.write_text("\n".join(json.dumps(each) for each in stale) + "\n", encoding="utf-8")
+    code = parallel.main(
+        ["parallel", "--partial", "--report", str(record), "--root", str(work), "--", PASS]
+    )
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "Local caches bullet names" not in out
+    after = lines(record)[2:]
+    assert [each.get("kind") for each in after] == [None, runrecord.TIER]
+    assert list(conformance.check_cache_written(work)) == []
+
+
 def test_the_tiers_line_names_its_gates_in_the_order_given(work: Path) -> None:
     record = work / ".ratchet/timing.jsonl"
     slow = shlex.join([sys.executable, "-c", "import time; time.sleep(0.3)"])

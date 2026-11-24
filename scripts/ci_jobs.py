@@ -431,7 +431,7 @@ def flags(justfile: str, gates: tuple[str, ...], options: argparse.Namespace) ->
             joined |= other
             groups.remove(other)
         groups.append(joined)
-    out = ["--runner", options.runner, "--root", str(options.root)]
+    out = ["--runner", options.runner, "--root", str(options.root), "--partial"]
     out += ["--jobs", str(options.jobs)] if options.jobs else []
     out += ["--report", options.report] if options.report else []
     for kept in groups:

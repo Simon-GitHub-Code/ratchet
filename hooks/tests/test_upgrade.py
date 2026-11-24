@@ -1294,13 +1294,17 @@ def test_available_opt_ins_surfaces_missing_capabilities_and_omits_configured_on
         "coverage:\n    python3 scripts/coverage_groups.py --report cov.xml\n",
         encoding="utf-8",
     )
-    titles = [title for title, _ in upgrade.available_opt_ins(unconfigured)]
-    assert titles == [
+    found_opt_ins = dict(upgrade.available_opt_ins(unconfigured))
+    assert list(found_opt_ins) == [
         "Build cache (`- Build:`, ADR 0095)",
         "Impact triggers (`### Impact triggers`, ADR 0096)",
         "CI loop budget (`[ceilings.loop]`, ADR 0088)",
         "Adversarial parser fuzz & coverage oracle (ADR 0097)",
     ]
+    assert (
+        "e.g. `- Build: gate `build`; caches `.next`; cold 45s; warm 5s;"
+        " reuse moved; consumers `smoke`, `a11y``"
+    ) in found_opt_ins["Build cache (`- Build:`, ADR 0095)"]
 
     boot_only = tmp_path / "boot-only"
     (boot_only / "docs/process").mkdir(parents=True)
@@ -1378,13 +1382,16 @@ def test_an_upgrade_renders_opt_ins_before_summary_without_altering_plain_or_owe
     applied = capsys.readouterr().out
     assert "Available opt-in capabilities (not yet configured in this project):\n" in applied
     assert "Build cache (`- Build:`, ADR 0095)" in applied
+    assert "e.g. `- Build: gate `build`; caches `.next`; cold 45s; warm 5s;" in applied
     assert "Impact triggers (`### Impact triggers`, ADR 0096)" in applied
     assert "CI loop budget (`[ceilings.loop]`, ADR 0088)" in applied
     assert "Adversarial parser fuzz & coverage oracle (ADR 0097)" in applied
+    assert "Workflow differences against the current templates" in applied
     opt_idx = applied.index("Available opt-in capabilities")
+    diff_idx = applied.index("Workflow differences against the current templates")
     summary_idx = applied.index("\nupgrade: ")
     plain_idx = applied.index("\nIn plain words:\n")
-    assert opt_idx < summary_idx < plain_idx
+    assert opt_idx < diff_idx < summary_idx < plain_idx
     assert "Available opt-in capabilities" not in plain(applied)
     assert owed.read(root).entries == ()
 

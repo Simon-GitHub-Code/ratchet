@@ -1034,6 +1034,7 @@ def test_a_group_keeps_the_schedule_the_recipes_give_its_gates(tmp_path: Path) -
         "just",
         "--root",
         str(tmp_path),
+        "--partial",
         "--serial",
         "alpha",
         "beta",
@@ -1043,6 +1044,31 @@ def test_a_group_keeps_the_schedule_the_recipes_give_its_gates(tmp_path: Path) -
         "--wide",
         "gamma",
     ]
+
+
+def test_a_grouped_ci_job_runs_parallel_as_partial_and_skips_local_caches(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    speed = "- Shards: 1\n- Local caches: `~/.ratchet-nothing-here/x`\n"
+    root = project(tmp_path / "repo", '"bite rest"', "", recipes="", speed=speed)
+    runner = shlex.join([sys.executable, "-c", "pass"])
+    argv = [
+        "ci_jobs.py",
+        "--root",
+        str(root),
+        "--run",
+        "rest",
+        "--runner",
+        runner,
+        "--report",
+        RECORD,
+    ]
+    assert ci_jobs.main(argv) == 0
+    assert "Local caches bullet names" not in capsys.readouterr().out
+    rows = [json.loads(line) for line in (root / RECORD).read_text(encoding="utf-8").splitlines()]
+    assert not [row for row in rows if row.get("kind") == "cache-missing"]
+    assert any(row.get("kind") == "tier" for row in rows)
+    assert any(row.get("kind") == "group" for row in rows)
 
 
 @pytest.mark.parametrize(

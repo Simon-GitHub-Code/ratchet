@@ -4532,17 +4532,19 @@ def check_bite_all_ceiling(root: Path) -> Iterable[Finding]:
 
 
 def check_cache_written(root: Path) -> Iterable[Finding]:
+    declared = set(runrecord.cache_paths(read(root / BINDING_PATH) or ""))
     for path in runrecord.facts(root / runrecord.TIMING).missing or []:
-        yield agent(
-            f"{BINDING_PATH}: the Local caches bullet names {path}, which did not"
-            " exist after the last tier run",
-            then=(
-                (
-                    "make the recipe that owns the cache write it, or take the path off the"
-                    " Local caches bullet, then run the tier again"
+        if path in declared:
+            yield agent(
+                f"{BINDING_PATH}: the Local caches bullet names {path}, which did not"
+                " exist after the last tier run",
+                then=(
+                    (
+                        "make the recipe that owns the cache write it, or take the path off the"
+                        " Local caches bullet, then run the tier again"
+                    ),
                 ),
-            ),
-        )
+            )
 
 
 def check_cache_restored(root: Path) -> Iterable[Finding]:
