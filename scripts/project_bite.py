@@ -223,8 +223,12 @@ def git_in(
     return git_bytes(root, *args, index=index, stdin=stdin).decode().strip()
 
 
+SHARD_ENV = ("SHARD", "SHARDS")
+
+
 def environment() -> dict[str, str]:
-    kept = {key: value for key, value in os.environ.items() if key not in (*REAL_TREE, report.RUN)}
+    drop = (*REAL_TREE, report.RUN, *SHARD_ENV)
+    kept = {key: value for key, value in os.environ.items() if key not in drop}
     return {**kept, BITING: "1"}
 
 
