@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.15.3
+
+This patch release holds pull requests #411 and #412 (closing #409 and #410), eliminating unnecessary bite-lane serialization and inline-code false positives in `prose`.
+
+Upgrade from 0.15.2 as the README's Upgrading section says. These changes reach the project:
+
+- **Keep bite lanes parallel when helper recipes pass dynamic gate lists after `--` (#409, #411).** `scripts/schedule.py` (`passed`) no longer treats positional gate arrays after literal `--` (such as `tier0-staged`'s `"${gates[@]}"` or `_rest`'s `"${rest[@]}"`) as unreadable schedule flags when every flag before `--` is readable as text, restoring parallel bite execution while keeping conservative serialization when a flag before `--` is unreadable.
+- **Ignore inline code spans and fenced code blocks in `prose.py` (#410, #412).** `scripts/prose.py` strips single- and multi-backtick inline code spans (leaving unmatched stray backticks intact) and skips Markdown fenced code blocks (` ``` ` and ` ~~~ `) so backticked file paths like `` `.next/cache` `` no longer collide with `GLOSSARY.md` Avoid lists.
+
 ## 0.15.2
 
 This patch release holds pull request #407 (closing #405), fixing a live CI deadlock on `Local caches` in split CI runners and polishing `upgrade.py`'s opt-in output.
