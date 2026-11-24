@@ -306,6 +306,8 @@ def available_opt_ins(sandbox: Path) -> tuple[tuple[str, str], ...]:
                 (
                     "declare `- Build: gate `build`; caches `<path>`; cold <N>s; warm <N>s;"
                     " reuse moved | shared `ENV=dir` | none: <reason>; consumers `<gate>`, ...`"
+                    " (e.g. `- Build: gate `build`; caches `.next`; cold 45s; warm 5s;"
+                    " reuse moved; consumers `smoke`, `a11y``)"
                     " under `## Speed` in `docs/process/binding.md` to enable build-once consumer"
                     " ordering (`parallel.py`), worktree/bite cache seeding (`drain.py`,"
                     " `project_bite.py`), and `COLD_BUILD` detection"
@@ -669,10 +671,10 @@ def render(root: Path, result: Plan, *, applied: bool) -> str:
     if owing:
         title = f"Owed, none of them red, for an agent to work through ({owed.LEDGER}):"
         blocks.append(items_block(root, title, owing))
-    if result.workflow_diffs:
-        blocks.append(workflow_diffs_block(result.workflow_diffs))
     if result.opt_ins:
         blocks.append(opt_ins_block(result.opt_ins))
+    if result.workflow_diffs:
+        blocks.append(workflow_diffs_block(result.workflow_diffs))
     blocks += [summary(root, result, applied=applied), plain(result, applied=applied)]
     return "\n\n".join(blocks) + "\n"
 
