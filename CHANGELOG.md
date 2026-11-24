@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.15.6
+
+This patch release holds pull request #420, fixing loop-budget gate medians so over-budget runs name the gates that actually grew instead of tagging every unbounded gate as `(new)`.
+
+Upgrade from 0.15.5 as the README's Upgrading section says. These changes reach the project:
+
+- **Count unbounded gates and green pre-budget runs in loop medians (#420).** `scripts/loop_budget.py` (`gate_medians` and `classify_runs`) now accepts `"unbounded"` gate records alongside `"green"` and treats green pre-budget runs (`not judged` with `no budget is declared`) as valid baselines (keeping machine-noisy, unread, and red runs excluded). `scripts/forge_runs.py` (`read_artifacts`) now also marks `"unbounded"` CI timing records as passing instead of writing them as `"red"` into the `loop` job's cached history.
+
 ## 0.15.5
 
 This patch release holds pull request #418, replacing hash-modulo bite sharding with deterministic static-weight LPT bin-packing to eliminate multi-minute shard skew in sharded `bite` / `bite-all` runs.
