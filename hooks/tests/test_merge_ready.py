@@ -3383,3 +3383,20 @@ def test_cutting_never_kind_non_guard_pages_remains_the_agents(tmp_path: Path, p
     branch(tmp_path, "feature/4-thing")
     change(tmp_path, {page: f"# {page}\n\nLine one.\n", "src/a.py": "x = 2\n"})
     assert judged(tmp_path) == []
+
+
+def test_help_names_the_record_subcommand_and_verdict_fields(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as top:
+        merge_ready.main(["merge_ready.py", "--help"])
+    assert top.value.code == 0
+    top_help = capsys.readouterr().out
+    assert "record [--root ROOT]" in top_help
+    assert "openQuestions" in top_help
+    with pytest.raises(SystemExit) as sub:
+        merge_ready.main(["merge_ready.py", "record", "--help"])
+    assert sub.value.code == 0
+    sub_help = capsys.readouterr().out
+    assert "merge_ready.py record" in sub_help
+    assert "verdict.json" in sub_help
