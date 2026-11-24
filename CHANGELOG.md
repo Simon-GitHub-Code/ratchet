@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.15.8
+
+This patch release holds pull requests #424, #425, #426, and #427, fixing the greenfield adoption CI deadlock on cold caches, smoothing first-hour `/ratchet:adopt` setup, and removing a stdout-ordering race in `test_with_service.py`.
+
+Upgrade from 0.15.7 as the README's Upgrading section says. These changes reach the project:
+
+- **Avoid failing `conformance` on cold CI cache misses (#427).** `scripts/cache_restore.py` now records `"miss": true` (and prints `cold miss`) when `actions/cache` passes `--hit ""` (no cache found for `key` or `restore-keys`), and `scripts/runrecord.py` (`record_restore`) ignores 0-byte cold-miss records. Fresh `main` pushes after adoption and post-eviction runs can now finish green and populate the cache instead of permanently deadlocking `tier1 (rest)`, while restored archives (`--hit true` / `--hit false`) that yield 0 bytes remain red.
+- **Ignore CI `/ratchet/` checkout in `.gitignore` and smooth `/ratchet:adopt` prompts (#424).** `skills/init/templates/gitignore` now ignores `/ratchet/` so repo linters and file-size limits do not scan the CI plugin checkout directory, and `skills/adopt/SKILL.md` clarifies template copying, structured owner pickers, and `architecture.tools` on greenfield repos.
+- **Carry tracker records on the adoption branch when `origin` exists (#425).** `skills/adopt/SKILL.md` now keeps the default branch aligned with `origin/main` during adoption by carrying uncommitted tracker records inside the adoption branch's `chore(method): adopt` commit rather than committing them ahead of `origin/main`.
+- **Stabilize `test_with_service.py` `ENDS_FIRST` stdout ordering (#426).** `hooks/tests/test_with_service.py` now flushes child stdout before signalling `RATCHET_SENDING`, eliminating an intermittent CI race with the watcher thread's `older()` message.
+
 ## 0.15.7
 
 This patch release holds pull request #422, refining bite-shard weighting so explicit slow `whole` faults are balanced cleanly above fast unnarrowed gates and multi-fault gates spread evenly across shards.
