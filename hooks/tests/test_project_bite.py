@@ -1957,7 +1957,7 @@ def test_a_recipe_that_passes_the_runner_an_ordinary_quoted_word_runs_its_gates_
 
 UNREAD_GATES = [
     ("{{run}} $FLAGS -- timed", {"timed"}),
-    ("{{run}} --serial first second -- $GATES", set(SCHEDULED)),
+    ("{{run}} $FLAGS --serial first second -- $GATES", set(SCHEDULED)),
 ]
 
 
@@ -1985,6 +1985,41 @@ def test_an_unread_recipe_s_gates_never_run_beside_another_gate(
     assert bool(met) is (strict != set(gates)), "the other gates share the lanes"
     every = "every gate" if strict == set(gates) else "`timed`"
     assert f"so its lanes run {every} each with nothing beside it" in shown(capsys)
+
+
+def test_a_helper_recipe_passing_shell_arrays_after_double_dash_keeps_bite_lanes_parallel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    log, mark = tmp_path / "log", tmp_path / "mark"
+    mark.mkdir()
+    monkeypatch.setenv("LOG", str(log))
+    monkeypatch.setenv("MARK", str(mark))
+    gates = {
+        "first": logged("first", "free"),
+        "second": logged("second", "first"),
+        "free": logged("free", "first"),
+        "other": logged("other", "free"),
+    }
+    registry = "".join(bite(name, "a planted word") for name in gates)
+    root = project(tmp_path / "repo", gates, registry)
+    recipes = (
+        'run := "python3 scripts/parallel.py"\n\n'
+        "tier0-staged:\n"
+        "    gates=(first second)\n"
+        '    {{run}} --serial first second -- "${gates[@]}"\n\n'
+        "_rest:\n"
+        "    rest=(free other)\n"
+        '    {{run}} -- "${rest[@]}"\n'
+    )
+    write(root, "justfile", recipes)
+    commit(root, "helper recipes")
+    assert project_bite.main(["project_bite.py", "--root", str(root), "--jobs", "4"]) == 0
+    met, _ = ran_with(log)
+    assert frozenset(("first", "second")) not in met, "apart gates from --serial ran at once"
+    assert frozenset(("first", "free")) in met, "parallel bite lanes were serialized"
+    assert "cannot read as text" not in shown(capsys)
 
 
 def test_check_keeps_the_schedule_the_proof_reads_from_the_same_binding(
