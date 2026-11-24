@@ -75,9 +75,9 @@ Tell the owner this before step 1. It is not a question.
      - the `pre-commit` framework (`pre-commit` or `uvx pre-commit`);
      - with an `origin` on GitHub, `gh` with `gh auth status` green;
      - `claude plugin list` showing `ratchet`, `mattpocock-skills`, `pstack` and `impeccable`.
-   - Commit the tracker setup's uncommitted records, if any, on the default branch as `chore(tracker): record the issue tracker`. Leave it unpushed; the adoption branch carries it in its pull request.
+   - Handle any uncommitted tracker setup records: when there is no remote, commit them on the default branch as `chore(tracker): record the issue tracker`; when `origin` exists, leave the default branch untouched and include them in the first `chore(method): adopt` commit on step 2's branch (keeping `origin/main` aligned and every commit in the adoption range under `chore(method): adopt` so `change-size` exempts it).
 
-   Done when the route names neither command, every check holds and no tracker record is left uncommitted; or you have printed the route's lines, or named what is missing, and stopped.
+   Done when the route names neither command, every check holds and tracker records are either committed (with no remote) or ready to join step 2's branch; or you have printed the route's lines, or named what is missing, and stopped.
 
 2. **Copy the templates.**
    - Work on a new branch, or on the one an earlier run of this skill left, which the route names this skill to resume while the binding has no plugin pin (the copy skips every file that exists, so it resumes).
