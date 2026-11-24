@@ -16,7 +16,7 @@ No skeleton is built: on an empty repository the next thing written is the owner
 
 ## What the owner is asked
 
-The owner is asked product questions, as the method's rule on asking defines them, and the architecture with its tools. They are asked only at step 3, so that every question comes in the first minutes and the rest of adoption runs while they are away. Put them all in one round — using the harness's structured multiple-choice question tool where available (with any longer system trade-offs printed above it so the picker does not hide them), or in one message otherwise — each in the words written here, with your reading of the records as the recommended option, so the owner can accept them all at once.
+The owner is asked product questions, as the method's rule on asking defines them, and the architecture with its tools. They are asked only at step 3, so that every question comes in the first minutes and the rest of adoption runs while they are away. Put them all in one round — using the harness's structured multiple-choice picker where available (with any longer system trade-offs printed above it so the picker does not hide them), or in one message otherwise — each in the words written here, with your reading of the records as the recommended option, so the owner can accept them all at once.
 
 1. **Ask** `adopt.first`: "What is the first thing you want to be able to do with it, from start to finish?" The options are the first usable part the records point to, as a few things a person can check, in the owner's words.
 2. **Ask** `adopt.later`: "Which of these can wait until that first part works?" The options are what the records name beyond that part; several may be chosen.
