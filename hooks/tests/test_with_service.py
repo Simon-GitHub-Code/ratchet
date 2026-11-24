@@ -1089,8 +1089,8 @@ BETWEEN_TWO_REQUESTS = (
 HOLDS = "http://127.0.0.1:{port}/work"
 ENDS_FIRST = (
     "import os, sys\n"
-    "open(os.environ['RATCHET_SENDING'], 'w').close()\n"
     "print('the load failed: every request was refused', flush=True)\n"
+    "open(os.environ['RATCHET_SENDING'], 'w').close()\n"
     "sys.exit(123)\n"
 )
 STOPS_AT_ONCE = (
