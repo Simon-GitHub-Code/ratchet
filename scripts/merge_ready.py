@@ -1738,9 +1738,28 @@ def pending_expiry(root: Path, raw: str, *, base_ref: str, head_ref: str) -> lis
     return expiry_reasons(change, extra={record: raw})
 
 
+RECORD_HELP = (
+    "Subcommand:\n"
+    "  record [--root ROOT] [--base BASE] [--head HEAD]\n"
+    "      Read a verdict JSON object from stdin (requiring slug, verdict, unresolved,\n"
+    "      openQuestions), stamp it with HEAD's tree, and write\n"
+    "      docs/features/<slug>/verdict.json."
+)
+
+
 def main(argv: list[str]) -> int:
     recording = argv[1:2] == ["record"]
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        prog="merge_ready.py record" if recording else "merge_ready.py",
+        description=(
+            "Write docs/features/<slug>/verdict.json from a verdict JSON object on stdin"
+            " (fields: slug, verdict, unresolved, openQuestions), stamped with HEAD's tree."
+            if recording
+            else "Judge whether a change can merge automatically or needs the owner."
+        ),
+        epilog=None if recording else RECORD_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--root", default=".")
     parser.add_argument("--base")
     parser.add_argument("--head", default="HEAD")
