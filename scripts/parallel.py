@@ -12,7 +12,7 @@ Usage::
 
     parallel.py [--runner "just"] [--jobs N] [--serial A B]... [--alone GATE...]
                 [--wide GATE...] [--after GATE:DEP]... [--first GATE...]
-                [--fail-fast] [--root DIR] [--report PATH] -- GATE...
+                [--fail-fast] [--partial] [--root DIR] [--report PATH] -- GATE...
 
 * Each ``GATE`` becomes ``RUNNER GATE`` and runs in ``--root`` (the current directory). The
   entry is split like a shell line, so ``"test-shard 1/4"`` passes two words. With no
@@ -82,7 +82,8 @@ Usage::
   did without a record. ``--alone`` gates still run last, in the order given.
 * After the closing lines, each path the binding's ``Local caches`` bullet of ``## Speed`` names
   (its code spans) that does not exist is said in one line, and with ``--report`` has a line of
-  its own (``kind`` ``cache-missing``, ``path``) after the tier's.
+  its own (``kind`` ``cache-missing``, ``path``) after the tier's, unless ``--partial`` is given
+  for a subset run that does not run every gate owning a cache.
 * SIGINT, SIGTERM and SIGHUP stop every running gate's whole process group (each gate runs in a
   session of its own), then exit 128 plus the signal. Nothing is left running except what a gate
   detached from its own group; SIGKILL cannot be caught by anything.
@@ -490,6 +491,7 @@ class Scheduler:
         self.jobs: int = options.jobs
         self.shares = shares(units, options.wide, alone=options.alone, jobs=options.jobs)
         self.fail_fast: bool = options.fail_fast
+        self.partial: bool = bool(getattr(options, "partial", False))
         self.report_to: Path | None = options.report
         self.tree = runrecord.tree_id(self.root) if options.report else None
         self.tools = tools(self.root)
@@ -1130,7 +1132,7 @@ def record(
     gates: list[str],
     extra: Mapping[str, object] | None = None,
 ) -> None:
-    missing = runrecord.missing_cache(scheduler.root)
+    missing = [] if scheduler.partial else runrecord.missing_cache(scheduler.root)
     for path in missing:
         say(
             f"parallel: the binding's Local caches bullet names {path}, which does not exist"
@@ -1217,6 +1219,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="run these gates first and stop before the rest on failure",
     )
     parser.add_argument("--fail-fast", action="store_true", help="stop at the first red gate")
+    parser.add_argument(
+        "--partial",
+        action="store_true",
+        help="subset run; skip checking Local caches paths owned by other jobs",
+    )
     parser.add_argument("--root", type=Path, default=Path(), help="directory the gates run in")
     parser.add_argument("--report", type=Path, help="append one budget.py record per gate")
     parser.add_argument("--budget", choices=("loop",), help="judge the run against a budget")
