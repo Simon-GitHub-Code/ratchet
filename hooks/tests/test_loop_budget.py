@@ -333,7 +333,25 @@ def test_history_helpers_classify_streaks_medians_and_check_times() -> None:
         {"kind": "tier", "seconds": 10.0, "status": "green", "run": "r0"},
         {"key": "lint", "seconds": 2.0, "status": "green", "run": "r0"},
         {"kind": "tier", "seconds": 11.0, "status": "green", "judgement": "within", "run": "r1"},
-        {"key": "lint", "seconds": 3.0, "status": "green", "run": "r1"},
+        {"key": "lint", "seconds": 3.0, "status": "unbounded", "run": "r1"},
+        {
+            "kind": "tier",
+            "seconds": 12.0,
+            "status": "green",
+            "judgement": "not judged",
+            "reason": Reason.NO_BUDGET.value,
+            "run": "r_nb",
+        },
+        {"key": "lint", "seconds": 4.0, "status": "unbounded", "run": "r_nb"},
+        {
+            "kind": "tier",
+            "seconds": 99.0,
+            "status": "red",
+            "judgement": "not judged",
+            "reason": Reason.NO_BUDGET.value,
+            "run": "r_nb_red",
+        },
+        {"key": "lint", "seconds": 99.0, "status": "unbounded", "run": "r_nb_red"},
         {"key": "lint", "seconds": 99.0, "status": "red", "run": "r2"},
         {"key": "lint", "seconds": "bad", "status": "green", "run": "r1"},
         {"key": "lint", "seconds": 4.0, "status": "green", "run": "now"},
@@ -359,7 +377,7 @@ def test_history_helpers_classify_streaks_medians_and_check_times() -> None:
     ]
     medians, has_history = gate_medians(records, current_run="now")
     assert has_history is True
-    assert medians == {"lint": 2.5}
+    assert medians == {"lint": 3.0}
 
     only_over: list[dict[str, object]] = [
         {"key": "slow", "seconds": 40.0, "status": "green", "run": "r_over"},
@@ -386,7 +404,7 @@ def test_history_helpers_classify_streaks_medians_and_check_times() -> None:
     )
     assert trailing_not_judged([]) is None
 
-    assert check_run_times(records) == [11.0, 50.0, 40.0, 12.0, 12.0]
+    assert check_run_times(records) == [11.0, 12.0, 99.0, 50.0, 40.0, 12.0, 12.0]
     plain: list[dict[str, object]] = [
         {"key": "lint", "seconds": 1.0},
         {"kind": "tier", "seconds": 0.0, "gates": ["test"]},
