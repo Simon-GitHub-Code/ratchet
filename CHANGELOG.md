@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.15.4
+
+This patch release holds pull requests #414, #415, and #416, adding fast-first fail-fast gating to grouped CI jobs, fixing shard-variable leakage inside sharded bite runs, and aligning `upgrade.py`'s `offered` vs `owed` reporting with `conformance.py`.
+
+Upgrade from 0.15.3 as the README's Upgrading section says. These changes reach the project:
+
+- **Fast-first fail-fast phase in grouped CI jobs (#414).** `scripts/ci_jobs.py` passes `--first` to `parallel.py` for sub-second deterministic policy gates (`change-size`, `conformance`, `settings-check`, `incidents`, `guard-diff`, `triggers`) whenever a grouped CI job mixes fast and heavy gates (safely excluding `--alone`, `- Build:` consumers, and gates sharing `--serial` / `- Apart:` groups with heavy gates). Red policy checks in `tier1 (rest)` now fail in seconds instead of waiting behind multi-minute builds or scans.
+- **Strip `SHARD` and `SHARDS` from inner bite gate environments (#415).** `scripts/project_bite.py` (`environment()`) removes `SHARD` and `SHARDS` alongside `RATCHET_RUN`, preventing sharded `bite-all` jobs from passing `--shard=K/N` into narrowed single-file inner gates.
+- **Separate `OFFERED` findings from `owed` counts in `upgrade.py` (#416).** `scripts/upgrade.py` excludes `conformance.OFFERED` findings (such as `OWN_JOB_LIST`) from `quality/owed.toml` counts and renders them in their own `Offered (optional, not in quality/owed.toml):` block so `upgrade.py` and `conformance.py` report identical owed counts.
+
 ## 0.15.3
 
 This patch release holds pull requests #411 and #412 (closing #409 and #410), eliminating unnecessary bite-lane serialization and inline-code false positives in `prose`.
