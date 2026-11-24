@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.15.2
+
+This patch release holds pull request #407 (closing #405), fixing a live CI deadlock on `Local caches` in split CI runners and polishing `upgrade.py`'s opt-in output.
+
+Upgrade from 0.15.1 as the README's Upgrading section says. These changes reach the project:
+
+- **Break `Local caches` CI deadlock and skip cross-job `cache-missing` in split CI (#405, #407).** `conformance.check_cache_written()` now intersects recorded missing paths with the paths still declared under `- Local caches:` in `docs/process/binding.md`, so removing a path immediately clears stale cached `.ratchet/timing.jsonl` findings. `scripts/parallel.py` adds `--partial` (passed by `scripts/ci_jobs.py` for split CI matrix jobs) so partial `ci-job` runners do not record `cache-missing` for caches owned by other split jobs while still writing the `tier` record.
+- **Keep `upgrade.py` opt-ins concise and visible (#407).** `scripts/upgrade.py` renders `Available opt-in capabilities` before verbose `Workflow differences` so opt-ins stay above tool-output truncation, and adds a one-line concrete `- Build:` example alongside the ADR 0095 grammar.
+
 ## 0.15.1
 
 This patch release holds two field-driven fixes merged since 0.15.0 (#403 and #404), closing #402 and improving the upgrade and feedback-loop experience across all supported harnesses.
