@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.15.7
+
+This patch release holds pull request #422, refining bite-shard weighting so explicit slow `whole` faults are balanced cleanly above fast unnarrowed gates and multi-fault gates spread evenly across shards.
+
+Upgrade from 0.15.6 as the README's Upgrading section says. These changes reach the project:
+
+- **Weight explicit `whole` faults above unnarrowed gates and spread each gate across shards (#422).** `scripts/project_bite.py` (`fault_weight` and `slice_tasks`) now separates explicit `whole` faults (`WHOLE_WEIGHT = 8`) from fast unnarrowed faults without `args` (`UNNARROWED_WEIGHT = 2`), groups equal-weight tasks by gate name before deterministic `sha256` tie-breaking, and breaks equal-load bucket ties by task count. This prevents many fast unnarrowed gates (like `formal` or `comments`) from swamping slow whole-tree faults (`a11y`, `e2e`, `test`, `perf`, `load`, `config-refusal`) and ensures multi-fault gates spread evenly across every shard.
+
 ## 0.15.6
 
 This patch release holds pull request #420, fixing loop-budget gate medians so over-budget runs name the gates that actually grew instead of tagging every unbounded gate as `(new)`.
