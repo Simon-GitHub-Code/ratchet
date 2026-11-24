@@ -56,7 +56,8 @@ GATE_PATHS = (str(REGISTRY), f"{PATCHES}**", str(gatelib.BINDING))
 PULL_REQUEST_TIERS = ("0", "1")
 DEEP_TIER = "2"
 TIER2_WEIGHT = 2
-WHOLE_WEIGHT = 4
+WHOLE_WEIGHT = 8
+UNNARROWED_WEIGHT = 2
 ALONE_WEIGHT = 2
 REAL_TREE = (*gatelib.REPOSITORY_VARIABLES, "VIRTUAL_ENV")
 IDENTITY = ("-c", "user.name=bite", "-c", "user.email=bite@example.invalid")
@@ -2268,8 +2269,10 @@ def fault_weight(task: Task) -> int:
     weight = 1
     if row.tier == DEEP_TIER:
         weight *= TIER2_WEIGHT
-    if bite.whole or not bite.args:
+    if bite.whole:
         weight *= WHOLE_WEIGHT
+    elif not bite.args:
+        weight *= UNNARROWED_WEIGHT
     if bite.alone:
         weight *= ALONE_WEIGHT
     return weight
@@ -2285,16 +2288,21 @@ def slice_tasks(tasks: Sequence[Task], shard: Shard) -> list[Task]:
         range(len(tasks)),
         key=lambda index: (
             -weights[index],
+            tasks[index][0].gate,
             fault_hash(tasks[index][0].gate, tasks[index][1][0].name),
             index,
         ),
     )
     loads = [0] * shard.total
+    counts = [0] * shard.total
     assigned = [0] * len(tasks)
     for index in order:
-        bucket = min(range(shard.total), key=loads.__getitem__)
+        bucket = min(
+            range(shard.total), key=lambda candidate: (loads[candidate], counts[candidate])
+        )
         assigned[index] = bucket + 1
         loads[bucket] += weights[index]
+        counts[bucket] += 1
     return [task for index, task in enumerate(tasks) if assigned[index] == shard.index]
 
 

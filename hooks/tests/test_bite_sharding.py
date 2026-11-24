@@ -419,14 +419,14 @@ def test_fault_weight_combines_tier_scope_and_alone_factors() -> None:
     assert project_bite.fault_weight(make_task("lint/a", tier="0", args=narrowed)) == 1
     assert project_bite.fault_weight(make_task("lint/b", tier="1", args=narrowed)) == 1
     assert project_bite.fault_weight(make_task("deep/c", tier="2", args=narrowed)) == 2
-    assert project_bite.fault_weight(make_task("lint/d", tier="0")) == 4
-    assert project_bite.fault_weight(make_task("lint/e", tier="0", whole="whole tree")) == 4
+    assert project_bite.fault_weight(make_task("lint/d", tier="0")) == 2
+    assert project_bite.fault_weight(make_task("lint/e", tier="0", whole="whole tree")) == 8
     assert project_bite.fault_weight(make_task("lint/f", tier="0", args=narrowed, alone=True)) == 2
     assert project_bite.fault_weight(make_task("deep/g", tier="2", args=narrowed, alone=True)) == 4
-    assert project_bite.fault_weight(make_task("deep/h", tier="2", whole="whole tree")) == 8
+    assert project_bite.fault_weight(make_task("deep/h", tier="2", whole="whole tree")) == 16
     assert (
         project_bite.fault_weight(make_task("deep/i", tier="2", whole="whole tree", alone=True))
-        == 16
+        == 32
     )
 
 
@@ -446,9 +446,27 @@ def test_slice_tasks_balances_heavy_faults_evenly_and_preserves_order() -> None:
     for part in slices:
         heavy_count = sum(1 for task in part if project_bite.task_id(task) in heavy_ids)
         assert heavy_count == 2
-        assert sum(project_bite.fault_weight(task) for task in part) == 36
+        assert sum(project_bite.fault_weight(task) for task in part) == 68
         positions = [tasks.index(task) for task in part]
         assert positions == sorted(positions)
+
+
+def test_slice_tasks_separates_explicit_whole_and_spreads_each_gate_evenly() -> None:
+    whole_tier2 = (
+        [make_task(f"a11y/a-{i}", tier="2", whole="whole boot") for i in range(2)]
+        + [make_task(f"e2e/e-{i}", tier="2", whole="whole boot") for i in range(2)]
+        + [make_task(f"perf/p-{i}", tier="2", whole="whole boot") for i in range(2)]
+    )
+    unnarrowed_fast = [make_task(f"formal/f-{i}", tier="2") for i in range(12)]
+    narrowed_tier2 = [
+        make_task(f"mutation/m-{i}", tier="2", args=(f"src/m{i}.ts",)) for i in range(3)
+    ]
+    tasks = [*whole_tier2, *unnarrowed_fast, *narrowed_tier2]
+    slices = [project_bite.slice_tasks(tasks, project_bite.Shard(i, 3)) for i in range(1, 4)]
+    for part in slices:
+        assert sum(1 for _, bites in part if bites[0].whole) == 2
+        assert sum(1 for row, _ in part if row.gate == "formal") == 4
+        assert sum(1 for row, _ in part if row.gate == "mutation") == 1
 
 
 def test_shard_cli_balances_heavy_tier2_whole_alone_faults_across_slices(
