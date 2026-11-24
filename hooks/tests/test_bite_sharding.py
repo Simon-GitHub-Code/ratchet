@@ -390,3 +390,101 @@ def test_slowest_report_precedes_load_on_red_and_skips_zero_total(
     monkeypatch.setattr(project_bite, "execute_lanes", no_faults)
     assert run_bite(zero_root) == 0
     assert "bite: slowest:" not in capsys.readouterr().out
+
+
+def make_task(
+    key: str,
+    *,
+    tier: str = "0",
+    args: tuple[str, ...] = (),
+    whole: str = "",
+    alone: bool = False,
+) -> project_bite.Task:
+    gate, name = key.split("/", 1)
+    gate_row = project_bite.Row(gate, "tool", tier, f"sh gate {gate}")
+    bite = project_bite.Bite(
+        gate,
+        name,
+        "L001",
+        project_bite.Write(f"src/{gate}_{name}.txt", "planted\n"),
+        args=args,
+        whole=whole,
+        alone=alone,
+    )
+    return (gate_row, [bite])
+
+
+def test_fault_weight_combines_tier_scope_and_alone_factors() -> None:
+    narrowed = ("src/one.txt",)
+    assert project_bite.fault_weight(make_task("lint/a", tier="0", args=narrowed)) == 1
+    assert project_bite.fault_weight(make_task("lint/b", tier="1", args=narrowed)) == 1
+    assert project_bite.fault_weight(make_task("deep/c", tier="2", args=narrowed)) == 2
+    assert project_bite.fault_weight(make_task("lint/d", tier="0")) == 4
+    assert project_bite.fault_weight(make_task("lint/e", tier="0", whole="whole tree")) == 4
+    assert project_bite.fault_weight(make_task("lint/f", tier="0", args=narrowed, alone=True)) == 2
+    assert project_bite.fault_weight(make_task("deep/g", tier="2", args=narrowed, alone=True)) == 4
+    assert project_bite.fault_weight(make_task("deep/h", tier="2", whole="whole tree")) == 8
+    assert (
+        project_bite.fault_weight(make_task("deep/i", tier="2", whole="whole tree", alone=True))
+        == 16
+    )
+
+
+def test_slice_tasks_balances_heavy_faults_evenly_and_preserves_order() -> None:
+    heavy = [
+        make_task(f"deep/heavy-{i}", tier="2", whole="whole tree", alone=True) for i in range(6)
+    ]
+    light = [make_task(f"lint/light-{i}", tier="0", args=(f"src/l{i}.txt",)) for i in range(12)]
+    tasks = [*heavy, *light]
+    heavy_ids = {project_bite.task_id(task) for task in heavy}
+
+    assert project_bite.check_shards(tasks, 3) == 0
+    slices = [project_bite.slice_tasks(tasks, project_bite.Shard(i, 3)) for i in range(1, 4)]
+    assert slices == [
+        project_bite.slice_tasks(tasks, project_bite.Shard(i, 3)) for i in range(1, 4)
+    ]
+    for part in slices:
+        heavy_count = sum(1 for task in part if project_bite.task_id(task) in heavy_ids)
+        assert heavy_count == 2
+        assert sum(project_bite.fault_weight(task) for task in part) == 36
+        positions = [tasks.index(task) for task in part]
+        assert positions == sorted(positions)
+
+
+def test_shard_cli_balances_heavy_tier2_whole_alone_faults_across_slices(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    heavy_entries = [
+        (
+            f'[[bite]]\ngate = "deep"\nname = "heavy-{i}"\n'
+            f'write = {{ path = "src/h{i}.txt", content = "planted\\n" }}\n'
+            f'expect = "L001"\nwhole = "whole tree"\nalone = true\n'
+        )
+        for i in range(6)
+    ]
+    light_entries = [
+        (
+            f'[[bite]]\ngate = "lint"\nname = "light-{i}"\n'
+            f'write = {{ path = "src/l{i}.txt", content = "planted\\n" }}\n'
+            f'expect = "L001"\nargs = ["src/l{i}.txt"]\n'
+        )
+        for i in range(6)
+    ]
+    root = project(
+        tmp_path / "repo",
+        {"deep": LINT, "lint": LINT},
+        "".join([*heavy_entries, *light_entries]),
+        tiers={"deep": "2", "lint": "0"},
+    )
+    assert run_bite(root, "--shard-check", "3") == 0
+    capsys.readouterr()
+
+    seen: list[tuple[str, str]] = []
+    for index in range(1, 4):
+        assert run_bite(root, "--shard", f"{index}/3") == 0
+        part = proved_faults(capsys.readouterr().out)
+        assert sum(1 for gate, _ in part if gate == "deep") == 2
+        assert sum(1 for gate, _ in part if gate == "lint") == 2
+        seen.extend(part)
+    assert len(seen) == 12
+    assert len(set(seen)) == 12

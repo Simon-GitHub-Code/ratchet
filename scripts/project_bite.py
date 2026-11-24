@@ -54,6 +54,10 @@ KINDS = ("write", "patch", "remove", "replace")
 GATE_GROUPS = ("tool-config", "gate-commands", "fitness", "gate-tools", "formal")
 GATE_PATHS = (str(REGISTRY), f"{PATCHES}**", str(gatelib.BINDING))
 PULL_REQUEST_TIERS = ("0", "1")
+DEEP_TIER = "2"
+TIER2_WEIGHT = 2
+WHOLE_WEIGHT = 4
+ALONE_WEIGHT = 2
 REAL_TREE = (*gatelib.REPOSITORY_VARIABLES, "VIRTUAL_ENV")
 IDENTITY = ("-c", "user.name=bite", "-c", "user.email=bite@example.invalid")
 COMMIT = (*IDENTITY, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m")
@@ -2258,17 +2262,40 @@ def parse_shard_count(raw: str) -> int:
     return int(raw)
 
 
-def shard_of_fault(gate: str, name: str, shards: int) -> int:
-    key = f"{gate}:{name}"
-    return int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], "big") % shards + 1
+def fault_weight(task: Task) -> int:
+    row, bites = task
+    bite = bites[0]
+    weight = 1
+    if row.tier == DEEP_TIER:
+        weight *= TIER2_WEIGHT
+    if bite.whole or not bite.args:
+        weight *= WHOLE_WEIGHT
+    if bite.alone:
+        weight *= ALONE_WEIGHT
+    return weight
+
+
+def fault_hash(gate: str, name: str) -> bytes:
+    return hashlib.sha256(f"{gate}:{name}".encode()).digest()
 
 
 def slice_tasks(tasks: Sequence[Task], shard: Shard) -> list[Task]:
-    return [
-        task
-        for task in tasks
-        if shard_of_fault(task[0].gate, task[1][0].name, shard.total) == shard.index
-    ]
+    weights = [fault_weight(task) for task in tasks]
+    order = sorted(
+        range(len(tasks)),
+        key=lambda index: (
+            -weights[index],
+            fault_hash(tasks[index][0].gate, tasks[index][1][0].name),
+            index,
+        ),
+    )
+    loads = [0] * shard.total
+    assigned = [0] * len(tasks)
+    for index in order:
+        bucket = min(range(shard.total), key=loads.__getitem__)
+        assigned[index] = bucket + 1
+        loads[bucket] += weights[index]
+    return [task for index, task in enumerate(tasks) if assigned[index] == shard.index]
 
 
 def task_id(task: Task) -> tuple[str, str]:
