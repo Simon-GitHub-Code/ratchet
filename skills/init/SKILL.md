@@ -65,7 +65,7 @@ Take an answer as given; never refine it with a follow-up. A question whose answ
 
 3. **Link `CLAUDE.md` and extend `.gitignore`.**
    - Run `ln -s AGENTS.md CLAUDE.md` at the root, replacing a plain `CLAUDE.md` whose content step 2 moved. Skipped when `CLAUDE.md` is a symlink to `AGENTS.md`.
-   - Append to `.gitignore` (create it if missing) each line of `${CLAUDE_SKILL_DIR}/templates/gitignore` it lacks: the agent worktrees pstack's panels leave under `.claude/worktrees/` and impeccable's caches, which whole-tree gates would otherwise judge. Skipped when every line is present.
+   - Append to `.gitignore` (create it if missing) each line of `${CLAUDE_SKILL_DIR}/templates/gitignore` it lacks: the agent worktrees pstack's panels leave under `.claude/worktrees/`, impeccable's caches, `.ratchet/`, and `/ratchet/` where CI checks out the plugin, which whole-tree gates would otherwise judge. Skipped when every line is present.
 
    Done when `CLAUDE.md` is a symlink to `AGENTS.md` and `.gitignore` holds every line of `${CLAUDE_SKILL_DIR}/templates/gitignore`.
 

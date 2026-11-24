@@ -16,7 +16,7 @@ No skeleton is built: on an empty repository the next thing written is the owner
 
 ## What the owner is asked
 
-The owner is asked product questions, as the method's rule on asking defines them, and the architecture with its tools. They are asked only at step 3, so that every question comes in the first minutes and the rest of adoption runs while they are away. Put them all in one message, each in the words written here, with your reading of the records as the recommended option, so the owner can accept them all at once.
+The owner is asked product questions, as the method's rule on asking defines them, and the architecture with its tools. They are asked only at step 3, so that every question comes in the first minutes and the rest of adoption runs while they are away. Put them all in one round — using the harness's structured multiple-choice picker where available (with any longer system trade-offs printed above it so the picker does not hide them), or in one message otherwise — each in the words written here, with your reading of the records as the recommended option, so the owner can accept them all at once.
 
 1. **Ask** `adopt.first`: "What is the first thing you want to be able to do with it, from start to finish?" The options are the first usable part the records point to, as a few things a person can check, in the owner's words.
 2. **Ask** `adopt.later`: "Which of these can wait until that first part works?" The options are what the records name beyond that part; several may be chosen.
@@ -27,7 +27,7 @@ Then the architecture and its tools, drafted as [architecture.md](../method/arch
 - **A repository with code:** the first is "keep what is here", described from the code. Another is offered only when the code shows a reason. A rewrite is never offered by default.
 
 4. **Ask** `architecture.system`: "How should it be built? Each choice says what it is made of, where it runs, where your things are kept, and what changing it later would cost." The options are the systems, recommended first, and "You decide", which takes the recommendation.
-5. **Ask** `architecture.tools`: "Which tools should check the work? Each set names one tool for each kind of check, for the design I recommend." The options are the recommended system's set, one concrete current tool for each concept the rows bound now and the tests need, a second set only where two tools are close, and "You decide", which takes the first. When the owner picks another system, that system's own set holds and this answer is set aside.
+5. **Ask** `architecture.tools`: "Which tools should check the work? Each set names one tool for each kind of check, for the design I recommend." The options are the recommended system's set, one concrete current tool for each concept the rows bound now and the tests need, a second set only where two tools are close, and "You decide", which takes the first. When the owner picks another system, that system's own set holds and this answer is set aside; on an empty repository with no stack chosen yet, make clear that this set is tied to the recommended system (and if the owner wants to settle `architecture.system` first, take that answer before proposing stack tools).
 6. **Ask** `loop.wait`: "When you ask for a check on a small change, how long will you wait for the answer?" Offer plain durations (such as 2 minutes, 5 minutes, 10 minutes), with your estimate for this stack first.
 
 Whether others reach it, rely on it, or trust it with what cannot be got back is something a machine cannot see reliably, so the owner declares it. On a repository that already has code, always ask the first in the same message, naming any sign the tree shows (a deploy configuration or workflow, a production address, a host's configuration); recommend "no" only when the tree shows none:
@@ -75,15 +75,15 @@ Tell the owner this before step 1. It is not a question.
      - the `pre-commit` framework (`pre-commit` or `uvx pre-commit`);
      - with an `origin` on GitHub, `gh` with `gh auth status` green;
      - `claude plugin list` showing `ratchet`, `mattpocock-skills`, `pstack` and `impeccable`.
-   - Commit the tracker setup's uncommitted records, if any, on the default branch as `chore(tracker): record the issue tracker`.
+   - Commit the tracker setup's uncommitted records, if any, on the default branch as `chore(tracker): record the issue tracker`. Leave it unpushed; the adoption branch carries it in its pull request.
 
    Done when the route names neither command, every check holds and no tracker record is left uncommitted; or you have printed the route's lines, or named what is missing, and stopped.
 
 2. **Copy the templates.**
    - Work on a new branch, or on the one an earlier run of this skill left, which the route names this skill to resume while the binding has no plugin pin (the copy skips every file that exists, so it resumes).
    - Every commit's subject starts `chore(method): adopt`: the `commits` gate accepts it, and the change-size gate exempts a range made only of such commits and prints the size instead.
-   - Copy every file under `templates/`, dotfiles included, to the same path, skipping any that exists and skipping `.claude/settings.json`. Claude Code applies its `deny` rules the moment the file exists. Step 8 writes it.
-   - Append to `.gitignore` the lines of the init skill's `templates/gitignore` it lacks.
+   - Copy every file under `templates/`, dotfiles included, to the same path, skipping any that exists and skipping `.claude/settings.json`. Copy them with the file tools or shell `cp` — not an inline `python3` snippet naming the plugin folder, which the guard denies. Claude Code applies its `deny` rules the moment the file exists. Step 8 writes it.
+   - Append to `.gitignore` the lines of the init skill's `templates/gitignore` it lacks (including `/ratchet/`, where CI checks out the plugin; any whole-tree gate whose tool does not read `.gitignore` must also exclude `/ratchet/`).
 
    Done when every file under `templates/` but `.claude/settings.json` is at its path, `.gitignore` holds every line of the init skill's `templates/gitignore`, and the skipped files are noted for the hand-over.
 
