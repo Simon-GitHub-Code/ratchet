@@ -1046,6 +1046,110 @@ def test_a_group_keeps_the_schedule_the_recipes_give_its_gates(tmp_path: Path) -
     ]
 
 
+def test_a_grouped_ci_job_runs_fast_gates_first_and_skips_heavy_gates_on_fast_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path / "repo", '"bite rest"', "", recipes="", speed="- Shards: 1\n")
+    lists = (
+        'tier1_gates := "bite build artefact-scan change-size conformance"\n'
+        'tier1_sharded := ""\n'
+        'tier1_jobs := "bite rest"\n'
+    )
+    (root / JUSTFILE).write_text(lists, encoding="utf-8")
+    gates = ("build", "artefact-scan", "change-size", "conformance")
+    options = argparse.Namespace(runner="just", root=root, jobs=None, report=None)
+    assert ci_jobs.flags(lists, gates, options) == [
+        "--runner",
+        "just",
+        "--root",
+        str(root),
+        "--partial",
+        "--first",
+        "change-size",
+        "conformance",
+    ]
+    code, ran = run_job(root, "rest", monkeypatch, "change-size")
+    assert code == 1
+    assert ran == ["change-size", "conformance"]
+    out = capsys.readouterr().out
+    assert "parallel: stopped before heavy gates after fast failure:" in out
+    assert "artefact-scan" in out
+    assert "build" in out
+
+
+@pytest.mark.parametrize(
+    "gates",
+    [
+        ("change-size", "conformance"),
+        ("build", "artefact-scan"),
+    ],
+    ids=["all-fast", "no-fast"],
+)
+def test_a_grouped_ci_job_omits_first_when_all_or_no_gates_are_fast(
+    tmp_path: Path, gates: tuple[str, ...]
+) -> None:
+    options = argparse.Namespace(runner="just", root=tmp_path, jobs=None, report=None)
+    assert "--first" not in ci_jobs.flags("", gates, options)
+
+
+def test_fast_first_excludes_build_consumers_alone_and_serial_with_heavy_gates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    speed = (
+        "- Shards: 1\n"
+        "- Build: gate `build`; caches `.cache`; cold 30s; warm 2s; reuse moved;"
+        " consumers `conformance`, `artefact-scan`\n"
+        "- Alone: `incidents`\n"
+        "- Apart: `triggers build` `guard-diff settings-check` `change-size outside`\n"
+    )
+    root = project(tmp_path / "repo", '"bite rest"', "", recipes="", speed=speed)
+    lists = (
+        'tier1_gates := "bite build artefact-scan change-size conformance'
+        ' settings-check incidents guard-diff triggers"\n'
+        'tier1_sharded := ""\n'
+        'tier1_jobs := "bite rest"\n'
+    )
+    (root / JUSTFILE).write_text(lists, encoding="utf-8")
+    gates = (
+        "build",
+        "artefact-scan",
+        "change-size",
+        "conformance",
+        "settings-check",
+        "incidents",
+        "guard-diff",
+        "triggers",
+    )
+    options = argparse.Namespace(runner="just", root=root, jobs=None, report=None)
+    assert ci_jobs.flags(lists, gates, options) == [
+        "--runner",
+        "just",
+        "--root",
+        str(root),
+        "--partial",
+        "--first",
+        "change-size",
+        "settings-check",
+        "guard-diff",
+    ]
+    assert run_job(root, "rest", monkeypatch) == (0, sorted(gates))
+
+
+def test_fast_first_excludes_recipe_alone_and_transitive_serial_groups(tmp_path: Path) -> None:
+    justfile = (
+        "tier1:\n"
+        "    python3 scripts/parallel.py"
+        " --serial change-size conformance"
+        " --serial guard-diff build"
+        " --alone conformance"
+        " -- change-size conformance guard-diff incidents build\n"
+    )
+    options = argparse.Namespace(runner="just", root=tmp_path, jobs=None, report=None)
+    gates = ("change-size", "conformance", "guard-diff", "incidents", "build")
+    got = ci_jobs.flags(justfile, gates, options)
+    assert got[got.index("--first") :] == ["--first", "incidents"]
+
+
 def test_a_grouped_ci_job_runs_parallel_as_partial_and_skips_local_caches(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING
 
 import application_types
 import budget
+import build_cache
 import gatelib
 import justfile_text
 import markdown_text
@@ -60,6 +61,16 @@ WAITS = (application_types.NONE, application_types.LATER)
 SCRIPT = "ci_jobs.py"
 ROUTE = 'just ci-job "${{ matrix.gate }}"'
 RECIPE = "ci-job"
+FAST_FIRST = frozenset(
+    {
+        "change-size",
+        "conformance",
+        "settings-check",
+        "incidents",
+        "guard-diff",
+        "triggers",
+    }
+)
 
 
 class Kind(Enum):
@@ -421,6 +432,26 @@ def run(root: Path, name: str, options: argparse.Namespace) -> int:
     return code
 
 
+def fast_first(
+    gates: tuple[str, ...],
+    *,
+    binding: str,
+    apart: schedule.Groups,
+    alone: frozenset[str],
+) -> list[str]:
+    present = frozenset(gates)
+    deps = parallel.build_spec_deps(build_cache.parse_build_spec(binding), gates)
+    groups = [members for group in apart if len(members := present.intersection(group)) > 1]
+    kept = (present & FAST_FIRST) - alone
+    while True:
+        blocked = {gate for gate in kept if deps.get(gate, frozenset()) - kept}
+        blocked.update(gate for members in groups if members - kept for gate in members & kept)
+        if not blocked:
+            break
+        kept -= blocked
+    return [gate for gate in gates if gate in kept] if 0 < len(kept) < len(present) else []
+
+
 def flags(justfile: str, gates: tuple[str, ...], options: argparse.Namespace) -> list[str]:
     given = schedule.recipes(justfile)[0].among(gates)
     alone = [gate for gate in gates if gate in given.alone]
@@ -438,7 +469,16 @@ def flags(justfile: str, gates: tuple[str, ...], options: argparse.Namespace) ->
         out += ["--serial", *(gate for gate in gates if gate in kept)] if len(kept) > 1 else []
     out += ["--alone", *alone] if alone else []
     wide = [gate for gate in gates if gate in given.wide]
-    return out + (["--wide", *wide] if wide else [])
+    out += ["--wide", *wide] if wide else []
+    binding = gatelib.read_text(options.root / gatelib.BINDING) or ""
+    stated = schedule.stated(binding).among(gates)
+    first = fast_first(
+        gates,
+        binding=binding,
+        apart=(*given.apart, *stated.apart),
+        alone=given.alone | stated.alone,
+    )
+    return out + (["--first", *first] if first else [])
 
 
 def main(argv: list[str]) -> int:
