@@ -90,8 +90,16 @@ def just(
     environment = {
         name: value
         for name, value in os.environ.items()
-        if name not in ("RATCHET_PLUGIN", "RATCHET_PLUGIN_DIR") and not name.startswith("GIT_")
+        if name
+        not in (
+            "RATCHET_PLUGIN",
+            "RATCHET_PLUGIN_DIR",
+            "CLAUDE_CONFIG_DIR",
+            "CODEX_HOME",
+        )
+        and not name.startswith("GIT_")
     }
+    environment["HOME"] = str(root.parent)
     environment.update(env or {})
     if plugin is not None:
         environment["RATCHET_PLUGIN"] = str(plugin)
@@ -182,6 +190,37 @@ def test_a_sibling_that_matches_runs_when_the_recorded_copy_does_not(tmp_path: P
     assert done.returncode == 0, done.stdout + done.stderr
     version = plugin_pin.version_of(good)
     assert done.stdout.splitlines()[0] == f"plugin-pin: using {version}, in {good}"
+
+
+@pytest.mark.parametrize(
+    ("env_var", "rel"),
+    [
+        ("CLAUDE_CONFIG_DIR", ".claude-custom/plugins/cache/ratchet/ratchet/0.15.8"),
+        ("HOME", ".claude/plugins/cache/ratchet/ratchet/0.15.8"),
+        ("CODEX_HOME", ".codex-custom/plugins/cache/ratchet/ratchet/0.15.8"),
+        ("HOME", ".codex/plugins/cache/ratchet/ratchet/0.15.8"),
+    ],
+)
+def test_a_single_folder_harness_finds_the_pinned_release_in_other_harness_caches(
+    tmp_path: Path, env_var: str, rel: str
+) -> None:
+    home = tmp_path / "home"
+    cached = release_copy(home / rel)
+    pinned = raw_tree_id(cached, tmp_path)
+    recorded = release_copy(home / ".gemini/config/plugins/ratchet")
+    repos.write(recorded, "scripts/extra.py", "print('newer')\n")
+    root = project(tmp_path / "repo", cached, pinned, record=recorded)
+    env = (
+        {"HOME": str(home)}
+        if env_var == "HOME"
+        else {"HOME": str(tmp_path / "empty-home"), env_var: str(home / rel.split("/", 1)[0])}
+    )
+    done = just(root, "plugin-pin", env=env)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert done.stdout.splitlines()[0].endswith(f"in {cached}")
+    explicit = just(root, "plugin-pin", plugin=recorded, env=env)
+    assert explicit.returncode == 1
+    assert explicit.stdout.startswith(f"the plugin at {recorded} is tree ")
 
 
 def test_with_no_matching_copy_on_disk_the_tier_is_red_in_one_line(tmp_path: Path) -> None:
