@@ -334,3 +334,12 @@ def test_a_ticket_written_through_a_link_asks() -> None:
     verdict = hook.decide(payload, guard)
     assert verdict is not None
     assert verdict.detail == "04-d.md gets the status `ready-for-agent`"
+
+
+def test_glob_and_brace_characters_in_an_inline_program_do_not_ask_for_tickets() -> None:
+    css = "python3 -c \"open('/tmp/a.html', 'w').write('.x > * { color: red } agent:ready')\""
+    note = "python3 -c \"open('/tmp/a', 'w').write('.scratch/f/issues/notes.txt agent:ready')\""
+    copy = "python3 -c \"import shutil; shutil.copy('/tmp/t', '.scratch/f/issues'); 'agent:ready'\""
+    assert shell(css) is None
+    assert shell(note) is None
+    assert shell(copy) == "issues/ gets the status `agent:ready`"

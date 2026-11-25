@@ -572,15 +572,18 @@ class _Checker:
             for command in interpreters.git_commands(program):
                 verdicts += inner.script(command, context)
             names = interpreters.named_paths(program)
-            verdicts += tickets.named(names, self.line, context, guard=self.guard)
+            verdicts += tickets.named(names, self.line, context, guard=self.guard, wild=False)
             removes = call.removes(program)
-            hits = self.guard.locator.words(names, context.cwd, destructive=removes)
+            locator = self.guard.locator
+            hits = locator.hits(locator.named(names, context.cwd), destructive=removes)
             verdicts += self.guard.writes(
                 context, hits, lambda hit: interpreters.detail(call.name, hit.path, hit.group.name)
             )
-            verdicts += self.guard.unfollowed(context, names, destructive=removes, by=call.name)
+            verdicts += self.guard.unfollowed(
+                context, locator.literal(names), destructive=removes, by=call.name
+            )
             written = interpreters.written_names(program)
-            verdicts += self.guard.acting(self.guard.locator.named(written, context.cwd))
+            verdicts += self.guard.acting(locator.named(written, context.cwd))
         return verdicts
 
     def _writes(

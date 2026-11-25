@@ -23,26 +23,34 @@ def _readings(path: Path, guard: Guard) -> tuple[Path, ...]:
     return (Path(posixpath.normpath(path)), guard.locator.filesystem.canonical(path))
 
 
-def _part(part: str, name: str) -> bool:
-    return part.casefold() == name or _GLOB.search(part) is not None
+def _part(part: str, name: str, *, wild: bool = True) -> bool:
+    return part.casefold() == name or (wild and _GLOB.search(part) is not None)
 
 
-def _is_ticket(path: Path) -> bool:
+def _is_ticket(path: Path, *, wild: bool = True) -> bool:
     *_, tracker, _, issues, name = ("", "", "", *path.parts)
     return (
-        _part(tracker, TRACKER_DIRECTORY)
-        and _part(issues, TICKETS_DIRECTORY)
-        and (name.casefold().endswith(TICKET_SUFFIX) or _GLOB.search(name) is not None)
+        _part(tracker, TRACKER_DIRECTORY, wild=wild)
+        and _part(issues, TICKETS_DIRECTORY, wild=wild)
+        and (name.casefold().endswith(TICKET_SUFFIX) or (wild and _GLOB.search(name) is not None))
     )
 
 
-def _holds_tickets(path: Path) -> bool:
+def _holds_tickets(path: Path, *, wild: bool = True) -> bool:
     *_, tracker, feature, last = ("", "", *path.parts)
     return (
-        _part(last, TRACKER_DIRECTORY)
-        or _part(feature, TRACKER_DIRECTORY)
-        or (_part(tracker, TRACKER_DIRECTORY) and _part(last, TICKETS_DIRECTORY))
+        _part(last, TRACKER_DIRECTORY, wild=wild)
+        or _part(feature, TRACKER_DIRECTORY, wild=wild)
+        or (
+            _part(tracker, TRACKER_DIRECTORY, wild=wild)
+            and _part(last, TICKETS_DIRECTORY, wild=wild)
+        )
     )
+
+
+def _classify(readings: tuple[Path, ...], *, wild: bool) -> tuple[bool, bool]:
+    ticket = any(_is_ticket(reading, wild=wild) for reading in readings)
+    return ticket, ticket or any(_holds_tickets(reading, wild=wild) for reading in readings)
 
 
 def statuses(text: str) -> set[str]:
@@ -113,20 +121,22 @@ def _detail(names: list[str], label: str) -> str:
     return f"{', '.join(names)} {'gets' if len(names) == 1 else 'get'} the status `{label}`"
 
 
-def named(words: Iterable[str], text: str, context: Context, *, guard: Guard) -> list[Verdict]:
+def named(
+    words: Iterable[str], text: str, context: Context, *, guard: Guard, wild: bool = True
+) -> list[Verdict]:
     filesystem = guard.locator.filesystem
+    candidates = (
+        guard.locator.paths(words, context.cwd) if wild else guard.locator.named(words, context.cwd)
+    )
     given: dict[str, list[str]] = {}
-    for word in filter(None, words):
-        path = context.cwd / filesystem.expand(word)
-        for found in filesystem.glob(path) or [path]:
-            readings = _readings(found, guard)
-            ticket = any(map(_is_ticket, readings))
-            if not ticket and not any(map(_holds_tickets, readings)):
-                continue
-            label = ready_label(Context(found.parent), guard)
-            held = statuses(filesystem.read_text(found) or "") if ticket else set[str]()
-            if label in text and label not in held:
-                given.setdefault(label, []).append(found.name if ticket else f"{found.name}/")
+    for found in candidates:
+        ticket, relevant = _classify(_readings(found, guard), wild=wild)
+        if not relevant:
+            continue
+        label = ready_label(Context(found.parent), guard)
+        held = statuses(filesystem.read_text(found) or "") if ticket else set[str]()
+        if label in text and label not in held:
+            given.setdefault(label, []).append(found.name if ticket else f"{found.name}/")
     return [
         Verdict(RULE, _detail(list(dict.fromkeys(names)), label)) for label, names in given.items()
     ]

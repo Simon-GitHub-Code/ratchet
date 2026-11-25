@@ -6,7 +6,7 @@ from ratchet_guards import interpreters
 from ratchet_guards.context import Guard
 from ratchet_guards.hook import reason
 from ratchet_guards.manifest import parse
-from tests.support import ROOT, FakeRepo, make_guard, rules, verdicts
+from tests.support import ROOT, FakeFilesystem, FakeRepo, make_guard, rules, verdicts
 from tests.test_hook import SHIM, checkout, decision, run_shim, switch_to_a_branch
 
 W = "guard-path-write"
@@ -468,3 +468,23 @@ def test_a_separator_word_of_a_command_string_is_not_a_path() -> None:
     assert interpreters.named_paths("p = '/'") == ["/"]
     assert interpreters.named_paths("p = '//'") == ["//"]
     assert interpreters.named_paths("p = '/ '") == ["/ "]
+
+
+def test_glob_characters_in_an_inline_program_do_not_match_guard_paths() -> None:
+    files = (*FakeFilesystem().files, "/repo/DESIGN.md", "/repo/LOCKED.md", "/repo/.git/HEAD")
+    filesystem = FakeFilesystem(manifest=MANIFEST, files=files)
+    on_main = make_guard(FakeRepo(branch="main"), manifest=MANIFEST, filesystem=filesystem)
+    on_branch = make_guard(manifest=MANIFEST, filesystem=filesystem)
+    css_edit = (
+        "python3 - <<'EOF'\n"
+        "s = open('/tmp/a.html').read().replace('.x .sel > * {', '.x .sel th {')\n"
+        "open('/tmp/a.html', 'w').write(s)\n"
+        "EOF"
+    )
+    assert rules(css_edit, on_main) == []
+    assert rules("python3 -c \"open('/tmp/a.txt', 'w').write('scripts/*.py')\"", on_main) == []
+    assert rules("python3 -c \"import os; s = 'a * b'; os.unlink('/tmp/a.txt')\"", on_branch) == []
+    lost = "cd \"$dir\" && python3 -c \"open('/tmp/a.txt', 'w').write('scripts/*.py')\""
+    assert rules(lost, on_main) == []
+    assert rules("python3 -c \"open('DESIGN.md', 'w').write('.x > * {')\"", on_main) == [P]
+    assert rules("python3 -c \"import os; s = 'a * b'; os.unlink('LOCKED.md')\"", on_branch) == [W]
