@@ -1,4 +1,7 @@
+import bisect
+import difflib
 import re
+from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import NoReturn
@@ -307,9 +310,68 @@ def _lockfile(
     return found
 
 
+def _anchors(old: list[str], new: list[str]) -> list[tuple[int, int]]:
+    old_counts, new_counts = Counter(old), Counter(new)
+    positions = {
+        line: index
+        for index, line in enumerate(old)
+        if old_counts[line] == 1 and new_counts[line] == 1
+    }
+    pairs = [(positions[line], index) for index, line in enumerate(new) if line in positions]
+    if not pairs:
+        return []
+    tails: list[int] = []
+    previous = [-1] * len(pairs)
+    at_tail: list[int] = []
+    for k, (old_index, _) in enumerate(pairs):
+        slot = bisect.bisect_left(tails, old_index)
+        if slot == len(tails):
+            tails.append(old_index)
+            at_tail.append(k)
+        else:
+            tails[slot] = old_index
+            at_tail[slot] = k
+        if slot > 0:
+            previous[k] = at_tail[slot - 1]
+    sequence: list[tuple[int, int]] = []
+    cursor = at_tail[-1]
+    while cursor != -1:
+        sequence.append(pairs[cursor])
+        cursor = previous[cursor]
+    sequence.reverse()
+    return sequence
+
+
+def _gap_added(old: list[str], new: list[str]) -> list[str]:
+    if not old:
+        return new
+    if not new or old == new:
+        return []
+    matcher = difflib.SequenceMatcher(None, old, new, autojunk=False)
+    return [
+        line
+        for tag, _, _, j1, j2 in matcher.get_opcodes()
+        if tag in {"insert", "replace"}
+        for line in new[j1:j2]
+    ]
+
+
 def _added(before: str, after: str) -> str:
-    seen = set(before.split("\n"))
-    return "\n".join(line for line in after.split("\n") if line not in seen)
+    old, new = before.split("\n"), after.split("\n")
+    lo = 0
+    hi_old, hi_new = len(old), len(new)
+    while lo < hi_old and lo < hi_new and old[lo] == new[lo]:
+        lo += 1
+    while hi_old > lo and hi_new > lo and old[hi_old - 1] == new[hi_new - 1]:
+        hi_old -= 1
+        hi_new -= 1
+    old_mid, new_mid = old[lo:hi_old], new[lo:hi_new]
+    out: list[str] = []
+    pi = pj = 0
+    for old_index, new_index in (*_anchors(old_mid, new_mid), (len(old_mid), len(new_mid))):
+        out.extend(_gap_added(old_mid[pi:old_index], new_mid[pj:new_index]))
+        pi, pj = old_index + 1, new_index + 1
+    return "\n".join(out)
 
 
 Verdict = list[Change] | NotDependencyOnlyError
