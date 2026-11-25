@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 import build_cache
-from tests.repos import repository
+from tests.repos import git, repository
 
 HEADER = "# Binding\n\n## Speed\n\n"
 
@@ -227,6 +227,51 @@ def test_seed_worktree_copies_moved_caches_with_metadata_and_records_missing(
     assert (dest / ".build-cache" / "link.o").is_symlink()
     assert (dest / "dist.bin").read_bytes() == b"bin"
     assert int((dest / "dist.bin").stat().st_mtime) == stamp
+
+
+def test_seed_worktree_falls_back_to_main_checkout_when_source_is_a_linked_worktree(
+    tmp_path: Path,
+) -> None:
+    main = repository(tmp_path / "main", {"README.md": "ok\n"})
+    (main / ".dart_tool/build").mkdir(parents=True)
+    (main / ".dart_tool/build/asset_graph.json").write_text('{"warm": true}\n', encoding="utf-8")
+    linked = tmp_path / "linked"
+    git(main, "worktree", "add", "-q", str(linked), "-b", "side")
+    dest = tmp_path / "bite-copy"
+    dest.mkdir()
+    spec = build_cache.BuildSpec(
+        gate="build",
+        cache_paths=(".dart_tool/build", "still-absent"),
+        cold_seconds=280.0,
+        warm_seconds=50.0,
+        reuse=build_cache.ReusePolicy(kind=build_cache.ReuseKind.MOVED),
+    )
+    result = build_cache.seed_worktree(linked, dest, spec)
+    assert result == build_cache.SeedResult(
+        kind=build_cache.ReuseKind.MOVED,
+        copied=(".dart_tool/build",),
+        missing=("still-absent",),
+        env={},
+    )
+    assert (dest / ".dart_tool/build/asset_graph.json").read_text(encoding="utf-8") == (
+        '{"warm": true}\n'
+    )
+    shared = build_cache.BuildSpec(
+        gate="build",
+        cache_paths=(),
+        cold_seconds=60.0,
+        warm_seconds=5.0,
+        reuse=build_cache.ReusePolicy(
+            kind=build_cache.ReuseKind.SHARED, env_name="CACHE_DIR", env_dir=".shared"
+        ),
+    )
+    shared_res = build_cache.seed_worktree(linked, dest, shared)
+    assert shared_res.env == {"CACHE_DIR": str((main / ".shared").resolve())}
+    bare = tmp_path / "bare.git"
+    bare.mkdir()
+    git(bare, "init", "--bare", "-q")
+    assert build_cache._common_checkout(bare) is None  # noqa: SLF001 # -- bare repo has no checkout
+    assert build_cache._common_checkout(main) is None  # noqa: SLF001 # -- main checkout is not linked
 
 
 def test_seed_worktree_rejects_escaping_cache_paths(tmp_path: Path) -> None:

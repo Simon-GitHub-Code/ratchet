@@ -282,19 +282,34 @@ def _copy_cache_entry(src_path: Path, dst_path: Path) -> bool:
     return False
 
 
+def _common_checkout(source: Path) -> Path | None:
+    raw = gatelib.git(source, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if not raw:
+        return None
+    common = Path(raw).resolve()
+    if common.name != ".git":
+        return None
+    parent = common.parent
+    return parent if parent != source.resolve() else None
+
+
 def seed_worktree(source: Path, dest: Path, spec: BuildSpec) -> SeedResult:
     if spec.reuse.kind is ReuseKind.NONE:
         return SeedResult(kind=ReuseKind.NONE)
+    fallback = _common_checkout(source)
     if spec.reuse.kind is ReuseKind.SHARED:
         raw = Path(spec.reuse.env_dir).expanduser()
-        resolved = (raw if raw.is_absolute() else source / raw).resolve()
+        resolved = (raw if raw.is_absolute() else (fallback or source) / raw).resolve()
         resolved.mkdir(parents=True, exist_ok=True)
         return SeedResult(kind=ReuseKind.SHARED, env={spec.reuse.env_name: str(resolved)})
     copied: list[str] = []
     missing: list[str] = []
     for rel in spec.cache_paths:
         src_path, dst_path = _safe_cache_rel(source, dest, rel)
-        if _copy_cache_entry(src_path, dst_path):
+        if _copy_cache_entry(src_path, dst_path) or (
+            fallback is not None
+            and _copy_cache_entry(_safe_cache_rel(fallback, dest, rel)[0], dst_path)
+        ):
             copied.append(rel)
         else:
             missing.append(rel)
