@@ -123,13 +123,19 @@ class Locator:
             paths += found or [path]
         return paths
 
+    @staticmethod
+    def literal(names: Iterable[str]) -> list[str]:
+        return [name for name in names if name and not _GLOB_CHARS & set(name)]
+
     def named(self, names: Iterable[str], cwd: Path) -> list[Path]:
-        literal = (name for name in names if name and not _GLOB_CHARS & set(name))
-        return [cwd / self.filesystem.expand(name) for name in literal]
+        return [cwd / self.filesystem.expand(name) for name in self.literal(names)]
+
+    def hits(self, paths: Iterable[Path], *, destructive: bool) -> list[Hit]:
+        found = (self.classify(path, destructive=destructive) for path in paths)
+        return [hit for hit in found if hit is not None]
 
     def words(self, words: Iterable[str], cwd: Path, *, destructive: bool) -> list[Hit]:
-        hits = (self.classify(path, destructive=destructive) for path in self.paths(words, cwd))
-        return [hit for hit in hits if hit is not None]
+        return self.hits(self.paths(words, cwd), destructive=destructive)
 
     def acting(self, path: Path) -> Acting | None:
         canonical = self.filesystem.canonical(path)
