@@ -308,6 +308,96 @@ def test_a_spec_the_change_does_not_show_is_refused() -> None:
     assert str(found) == "the entry point reports '9' for beta, which no added line shows"
 
 
+def test_a_new_lockfile_entry_sharing_a_common_version_line_is_shown() -> None:
+    before = 'packages:\n  alpha:\n    version: "1.0.0"\n  gamma:\n    version: "2.0.0"\n'
+    after = (
+        "packages:\n"
+        "  alpha:\n"
+        '    version: "1.0.0"\n'
+        "  beta:\n"
+        '    version: "1.0.0"\n'
+        "  gamma:\n"
+        '    version: "2.0.0"\n'
+    )
+    old_out = (
+        "rest\tapp.lock\tpackages\n"
+        f"locked\tapp.lock\tmain\talpha\t1.0.0\t1.0.0\tregistry\t{stack.REGISTRY}\tsum-a\tone\n"
+        f"locked\tapp.lock\tmain\tgamma\t2.0.0\t2.0.0\tregistry\t{stack.REGISTRY}\tsum-g\tone\n"
+    )
+    new_out = (
+        old_out
+        + f"locked\tapp.lock\tmain\tbeta\t1.0.0\t1.0.0\tregistry\t{stack.REGISTRY}\tsum-b\tone\n"
+    )
+    outputs = iter([old_out, new_out])
+    found = dependencies.judge(CONTRACT, {"app.lock": (before, after)}, lambda _: next(outputs))[
+        "app.lock"
+    ]
+    assert isinstance(found, list), found
+    assert [str(c) for c in found] == ["beta (main) (none) -> 1.0.0"]
+
+
+def test_a_dropped_and_added_entry_at_the_same_version_line_is_shown() -> None:
+    before = 'packages:\n  alpha:\n    version: "1.0.0"\n  gamma:\n    version: "2.0.0"\n'
+    after = 'packages:\n  gamma:\n    version: "2.0.0"\n  zeta:\n    version: "1.0.0"\n'
+    old_out = (
+        "rest\tapp.lock\tpackages\n"
+        f"locked\tapp.lock\tmain\talpha\t1.0.0\t1.0.0\tregistry\t{stack.REGISTRY}\tsum-a\tone\n"
+        f"locked\tapp.lock\tmain\tgamma\t2.0.0\t2.0.0\tregistry\t{stack.REGISTRY}\tsum-g\tone\n"
+    )
+    new_out = (
+        "rest\tapp.lock\tpackages\n"
+        f"locked\tapp.lock\tmain\tgamma\t2.0.0\t2.0.0\tregistry\t{stack.REGISTRY}\tsum-g\tone\n"
+        f"locked\tapp.lock\tmain\tzeta\t1.0.0\t1.0.0\tregistry\t{stack.REGISTRY}\tsum-z\tone\n"
+    )
+    outputs = iter([old_out, new_out])
+    found = dependencies.judge(CONTRACT, {"app.lock": (before, after)}, lambda _: next(outputs))[
+        "app.lock"
+    ]
+    assert isinstance(found, list), found
+    assert [str(c) for c in found] == [
+        "alpha (main) 1.0.0 -> (none)",
+        "zeta (main) (none) -> 1.0.0",
+    ]
+
+
+def test_an_unchanged_version_line_elsewhere_cannot_forge_a_new_entry() -> None:
+    before = 'packages:\n  alpha:\n    version: "1.0.0"\n  gamma:\n    version: "3.0.0"\n'
+    after = (
+        "packages:\n"
+        "  alpha:\n"
+        '    version: "1.0.0"\n'
+        "  beta:\n"
+        '    version: "1.5.0"\n'
+        "  gamma:\n"
+        '    version: "3.0.0"\n'
+    )
+    old_out = (
+        "rest\tapp.lock\tpackages\n"
+        f"locked\tapp.lock\tmain\talpha\t1.0.0\t1.0.0\tregistry\t{stack.REGISTRY}\tsum-a\tone\n"
+        f"locked\tapp.lock\tmain\tgamma\t3.0.0\t3.0.0\tregistry\t{stack.REGISTRY}\tsum-g\tone\n"
+    )
+    forged_out = (
+        old_out
+        + f"locked\tapp.lock\tmain\tbeta\t3.0.0\t3.0.0\tregistry\t{stack.REGISTRY}\tsum-b\tone\n"
+    )
+    outputs = iter([old_out, forged_out])
+    found = dependencies.judge(CONTRACT, {"app.lock": (before, after)}, lambda _: next(outputs))[
+        "app.lock"
+    ]
+    assert str(found) == "the entry point reports '3.0.0' for beta, which no added line shows"
+
+
+def test_line_diff_handles_reordered_unique_anchors_and_duplicate_only_gaps() -> None:
+    before = "top\nu1\nu2\nshared\nshared\nbottom\n"
+    after = "top\nu2\nu1\nshared\nadded\nshared\nbottom\n"
+    added = dependencies._added(before, after).splitlines()  # noqa: SLF001 # -- checks anchor LIS and gap diff directly
+    assert "added" in added
+    assert "top" not in added
+    assert "bottom" not in added
+    assert dependencies._added("a\na\n", "a\nb\na\n") == "b"  # noqa: SLF001 # -- gap with no unique anchors
+    assert dependencies._added("a\nb\n", "a\n") == ""  # noqa: SLF001 # -- pure deletion adds nothing
+
+
 REST = "rest\tapp.lock\tx\n"
 LOCKED = "locked\tapp.lock\tmain\tbeta\t1\t1\tregistry\thttps://registry.example\tsum\tone\n"
 DECLARED = "declared\tapp.manifest\tmain\tbeta\t1\tregistry\n"
