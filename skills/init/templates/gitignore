@@ -2,5 +2,6 @@
 .impeccable/hook.cache.json
 .impeccable/config.local.json
 .impeccable/live/sessions/
+.impeccable/questions/
 .ratchet/
 /ratchet/

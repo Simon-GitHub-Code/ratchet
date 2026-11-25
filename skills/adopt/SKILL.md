@@ -83,7 +83,7 @@ Tell the owner this before step 1. It is not a question.
    - Work on a new branch, or on the one an earlier run of this skill left, which the route names this skill to resume while the binding has no plugin pin (the copy skips every file that exists, so it resumes).
    - Every commit's subject starts `chore(method): adopt`: the `commits` gate accepts it, and the change-size gate exempts a range made only of such commits and prints the size instead.
    - Copy every file under `templates/`, dotfiles included, to the same path, skipping any that exists and skipping `.claude/settings.json`. Copy them with the file tools or shell `cp` — not an inline `python3` snippet naming the plugin folder, which the guard denies. Claude Code applies its `deny` rules the moment the file exists. Step 8 writes it.
-   - Append to `.gitignore` the lines of the init skill's `templates/gitignore` it lacks (including `/ratchet/`, where CI checks out the plugin; any whole-tree gate whose tool does not read `.gitignore` must also exclude `/ratchet/`).
+   - Append to `.gitignore` the lines of the init skill's `templates/gitignore` it lacks (including `/ratchet/`, where CI checks out the plugin, and `.impeccable/questions/`, where `impeccable` writes local seed files with a 32-char hex `"key"` field; any whole-tree gate whose tool does not read `.gitignore`, such as `gitleaks dir`, must also exclude `/ratchet/` and `.impeccable/questions/`).
 
    Done when every file under `templates/` but `.claude/settings.json` is at its path, `.gitignore` holds every line of the init skill's `templates/gitignore`, and the skipped files are noted for the hand-over.
 
