@@ -376,3 +376,82 @@ def test_staged_matches_bracketed_route_filenames_literally(tmp_path: Path, caps
     out = capsys.readouterr().out
     assert "focus at app/[id]/page.txt:2:ONLY-THIS" in out
     assert "silence: rose from 0 to 1" in out
+
+
+@pytest.mark.parametrize(
+    ("line", "expected", "problem"),
+    [
+        (
+            "- Exclude: `lib/*.options.dart`, `**/*.g.dart`\n",
+            ("lib/*.options.dart", "**/*.g.dart"),
+            "",
+        ),
+        ("- Exclude: none: this stack generates no files with suppression headers\n", (), ""),
+        ("- Exclude: <globs>\n", (), ""),
+        ("- Exclude: none: short\n", (), "needs the reason"),
+        ("- Exclude: lib/*.options.dart\n", (), "names its globs in backticks"),
+        ("- Exclude: `/etc/passwd`\n", (), "specific relative glob"),
+        ("- Exclude: `../escape.dart`\n", (), "specific relative glob"),
+        ("- Exclude: `**`\n", (), "specific relative glob"),
+    ],
+)
+def test_optional_exclude_bullet_parses_and_validates(
+    line: str, expected: tuple[str, ...], problem: str
+) -> None:
+    spec = parsed(BINDING + "\n" + line)
+    assert spec.excludes == expected
+    if problem:
+        assert any(problem in item for item in spec.problems), spec.problems
+    else:
+        assert spec.problems == ()
+
+
+def test_excluded_generated_files_do_not_count_in_tree_or_staged(
+    tmp_path: Path, capsys: Out
+) -> None:
+    binding = BINDING + "\n- Exclude: `lib/*.options.dart`, `**/*.g.dart`\n"
+    root = repository(tmp_path, {"docs/process/binding.md": binding, "lib/app.dart": "ok\n"})
+    commit(root, "feat(core): second")
+    branch(root)
+    write(root, "lib/main.server.options.dart", "SILENCE-IT\nONLY-THIS\n")
+    write(root, "lib/sub/model.g.dart", "QUIET\n")
+    assert run(root) == 0
+    git(root, "add", "lib/main.server.options.dart", "lib/sub/model.g.dart")
+    assert run_staged(root) == 0
+    capsys.readouterr()
+    write(root, "lib/app.dart", "SILENCE-IT\nONLY-THIS\n")
+    assert run(root) == 1
+    out = capsys.readouterr().out
+    assert "focus at lib/app.dart:2:ONLY-THIS" in out
+    assert "silence: rose from 0 to 1" in out
+    git(root, "add", "lib/app.dart")
+    assert run_staged(root) == 1
+    out = capsys.readouterr().out
+    assert "focus at lib/app.dart:2:ONLY-THIS" in out
+    assert "silence: rose from 0 to 1" in out
+
+
+def test_a_change_cannot_add_an_exclude_to_hide_its_own_suppressions(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    write(root, "docs/process/binding.md", BINDING + "\n- Exclude: `lib/*.dart`\n")
+    write(root, "lib/sneak.dart", "SILENCE-IT\nONLY-THIS\n")
+    assert run(root) == 1
+    out = capsys.readouterr().out
+    assert "focus at lib/sneak.dart:2:ONLY-THIS" in out
+    assert "silence: rose from 0 to 1" in out
+    git(root, "add", "docs/process/binding.md", "lib/sneak.dart")
+    assert run_staged(root) == 1
+    out = capsys.readouterr().out
+    assert "focus at lib/sneak.dart:2:ONLY-THIS" in out
+    assert "silence: rose from 0 to 1" in out
+
+
+def test_conformance_flags_a_malformed_suppressions_exclude(repo: Path) -> None:
+    path = repo / "docs/process/binding.md"
+    text = path.read_text(encoding="utf-8")
+    anchor = "## Suppressions\n"
+    assert anchor in text
+    path.write_text(text.replace(anchor, anchor + "\n- Exclude: `**`\n", 1), encoding="utf-8")
+    assert any("specific relative glob" in p for p in found(repo))

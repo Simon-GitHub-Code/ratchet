@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 SECTION = "## Suppressions"
 KIND = "Kind"
 QUESTION = "Question"
+EXCLUDE = "Exclude"
 BINDING = str(gatelib.BINDING)
 RISES = "rises"
 NEVER = "never"
@@ -26,6 +27,7 @@ KEPT = "kept"
 RULES = (RISES, NEVER, KEPT)
 NONE_PREFIX = "none:"
 MIN_REASON = 10
+BROAD_EXCLUDES = frozenset({"*", "**", "**/*", "."})
 COLUMNS = {KIND: (KIND, "Pattern", "Rule"), QUESTION: (QUESTION, "Kinds")}
 
 
@@ -41,6 +43,7 @@ class Spec:
     kinds: tuple[Kind, ...]
     silenced: dict[str, tuple[str, ...]]
     problems: tuple[str, ...]
+    excludes: tuple[str, ...] = ()
 
 
 def valid(pattern: str) -> bool:
@@ -103,6 +106,37 @@ def _silenced(
     return found
 
 
+def _bad_exclude(pattern: str) -> bool:
+    return (
+        not pattern
+        or pattern.startswith("/")
+        or ".." in pattern.split("/")
+        or pattern in BROAD_EXCLUDES
+    )
+
+
+def _excludes(binding: str, problems: list[str]) -> tuple[str, ...]:
+    raw = markdown_text.bullets(markdown_text.section(binding, SECTION)).get(EXCLUDE)
+    if raw is None or raw.startswith("<"):
+        return ()
+    plain = raw.strip("` ")
+    if plain.lower().startswith(NONE_PREFIX):
+        if len(plain[len(NONE_PREFIX) :].strip()) < MIN_REASON:
+            problems.append("'- Exclude: none:' needs the reason no path is excluded")
+        return ()
+    found = tuple(item.strip() for item in markdown_text.ticked(raw) if item.strip())
+    if not found:
+        problems.append("'- Exclude:' names its globs in backticks, or says `none: <reason>`")
+        return ()
+    bad = [item for item in found if _bad_exclude(item)]
+    if bad:
+        problems.append(
+            f"'- Exclude:' pattern '{bad[0]}' must be a specific relative glob without `..`"
+        )
+        return ()
+    return found
+
+
 def parse(binding: str | None) -> Spec | None:
     if binding is None or not markdown_text.has_section(binding, SECTION):
         return None
@@ -114,12 +148,16 @@ def parse(binding: str | None) -> Spec | None:
     kinds = _kinds(tables[KIND].rows, problems) if KIND in tables else ()
     covered = tables.get(QUESTION)
     silenced = _silenced(covered.rows, kinds, problems) if covered else {}
-    return Spec(kinds, silenced, tuple(problems))
+    excludes = _excludes(binding, problems)
+    return Spec(kinds, silenced, tuple(problems), excludes)
 
 
-def counts(root: Path, ref: str | None, kinds: tuple[Kind, ...]) -> dict[str, int]:
+def counts(
+    root: Path, ref: str | None, kinds: tuple[Kind, ...], *, excludes: Sequence[str] = ()
+) -> dict[str, int]:
+    outside: str | tuple[str, ...] = (BINDING, *excludes) if excludes else BINDING
     return {
-        k.name: grep_count(root, k.pattern, ref, word=False, outside=BINDING)
+        k.name: grep_count(root, k.pattern, ref, word=False, outside=outside)
         for k in kinds
         if k.rule == RISES
     }
@@ -143,17 +181,25 @@ def risen(before: dict[str, int], after: dict[str, int]) -> list[str]:
     ]
 
 
-def focused(root: Path, kinds: tuple[Kind, ...]) -> list[str]:
+def focused(root: Path, kinds: tuple[Kind, ...], *, excludes: Sequence[str] = ()) -> list[str]:
+    scope = [".", f":(exclude){BINDING}", *(f":(glob,exclude){glob}" for glob in excludes)]
     found: list[str] = []
     for kind in kinds:
         if kind.rule == NEVER:
             out = gatelib.git(
                 root,
                 *("grep", "-I", "-n", "-E", "--untracked", "-e", kind.pattern),
-                *("--", ".", f":(exclude){BINDING}"),
+                *("--", *scope),
             )
             found += [f"{kind.name} at {line}" for line in (out or "").splitlines()]
     return found
+
+
+def _filter_paths(paths: Sequence[str], excludes: Sequence[str]) -> list[str]:
+    if not excludes:
+        return list(paths)
+    patterns = list(excludes)
+    return [path for path in paths if not gatelib.matches(path, patterns)]
 
 
 def focused_staged(root: Path, kinds: tuple[Kind, ...], paths: Sequence[str]) -> list[str]:
@@ -185,32 +231,39 @@ def main(argv: list[str]) -> int:
         else gatelib.read_text(root / gatelib.BINDING)
     )
     then = parse(gatelib.show(root, base, str(gatelib.BINDING))) if base else None
+    excludes = then.excludes if then is not None else (now.excludes if base is None and now else ())
     never = tuple(
         {k.name: k for spec in (then, now) if spec for k in spec.kinds if k.rule == NEVER}.values()
     )
     if options.staged:
-        index_paths = (
+        raw_index = (
             staged_paths(root, outside=BINDING)
             if base is None
             else diff_paths(root, base, in_index=True, outside=BINDING)
         )
+        index_paths = _filter_paths(raw_index, excludes)
         problems = focused_staged(root, never, index_paths)
     else:
         index_paths = []
-        problems = focused(root, never)
+        problems = focused(root, never, excludes=excludes)
     if base is None or then is None:
         if base is not None:
             print(
                 "suppressions: the merge base's binding has no Suppressions section: none counted"
             )
     elif options.staged:
-        base_paths = diff_paths(root, base, in_index=False, outside=BINDING)
+        base_paths = _filter_paths(
+            diff_paths(root, base, in_index=False, outside=BINDING), excludes
+        )
         problems += risen(
             counts_staged(root, then.kinds, base_paths, ref=base),
             counts_staged(root, then.kinds, index_paths),
         )
     else:
-        problems += risen(counts(root, base, then.kinds), counts(root, None, then.kinds))
+        problems += risen(
+            counts(root, base, then.kinds, excludes=excludes),
+            counts(root, None, then.kinds, excludes=excludes),
+        )
     return gatelib.report("suppressions", problems, base)
 
 
