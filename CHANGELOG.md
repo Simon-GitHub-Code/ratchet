@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.15.9
+
+This patch release holds pull requests #429 and #430, adding the read-only `/ratchet:audit` compliance command and documenting `merge_ready.py record` in `--help`.
+
+Upgrade from 0.15.8 as the README's Upgrading section says. These changes reach the project:
+
+- **Add `/ratchet:audit` compliance command and deterministic scorecard script (#430).** Adds `skills/audit/SKILL.md` and `scripts/audit.py` (`--root .`, text or `--json`, exit `1` on any red section) to produce a read-only 13-section Ratchet compliance scorecard (`conformance`, `plugin-pin`, `hooks`, `settings`, `incidents`, `triggers`, `life-events`, `formal-model`, `owed`, `opt-ins`, `budgets`, `records`, and `binding-review`). The `life-events` section reports declared events, fresh undeclared event signs, and previously-declined signs still in the tree, paired with semantic checks in the skill for standing `none:` / `later:` honesty, missed lifecycle events beyond file globs, guard/lockfile/test-path integrity, and bite strength.
+- **Document `merge_ready.py record` subcommand and verdict fields in `--help` (#429).** `scripts/merge_ready.py --help` now documents the `record` subcommand and its verdict fields directly so agents and humans inspecting CLI help see the full interface.
+
 ## 0.15.8
 
 This patch release holds pull requests #424, #425, #426, and #427, fixing the greenfield adoption CI deadlock on cold caches, smoothing first-hour `/ratchet:adopt` setup, and removing a stdout-ordering race in `test_with_service.py`.
