@@ -210,6 +210,7 @@ Each command is yours to type. Claude Code refuses them to an agent, so the orde
 | `/ratchet:safeguard [event]` | Sets up the safeguards the project now owes. With `deployed`, `irreplaceable-data` or `depended-on`, declares that event first. |
 | `/ratchet:architecture` | Reviews how the project is built when its shape changes, or lets you revisit the choice. |
 | `/ratchet:fill` | After an upgrade, writes what the new version needs that an agent can write from the repository alone. Asks you nothing. |
+| `/ratchet:audit` | Runs a read-only compliance audit across conformance, pin, hooks, settings, triggers, formal-model sync, owed debt, opt-ins, budgets, records, and binding honesty. |
 
 Agents load one more skill, `ratchet:method`, by themselves. It is the method in full.
 
