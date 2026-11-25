@@ -32,11 +32,21 @@ def staged_paths(root: Path, *, outside: str | None = None) -> list[str]:
 
 
 def grep_count(
-    root: Path, pattern: str, ref: str | None, *, word: bool = True, outside: str | None = None
+    root: Path,
+    pattern: str,
+    ref: str | None,
+    *,
+    word: bool = True,
+    outside: str | Sequence[str] | None = None,
 ) -> int:
     args = ["grep", "-I", "-c", "-E", *(["-w"] if word else [])]
     args += ([] if ref else ["--untracked"]) + [pattern]
-    scope = [".", f":(exclude){outside}"] if outside else ["."]
+    if isinstance(outside, str):
+        scope = [".", f":(exclude){outside}"]
+    elif outside:
+        scope = [".", *(f":(glob,exclude){glob}" for glob in outside)]
+    else:
+        scope = ["."]
     return _sum_counts(gatelib.git(root, *args, *([ref] if ref else []), "--", *scope))
 
 
