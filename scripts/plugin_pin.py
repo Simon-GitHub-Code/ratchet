@@ -102,6 +102,13 @@ def checked_folder(plugin: Path) -> bool:
     return bool(folder) and os.path.realpath(folder) == os.path.realpath(plugin)
 
 
+def working_tree_clean(plugin: Path) -> bool:
+    status = git_output(plugin, "status", "--porcelain", "--no-renames", "-z")
+    if status is None:
+        return False
+    return all(entry[3:] in EXCLUDED_PATHS for entry in status.split("\0") if entry)
+
+
 def commit_of(plugin: Path) -> str | None:
     if checked_folder(plugin) or not (plugin / ".git").exists():
         return release_commit(gatelib.read_text(plugin / COMMIT_FILE))
@@ -111,9 +118,8 @@ def commit_of(plugin: Path) -> str | None:
     if git_output(plugin, "ls-tree", "--name-only", "HEAD", "--", str(COMMIT_FILE)):
         recorded = release_commit(git_output(plugin, "show", f"HEAD:{COMMIT_FILE}"))
         parents = (git_output(plugin, "rev-list", "--parents", "-n", "1", "HEAD") or "").split()
-        clean = git_output(plugin, "status", "--porcelain") == ""
         parent = parents[1:]
-        if clean and len(parent) == 1 and recorded in (UNREADABLE, parent[0]):
+        if working_tree_clean(plugin) and len(parent) == 1 and recorded in (UNREADABLE, parent[0]):
             return recorded
     return head.strip()
 

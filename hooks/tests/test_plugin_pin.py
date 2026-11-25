@@ -642,3 +642,27 @@ def test_release_tree_handles_empty_filtered_tree_and_unreadable_git_output(
 
     monkeypatch.setattr(plugin_pin, "git_output", failing_ls_tree)
     assert plugin_pin.release_tree(used) is None
+
+
+def test_release_tag_checkout_with_only_excluded_changes_keeps_its_recorded_commit(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    used, base = plugin(tmp_path / "codex-tag")
+    repos.write(used, "skills/init/templates/CLAUDE.md", "# Claude\n")
+    base = repos.commit(used, "feat(init): add template")
+    repos.write(used, ".claude-plugin/commit", f"{base}\n")
+    tag_commit = repos.commit(used, "release: v1.2.3")
+    (used / "skills/init/templates/CLAUDE.md").unlink()
+    repos.write(used, "package-lock.json", '{"lockfileVersion": 3}\n')
+
+    assert plugin_pin.commit_of(used) == base
+    expected_tree = plugin_pin.release_tree(used)
+    assert expected_tree is not None
+    root = adopted(tmp_path / "repo", f"- Ratchet plugin: 1.2.3 at {base} tree {expected_tree}")
+    assert run(root, used, capsys)[0] == 0
+
+    repos.write(used, "scripts/extra.py", "print(1)\n")
+    assert plugin_pin.commit_of(used) == tag_commit
+
+    monkeypatch.setattr(plugin_pin, "git_output", lambda _p, *_a: None)
+    assert plugin_pin.working_tree_clean(used) is False
