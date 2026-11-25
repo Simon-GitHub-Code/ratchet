@@ -245,9 +245,11 @@ class Report:
         self.failures.append(Failure(check, detail, produce))
 
 
-def run_gh(args: Sequence[str]) -> str | None:
+def run_gh(args: Sequence[str], *, cwd: Path | None = None) -> str | None:
     try:
-        completed = subprocess.run(["gh", *args], capture_output=True, text=True, check=False)
+        completed = subprocess.run(
+            ["gh", *args], capture_output=True, text=True, check=False, cwd=cwd
+        )
     except OSError:
         return None
     return completed.stdout if completed.returncode == 0 else None

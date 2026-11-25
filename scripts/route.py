@@ -446,12 +446,26 @@ def blocked_kinds(root: Path, ticket: preflight.Ticket) -> list[str]:
     return queue_notes.texts(queue_notes.read_note(root, own_branch(ticket)).get("holds"))
 
 
+def _no_ticket_why(gh: preflight.Runner | None, checkout: Checkout, *, local: bool) -> str:
+    if gh is not None and local:
+        return (
+            "the tracker could not be read (`gh` failed) and no local ticket carries"
+            " the agent-ready label"
+        )
+    if gh is None and checkout.forge:
+        return (
+            f"the tracker was not checked offline (run `{NEXT}` to read it) and no local"
+            " ticket carries the agent-ready label"
+        )
+    return "no open ticket carries the agent-ready label"
+
+
 def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> Step:
     tickets, local = agent_ready(root, gh)
     if not tickets:
         return (triage_step(root) or unsplit_spec(root) if local else None) or Step(
             SPEC,
-            "no open ticket carries the agent-ready label",
+            _no_ticket_why(gh, checkout, local=local),
             f"{TICKETS}, then {CONJECTURE} <ticket>",
             "specify",
         )
@@ -526,6 +540,28 @@ def switch_step(checkout: Checkout) -> Step | None:
     )
 
 
+def _open_pull_request(output: str | None) -> tuple[bool, str | None]:
+    if output is None:
+        return False, None
+    try:
+        data: object = json.loads(output)
+    except ValueError:
+        return False, None
+    if isinstance(data, dict):
+        return True, str(data.get("url", "")) if data.get("state") == "OPEN" else None
+    if isinstance(data, list):
+        opened = next(
+            (
+                str(item.get("url", ""))
+                for item in data
+                if isinstance(item, dict) and item.get("state", "OPEN") == "OPEN"
+            ),
+            None,
+        )
+        return True, opened
+    return False, None
+
+
 def pull_request_step(checkout: Checkout, gh: preflight.Runner | None) -> Step:
     if not checkout.forge:
         return Step(
@@ -538,22 +574,27 @@ def pull_request_step(checkout: Checkout, gh: preflight.Runner | None) -> Step:
             NEXT,
             "merge",
         )
-    output = None if gh is None else gh(["pr", "view", "--json", "state,url"])
-    if output is not None:
-        try:
-            data = json.loads(output)
-        except ValueError:
-            data = None
-        if isinstance(data, dict) and data.get("state") == "OPEN":
-            return Step(
-                WAIT, f"pull request {data.get('url', '')} is open", FEATURE + " <ticket>", "review"
-            )
-    return Step(
-        PULL_REQUEST,
-        f"branch `{checkout.branch}` is clean and has no open pull request",
-        WAIT,
-        "pull-request",
+    if gh is None:
+        return Step(
+            PULL_REQUEST,
+            f"branch `{checkout.branch}` is clean; the forge was not checked offline, so run"
+            f" `{NEXT}` to see whether a pull request is already open",
+            WAIT,
+            "pull-request",
+        )
+    output = gh(
+        ["pr", "list", "--head", checkout.branch or "", "--state", "open", "--json", "state,url"]
     )
+    checked, url = _open_pull_request(output)
+    if url is not None:
+        return Step(WAIT, f"pull request {url} is open", FEATURE + " <ticket>", "review")
+    why = (
+        f"branch `{checkout.branch}` is clean and has no open pull request"
+        if checked
+        else f"branch `{checkout.branch}` is clean, and the forge could not be read (`gh` failed);"
+        " check whether a pull request is already open"
+    )
+    return Step(PULL_REQUEST, why, WAIT, "pull-request")
 
 
 def adoption_step(root: Path) -> Step | None:
@@ -1194,7 +1235,10 @@ def main(argv: list[str]) -> int:
     root = Path(options.root).resolve()
     if options.decline:
         return decline(root, options.decline)
-    step = decide(root, None if options.offline else preflight.run_gh)
+    gh: preflight.Runner | None = (
+        None if options.offline else lambda args: preflight.run_gh(args, cwd=root)
+    )
+    step = decide(root, gh)
     with runrecord.read_once():
         also = (
             pin_proposals(root)
