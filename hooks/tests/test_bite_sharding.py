@@ -506,3 +506,24 @@ def test_shard_cli_balances_heavy_tier2_whole_alone_faults_across_slices(
         seen.extend(part)
     assert len(seen) == 12
     assert len(set(seen)) == 12
+
+
+def test_two_binding_rows_sharing_one_entry_point_prove_each_bite_once(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(
+        tmp_path / "repo",
+        {"formal": LINT},
+        bite_toml("formal", "first", path="src/f1.txt")
+        + bite_toml("formal", "second", path="src/f2.txt"),
+        tiers={"formal": "2"},
+    )
+    binding = root / "docs/process/binding.md"
+    text = binding.read_text(encoding="utf-8")
+    extra_row = "| second formal question | a tool | 2 | | `sh gate formal` |\n"
+    binding.write_text(text.replace("## Speed", extra_row + "\n## Speed", 1), encoding="utf-8")
+    assert run_bite(root, "--shard-check", "2") == 0
+    assert "2 faults partitioned across 2 slices" in capsys.readouterr().out
+    assert run_bite(root) == 0
+    proved = proved_faults(capsys.readouterr().out)
+    assert proved == [("formal", "first"), ("formal", "second")]
