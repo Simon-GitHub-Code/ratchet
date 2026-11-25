@@ -311,15 +311,68 @@ def test_a_working_branch_waits_for_its_pull_request(tmp_path: Path) -> None:
     root = repository(tmp_path, ADOPTED)
     git(root, "remote", "add", "origin", "https://example.invalid/r.git")
     branch(root, "feature/4-x")
-    assert route.decide(root, None).command == route.PULL_REQUEST
-    assert route.decide(root, FakeGh(pr=None)).stage == "pull-request"
-    assert route.decide(root, FakeGh(pr="not json")).stage == "pull-request"
-    assert route.decide(root, FakeGh(pr='{"state": "MERGED"}')).stage == "pull-request"
+    offline = route.decide(root, None)
+    assert offline.command == route.PULL_REQUEST
+    assert "forge was not checked offline" in offline.why
+    assert "has no open pull request" not in offline.why
+    failed = route.decide(root, FakeGh(pr=None))
+    assert failed.stage == "pull-request"
+    assert "forge could not be read" in failed.why
+    assert "has no open pull request" not in failed.why
+    assert "forge could not be read" in route.decide(root, FakeGh(pr="not json")).why
+    assert "forge could not be read" in route.decide(root, FakeGh(pr="123")).why
+    confirmed_empty = route.decide(root, FakeGh(pr="[]"))
+    assert confirmed_empty.stage == "pull-request"
+    assert confirmed_empty.why == "branch `feature/4-x` is clean and has no open pull request"
+    confirmed_merged = route.decide(root, FakeGh(pr='{"state": "MERGED"}'))
+    assert confirmed_merged.stage == "pull-request"
+    assert confirmed_merged.why == "branch `feature/4-x` is clean and has no open pull request"
     waiting = route.decide(root, FakeGh(pr='{"state": "OPEN", "url": "https://x/pull/1"}'))
     assert waiting.command == route.WAIT
     assert "https://x/pull/1" in waiting.why
+    listed = route.decide(
+        root, FakeGh(pr='[{"state": "CLOSED"}, {"state": "OPEN", "url": "https://x/pull/2"}]')
+    )
+    assert listed.command == route.WAIT
+    assert "https://x/pull/2" in listed.why
     write(root, "src/x.py", "x = 1\n")
     assert route.decide(root, None).then == route.PULL_REQUEST
+
+
+def test_empty_ticket_step_distinguishes_offline_and_failed_tracker_from_empty(
+    tmp_path: Path,
+) -> None:
+    root = repository(tmp_path, ADOPTED)
+    assert route.decide(root, None).why == "no open ticket carries the agent-ready label"
+    git(root, "remote", "add", "origin", "https://example.invalid/r.git")
+    assert "tracker was not checked offline" in route.decide(root, None).why
+    assert "tracker could not be read" in route.decide(root, FakeGh(issues=None)).why
+    assert route.decide(root, FakeGh(issues="[]")).why == (
+        "no open ticket carries the agent-ready label"
+    )
+
+
+def test_online_route_main_runs_gh_in_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+) -> None:
+    root = repository(tmp_path, ADOPTED)
+    git(root, "remote", "add", "origin", "https://example.invalid/r.git")
+    branch(root, "feature/4-x")
+    seen: list[tuple[Sequence[str], Path | None]] = []
+
+    def fake_gh(args: Sequence[str], *, cwd: Path | None = None) -> str | None:
+        seen.append((args, cwd))
+        return '[{"state": "OPEN", "url": "https://x/pull/80"}]'
+
+    monkeypatch.setattr(route.preflight, "run_gh", fake_gh)
+    assert route.main(["route", "--root", str(root)]) == 0
+    assert seen == [
+        (
+            ["pr", "list", "--head", "feature/4-x", "--state", "open", "--json", "state,url"],
+            root.resolve(),
+        )
+    ]
+    assert "https://x/pull/80" in capsys.readouterr().out
 
 
 def test_the_records_come_before_any_ticket(tmp_path: Path) -> None:
