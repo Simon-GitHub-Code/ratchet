@@ -2223,11 +2223,16 @@ def changed_tasks(
 
 def fault_tasks(selected: Sequence[Task], only: Sequence[str]) -> list[Task]:
     tasks: list[Task] = []
+    seen: set[tuple[str, str]] = set()
     for row, bites in selected:
         if only and row.gate not in only:
             continue
         verdict_at = next((index for index, bite in enumerate(bites) if not bite.args), 0)
         for index, bite in enumerate(bites):
+            key = (row.gate, bite.name)
+            if key in seen:
+                continue
+            seen.add(key)
             check = index == verdict_at
             task_row = (
                 row
