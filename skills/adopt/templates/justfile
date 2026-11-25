@@ -32,9 +32,12 @@ plugin_choice := ```
     have=$(treeof "$rec") || have=
     if [ "$have" = "$want" ]; then printf 'D%s %s' "$want" "$rec"; exit 0; fi
     if [ "$file" = 1 ]; then
-      for sibling in "${rec%/*}"/*/; do
-        sibling=${sibling%/}
-        [ "$sibling" != "$rec" ] && [ -f "$sibling/.claude-plugin/plugin.json" ] && [ "$(treeof "$sibling" || true)" = "$want" ] && { printf 'D%s %s' "$want" "$sibling"; exit 0; }
+      for root in "${rec%/*}" "${CLAUDE_CONFIG_DIR:+${CLAUDE_CONFIG_DIR}/plugins/cache/ratchet/ratchet}" "${HOME:+${HOME}/.claude/plugins/cache/ratchet/ratchet}" "${CODEX_HOME:+${CODEX_HOME}/plugins/cache/ratchet/ratchet}" "${HOME:+${HOME}/.codex/plugins/cache/ratchet/ratchet}"; do
+        [ -n "$root" ] && [ -d "$root" ] || continue
+        for sibling in "$root"/*/; do
+          sibling=${sibling%/}
+          [ "$sibling" != "$rec" ] && [ -f "$sibling/.claude-plugin/plugin.json" ] && [ "$(treeof "$sibling" || true)" = "$want" ] && { printf 'D%s %s' "$want" "$sibling"; exit 0; }
+        done
       done
     fi
     if [ ! -d "$rec" ]; then printf 'Rthe plugin at %s is gone, and no copy on disk has the tree %s that docs/process/binding.md pins: install the plugin release the pin names, then start an agent session here once, or set RATCHET_PLUGIN to its folder' "$rec" "$want"; exit 0; fi
