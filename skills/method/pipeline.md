@@ -73,7 +73,7 @@ Done when every listed test passes and `check` exits 0, or the test that cannot 
 
 The critic runs only once the binding's `- Life events:` line declares `depended-on`. Before that people outside do not rely on the project, and an adversary on every ticket costs more than what it would find: a ticket is built by spec, the ticket check, implement and review. The merge rule is unchanged. A finding the review opens is still open, and the review still judges the spec's tests and the change against the records.
 
-- **Works with:** the method's rule of evidence, as the one adversary; `impeccable` `audit` and `critique` for any user interface. `/pstack:interrogate` is the owner's to type on the branch afterwards, never the critic's to imitate.
+- **Works with:** the method's rule of evidence, as the one adversary; `impeccable` `audit` and `critique` for any user interface. The run's agent count is fixed, so the critic works in-process and loads nothing that spawns agents.
 - **Sees:** the spec, its tests, the changed files, the fitness tests, the fuzz harness.
 - **Never sees:** the implementer's notes, the ticket.
 - **Attacks:**
@@ -133,7 +133,7 @@ The script is a pure function of its arguments and the agents' structured result
    - Red on `size` alone is the exception: the orchestrator splits the ticket instead, as [`/ratchet:feature`](../feature/SKILL.md) step 1 says, and builds the first part that is free.
 1. **Spec.**
    - A non-empty `openQuestions` stops the run with `verdict: "blocked"`. The orchestrator asks the owner each one as the registered product question `feature.open-question` ([questions.toml](questions.toml)), writes the answer on the ticket under `## Answers`, and builds the ticket again.
-   - A non-empty `guardEdits` stops the run the same way: criteria that need a guard path changed (an import contract, a shared test fixture, a row of the binding's Architecture table, the definition of a term the glossary already has) cannot be met by a run with no owner at the keyboard. The owner lands those edits first, or builds the ticket with `/pstack:poteto-mode` while present and merges the change.
+   - A non-empty `guardEdits` stops the run the same way: criteria that need a guard path changed (an import contract, a shared test fixture, a row of the binding's Architecture table, the definition of a term the glossary already has) cannot be met by a run with no owner at the keyboard. The owner lands those edits first, or asks this session to make the guard edits and build the ticket while present and merges the change.
    - A word the glossary lacks is not a guard edit where the manifest marks the glossary `edit = "append"`: the spec role adds the term with its *Avoid* list, the guard lets an addition through, and the pull request lists it.
 2. **Ticket check.** A gap the check finds, a promise `dropped` or `bent` or an input case no criterion decides, goes back to the spec role, which amends `spec.md` once while no code exists, and the check reads it again. After that the run decides, and the script asks the owner nothing.
    - **A promise still `dropped`** is kept from the ticket. The readings the script settles say, in the ticket's words, that the app does it. The implementer builds it with a test, and the review judges the build against it. It joins the `assumptions` as "the plan left this out, so it was built as your ticket says", which the owner overrules as he would any assumption. A ticket line about how the change is built, such as a tool to run, is kept the same way.

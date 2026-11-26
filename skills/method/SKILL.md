@@ -160,7 +160,7 @@ Done when the pull request is open and green, or, with no forge, the change desc
 1. The owner types the ticket into being with `mattpocock-skills`: `/mattpocock-skills:wayfinder` when the effort is too big for one session, `/mattpocock-skills:grill-with-docs` to decide, `/mattpocock-skills:to-spec` and `to-tickets` to write it, `/mattpocock-skills:triage` for an issue that arrived.
    - The agent-ready label these commands apply is the agreement.
 2. The owner types `/ratchet:conjecture <ticket>`, for the `## Conjecture` that [records.md](records.md) describes.
-3. The owner types `/ratchet:feature <ticket>` when they step away, or `/pstack:poteto-mode <ticket>` when they stay.
+3. The owner types `/ratchet:feature <ticket>` when they step away, or asks this session to build it with them here when they stay.
 
 Read [route.md](route.md) for the stages around these and [pipeline.md](pipeline.md) for what each role does once the feature runs.
 

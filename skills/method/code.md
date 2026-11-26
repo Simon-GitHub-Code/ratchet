@@ -5,8 +5,7 @@ Read this before you shape code the gates judge. It holds only the rules that ex
 Design and testing belong to the other plugins:
 
 - `mattpocock-skills:codebase-design` for modules, seams and adapters;
-- `mattpocock-skills:tdd` for the loop and the seams under test;
-- `/pstack:architect`, which the owner types, before code crosses a boundary.
+- `mattpocock-skills:tdd` for the loop and the seams under test.
 
 ## The rules
 
