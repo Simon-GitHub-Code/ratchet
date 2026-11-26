@@ -11,6 +11,7 @@ from pathlib import Path
 
 import application_types
 import budget
+import companions
 import documents
 import feature_preflight as preflight
 import flags
@@ -49,16 +50,16 @@ EXPIRE = (
 CHECK_FALLBACK = "the binding's `check` entry point"
 
 INIT = "/ratchet:init"
-TRACKER_SETUP = "/mattpocock-skills:setup-matt-pocock-skills"
+TRACKER_SETUP = companions.ref("tracker_setup")
 ADOPT = "/ratchet:adopt"
-GRILL = "/mattpocock-skills:grill-with-docs"
-SPEC = "/mattpocock-skills:to-spec"
-TICKETS = "/mattpocock-skills:to-tickets"
+GRILL = companions.ref("grill")
+SPEC = companions.ref("to_spec")
+TICKETS = companions.ref("to_tickets")
 CONJECTURE = "/ratchet:conjecture"
 FEATURE = "/ratchet:feature"
 PULL_REQUEST = (
-    "open the pull request (`mattpocock-skills:pr` fills the body); its merge job merges it when"
-    " the merge judge passes it, and comments why when the merge is yours"
+    f"open the pull request (`{companions.ref('pr')}` fills the body); its merge job merges it"
+    " when the merge judge passes it, and comments why when the merge is yours"
 )
 WAIT = "nothing: the merge job merges it once `ci` is green, or comments why the merge is yours"
 MERGE_FALLBACK = "the binding's `merge` entry point"

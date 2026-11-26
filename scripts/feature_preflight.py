@@ -15,6 +15,7 @@ from typing import Literal
 
 import application_types
 import change_size
+import companions
 import gatelib
 import hooks_installed
 import owed
@@ -101,8 +102,8 @@ Runner = Callable[[Sequence[str]], str | None]
 
 PRODUCES = {
     "ticket": (
-        "/mattpocock-skills:to-spec, /mattpocock-skills:to-tickets or /mattpocock-skills:triage"
-        " writes the ticket on the tracker"
+        f"{companions.ref('to_spec')}, {companions.ref('to_tickets')} or"
+        f" {companions.ref('triage')} writes the ticket on the tracker"
     ),
     "open": "a closed ticket is done or rejected; pick an open one",
     "conjecture": (
@@ -123,7 +124,7 @@ PRODUCES = {
         " the tracker, the original marked split (`/ratchet:feature`, step 4, `tooLarge`)"
     ),
     "split": "build the parts it was split into; nothing is left to do for the ticket itself",
-    "label": "the owner applies the agent-ready label (/mattpocock-skills:triage, or by hand)",
+    "label": f"the owner applies the agent-ready label ({companions.ref('triage')}, or by hand)",
     "blocked": (
         "build the blocking tickets first; when the order no longer holds, the owner edits the"
         " ticket's Blocked by"
@@ -239,6 +240,7 @@ class Report:
     flag: Flag = field(default_factory=Flag)
     start: publish_check.Start | None = None
     named_gates: list[NamedGate] = field(default_factory=list)
+    companions: dict[str, str] = field(default_factory=companions.pipeline_map)
 
     def fail(self, check: str, detail: str, produce: str = "") -> None:
         self.ok = False
@@ -790,7 +792,7 @@ def preflight(ref: str, root: Path, *, base: str, branch: str | None, gh: Runner
             f"{ref}: a local ticket is a file at .scratch/<feature>/issues/<name>.md with no"
             " second name (a hard link), the one file the guard asks the owner about before an"
             " agent writes the agent-ready label",
-            "/mattpocock-skills:to-tickets",
+            companions.ref("to_tickets"),
         )
     else:
         check_ticket(report, ticket, report.label, root=root, gh=gh)

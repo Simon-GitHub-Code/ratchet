@@ -46,6 +46,22 @@ const CONFLICTS = REJUDGE ? (REJUDGE.conflicts || []).filter(Boolean).map(String
 let PARENT = REJUDGE && typeof REJUDGE.parent === 'string' ? REJUDGE.parent.trim() : ''
 let DEPLOYED = !REJUDGE || REJUDGE.deployed !== false
 let FLAG = flagOf(REJUDGE && REJUDGE.flag, DEPLOYED)
+const DEFAULT_COMPANIONS = {
+  tdd: 'mattpocock-skills:tdd',
+  codebase_design: 'mattpocock-skills:codebase-design',
+  code_review: 'mattpocock-skills:code-review',
+  ui_design: 'impeccable:impeccable',
+}
+let COMPANIONS = companionsOf(REJUDGE && REJUDGE.companions ? REJUDGE.companions : ARGS.companions)
+
+function companionsOf(raw) {
+  const out = { ...DEFAULT_COMPANIONS }
+  if (!raw || typeof raw !== 'object') return out
+  for (const key of Object.keys(DEFAULT_COMPANIONS)) {
+    if (typeof raw[key] === 'string' && raw[key].trim()) out[key] = raw[key].trim()
+  }
+  return out
+}
 
 function flagOf(flag, deployed) {
   const key = flag && typeof flag.key === 'string' ? flag.key : ''
@@ -1089,10 +1105,10 @@ function specPrompt(gaps = []) {
   return `${PREAMBLE}
 You are the SPEC agent for one feature of this repository.
 ${commonRules('spec')}
-Load the \`mattpocock-skills:tdd\` skill: it says what a good test is and how the seams under
+Load the \`${COMPANIONS.tdd}\` skill: it says what a good test is and how the seams under
 test are chosen. The spec names those seams; the owner has agreed the approach through the
 ticket's \`## Conjecture\` section and the agent-ready label.
-Load the \`mattpocock-skills:codebase-design\` skill too, and use its vocabulary (module,
+Load the \`${COMPANIONS.codebase_design}\` skill too, and use its vocabulary (module,
 interface, depth, seam, adapter) for the Design section: where the feature lives, which seams
 it adds or changes, and deep modules over shallow wrappers.
 ${lastRunNote()}${amendNote(gaps)}
@@ -1299,9 +1315,9 @@ ${FORK_TEST}
 ${UNSTATED_RULE}
 ${DEPARTURE_RULE}
 
-Load the \`mattpocock-skills:tdd\` skill and work its loop one slice at a time: run the listed
+Load the \`${COMPANIONS.tdd}\` skill and work its loop one slice at a time: run the listed
 tests, implement the smallest change that makes one pass, re-run, repeat. If the change touches
-a user interface, load \`impeccable:impeccable\` as well: \`shape\` before you build the surface,
+a user interface, load \`${COMPANIONS.ui_design}\` as well: \`shape\` before you build the surface,
 \`polish\` before you return, and DESIGN.md is the standard you build to. The spec's tests and expected text are fixed inputs: a test you believe wrong stays red and is
 named in \`notes\`. Only where an expected output is too large to state by hand may you record it
 with the recorded-output tool binding.md's \`## Tests\` section names, placing any recorded files
@@ -1336,7 +1352,7 @@ Inputs you may read:
 - Tests a critic added, if any (some currently fail on purpose): ${JSON.stringify(testsAdded)}
 - AGENTS.md, GLOSSARY.md, docs/process/binding.md, docs/adr/, and the code under change
 
-Load the \`mattpocock-skills:tdd\` skill and work one slice at a time.
+Load the \`${COMPANIONS.tdd}\` skill and work one slice at a time.
 
 Findings you MUST resolve (blocker, major, or a test the critic kept failing):
 ${JSON.stringify(blockingFindings, null, 2)}
@@ -1487,7 +1503,7 @@ Do all of the following and report evidence for each:
 5a. Non-negotiables and vocabulary: check every AGENTS.md non-negotiable holds in the change,
    the glossary's banned words are absent from new identifiers, and any generated contract
    artefact binding.md names matches the code that it describes.
-6. User interface: if the change touches one, load \`impeccable:impeccable\` and run its \`audit\`
+6. User interface: if the change touches one, load \`${COMPANIONS.ui_design}\` and run its \`audit\`
    and \`critique\` on the surface; each finding they prove is a finding here, judged against
    DESIGN.md.
 7. Guard paths: run \`guard-diff\` and put every guard path it lists in \`guardFilesChanged\`.
@@ -1578,10 +1594,10 @@ ${outsideInputs(CRITIC)} are outside your inputs:
 judge the spec against the ticket, and the code against the spec and the standards.
 
 ${deployedNote()}${roleAssumptionsNote()}${movedNote()}
-Load the \`mattpocock-skills:code-review\` skill and apply its two axes in-process, as both of
+Load the \`${COMPANIONS.code_review}\` skill and apply its two axes in-process, as both of
 its sub-agents (the pipeline fixes the agent count): the spec source is spec.md; the standards
 sources are AGENTS.md, the glossary, docs/adr/ and the binding, plus the skill's smell
-baseline as judgement calls. Load the \`mattpocock-skills:codebase-design\` skill for axis F and
+baseline as judgement calls. Load the \`${COMPANIONS.codebase_design}\` skill for axis F and
 use its vocabulary. Record every issue with axis, severity, location and evidence:
 A. Spec conformance: does each Given/When/Then acceptance criterion have a test and an
    implementation that satisfies it? Any criterion silently narrowed? Any test weakened,
@@ -2232,6 +2248,7 @@ BASE = BASE || preflight.base || ''
 PARENT = typeof preflight.parent === 'string' ? preflight.parent.trim() : ''
 DEPLOYED = preflight.deployed !== false
 FLAG = flagOf(preflight.flag, DEPLOYED)
+if (preflight.companions && typeof preflight.companions === 'object') COMPANIONS = companionsOf(preflight.companions)
 const unfitPreflight = unfitArgument()
 if (unfitPreflight) return unfitPreflight
 CRITIC = preflight.critic !== false
