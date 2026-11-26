@@ -1,0 +1,102 @@
+name: companion-canary
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: companion-canary
+  cancel-in-progress: true
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: mattpocock/skills
+          path: _canary/mattpocock
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: michael-denyer/pstack-claude
+          path: _canary/pstack-claude
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: pbakaus/impeccable
+          path: _canary/impeccable
+          persist-credentials: false
+      - name: Check companion skill slugs and contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' 2>&1 | tee canary.txt
+          import json
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          REPOS = {
+              "mattpocock-skills": Path("_canary/mattpocock"),
+              "pstack": Path("_canary/pstack-claude"),
+              "impeccable": Path("_canary/impeccable"),
+          }
+
+          def plugin_root(plugin: str, repo: Path) -> Path:
+              manifest = repo / ".claude-plugin" / "marketplace.json"
+              if manifest.is_file():
+                  data = json.loads(manifest.read_text(encoding="utf-8"))
+                  for entry in data.get("plugins", []):
+                      if entry.get("name") == plugin and isinstance(entry.get("source"), str):
+                          return (repo / entry["source"]).resolve()
+              return repo.resolve()
+
+          roots = {name: plugin_root(name, repo) for name, repo in REPOS.items()}
+          cmd = ["python3", "scripts/companions.py", "--check", "--require-installed"]
+          for name, root in roots.items():
+              cmd.extend(["--plugin-dir", f"{name}={root}"])
+          res = subprocess.run(cmd, text=True, check=False)
+          failed = res.returncode != 0
+
+          setup_root = roots["mattpocock-skills"]
+          labels_header = "| Label in mattpocock/skills | Label in our tracker |"
+          if not any(
+              labels_header in p.read_text(encoding="utf-8", errors="ignore")
+              for p in (setup_root / "skills").rglob("triage-labels.md")
+          ):
+              print(f"companions: mattpocock-skills: triage-labels.md missing header {labels_header!r}")
+              failed = True
+          else:
+              print("companions: mattpocock-skills: triage-labels.md contract green")
+
+          sys.exit(1 if failed else 0)
+          PY
+      - name: Open or update the canary issue
+        if: failure()
+        shell: bash
+        run: |
+          title="Companion canary: upstream skill drift"
+          {
+            echo "The weekly companion canary failed in $RUN."
+            echo "Update \`scripts/companions.json\` (and any affected docs/contracts) to match upstream."
+            echo
+            echo '```'
+            cat canary.txt 2>/dev/null || echo "canary failed before producing output"
+            echo '```'
+          } > finding.md
+          number="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file finding.md
+          else
+            gh issue create --title "$title" --body-file finding.md
+          fi
