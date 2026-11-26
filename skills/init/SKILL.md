@@ -47,6 +47,7 @@ Take an answer as given; never refine it with a follow-up. A question whose answ
    - List the plugins. Note each one's version and marketplace (`<plugin>@<marketplace>` in Claude Code) for step 5.
    - When `mattpocock-skills`, `pstack` or `impeccable` is missing, install it without asking and say so in the hand-over: run the page's install commands, each in a Bash call of its own (`init.defaults` assumes it). Installing is allowed; removing is refused.
    - A plugin the page says has no package for this harness is reported in the hand-over as missing, not installed another way.
+   - Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/companions.py" --check` and report any drifted or missing companion skill in the hand-over.
    - `gh auth status`, and `glab auth status` when `glab` exists, decide whether `init.online` is asked.
    - Look for code: a package manifest, a lockfile, source directories. None means greenfield, whose stack adoption asks.
    - Check git:
@@ -86,7 +87,7 @@ Take an answer as given; never refine it with a follow-up. A question whose answ
      2. Follow `<pstack>/skills/setup-pstack/SKILL.md` with the budget answered as `medium` and the roles taken from the tiered mix: `haiku` for read-only exploration, `sonnet` for code-writing and investigation, `opus` for judgment, prose and synthesis, panels mixing `opus` and `sonnet`. Every model written must be one the Agent tool lists.
      3. Skip its two closing offers (a verification skill, a formal verification skill). `/ratchet:adopt` names them in the binding's formal group when the stack is known.
 
-     The file is pstack's, not this plugin's. `init.defaults` assumes the mix, and the owner can rerun `/pstack:setup-pstack` at any time.
+     The file is pstack's, not this plugin's. `init.defaults` assumes the mix, and the owner can ask any session to run pstack's model setup again at any time.
    - **`impeccable`: skipped when `PRODUCT.md` exists, or when `init.interface` is no user interface.** Otherwise invoke the `impeccable` skill with the argument `init` followed by the owner's answers: the purpose paragraph, the user and job, what makes it better, where it is used, the interface as assumed, and the sentence "the owner gave these answers this session; the platform is an assumption they can overturn, and the stack is not chosen yet: it is chosen with the owner at adoption; write PRODUCT.md from them, keep the owner's own words, and record no workflow default".
      - Its Setup runs the `impeccable context` launcher from its `scripts/` folder before the init reference. Let it, and do not rerun it after `PRODUCT.md` is written.
      - A question it still asks is listed in the hand-over.
