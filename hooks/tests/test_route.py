@@ -402,6 +402,8 @@ def test_tickets_on_the_tracker_route_to_conjecture_then_feature(tmp_path: Path)
     assert step.then == f"{route.FEATURE} 3"
     assert gh.calls[0][:4] == ["issue", "list", "--state", "open"]
     assert "ready-for-agent" in gh.calls[0]
+    assert "--limit" in gh.calls[0]
+    assert gh.calls[0][gh.calls[0].index("--limit") + 1] == str(route.ISSUE_LIST_LIMIT)
     built = route.decide(
         root, FakeGh(issues=issues((3, "Three", "Body."), (5, "Five", "X." + CONJECTURE)))
     )
@@ -1878,3 +1880,46 @@ def test_route_proposes_sharding_when_tier2_gate_approaches_ceiling(
     assert route.main(["route", "--root", str(root), "--offline"]) == 0
     also = [line for line in capsys.readouterr().out.splitlines() if line.startswith("also:")]
     assert any("mutation" in line and "tier2_sharded" in line for line in also)
+
+
+def test_tracker_skips_parent_specs_and_caches_repeated_issue_views(tmp_path: Path) -> None:
+    root = repository(tmp_path, ADOPTED)
+    parent_body = "Parent spec." + CONJECTURE
+    child_one = "## Parent\n\n- #32\n\nChild one."
+    child_two = "## Parent\n\n- #32\n\n## Blocked by\n\n- #53\n\nChild two."
+    listed = json.dumps(
+        [
+            {
+                "number": 32,
+                "title": "Spec",
+                "body": parent_body,
+                "labels": [{"name": "ready-for-agent"}],
+            },
+            {"number": 53, "title": "First", "body": child_one},
+            {"number": 54, "title": "Second", "body": child_two},
+        ]
+    )
+    gh = FakeGh(issues=listed)
+    step = route.decide(root, gh)
+    assert step.command == route.FEATURE
+    assert "2 agent-ready tickets" in step.why
+    assert [call for call in gh.calls if call[:2] == ["issue", "view"]] == []
+
+    unlisted_parent = FakeGh(
+        issues=issues((53, "First", child_one), (54, "Second", child_two)),
+        issue_32=json.dumps(
+            {
+                "number": 32,
+                "title": "Spec",
+                "body": parent_body,
+                "labels": [],
+                "state": "OPEN",
+            }
+        ),
+    )
+    assert route.decide(root, unlisted_parent).command == route.FEATURE
+    view_32 = [call for call in unlisted_parent.calls if call[:3] == ["issue", "view", "32"]]
+    assert len(view_32) == 1
+
+    single = FakeGh(issues=issues((32, "Spec", parent_body), (53, "First", child_one)))
+    assert route.decide(root, single).command == f"{route.FEATURE} 53"

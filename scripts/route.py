@@ -8,6 +8,7 @@ import statistics
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import application_types
 import budget
@@ -32,7 +33,11 @@ import runrecord
 import tier2_projection
 import triggers
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
 INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md")
+ISSUE_LIST_LIMIT = 1000
 STANZA = "ratchet:method"
 TRACKER_RECORD = Path("docs/agents/issue-tracker.md")
 BINDING = Path("docs/process/binding.md")
@@ -150,7 +155,18 @@ def records_missing(root: Path) -> str | None:
 def tracker_tickets(root: Path, gh: preflight.Runner) -> list[preflight.Ticket] | None:
     label = preflight.ready_label(root)
     output = gh(
-        ["issue", "list", "--state", "open", "--label", label, "--json", "number,title,body,labels"]
+        [
+            "issue",
+            "list",
+            "--state",
+            "open",
+            "--label",
+            label,
+            "--limit",
+            str(ISSUE_LIST_LIMIT),
+            "--json",
+            "number,title,body,labels",
+        ]
     )
     if output is None:
         return None
@@ -162,13 +178,19 @@ def tracker_tickets(root: Path, gh: preflight.Runner) -> list[preflight.Ticket] 
     for item in data if isinstance(data, list) else []:
         if not isinstance(item, dict) or not isinstance(item.get("number"), int):
             continue
+        raw_labels = item.get("labels")
+        names = tuple(
+            str(entry.get("name", ""))
+            for entry in (raw_labels if isinstance(raw_labels, list) else [])
+            if isinstance(entry, dict) and entry.get("name")
+        )
         tickets.append(
             preflight.Ticket(
                 ref=str(item["number"]),
                 number=item["number"],
                 title=str(item.get("title", "")),
                 body=str(item.get("body", "")),
-                labels=(label,),
+                labels=names or (label,),
                 is_open=True,
             )
         )
@@ -407,9 +429,60 @@ def drain_hold(root: Path, ticket: preflight.Ticket) -> queue_notes.Hold | None:
     return queue_notes.held(root, own_branch(ticket), ticket)
 
 
+def parent_ref_key(ref: str) -> str:
+    return ref.lstrip("#")
+
+
+def without_parents(tickets: list[preflight.Ticket]) -> list[preflight.Ticket]:
+    parents = {
+        parent_ref_key(t.parent)
+        for t in tickets
+        if t.parent is not None and parent_ref_key(t.parent) != parent_ref_key(t.ref)
+    }
+    return [t for t in tickets if parent_ref_key(t.ref) not in parents]
+
+
+def issue_view_key(number: int) -> tuple[str, ...]:
+    return ("issue", "view", str(number), "--json", "number,title,body,labels,state")
+
+
+def issue_view_payload(ticket: preflight.Ticket) -> str:
+    return json.dumps(
+        {
+            "number": ticket.number,
+            "title": ticket.title,
+            "body": ticket.body,
+            "labels": [{"name": name} for name in ticket.labels],
+            "state": "OPEN" if ticket.is_open else "CLOSED",
+        }
+    )
+
+
+def cached_runner(gh: preflight.Runner, known: Sequence[preflight.Ticket] = ()) -> preflight.Runner:
+    cache: dict[tuple[str, ...], str | None] = {
+        issue_view_key(t.number): issue_view_payload(t) for t in known if t.number is not None
+    }
+
+    def run(args: Sequence[str]) -> str | None:
+        key = tuple(args)
+        if key not in cache:
+            cache[key] = gh(args)
+        return cache[key]
+
+    return run
+
+
+def fetched_ready(
+    root: Path, gh: preflight.Runner | None
+) -> tuple[list[preflight.Ticket], bool, preflight.Runner]:
+    if gh is None or (listed := tracker_tickets(root, gh)) is None:
+        return without_parents(local_tickets(root)), True, (lambda _args: None)
+    return without_parents(listed), False, cached_runner(gh, listed)
+
+
 def agent_ready(root: Path, gh: preflight.Runner | None) -> tuple[list[preflight.Ticket], bool]:
-    tickets = tracker_tickets(root, gh) if gh is not None else None
-    return (local_tickets(root), True) if tickets is None else (tickets, False)
+    tickets, local, _runner = fetched_ready(root, gh)
+    return tickets, local
 
 
 def build_step(ready: list[preflight.Ticket], queue: int, checkout: Checkout) -> Step | None:
@@ -462,7 +535,7 @@ def _no_ticket_why(gh: preflight.Runner | None, checkout: Checkout, *, local: bo
 
 
 def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> Step:
-    tickets, local = agent_ready(root, gh)
+    tickets, local, offline_gh = fetched_ready(root, gh)
     if not tickets:
         return (triage_step(root) or unsplit_spec(root) if local else None) or Step(
             SPEC,
@@ -473,7 +546,6 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
     done = finished(root, tickets, merged_features(root, checkout.default_branch))
     if done is not None:
         return done
-    offline_gh = gh or (lambda _args: None)
     unblocked = [t for t in tickets if not preflight.open_blockers(t, root, offline_gh)]
     if not unblocked:
         return blocking(tickets, root, offline_gh) or Step(

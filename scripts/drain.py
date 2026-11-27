@@ -872,7 +872,9 @@ def pipeline_agents(root: Path) -> int:
 def plan(drain: Drain) -> Plan:
     root = drain.root
     base = merge_ready.default_ref(root)
-    tickets, _local = route.agent_ready(root, drain.gh)
+    tickets, _local, cached = route.fetched_ready(root, drain.gh)
+    if drain.gh is not None:
+        drain = replace(drain, gh=cached)
     checkout = preflight.Report(ref="")
     preflight.check_checkout(checkout, root, base=base, branch=None)
     preflight.check_hooks(checkout, root)

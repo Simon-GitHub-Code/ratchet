@@ -303,7 +303,13 @@ class FakeGh:
 def test_tracker_tickets_wait_on_each_other_by_number(tmp_path: Path) -> None:
     root = project(tmp_path)
     git(root, "remote", "add", "origin", "https://example.invalid/r.git")
-    gh = FakeGh(**{"3": "Body." + CONJECTURE, "4": "## Blocked by\n\n- #3\n" + CONJECTURE})
+    gh = FakeGh(
+        **{
+            "2": "Parent spec." + CONJECTURE,
+            "3": "## Parent\n\n- #2\n\nBody." + CONJECTURE,
+            "4": "## Parent\n\n- #2\n\n## Blocked by\n\n- #3\n" + CONJECTURE,
+        }
+    )
     drafted = drain.plan(drain.Drain(root, gh))
     assert drafted.forge is True
     assert [(e.ref, e.state, e.waits_on) for e in drafted.tickets] == [
