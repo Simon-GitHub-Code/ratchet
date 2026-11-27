@@ -3400,3 +3400,105 @@ def test_help_names_the_record_subcommand_and_verdict_fields(
     sub_help = capsys.readouterr().out
     assert "merge_ready.py record" in sub_help
     assert "verdict.json" in sub_help
+
+
+def test_high_consequence_holds_absolute_paths_and_never_waives_doors_or_expect_outputs(
+    tmp_path: Path,
+) -> None:
+    binding = (
+        "# Binding\n\n- Application types: service\n- Life events: none\n"
+        "- Stakes: high-consequence\n\n"
+        "## Absolute paths\n\n`src/domain/**`\n\n"
+        "## Recorded outputs\n\n| Paths | Pattern |\n| --- | --- |\n"
+        "| `tests/__snapshots__/**` | |\n"
+    )
+    thresholds = (
+        '[py.coverage.core]\npaths = ["src/core/**"]\nabsolute = true\n'
+        '[py.coverage.app]\npaths = ["src/app/**"]\nline = 80.0\n'
+    )
+    repo = tmp_path / "hi"
+    repository(
+        repo,
+        {
+            **BASE,
+            "docs/process/binding.md": binding,
+            "quality/thresholds.toml": thresholds,
+            "tests/__snapshots__/a.snap": "v1\n",
+            "src/domain/calc.py": "x = 1\n",
+            "src/core/ledger.py": "x = 1\n",
+            "src/app/view.py": "x = 1\n",
+        },
+    )
+    branch(repo, "feature/4-thing")
+    change(repo, {"src/app/view.py": "x = 2\n"})
+    assert codes(repo) == []
+
+    change(repo, {"src/domain/calc.py": "x = 2\n"})
+    assert codes(repo) == ["stakes"]
+
+    git(repo, "checkout", "-q", "main")
+    branch(repo, "feature/5-core")
+    change(repo, {"src/core/ledger.py": "x = 2\n"})
+    assert codes(repo) == ["stakes"]
+
+    git(repo, "checkout", "-q", "main")
+    branch(repo, "feature/6-door-and-snap")
+    change(
+        repo,
+        {"migrations/001.sql": "create table t(id int);\n", "tests/__snapshots__/a.snap": "v2\n"},
+    )
+    assert set(codes(repo)) >= {"door", "expect-output"}
+
+    git(repo, "checkout", "-q", "main")
+    branch(repo, "feature/6b-lower-stakes")
+    change(
+        repo,
+        {
+            "docs/process/binding.md": binding.replace("high-consequence", "standard"),
+            "src/domain/calc.py": "x = 3\n",
+        },
+    )
+    assert "stakes" in codes(repo)
+
+
+def test_high_consequence_reads_tip_binding_and_tolerates_missing_or_bad_thresholds(
+    tmp_path: Path,
+) -> None:
+    binding = (
+        "# Binding\n\n- Application types: service\n- Life events: none\n"
+        "- Stakes: high-consequence\n\n## Absolute paths\n\n`src/domain/**`\n"
+    )
+    tip_only = tmp_path / "tip-only"
+    files = {k: v for k, v in BASE.items() if k != "docs/process/binding.md"}
+    repository(tip_only, {**files, "src/domain/calc.py": "x = 1\n"})
+    branch(tip_only, "feature/6c-tip")
+    change(tip_only, {"src/domain/calc.py": "x = 2\n"})
+    git(tip_only, "checkout", "-q", "main")
+    write(tip_only, "docs/process/binding.md", binding)
+    commit(tip_only, "chore(method): declare high-consequence on main")
+    git(tip_only, "checkout", "-q", "feature/6c-tip")
+    assert "stakes" in codes(tip_only)
+
+    bad = tmp_path / "bad-toml"
+    repository(
+        bad,
+        {
+            **BASE,
+            "docs/process/binding.md": binding,
+            "quality/thresholds.toml": "not = [valid\n",
+            "src/app/view.py": "x = 1\n",
+        },
+    )
+    branch(bad, "feature/7-bad")
+    change(bad, {"src/app/view.py": "x = 2\n"})
+    assert codes(bad) == []
+
+    no_toml = tmp_path / "no-toml"
+    stripped = {k: v for k, v in BASE.items() if k != "quality/thresholds.toml"}
+    repository(
+        no_toml,
+        {**stripped, "docs/process/binding.md": binding, "src/app/view.py": "x = 1\n"},
+    )
+    branch(no_toml, "feature/8-notoml")
+    change(no_toml, {"src/app/view.py": "x = 2\n"})
+    assert codes(no_toml) == []

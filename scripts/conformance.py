@@ -1024,18 +1024,21 @@ def check_binding(root: Path) -> Iterable[Finding]:
         return
     adrs = {number for number, _ in numbered_files(root / "docs/adr")}
     catalogue = application_types.load()
+    stakes = application_types.stakes_of(text)
     rows = markdown_text.table_cells(gates)
     dropped = {
         application_types.dropped(question): question
-        for question in sorted(catalogue.questions - {question for question, _ in rows})
+        for question in sorted(
+            catalogue.required_questions(stakes) - {question for question, _ in rows}
+        )
     }
     typing = catalogue.types_problem(text)
     fired = Fired.of(root, text) if dropped else Fired({}, frozenset())
-    moved = moved_triggers(catalogue, rows)
+    moved = moved_triggers(catalogue, rows, stakes=stakes)
     for failure in unfolded(catalogue.failures(text, rows, adrs), dropped, text):
         question = dropped.get(failure)
         if question is not None:
-            trigger = catalogue.trigger_of(question)
+            trigger = catalogue.trigger_of(question, stakes)
             yield dropped_row(failure, question, trigger=trigger, fired=fired)
         elif failure in moved:
             question, trigger = moved[failure]
@@ -1132,15 +1135,18 @@ class Fired:
 
 
 def moved_triggers(
-    catalogue: application_types.Catalogue, rows: Sequence[tuple[str, str]]
+    catalogue: application_types.Catalogue,
+    rows: Sequence[tuple[str, str]],
+    *,
+    stakes: str = application_types.STANDARD,
 ) -> dict[str, tuple[str, str]]:
     moved = {}
     for question, tool in rows:
         waits = application_types.LATER.match(tool)
         if waits is None or question not in catalogue.questions:
             continue
-        trigger = catalogue.trigger_of(question)
-        failure = catalogue.later_problem(question, waits.group(1).strip())
+        trigger = catalogue.trigger_of(question, stakes)
+        failure = catalogue.later_problem(question, waits.group(1).strip(), stakes)
         if failure is not None and trigger != application_types.ALWAYS:
             moved[failure] = (question, trigger)
     return moved
@@ -1312,8 +1318,9 @@ def check_trigger_kinds(root: Path) -> Iterable[Finding]:
     catalogue = application_types.load()
     kinds, _ = triggers.parse(text)
     types = set(application_types.declared(text) or [])
-    asked = catalogue.kinds_asked(types)
-    for name in sorted(catalogue.kinds_required(types) - set(kinds)):
+    stakes = application_types.stakes_of(text)
+    asked = catalogue.kinds_asked(types, stakes)
+    for name in sorted(catalogue.kinds_required(types, stakes) - set(kinds)):
         why = (
             "which a question asked of these types is triggered by"
             if name in asked

@@ -53,8 +53,18 @@ def test_the_catalogue_file_lists_each_question_once() -> None:
     data = tomllib.loads(application_types.CATALOGUE.read_text(encoding="utf-8"))
     names = [question["name"] for question in data["question"]]
     assert len(names) == len(set(names))
-    keys = {"name", "applies-to", "collection", "directives", "proofs", "trigger"}
+    keys = {
+        "name",
+        "applies-to",
+        "collection",
+        "directives",
+        "proofs",
+        "trigger",
+        "high-consequence-trigger",
+        "stakes",
+    }
     assert all(set(question) <= keys for question in data["question"])
+    assert {SHIPPED.trigger_problem(trigger) for trigger in SHIPPED.promoted.values()} == {None}
 
 
 def test_every_proof_a_question_requires_is_described_and_every_description_is_required() -> None:
@@ -374,3 +384,64 @@ def test_the_signs_table_is_read_and_its_faults_named() -> None:
     assert problems is not None
     assert len(problems.problems) == 5
     assert "lacks its table" in application_types.signs_in("## Life event signs\n\nx\n").problems[0]  # type: ignore[union-attr]
+
+
+def test_stakes_profile_promotes_triggers_and_gates_high_stakes_questions() -> None:
+    assert application_types.stakes_of("# Binding\n") == "standard"
+    assert application_types.stakes_of("- Stakes: standard\n") == "standard"
+    assert application_types.stakes_of("- Stakes: `high-consequence`\n") == "high-consequence"
+    assert application_types.stakes_of("- Stakes: unknown\n") == "standard"
+    assert application_types.stakes_problem("# Binding\n") is None
+    assert application_types.stakes_problem("- Stakes: standard\n") is None
+    assert application_types.stakes_problem("- Stakes: high-consequence\n") is None
+    assert application_types.stakes_problem("- Stakes:\n") == (
+        "'- Stakes:' names nothing; write one of standard, high-consequence"
+    )
+    assert application_types.stakes_problem("- Stakes: critical\n") == (
+        "'- Stakes:' names 'critical'; write one of standard, high-consequence"
+    )
+
+    assert SHIPPED.trigger_of("changed-code mutation") == "life:depended-on"
+    assert SHIPPED.trigger_of("changed-code mutation", "high-consequence") == "code:source"
+    assert SHIPPED.trigger_of("full mutation", "high-consequence") == "code:source"
+    assert SHIPPED.trigger_of("rolls back safely", "high-consequence") == "code:stored-format"
+
+    cat = Catalogue(
+        types={"service": "answers requests"},
+        narrowed={},
+        collections=frozenset(),
+        triggers={"mut": "life:depended-on", "replay": "code:source"},
+        kinds={"source": "src"},
+        events={"depended-on": application_types.Event("users", ())},
+        promoted={"mut": "code:source"},
+        high_stakes=frozenset({"replay"}),
+    )
+    assert cat.required_questions("standard") == {"mut"}
+    assert cat.required_questions("high-consequence") == {"mut", "replay"}
+    assert cat.kinds_asked({"service"}, "standard") == set()
+    assert cat.kinds_asked({"service"}, "high-consequence") == {"source"}
+
+    std_binding = "- Application types: service\n- Stakes: standard\n"
+    assert list(cat.failures(std_binding, [("mut", "later: life:depended-on")], ADRS)) == []
+    hi_binding = "- Application types: service\n- Stakes: high-consequence\n"
+    assert list(cat.failures(hi_binding, [("mut", "later: life:depended-on")], ADRS)) == [
+        application_types.dropped("replay"),
+        (
+            "gate 'mut' says `later: life:depended-on`, but its trigger is `code:source`:"
+            " write `later: code:source`"
+        ),
+    ]
+    assert (
+        list(
+            cat.failures(
+                hi_binding,
+                [("mut", "later: code:source"), ("replay", "later: code:source")],
+                ADRS,
+            )
+        )
+        == []
+    )
+    bad_binding = "- Application types: service\n- Stakes: custom\n"
+    assert list(cat.failures(bad_binding, [("mut", "later: life:depended-on")], ADRS)) == [
+        "'- Stakes:' names 'custom'; write one of standard, high-consequence"
+    ]

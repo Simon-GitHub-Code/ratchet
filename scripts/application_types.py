@@ -19,6 +19,10 @@ if TYPE_CHECKING:
 CATALOGUE = Path(__file__).resolve().parents[1] / "skills/method/application-types.toml"
 DECLARATION = re.compile(r"^- Application types:(.*)$", re.MULTILINE)
 EVENTS = re.compile(r"^- Life events:(.*)$", re.MULTILINE)
+STAKES = re.compile(r"^- Stakes:(.*)$", re.MULTILINE)
+STANDARD = "standard"
+HIGH_CONSEQUENCE = "high-consequence"
+KNOWN_STAKES = (STANDARD, HIGH_CONSEQUENCE)
 NONE = re.compile(r"^none\b[\s,:;-]*(.*)$")
 LATER = re.compile(r"^`?later:(.*?)`?$")
 ALWAYS = "always"
@@ -56,13 +60,20 @@ class Catalogue:
     events: Mapping[str, Event] = field(default_factory=dict)
     directed: frozenset[str] = frozenset()
     architecture: Mapping[str, str] = field(default_factory=dict)
+    promoted: Mapping[str, str] = field(default_factory=dict)
+    high_stakes: frozenset[str] = frozenset()
 
     @property
     def questions(self) -> frozenset[str]:
         named = self.collections | frozenset(self.narrowed) | frozenset(self.proofs)
         return named | frozenset(self.triggers)
 
-    def trigger_of(self, question: str) -> str:
+    def required_questions(self, stakes: str = STANDARD) -> frozenset[str]:
+        return self.questions if stakes == HIGH_CONSEQUENCE else self.questions - self.high_stakes
+
+    def trigger_of(self, question: str, stakes: str = STANDARD) -> str:
+        if stakes == HIGH_CONSEQUENCE and question in self.promoted:
+            return self.promoted[question]
         return self.triggers.get(question, ALWAYS)
 
     def trigger_problem(self, trigger: str) -> str | None:
@@ -87,19 +98,21 @@ class Catalogue:
             if f"{LIFE}{event}" in parts(trigger)
         )
 
-    def kinds_asked(self, types: AbstractSet[str]) -> frozenset[str]:
+    def kinds_asked(self, types: AbstractSet[str], stakes: str = STANDARD) -> frozenset[str]:
         return frozenset(
             kind
-            for question in self.questions
+            for question in self.required_questions(stakes)
             if self.asked_of(question) & types
-            for kind in code_kinds(self.trigger_of(question))
+            for kind in code_kinds(self.trigger_of(question, stakes))
         )
 
-    def kinds_required(self, types: AbstractSet[str]) -> frozenset[str]:
+    def kinds_required(self, types: AbstractSet[str], stakes: str = STANDARD) -> frozenset[str]:
         if not types:
             return frozenset()
         reopen = (code_kinds(trigger) for trigger in self.architecture)
-        return self.kinds_asked(types) | frozenset(kind for kinds in reopen for kind in kinds)
+        return self.kinds_asked(types, stakes) | frozenset(
+            kind for kinds in reopen for kind in kinds
+        )
 
     def asked_of(self, question: str) -> frozenset[str]:
         return self.narrowed.get(question, frozenset(self.types))
@@ -109,14 +122,19 @@ class Catalogue:
         return "none: not " + (f"{', '.join(head)} or {last}" if head else last)
 
     def row_problem(
-        self, row: tuple[str, str], kinds: AbstractSet[str] | None, adrs: AbstractSet[int]
+        self,
+        row: tuple[str, str],
+        kinds: AbstractSet[str] | None,
+        adrs: AbstractSet[int],
+        *,
+        stakes: str = STANDARD,
     ) -> str | None:
         question, tool = row
         if not tool:
             return f"gate '{question}' names no tool: an empty Tool cell is an unfinished binding"
         later = LATER.match(tool)
         if later is not None:
-            return self.later_problem(question, later.group(1).strip())
+            return self.later_problem(question, later.group(1).strip(), stakes)
         match = NONE.match(tool)
         if match is None or kinds is None:
             return None
@@ -131,8 +149,8 @@ class Catalogue:
         hint = "" if applies else f"; it is not asked of these types, so write `{cell}`"
         return f"gate '{question}' {problem}{hint}"
 
-    def later_problem(self, question: str, said: str) -> str | None:
-        trigger = self.trigger_of(question)
+    def later_problem(self, question: str, said: str, stakes: str = STANDARD) -> str | None:
+        trigger = self.trigger_of(question, stakes)
         if trigger == ALWAYS:
             return (
                 f"gate '{question}' says `later: {said}`, but it is asked from the first commit:"
@@ -162,12 +180,15 @@ class Catalogue:
         problem = self.types_problem(binding)
         if problem:
             yield problem
+        if stakes_error := stakes_problem(binding):
+            yield stakes_error
+        stakes = stakes_of(binding)
         kinds = None if problem else frozenset(declared(binding) or ())
         asked = {question for question, _ in rows}
-        for question in sorted(self.questions - asked):
+        for question in sorted(self.required_questions(stakes) - asked):
             yield dropped(question)
         for row in rows:
-            row_problem = self.row_problem(row, kinds, adrs)
+            row_problem = self.row_problem(row, kinds, adrs, stakes=stakes)
             if row_problem:
                 yield row_problem
 
@@ -200,7 +221,32 @@ def parsed(text: str) -> Catalogue:
             for name, event in data.get("events", {}).items()
         },
         architecture=dict(data.get("architecture", {})),
+        promoted={
+            q["name"]: q["high-consequence-trigger"]
+            for q in questions
+            if "high-consequence-trigger" in q
+        },
+        high_stakes=frozenset(q["name"] for q in questions if q.get("stakes") == HIGH_CONSEQUENCE),
     )
+
+
+def stakes_of(binding: str | None) -> str:
+    match = STAKES.search(binding or "")
+    if match is None:
+        return STANDARD
+    value = match.group(1).strip(" `")
+    return HIGH_CONSEQUENCE if value == HIGH_CONSEQUENCE else STANDARD
+
+
+def stakes_problem(binding: str) -> str | None:
+    match = STAKES.search(binding)
+    if match is None:
+        return None
+    value = match.group(1).strip(" `")
+    if value in KNOWN_STAKES:
+        return None
+    named = f"'{value}'" if value else "nothing"
+    return f"'- Stakes:' names {named}; write one of {', '.join(KNOWN_STAKES)}"
 
 
 def declared(binding: str) -> list[str] | None:

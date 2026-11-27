@@ -2340,3 +2340,38 @@ def test_bound_accessibility_gate_requires_forced_colors_and_reduced_motion_proo
 
     replace(BINDING, later_cell, "| accessibility | none: not a web-ui or an app |")(repo)
     assert red(repo) == []
+
+
+def test_stakes_profile_is_validated_and_promotes_triggers_in_conformance(repo: Path) -> None:
+    assert red(repo) == []
+    replace(BINDING, "- Stakes: standard", "- Stakes: critical")(repo)
+    assert any("'- Stakes:' names 'critical'" in line for line in red(repo))
+
+    replace(BINDING, "- Stakes: critical", "- Stakes: high-consequence")(repo)
+    bound_row = (
+        "| changed-code mutation | the mutation tool, judged by `ratchet` plugin"
+        " `scripts/mutation_survivors.py` |"
+    )
+    old_later = "| changed-code mutation | later: life:depended-on |"
+    promoted_later = "| changed-code mutation | later: code:source |"
+    replace(BINDING, bound_row, old_later)(repo)
+    found = red(repo)
+    assert any("write `later: code:source`" in line for line in found), found
+    assert any("write `later: code:stored-format`" in line for line in found), found
+
+    replace(BINDING, old_later, promoted_later)(repo)
+    replace(
+        BINDING,
+        "| rolls back safely | later: life:deployed and code:stored-format |",
+        "| rolls back safely | later: code:stored-format |",
+    )(repo)
+    registry_path = str(project_bite.REGISTRY)
+    (repo / registry_path).write_text(
+        re.sub(
+            r'\[\[bite\]\]\ngate = "mutation-changed"\n(?:(?!\[\[bite\]\]).*\n)*',
+            "",
+            (repo / registry_path).read_text(encoding="utf-8"),
+        ),
+        encoding="utf-8",
+    )
+    assert red(repo) == []

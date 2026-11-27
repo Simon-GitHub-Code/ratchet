@@ -266,11 +266,13 @@ trigger = "code:source"
 name = "changed-code mutation"
 directives = true
 trigger = "life:depended-on"
+high-consequence-trigger = "code:source"
 
 [[question]]
 name = "full mutation"
 directives = true
 trigger = "life:depended-on"
+high-consequence-trigger = "code:source"
 
 [[question]]
 name = "static security analysis"
@@ -358,6 +360,7 @@ trigger = "code:flag"
 name = "rolls back safely"
 applies-to = ["service", "app", "cli", "job"]
 trigger = "life:deployed and code:stored-format"
+high-consequence-trigger = "code:stored-format"
 
 [[question]]
 name = "survives failing dependencies"
