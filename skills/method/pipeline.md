@@ -1,6 +1,6 @@
 # The feature pipeline
 
-A feature is built by roles with fixed sight lines, because one agent grading its own work is confirmation, not criticism. The `/ratchet:feature` skill runs them through the `pipeline` workflow the plugin ships (`workflows/pipeline.js`) once its preflight is green: once for a ticket, and once for each ticket when it drains the queue ([the drain](#the-drain)).
+A feature is built by roles with fixed sight lines, because one agent grading its own work is confirmation, not criticism. The `/ratchet:feature` skill runs them through the `pipeline` workflow the plugin ships (`workflows/pipeline.js`, or `workflows/pipeline.py` on harnesses whose workflow tool runs Python scripts) once its preflight is green: once for a ticket, and once for each ticket when it drains the queue ([the drain](#the-drain)).
 
 ## Roles
 

@@ -16,7 +16,7 @@ Pick the mode from what the owner typed:
 ## Both modes
 
 - **The input.** A ticket the owner's `/mattpocock-skills:to-spec`, `to-tickets` or `triage` wrote, with the method's `## Conjecture` and `## Operability` sections. It carries the agent-ready label the owner applies (`ready-for-agent` in mattpocock-skills, spelled as `docs/agents/triage-labels.md` maps it). The label is the owner's agreement: nothing here infers it or applies it.
-- **The Workflow call.** Call the Workflow tool by the workflow's name, `ratchet:pipeline`, in every Workflow call on this page. A harness that lists no plugin workflow by name takes `scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/pipeline.js"` instead, once you have read that file: a fresh install refuses a script path the session has not read.
+- **The Workflow call.** Call the Workflow tool by the workflow's name, `ratchet:pipeline`, in every Workflow call on this page. A harness that lists no plugin workflow by name takes `scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/pipeline.js"` instead (or `ScriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/pipeline.py"` with `Args` on a harness whose workflow tool runs Python scripts, which delegates to the same `workflows/pipeline.js` definition), once you have read that file: a fresh install refuses a script path the session has not read.
 - **The turn.** Stay in the turn until every workflow you start has returned. In a headless session (`claude -p`) the session ends with your turn and takes a running workflow with it.
 
 ## One ticket

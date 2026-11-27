@@ -44,6 +44,7 @@ validate:
 
 parse-workflow:
     node --no-warnings scripts/parse-js.mjs workflow workflows/pipeline.js
+    python3 -c 'import ast, pathlib; compile(pathlib.Path("workflows/pipeline.py").read_text(encoding="utf-8"), "workflows/pipeline.py", "exec", ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)'
 
 parse-adapters:
     node --no-warnings scripts/parse-js.mjs adapter adapters/pi/ratchet-guard.ts adapters/opencode/ratchet-guard.ts
