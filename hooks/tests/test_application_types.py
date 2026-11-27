@@ -80,6 +80,12 @@ def test_every_proof_a_question_requires_is_described_and_every_description_is_r
         "accessibility": ("forced-colors", "reduced-motion"),
         "authorization and tenant isolation": ("unprotected-route", "cross-tenant-read"),
         "sensitive data kept out of logs": ("secret-logged",),
+        "execution determinism and replay": ("ambient-nondeterminism", "replay-drift"),
+        "exact-value and unit safety": ("imprecise-or-untyped-quantity",),
+        "differential oracle agreement": ("oracle-divergence",),
+        "idempotency and concurrent write safety": ("duplicate-action", "concurrent-race"),
+        "fail-closed on stale or out-of-bounds input": ("stale-input-accepted", "bound-bypassed"),
+        "schema and ledger integrity": ("schema-integrity",),
         "formal verification of concurrency": ("code-departs-from-model",),
         "formal verification of untrusted input": ("code-departs-from-model",),
         "formal verification of state": ("code-departs-from-model",),
@@ -412,37 +418,107 @@ def test_stakes_profile_promotes_triggers_and_gates_high_stakes_questions() -> N
     assert SHIPPED.trigger_of("changed-code mutation", "high-consequence") == "code:source"
     assert SHIPPED.trigger_of("full mutation", "high-consequence") == "code:source"
     assert SHIPPED.trigger_of("rolls back safely", "high-consequence") == "code:stored-format"
+    assert SHIPPED.trigger_of("sensitive data kept out of logs", "high-consequence") == (
+        "code:entry-point"
+    )
+    assert SHIPPED.high_stakes == {
+        "execution determinism and replay",
+        "exact-value and unit safety",
+        "differential oracle agreement",
+        "idempotency and concurrent write safety",
+        "fail-closed on stale or out-of-bounds input",
+        "schema and ledger integrity",
+    }
+    assert "exact-quantity" not in SHIPPED.kinds_required({"service"}, "standard")
+    assert "exact-quantity" in SHIPPED.kinds_required({"service"}, "high-consequence")
 
     cat = Catalogue(
-        types={"service": "answers requests"},
-        narrowed={},
+        types={"service": "answers requests", "library": "is imported"},
+        narrowed={"idemp": frozenset({"service"})},
         collections=frozenset(),
-        triggers={"mut": "life:depended-on", "replay": "code:source"},
+        triggers={"mut": "life:depended-on", "replay": "code:source", "idemp": "code:source"},
         kinds={"source": "src"},
         events={"depended-on": application_types.Event("users", ())},
         promoted={"mut": "code:source"},
-        high_stakes=frozenset({"replay"}),
+        high_stakes=frozenset({"replay", "idemp"}),
     )
     assert cat.required_questions("standard") == {"mut"}
-    assert cat.required_questions("high-consequence") == {"mut", "replay"}
+    assert cat.required_questions("high-consequence") == {"mut", "replay", "idemp"}
     assert cat.kinds_asked({"service"}, "standard") == set()
     assert cat.kinds_asked({"service"}, "high-consequence") == {"source"}
 
     std_binding = "- Application types: service\n- Stakes: standard\n"
     assert list(cat.failures(std_binding, [("mut", "later: life:depended-on")], ADRS)) == []
+    assert (
+        list(
+            cat.failures(
+                std_binding,
+                [
+                    ("mut", "later: life:depended-on"),
+                    ("replay", "none: standard stakes"),
+                    ("idemp", "none: not high-consequence"),
+                ],
+                ADRS,
+            )
+        )
+        == []
+    )
+    assert list(
+        cat.failures(
+            std_binding,
+            [("mut", "later: life:depended-on"), ("replay", "none: skipped for now")],
+            ADRS,
+        )
+    ) == [
+        (
+            "gate 'replay' is bound to none and names no ADR that accepts the gap;"
+            " it is asked only under high-consequence stakes, so write `none: standard stakes`"
+        )
+    ]
     hi_binding = "- Application types: service\n- Stakes: high-consequence\n"
     assert list(cat.failures(hi_binding, [("mut", "later: life:depended-on")], ADRS)) == [
+        application_types.dropped("idemp"),
         application_types.dropped("replay"),
         (
             "gate 'mut' says `later: life:depended-on`, but its trigger is `code:source`:"
             " write `later: code:source`"
         ),
     ]
+    assert list(
+        cat.failures(
+            hi_binding,
+            [
+                ("mut", "later: code:source"),
+                ("replay", "none: standard stakes"),
+                ("idemp", "later: code:source"),
+            ],
+            ADRS,
+        )
+    ) == ["gate 'replay' is bound to none and names no ADR that accepts the gap"]
     assert (
         list(
             cat.failures(
                 hi_binding,
-                [("mut", "later: code:source"), ("replay", "later: code:source")],
+                [
+                    ("mut", "later: code:source"),
+                    ("replay", "later: code:source"),
+                    ("idemp", "later: code:source"),
+                ],
+                ADRS,
+            )
+        )
+        == []
+    )
+    hi_lib = "- Application types: library\n- Stakes: high-consequence\n"
+    assert (
+        list(
+            cat.failures(
+                hi_lib,
+                [
+                    ("mut", "later: code:source"),
+                    ("replay", "later: code:source"),
+                    ("idemp", "none: not a service"),
+                ],
                 ADRS,
             )
         )

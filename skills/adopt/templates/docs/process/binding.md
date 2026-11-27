@@ -90,7 +90,7 @@ Every question also has a trigger in the same file (ADR 0028): `always`, `code:<
 
 `Life events` lists the events the owner has declared, from `deployed`, `irreplaceable-data` and `depended-on` (`none` until then). A declared event owes its rows in the same way and is never red. The route proposes an event when it sees a sign of it; only the owner declares one.
 
-`Stakes` is `standard` (default when absent) or `high-consequence` (ADR 0101). Under `high-consequence`, mutation and rollback triggers promote to code arrival (`code:source` and `code:stored-format`), high-consequence catalogue questions apply, one-way doors and altered recorded outputs are never waived before life events are declared, and changes touching `## Absolute paths` (or `absolute = true` coverage groups) route to the owner for human review.
+`Stakes` is `standard` (default when absent) or `high-consequence` (ADR 0101, ADR 0102). Under `high-consequence`, mutation, rollback and log-redaction triggers promote to code arrival (`code:source`, `code:stored-format` and `code:entry-point`), the six `high-consequence` catalogue questions apply (under `standard` stakes they may be written `none: standard stakes` without an ADR, or omitted), one-way doors and altered recorded outputs are never waived before life events are declared, and changes touching `## Absolute paths` (or `absolute = true` coverage groups) route to the owner for human review.
 
 For `static security analysis`, state in the row or beside it whether the gate reads product code or every file with its reason; when narrowed to product code, record what is given up and which gates still read test files (such as secrets scan, typed lint, and import rules), and keep exclusions visible in the gate's command rather than a hidden ignore file.
 
@@ -139,6 +139,12 @@ For `static security analysis`, state in the row or beside it whether the gate r
 | static security analysis | | 1 | | `just sast` |
 | authorization and tenant isolation | | 1 | | `just authz-check` |
 | sensitive data kept out of logs | | 1 | | `just log-redaction` |
+| execution determinism and replay | | 1 | | `just determinism` |
+| exact-value and unit safety | | 1 | | `just exact-values` |
+| differential oracle agreement | | 1 | | `just oracle` |
+| idempotency and concurrent write safety | | 1 | | `just idempotency` |
+| fail-closed on stale or out-of-bounds input | | 1 | | `just fail-closed` |
+| schema and ledger integrity | | 1 | | `just schema-integrity` |
 | configuration hardening | | 1 | | `just iac` |
 | artefact and image scan | | 1 | | `just artefact-scan` |
 | type coverage, ratcheted | | 1 | `quality/thresholds.toml` | `just type-coverage` |

@@ -23,6 +23,7 @@ STAKES = re.compile(r"^- Stakes:(.*)$", re.MULTILINE)
 STANDARD = "standard"
 HIGH_CONSEQUENCE = "high-consequence"
 KNOWN_STAKES = (STANDARD, HIGH_CONSEQUENCE)
+STANDARD_STAKES_REASON = re.compile(r"\b(?:standard stakes|not high-consequence)\b")
 NONE = re.compile(r"^none\b[\s,:;-]*(.*)$")
 LATER = re.compile(r"^`?later:(.*?)`?$")
 ALWAYS = "always"
@@ -121,6 +122,27 @@ class Catalogue:
         *head, last = [a(kind) for kind in self.types if kind in self.asked_of(question)]
         return "none: not " + (f"{', '.join(head)} or {last}" if head else last)
 
+    def exempt_none(
+        self, question: str, reason: str, kinds: AbstractSet[str], *, stakes: str
+    ) -> bool:
+        asked_of = self.asked_of(question)
+        if not (asked_of & kinds) and says_not_a(reason, asked_of):
+            return True
+        return (
+            stakes != HIGH_CONSEQUENCE
+            and question in self.high_stakes
+            and bool(STANDARD_STAKES_REASON.search(reason))
+        )
+
+    def none_hint(self, question: str, kinds: AbstractSet[str], *, stakes: str) -> str:
+        if not (self.asked_of(question) & kinds):
+            return f"; it is not asked of these types, so write `{self.none_cell(question)}`"
+        if stakes != HIGH_CONSEQUENCE and question in self.high_stakes:
+            return (
+                "; it is asked only under high-consequence stakes, so write `none: standard stakes`"
+            )
+        return ""
+
     def row_problem(
         self,
         row: tuple[str, str],
@@ -138,16 +160,12 @@ class Catalogue:
         match = NONE.match(tool)
         if match is None or kinds is None:
             return None
-        asked_of = self.asked_of(question)
-        applies = bool(asked_of & kinds)
-        if not applies and says_not_a(match.group(1), asked_of):
+        if self.exempt_none(question, match.group(1), kinds, stakes=stakes):
             return None
         problem = unaccepted(match.group(1), adrs)
         if problem is None:
             return None
-        cell = self.none_cell(question)
-        hint = "" if applies else f"; it is not asked of these types, so write `{cell}`"
-        return f"gate '{question}' {problem}{hint}"
+        return f"gate '{question}' {problem}{self.none_hint(question, kinds, stakes=stakes)}"
 
     def later_problem(self, question: str, said: str, stakes: str = STANDARD) -> str | None:
         trigger = self.trigger_of(question, stakes)
