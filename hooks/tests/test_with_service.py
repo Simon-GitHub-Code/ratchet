@@ -1810,6 +1810,35 @@ def test_the_name_must_be_the_whole_setting_and_every_name_is_tried(
     assert out.count("without DB") == 1, "DB_URL itself was named"
 
 
+def test_refuses_accepts_invalid_value_for_settings_with_defaults(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    check_bad = (
+        "import os, sys\n"
+        "val = os.environ.get('PORT_SETTING', '8000')\n"
+        "if not val.isdigit():\n"
+        "    print('invalid PORT_SETTING', file=sys.stderr)\n"
+        "    sys.exit(2)\n" + SERVE
+    )
+    code, out = run(
+        *("--boot", f"exec {python(check_bad)}", "--ready", READY),
+        *("--refuses", "PORT_SETTING=not-a-number"),
+        capsys=capsys,
+    )
+    assert (code, out) == (0, "with_service: green\n")
+
+    bad_code, bad_out = run(
+        *("--boot", f"exec {python(check_bad)}", "--ready", READY),
+        *("--refuses", "PORT_SETTING=9000"),
+        capsys=capsys,
+    )
+    assert bad_code == 1
+    assert "the service became ready with invalid PORT_SETTING: it did not refuse" in bad_out
+
+    with pytest.raises(SystemExit):
+        run(*("--boot", "true", "--ready", READY, "--refuses", "=bad"), capsys=capsys)
+
+
 def unmeasured_env() -> dict[str, str]:
     return {
         key: value

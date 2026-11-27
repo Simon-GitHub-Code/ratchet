@@ -440,6 +440,14 @@ def test_one_gate_is_proven_alone_before_the_registry_is_whole(
     assert prove(root, "--gate", "unproven") == 1
     assert shown(capsys) == ("no bite to run: a gate with nothing to run is red\nbite: red\n")
 
+    two = project(
+        tmp_path / "two",
+        {"lint": LINT, "fmt": LINT},
+        bite("lint", "a planted word") + "\n" + bite("fmt", "a planted word"),
+    )
+    assert prove(two, "--gate", "lint", "fmt") == 0
+    assert "bite: green: 2 of 2 faults bit, over 2 gates" in shown(capsys)
+
 
 def changed(root: Path) -> Path:
     write(root, "guards/manifest.toml", MANIFEST)

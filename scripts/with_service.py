@@ -463,17 +463,31 @@ def run_signalled(
     return combined_exit(code, watch_code[0]), [*problems, *found]
 
 
+def refusal_spec(spec: str) -> tuple[str, str | None]:
+    if "=" in spec:
+        name, value = spec.split("=", 1)
+        return name, value
+    return spec, None
+
+
 def refusal(
-    code: int | None, name: str, not_ready: str | None, *, output: str, timeout: float
+    code: int | None,
+    setting: tuple[str, bool],
+    not_ready: str | None,
+    *,
+    output: str,
+    timeout: float,
 ) -> list[str]:
+    name, invalid = setting
+    cause = f"with invalid {name}" if invalid else f"without {name}"
     if not_ready is None:
-        return [f"the service became ready without {name}: it did not refuse"]
+        return [f"the service became ready {cause}: it did not refuse"]
     if code is None:
-        return [f"the service neither refused nor became ready within {timeout:g}s without {name}"]
+        return [f"the service neither refused nor became ready within {timeout:g}s {cause}"]
     if code == 0:
-        return [f"the service exited with code 0 without {name}: a refusal is non-zero"]
+        return [f"the service exited with code 0 {cause}: a refusal is non-zero"]
     if not re.search(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])", output):
-        return [f"the service exited with code {code} without {name} but did not name it"]
+        return [f"the service exited with code {code} {cause} but did not name it"]
     return []
 
 
@@ -493,7 +507,11 @@ def serve(
                     output = log.read().decode("utf-8", errors="replace")
                     ended = process.returncode if exited else None
                     problems = refusal(
-                        ended, options.refuses, not_ready, output=output, timeout=options.timeout
+                        ended,
+                        (options.refuses, options.refuse_invalid),
+                        not_ready,
+                        output=output,
+                        timeout=options.timeout,
                     )
                     code = 1 if problems else 0
                 elif not_ready:
@@ -564,7 +582,7 @@ def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
         metavar="S",
         help="seconds of the command's load from the service accepting the held request to SIGTERM",
     )
-    parser.add_argument("--refuses", action="append", default=[], metavar="NAME")
+    parser.add_argument("--refuses", action="append", default=[], metavar="NAME[=VALUE]")
     parser.add_argument(
         "--loopback-only",
         action="store_true",
@@ -591,7 +609,9 @@ def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     if options.graceful is not None and not command:
         parser.error("--graceful needs a command after --, such as the load smoke")
     if options.refuses and (command or options.graceful is not None):
-        parser.error("--refuses boots with a setting missing and runs no command; use it alone")
+        parser.error("--refuses boots with a setting missing or invalid and runs no command")
+    if any(not refusal_spec(spec)[0] for spec in options.refuses):
+        parser.error("--refuses needs a setting name (NAME or NAME=VALUE)")
     return options, command
 
 
@@ -602,7 +622,7 @@ def main(argv: list[str]) -> int:
     picked = any(PORT_TOKEN in text for text in texts)
     hosted = any(HOST_TOKEN in text for text in texts)
 
-    def attempt(missing: str | None = None) -> tuple[int, list[str], bool]:
+    def attempt(refuse: str | None = None) -> tuple[int, list[str], bool]:
         env = dict(os.environ)
         if picked:
             env["PORT"] = str(gatelib.free_port())
@@ -612,13 +632,20 @@ def main(argv: list[str]) -> int:
         def expand(text: str) -> str:
             return text.replace(PORT_TOKEN, port).replace(HOST_TOKEN, host)
 
+        name, bad_value = refusal_spec(refuse) if refuse is not None else (None, None)
         ran = argparse.Namespace(**{**vars(options), "boot": expand(options.boot)})
         ran.hosted = hosted
-        ran.ready, ran.refuses = expand(options.ready), missing
+        ran.ready, ran.refuses, ran.refuse_invalid = (
+            expand(options.ready),
+            name,
+            bad_value is not None,
+        )
         env[gatelib.READY_ENV] = ran.ready
         env.update({key: expand(value) for key, value in pairs})
-        if missing:
-            env.pop(missing, None)
+        if name is not None and bad_value is not None:
+            env[name] = expand(bad_value)
+        elif name is not None:
+            env.pop(name, None)
         if gatelib.listening(ran.ready):
             problem = f"{ran.ready} already answers before the boot: free the port or use {{port}}"
             return 1, [problem], False

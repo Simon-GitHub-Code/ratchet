@@ -2346,7 +2346,9 @@ def parse_options(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="every gate of tiers 0 and 1, whatever the change",
     )
-    parser.add_argument("--gate", action="append", default=[], help="only this gate's bites")
+    parser.add_argument(
+        "--gate", action="extend", nargs="+", default=[], help="only these gates' bites"
+    )
     parser.add_argument("--jobs", type=int, default=min(MAX_LANES, gatelib.default_jobs()))
     parser.add_argument("--limit", type=float, help="seconds a run may take, for every gate")
     parser.add_argument("--shard", type=parse_shard, help="run only slice K/N of the faults")
