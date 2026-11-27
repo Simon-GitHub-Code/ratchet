@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.15.14
+
+This patch release holds pull request #461 (ADR 0104), making `change-size` measure added hand-written product lines only, exclude declared generated artefacts and whole-file recorded outputs, and escalate large coherent changes to the owner (`merge: owner`) before hitting a hard runaway ceiling.
+
+Upgrade from 0.15.13 as the README's Upgrading section says. These changes reach the project:
+
+- **Count added hand-written lines and add two-tier owner escalation for `change-size` (#461, ADR 0104).** `scripts/change_size.py` now measures `product_lines` and `test_lines` from added lines only (not `added + deleted`) so edits count once and deleting dead code never consumes budget. It also excludes optional `- Generated:` globs declared under `## Test paths` (validated against broad globs and path traversal by `scripts/conformance.py`) and whole-file rows of `## Recorded outputs`, both read strictly from the merge base. `[ceilings.change]` gains optional `product_files_hard` and `product_lines_hard` runaway ceilings (template defaults: `product_files = 25 / 60`, `product_lines = 1000 / 2500`, `test_lines = 3000`, backwards-compatible when omitted): changes between the autonomous and hard ceilings pass `change-size` with a warning, finish through `scripts/feature_preflight.py` and `workflows/pipeline.js`, and route to `merge: owner` (`size`) in `scripts/merge_ready.py`, while changes past the hard ceiling still fail red and split.
+
 ## 0.15.13
 
 This patch release holds pull requests #456 through #459, adding a fail-closed `pages` lane for pure documentation changes (ADR 0103), shipping a native Python `workflows/pipeline.py` entry point with full parity against `workflows/pipeline.js`, exempting method-written `docs/features/**/verdict.json` records from `## Comments`, and excluding Markdown docs and ADRs from `change-size` product ceilings.
