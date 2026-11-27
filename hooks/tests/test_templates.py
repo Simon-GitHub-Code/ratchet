@@ -1602,6 +1602,14 @@ def test_ci_wires_already_proven_skip_with_least_privilege_actions_read() -> Non
         job = ci.split(f"\n  {job_name}:\n", 1)[1].split(f"\n  {next_job}:\n", 1)[0]
         assert "needs: proven" in job
         assert "needs.proven.result == 'skipped' || needs.proven.outputs.skip != 'true'" in job
+    for job_name, next_job, output in (
+        ("tier1", "tier1-long", "tier1"),
+        ("tier1-long", "loop", "tier1_long"),
+    ):
+        job = ci.split(f"\n  {job_name}:\n", 1)[1].split(f"\n  {next_job}:\n", 1)[0]
+        assert "!cancelled()" in job
+        assert "needs.shape.result == 'success'" in job
+        assert f"needs.shape.outputs.{output} != '[]'" in job
     tier0 = ci.split("\n  tier0:\n", 1)[1].split("\n  shape:\n", 1)[0]
     assert "already_proven.py" in tier0
     assert "proven.json" in tier0

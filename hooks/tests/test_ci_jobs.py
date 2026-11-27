@@ -1306,7 +1306,11 @@ def upgraded(root: Path) -> None:
 TIER1_HEAD = "  tier1:\n    runs-on: ubuntu-latest"
 CACHE_KEY = "            tier1-${{ runner.os }}-${{ matrix.gate }}-\n"
 SHAPE_RUN = "      - id: shards\n        run: |\n"
-GUARD = "  tier1:\n    if: needs.shape.outputs.tier1 != '[]'"
+GUARD = (
+    "  tier1:\n"
+    "    if: ${{ !cancelled() && needs.shape.result == 'success'"
+    " && needs.shape.outputs.tier1 != '[]' }}"
+)
 LONG_OUTPUT = '          echo "tier1_long=$(json "$long")" >> "$GITHUB_OUTPUT"\n'
 LINE_ENDS = "its own line ends"
 OWN_EDITS = {

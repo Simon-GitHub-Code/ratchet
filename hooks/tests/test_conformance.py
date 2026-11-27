@@ -2268,6 +2268,41 @@ def test_ci_loop_and_ratchet_run_conformance_findings(repo: Path) -> None:
     assert any("needs:" in line and "tier1-long" in line for line in red(repo))
 
 
+def test_ci_proven_guard_catches_and_upgrades_unguarded_tier1_jobs(repo: Path) -> None:
+    ci = ".github/workflows/ci.yml"
+    original = (repo / ci).read_text(encoding="utf-8")
+    t1_new = (
+        "    if: ${{ !cancelled() && needs.shape.result == 'success'"
+        " && needs.shape.outputs.tier1 != '[]' }}"
+    )
+    t1_long_new = (
+        "    if: ${{ !cancelled() && needs.shape.result == 'success'"
+        " && needs.shape.outputs.tier1_long != '[]' }}"
+    )
+    legacy = original.replace(t1_new, conformance.TIER1_PROVEN_OLD["tier1"]).replace(
+        t1_long_new, conformance.TIER1_PROVEN_OLD["tier1-long"]
+    )
+    (repo / ci).write_text(legacy, encoding="utf-8")
+    found = [
+        f for f in conformance.findings(repo) if "runs after `proven` through `shape`" in f.problem
+    ]
+    assert len(found) == 2
+    patched = legacy
+    for item in found:
+        assert isinstance(item.fix, conformance.Auto)
+        patched = item.fix.want(patched)
+    assert patched == original
+
+    (repo / ci).write_text(original.replace(f"{t1_new}\n", ""), encoding="utf-8")
+    assert any("job `tier1` runs after `proven`" in line for line in red(repo))
+
+    (repo / ci).write_text(
+        original.replace(t1_new, "    if: always() && needs.shape.outputs.tier1 != '[]'"),
+        encoding="utf-8",
+    )
+    assert any("job `tier1` runs after `proven`" in line for line in red(repo))
+
+
 def test_sharded_bite_recipes_must_pass_shard_and_deep_must_cover_all_slices(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
