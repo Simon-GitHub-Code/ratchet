@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.15.13
+
+This patch release holds pull requests #456 through #459, adding a fail-closed `pages` lane for pure documentation changes (ADR 0103), shipping a native Python `workflows/pipeline.py` entry point with full parity against `workflows/pipeline.js`, exempting method-written `docs/features/**/verdict.json` records from `## Comments`, and excluding Markdown docs and ADRs from `change-size` product ceilings.
+
+Upgrade from 0.15.12 as the README's Upgrading section says. These changes reach the project:
+
+- **Fail-closed `pages` lane for pure documentation changes (#457, ADR 0103).** `scripts/pages_lane.py` classifies changes against the merge base (reading `docs/process/binding.md` and `guards/manifest.toml` from the merge base) and activates the `pages` lane only when every changed path is a non-guard Markdown page or `docs/features/*/verdict.json` outside `## What each gate reads`, `## Triggers`, `## Dependencies`, `## Image pins`, `## Test paths`, `## Formal verification`, and optional `- Pages exclude:` globs. `scripts/parallel.py` and `scripts/ci_jobs.py` still run every tier 0 gate, every method/conformance/documentation tier 1 gate, and any custom tier 1 gate while short-circuiting pure code, runtime, container, and dependency tier 1 gates. `scripts/already_proven.py` records `"lane": "pages"` and refuses to skip full default-branch push CI after a `pages`-lane pull request.
+- **Native Python `workflows/pipeline.py` with full `pipeline.js` parity (#459).** Adds a self-contained `workflows/pipeline.py` entry point for harnesses whose workflow runner executes Python scripts with top-level `await`, delegating directly to the single-source `workflows/pipeline.js` definition so every prompt, schema, severity rule, fork test, quote check, and verdict forcing rule stays identical with zero drift.
+- **Exclude Markdown documentation and ADRs from `change-size` product ceilings (#458).** `scripts/change_size.py` now excludes `**/*.md` and `**/*.markdown` from `product_files` and `product_lines`, keeping the ceiling focused on actual product code and preventing mechanical ADR regroupings or doc prune passes from tripping the ceiling.
+- **Exempt method-written `verdict.json` records from `## Comments` (#456).** `scripts/comments.py` (`judgeable()`) now skips `docs/features/**/verdict.json` alongside Markdown documents so a repository's first `/ratchet:feature` or `/ratchet:prune` pull request does not fail conformance or force an edit to guard path `docs/process/binding.md`.
+
 ## 0.15.12
 
 This patch release holds pull requests #453 and #454, fixing a P0 CI workflow bug where a skipped `proven` job silently skipped `tier1` and `tier1-long` on every `pull_request`, and smoothing `/ratchet:safeguard` binding ergonomics and config-refusal testing.
