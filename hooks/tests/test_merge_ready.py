@@ -3502,3 +3502,65 @@ def test_high_consequence_reads_tip_binding_and_tolerates_missing_or_bad_thresho
     branch(no_toml, "feature/8-notoml")
     change(no_toml, {"src/app/view.py": "x = 2\n"})
     assert codes(no_toml) == []
+
+
+def test_autonomous_change_size_ceiling_routes_to_owner_while_excluding_generated_and_deletions(
+    tmp_path: Path,
+) -> None:
+    binding = (
+        BASE[BINDING]
+        + "\n\n## Gates\n\n"
+        + "| Question | Tool | Tier | Threshold source | Entry point |\n"
+        + "| --- | --- | --- | --- | --- |\n"
+        + "| load smoke | later: code:entry-point | 1 | | `just load-smoke` |\n\n"
+        + "## Test paths\n\n- Tests: `tests/**`\n- Generated: `contracts/**/*.json`\n"
+    )
+    thresholds = (
+        THRESHOLDS
+        + "\n[ceilings.change]\nproduct_files = 2\nproduct_files_hard = 5\n"
+        + "product_lines = 4\nproduct_lines_hard = 12\ntest_lines = 50\n"
+    )
+    repo = tmp_path / "size-escalation"
+    repository(
+        repo,
+        {
+            **BASE,
+            BINDING: binding,
+            "quality/thresholds.toml": thresholds,
+            "src/old.py": "".join(f"old_{n} = {n}\n" for n in range(20)),
+            "contracts/api.json": "{}\n",
+        },
+    )
+
+    branch(repo, "feature/size-ok")
+    change(
+        repo,
+        {
+            "src/old.py": "a = 1\nb = 2\n",
+            "contracts/api.json": "".join(f'"{n}": {n}\n' for n in range(100)),
+            "tests/test_a.py": "".join(f"t{n} = {n}\n" for n in range(20)),
+        },
+    )
+    assert codes(repo) == [], "deletions, generated artefacts, and tests stay merge: agent"
+
+    git(repo, "checkout", "-q", "main")
+    branch(repo, "feature/size-over")
+    change(
+        repo,
+        {
+            "src/new.py": "".join(f"p{n} = {n}\n" for n in range(6)),
+        },
+    )
+    assert codes(repo) == ["size"]
+    assert any("over autonomous ceiling 4 (hard ceiling 12)" in line for line in judged(repo))
+
+    git(repo, "checkout", "-q", "main")
+    branch(repo, "chore/safeguard-size")
+    write(
+        repo,
+        BINDING,
+        binding.replace("later: code:entry-point", "real load tool"),
+    )
+    write(repo, "src/big.py", "".join(f"s{n} = {n}\n" for n in range(8)))
+    commit(repo, "chore(method): safeguard entry-point")
+    assert "size" not in codes(repo), "verified safeguard binding is exempt from size escalation"

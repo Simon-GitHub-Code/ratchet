@@ -376,17 +376,18 @@ function checkOutputField(ownTestsOnly) {
 const CHANGE_SIZE_FIELD = {
   changeSize: {
     type: 'object',
-    description: 'What the binding\'s change-size entry point prints for the working tree as you leave it: the product lines and the ceiling beside them, the test lines and theirs; omit when the binding binds no such gate',
+    description: 'What the binding\'s change-size entry point prints for the working tree as you leave it: the product lines added and the ceiling beside them (plus the hard ceiling when printed apart from the autonomous ceiling), the test lines added and theirs; omit when the binding binds no such gate',
     properties: {
-      lines: { type: 'integer', description: 'The product lines changed' },
-      ceiling: { type: 'integer', description: 'The product lines ceiling' },
-      testLines: { type: 'integer', description: 'The test lines changed' },
+      lines: { type: 'integer', description: 'The product lines added' },
+      ceiling: { type: 'integer', description: 'The autonomous product lines ceiling' },
+      hardCeiling: { type: 'integer', description: 'The hard product lines ceiling, when printed apart from the autonomous ceiling' },
+      testLines: { type: 'integer', description: 'The test lines added' },
       testCeiling: { type: 'integer', description: 'The test lines ceiling' },
     },
     required: ['lines', 'ceiling'],
   },
 }
-const CHANGE_SIZE_RULE = 'Run the binding\'s change-size entry point last and return what it prints as `changeSize`: `lines` and `ceiling` are its product lines and the ceiling beside them, `testLines` and `testCeiling` its test lines and theirs (leave the last two out when it prints no test ceiling); omit `changeSize` when the binding binds no such gate.'
+const CHANGE_SIZE_RULE = 'Run the binding\'s change-size entry point last and return what it prints as `changeSize`: `lines` and `ceiling` are its product lines and the ceiling beside them (with `hardCeiling` for the hard ceiling when printed apart from the autonomous ceiling), `testLines` and `testCeiling` its test lines and theirs (leave the last two out when it prints no test ceiling); omit `changeSize` when the binding binds no such gate.'
 const TRIGGERS_RULE = 'If `check` is red on the `triggers` gate (a line `triggers: \'<kind>\' gained N instance(s)`: a second instance of a kind whose safeguards are owed), do not edit the binding, the justfile or quality/ to quiet it and do not write a dispute. Finish the rest, then return with `checkPasses: false`, keep that gate line verbatim in `checkOutput`, and name the kind and `/ratchet:safeguard` in `notes`.'
 const OWED_RED = /triggers: '[^']+' gained \d+ instance/
 const ROOM_NUMERATOR = 2
@@ -403,7 +404,7 @@ const ESTIMATE_FIELD = {
     properties: {
       implementationLines: { type: 'integer', description: 'Product lines the implementation will add or change, by the seams the tests exercise' },
       criticLines: { type: 'integer', description: 'Test lines the critic\'s tests will add: about two fifths of the lines of your own tests, more for a user interface or an endpoint' },
-      recordLines: { type: 'integer', description: 'Lines of ADRs and glossary entries the change is likely to add, which count as product; 0 when none' },
+      recordLines: { type: 'integer', description: 'Lines of non-Markdown records the change is likely to add that count as product; 0 when none (Markdown docs and declared generated files are not counted)' },
       proposedSplit: {
         type: 'array',
         description: 'When the product lines (implementation and records, plus those already measured) would pass the product ceiling, or your tests plus the critic\'s the test ceiling: two or more tickets that each fit, with the acceptance criteria each carries; empty when the change fits',
@@ -1709,9 +1710,15 @@ function fixableByReview(review) {
   return blocking(review.issues).length > 0 && ticketIssues(review).length === 0
 }
 
+function productStopCeiling(size) {
+  const hard = size && size.hardCeiling
+  if (Number.isInteger(hard) && hard > 0) return hard
+  return size && size.ceiling
+}
+
 function noRoom(stage, size, critic = true) {
   const lines = size && size.lines
-  const ceiling = size && size.ceiling
+  const ceiling = productStopCeiling(size)
   if (Number.isInteger(lines) && Number.isInteger(ceiling) && ceiling > 0 && lines > ceiling) {
     return {
       kind: 'product',
@@ -1740,7 +1747,7 @@ function noRoom(stage, size, critic = true) {
 function cannotFit(size, estimate, critic = true) {
   if (!estimate) return null
   const lines = size && size.lines
-  const ceiling = size && size.ceiling
+  const ceiling = productStopCeiling(size)
   const product = (Number.isInteger(lines) ? lines : 0) + (estimate.implementationLines || 0) + (estimate.recordLines || 0)
   if (Number.isInteger(ceiling) && ceiling > 0 && product > ceiling) {
     return {

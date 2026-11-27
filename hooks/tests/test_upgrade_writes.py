@@ -146,9 +146,21 @@ def test_a_speed_section_that_lists_nothing_gains_the_shard_count_below_its_text
 
 
 THRESHOLDS = "quality/thresholds.toml"
-LIVE_CEILING = "[ceilings.change]\nproduct_files = 25\nproduct_lines = 1000\ntest_lines = 3000\n"
+LIVE_CEILING = (
+    "[ceilings.change]\n"
+    "product_files = 25\n"
+    "product_files_hard = 60\n"
+    "product_lines = 1000\n"
+    "product_lines_hard = 2500\n"
+    "test_lines = 3000\n"
+)
 COMMENTED_CEILING = (
-    "# [ceilings.change]\n# product_files = 25\n# product_lines = 1000\n# test_lines = 3000\n"
+    "# [ceilings.change]\n"
+    "# product_files = 25\n"
+    "# product_files_hard = 60\n"
+    "# product_lines = 1000\n"
+    "# product_lines_hard = 2500\n"
+    "# test_lines = 3000\n"
 )
 OLDER_CEILING = "[ceilings.change]\nfiles = 40\nlines = 1500\n"
 

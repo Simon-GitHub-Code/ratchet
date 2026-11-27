@@ -540,7 +540,7 @@ def test_change_size_counts_a_moved_file_by_its_changed_lines(tmp_path: Path) ->
     (root / "docs/features/f/spec.md").rename(root / "docs/features/f/plan.md")
     (root / "docs/features/f/plan.md").rename(root / "plan.txt")
     commit(root, "refactor(core): move a")
-    assert change_size.measure(root, "main") == change_size.Size(2, 2), "the edit, no record"
+    assert change_size.measure(root, "main") == change_size.Size(2, 1), "the edit, no record"
 
 
 def test_change_size_measures_against_the_ceiling(tmp_path: Path, capsys: Out) -> None:
@@ -553,7 +553,7 @@ def test_change_size_measures_against_the_ceiling(tmp_path: Path, capsys: Out) -
     write(root, "new.txt", "n\n")
     (root / "bin").write_bytes(b"\x00\x01")
     (root / "blob").write_bytes(b"\x00\x01")
-    assert change_size.measure(root, "main") == change_size.Size(4, 4), "binaries are files"
+    assert change_size.measure(root, "main") == change_size.Size(4, 3), "binaries are files"
     assert run(change_size, root) == 0
     assert "no ceiling recorded" in capsys.readouterr().out
     assert (
@@ -649,8 +649,8 @@ def test_change_size_ceilings_are_rewritten_in_place() -> None:
     assert change_size.with_ceilings("[x]\ny = 1\n", (3, 4, 5)) == f"[x]\ny = 1\n\n{after}"
     size, limits = change_size.Size(2, 2, 0, 9), change_size.Ceilings(None, 1, 8)
     assert change_size.over(size, limits) == [
-        "product lines: 2 changed, ceiling 1",
-        "test lines: 9 changed, ceiling 8",
+        "product lines: 2 added, ceiling 1",
+        "test lines: 9 added, ceiling 8",
     ]
 
 
@@ -761,11 +761,11 @@ def test_change_size_is_red_on_product_lines_and_on_a_runaway_of_tests_alone(
     root = sized(tmp_path, "`tests/**`, `**/*.test.ts`")
     write(root, "src/b.py", "".join(f"p{n} = 1\n" for n in range(3)))
     assert run(change_size, root) == 1
-    assert "product lines: 6 changed, ceiling 5" in capsys.readouterr().out
+    assert "product lines: 6 added, ceiling 5" in capsys.readouterr().out
     (root / "src/b.py").unlink()
     write(root, "tests/test_b.py", "".join(f"u{n} = 1\n" for n in range(9)))
     assert run(change_size, root) == 1
-    assert "test lines: 21 changed, ceiling 20" in capsys.readouterr().out
+    assert "test lines: 21 added, ceiling 20" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("row", [None, "<globs of the tests>", "", "tests/**", "none: no"])
@@ -809,6 +809,189 @@ def test_a_test_paths_section_without_its_bullet_is_unfilled(binding: str) -> No
     globs, problems = change_size.test_paths(binding)
     assert globs is None
     assert any("still the template's" in problem for problem in problems)
+
+
+def test_change_size_counts_added_lines_only_and_excludes_generated_and_recorded_outputs(
+    tmp_path: Path, capsys: Out
+) -> None:
+    binding = (
+        "# Binding\n\n## Test paths\n\n"
+        "- Tests: `tests/**`\n"
+        "- Generated: `contracts/**/*.json`\n\n"
+        "## Recorded outputs\n\n"
+        "| Paths | Pattern |\n"
+        "| --- | --- |\n"
+        "| `snapshots/**` | |\n"
+        "| `src/inline.py` | `expect\\(` |\n"
+    )
+    root = repository(
+        tmp_path,
+        {
+            "docs/process/binding.md": binding,
+            "quality/thresholds.toml": CEILINGS,
+            "src/old.py": "".join(f"old_{n} = {n}\n" for n in range(40)),
+            "contracts/api.json": "{}\n",
+            "snapshots/out.txt": "before\n",
+        },
+    )
+    commit(root, "feat(core): baseline")
+    branch(root)
+    write(root, "src/old.py", "kept = 1\nadded = 2\n")
+    write(root, "contracts/api.json", "".join(f'"{n}": {n}\n' for n in range(500)))
+    write(root, "snapshots/out.txt", "".join(f"row {n}\n" for n in range(300)))
+    write(root, "src/inline.py", "expect(1)\n")
+    commit(root, "refactor(core): shrink code and regenerate artefacts")
+    assert change_size.measure(root, "main") == change_size.Size(2, 3)
+    assert change_size.measure(root, "main", "HEAD") == change_size.Size(2, 3)
+    assert run(change_size, root) == 0
+    assert "2 product files (ceiling 2), 3 product lines (ceiling 5)" in capsys.readouterr().out
+
+
+def test_change_size_generated_paths_validation_and_merge_base_immutability(tmp_path: Path) -> None:
+    assert change_size.generated_paths(None) == ([], [])
+    assert change_size.generated_paths("# B\n\n## Test paths\n\n- Tests: `t/**`\n") == ([], [])
+    assert change_size.generated_paths(
+        "# B\n\n## Test paths\n\n- Tests: `t/**`\n- Generated: <globs>\n"
+    ) == ([], [])
+    assert change_size.generated_paths(
+        "# B\n\n## Test paths\n\n- Tests: `t/**`\n- Generated: none: no generated product files\n"
+    ) == ([], [])
+    assert change_size.generated_paths(
+        "# B\n\n## Test paths\n\n- Tests: `t/**`\n- Generated: `contracts/**`, `gen/*.json`\n"
+    ) == (["contracts/**", "gen/*.json"], [])
+    for bad in ("none: short", "contracts/**", "`*`", "`**`", "`/abs/**`", "`../up/**`"):
+        globs, problems = change_size.generated_paths(
+            f"# B\n\n## Test paths\n\n- Tests: `t/**`\n- Generated: {bad}\n"
+        )
+        assert globs == []
+        assert problems
+    assert change_size.recorded_output_globs(None) == []
+
+    root = repository(
+        tmp_path,
+        {
+            "docs/process/binding.md": "# B\n\n## Test paths\n\n- Tests: `tests/**`\n",
+            "quality/thresholds.toml": CEILINGS,
+        },
+    )
+    branch(root)
+    write(
+        root,
+        "docs/process/binding.md",
+        "# B\n\n## Test paths\n\n- Tests: `tests/**`\n- Generated: `src/**`\n",
+    )
+    write(root, "src/big.py", "".join(f"x{n} = {n}\n" for n in range(10)))
+    assert change_size.measure(root, "main").product_lines >= 10, (
+        "a branch cannot exempt its own files via - Generated:"
+    )
+
+
+def test_change_size_two_tier_warns_between_autonomous_and_hard_ceilings_and_blocks_past_hard(
+    tmp_path: Path, capsys: Out
+) -> None:
+    thresholds = (
+        "[ceilings.change]\n"
+        "product_files = 1\n"
+        "product_files_hard = 3\n"
+        "product_lines = 4\n"
+        "product_lines_hard = 10\n"
+        "test_lines = 20\n"
+    )
+    root = repository(
+        tmp_path,
+        {
+            "docs/process/binding.md": BINDING_WITH_ROW.format(row="`tests/**`"),
+            "quality/thresholds.toml": thresholds,
+        },
+    )
+    branch(root)
+    write(root, "src/a.py", "".join(f"a{n} = {n}\n" for n in range(6)))
+    write(root, "src/b.py", "b = 1\n")
+    assert run(change_size, root) == 0
+    out = capsys.readouterr().out
+    assert "autonomous ceiling 1, hard ceiling 3" in out
+    assert "autonomous ceiling 4, hard ceiling 10" in out
+    assert "change-size: warning: product files: 2 changed, over autonomous ceiling 1" in out
+    assert "change-size: warning: product lines: 7 added, over autonomous ceiling 4" in out
+    assert "requires owner merge" in out
+
+    write(root, "src/c.py", "".join(f"c{n} = {n}\n" for n in range(5)))
+    write(root, "src/d.py", "d = 1\n")
+    assert run(change_size, root) == 1
+    out = capsys.readouterr().out
+    assert "product files: 4 changed, hard ceiling 3" in out
+    assert "product lines: 13 added, hard ceiling 10" in out
+
+
+def test_change_size_rejects_hard_ceiling_below_autonomous_ceiling_and_supports_set_hard(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = repository(
+        tmp_path,
+        {
+            "quality/thresholds.toml": (
+                "[ceilings.change]\nproduct_files = 5\nproduct_files_hard = 3\n"
+                "product_lines = 10\nproduct_lines_hard = 5\n"
+            ),
+        },
+    )
+    branch(root)
+    write(root, "a.py", "x = 1\n")
+    assert run(change_size, root) == 1
+    out = capsys.readouterr().out
+    assert "ceilings.change.product_files_hard: 3 is below ceilings.change.product_files (5)" in out
+    assert (
+        "ceilings.change.product_lines_hard: 5 is below ceilings.change.product_lines (10)" in out
+    )
+
+    assert (
+        run(
+            change_size,
+            root,
+            "--set",
+            "--product-files",
+            "5",
+            "--product-files-hard",
+            "12",
+            "--product-lines",
+            "10",
+            "--product-lines-hard",
+            "25",
+            "--test-lines",
+            "50",
+        )
+        == 0
+    )
+    assert change_size.ceilings(root) == change_size.Ceilings(5, 10, 50, 12, 25)
+    assert "hard 12" in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        run(
+            change_size,
+            root,
+            "--set",
+            "--product-files",
+            "5",
+            "--product-files-hard",
+            "2",
+            "--product-lines",
+            "10",
+            "--test-lines",
+            "50",
+        )
+    with pytest.raises(SystemExit):
+        run(
+            change_size,
+            root,
+            "--set",
+            "--product-files",
+            "5",
+            "--product-lines",
+            "10",
+            "--product-lines-hard",
+            "8",
+            "--test-lines",
+            "50",
+        )
 
 
 def test_prose_reads_the_comments_of_any_text_file_and_skips_a_binary_one(tmp_path: Path) -> None:

@@ -1016,7 +1016,7 @@ def check_binding(root: Path) -> Iterable[Finding]:
             BINDING_PATH, problem, change_size.SECTION, template_text=template_binding()
         )
     else:
-        for problem in problems:
+        for problem in (*problems, *change_size.generated_paths(text)[1]):
             yield agent(f"{BINDING_PATH}: {problem}")
     gates = markdown_text.section(text, "## Gates")
     if not gates:
@@ -5933,7 +5933,8 @@ TEST_PATHS_PLACEHOLDER = re.compile(r"^- Tests: <[^\n]*>$", re.MULTILINE)
 TRIGGERS_PLACEHOLDER = re.compile(r"^\| <kind> \|[^\n]*$", re.MULTILINE)
 INCREMENTAL_PLACEHOLDER = re.compile(r'"bind: the mutation tool\'s option[^"]*"')
 SPEED_PLACEHOLDER = re.compile(
-    r"^(- (?!Local caches|Build|Model:|Mirrors:|Synced:)[A-Z][a-z ]+: )<[^\n]*>$", re.MULTILINE
+    r"^(- (?!Local caches|Build|Model:|Mirrors:|Synced:|Generated:)[A-Z][a-z ]+: )<[^\n]*>$",
+    re.MULTILINE,
 )
 INSTALL_PLACEHOLDER = re.compile(r"^- Install: <[^\n]*>$", re.MULTILINE)
 DEPENDENCY_PLACEHOLDER = re.compile(

@@ -461,6 +461,13 @@ def merge_judge(argv: list[str]) -> int:
     return merge_ready.main([*argv, "--base", "main"])
 
 
+def over_autonomous_size(root: Path) -> None:
+    write(root, "src/b.py", "B = 1\nC = 2\nD = 3\n")
+    commit(root, "feat(core): over autonomous line ceiling")
+    merge_ready.write_record(root, json.dumps(VERDICT))
+    commit(root, "docs(core): the verdict record")
+
+
 LISTER = "comments-list.py"
 LISTER_CODE = (
     "import sys\n"
@@ -683,6 +690,7 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("merge-ready: a flag on by default", merge_judge, flag_born_on, []),
     ("merge-ready: a commit after the review", merge_judge, commit_after_the_review, []),
     ("merge-ready: new surface with no flag", merge_judge, new_surface, []),
+    ("merge-ready: over the autonomous change-size ceiling", merge_judge, over_autonomous_size, []),
     ("queue: a ticket behind an open blocker", queue_gate, behind_an_open_blocker, []),
     ("plugin-pin: a plugin older than the pin", pin_gate, plugin_older_than_the_pin, []),
     ("budget: a gate over its tier's ceiling", budget.main, tier_ceiling_passed, IN_TIER),

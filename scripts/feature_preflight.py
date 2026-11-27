@@ -574,7 +574,10 @@ def size_failure(ticket: Ticket, root: Path) -> str | None:
     }
     over = [
         f"{stated[kind]} product {kind}, ceiling {limit}"
-        for kind, limit in (("lines", limits.product_lines), ("files", limits.product_files))
+        for kind, limit in (
+            ("lines", limits.hard_product_lines),
+            ("files", limits.hard_product_files),
+        )
         if limit is not None and stated.get(kind, 0) > limit
     ]
     if not over:

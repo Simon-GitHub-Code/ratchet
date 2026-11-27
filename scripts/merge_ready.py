@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 import application_types
+import change_size
 import coverage_groups
 import documents
 import expect_outputs
@@ -1462,6 +1463,27 @@ def stakes_reasons(change: Change) -> list[Reason]:
     ]
 
 
+def size_reasons(change: Change) -> list[Reason]:
+    text = change.before(THRESHOLDS)
+    if text is None:
+        return []
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return []
+    limits = change_size.ceilings_from(data)
+    if not limits.recorded() or change_size.is_safeguard(change.root, change.fork, change.head):
+        return []
+    size = change_size.measure(change.root, change.fork, change.head)
+    return [
+        Reason(
+            "size",
+            f"{item}; the owner merges changes past the autonomous ceiling (ADR 0104)",
+        )
+        for item in change_size.over_autonomous(size, limits)
+    ]
+
+
 def waiting(
     change: Change,
     reasons: list[Reason],
@@ -1705,6 +1727,7 @@ def judge(
         *file_reasons(change, manifest),
         *guard_reasons(change, manifest),
         *stakes_reasons(change),
+        *size_reasons(change),
         *registry_reasons(change),
         *waiting(
             change,

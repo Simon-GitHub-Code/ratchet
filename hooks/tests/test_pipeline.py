@@ -692,6 +692,33 @@ def test_a_ticket_whose_whole_change_cannot_fit_is_split_by_the_spec_stage() -> 
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=unmeasured, **answers)
     assert ran["result"]["verdict"] == "approve", "no change-size gate, no estimate to hold"
 
+    two_tier = {
+        **SPECIFIED,
+        "changeSize": {
+            "lines": 1200,
+            "ceiling": 1000,
+            "hardCeiling": 2500,
+            "testLines": 1500,
+            "testCeiling": 3000,
+        },
+    }
+    within_hard = {**fits, "implementationLines": 400, "recordLines": 0}
+    ran = _run(
+        {"ref": "4"},
+        preflight=PREFLIGHT,
+        spec={**two_tier, "changeEstimate": within_hard},
+        **answers,
+    )
+    assert ran["result"]["verdict"] == "approve", (
+        "between autonomous and hard ceiling finishes for owner merge"
+    )
+    past_hard = {**fits, "implementationLines": 1400, "recordLines": 0, "proposedSplit": split}
+    ran = _run(
+        {"ref": "4"}, preflight=PREFLIGHT, spec={**two_tier, "changeEstimate": past_hard}, **answers
+    )
+    assert ran["result"]["verdict"] == "blocked"
+    assert "estimates 2600 product lines" in ran["result"]["verdictForcedBy"][0]
+
 
 YOUNG = {
     **PREFLIGHT,

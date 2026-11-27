@@ -386,7 +386,7 @@ def test_the_change_size_ceiling_is_there_before_the_first_feature_and_its_first
     assert ceiling["product_lines"] >= FIRST_SLICE_LINES, "the first slice's lines fit"
     (tmp_path / "quality").mkdir()
     shutil.copy(path, tmp_path / "quality/thresholds.toml")
-    assert change_size.ceilings(tmp_path) == change_size.Ceilings(25, 1000, 3000), (
+    assert change_size.ceilings(tmp_path) == change_size.Ceilings(25, 1000, 3000, 60, 2500), (
         "the gate reads the template's ceilings"
     )
 

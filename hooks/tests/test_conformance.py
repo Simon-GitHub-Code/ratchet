@@ -2571,3 +2571,8 @@ def test_standard_stakes_allows_omitting_or_waiving_high_consequence_questions(r
     found = red(repo)
     for question in high_rows:
         assert any(f"has no '{question}' row" in line for line in found), (question, found)
+
+
+def test_conformance_rejects_malformed_generated_paths_under_test_paths(repo: Path) -> None:
+    replace(BINDING, "- Tests: `tests/**`", "- Tests: `tests/**`\n- Generated: `**`")(repo)
+    assert any("'- Generated:' refuses the pattern `**`" in line for line in red(repo))
