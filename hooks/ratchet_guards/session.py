@@ -1,4 +1,5 @@
 import json
+import stat
 import subprocess
 import sys
 from collections.abc import Callable
@@ -132,12 +133,29 @@ def render(event: str, text: str, *, antigravity: bool = False) -> str:
     return text
 
 
+def _kept_pinned(record: Path, binding: Path, plugin_root: Path) -> bool:
+    pin = plugin_pin.pinned(binding.read_text(encoding="utf-8", errors="replace"))
+    if pin is None or pin.tree is None or plugin_pin.copy_tree_id(plugin_root) == pin.tree:
+        return False
+    try:
+        if not stat.S_ISREG(record.lstat().st_mode):
+            return False
+        existing = Path(record.read_text(encoding="utf-8", errors="replace").strip())
+    except OSError:
+        return False
+    return existing.is_dir() and plugin_pin.copy_tree_id(existing) == pin.tree
+
+
 def record_plugin(cwd: Path, plugin_root: Path) -> None:
     common = common_directory(cwd)
-    if common is None or not (repository_root(cwd) / BINDING).is_file():
+    binding = repository_root(cwd) / BINDING
+    if common is None or not binding.is_file():
+        return
+    record = common / events.PLUGIN_RECORD
+    if _kept_pinned(record, binding, plugin_root):
         return
     try:
-        events.replace(common / events.PLUGIN_RECORD, f"{plugin_root}\n")
+        events.replace(record, f"{plugin_root}\n")
     except OSError:
         return
 
