@@ -449,6 +449,10 @@ const SPEC_SCHEMA = {
       items: { type: 'string' },
       description: 'Declared path or layer names exactly as AGENTS.md / docs/process/binding.md name them; empty if the project declares none',
     },
+    touchesUI: {
+      type: 'boolean',
+      description: 'true when this feature introduces or modifies any user-facing screen, page, view, component, layout, or visual state; false only for pure backend, API, CLI, data, or non-visual changes',
+    },
     openQuestions: {
       type: 'array',
       items: {
@@ -526,7 +530,7 @@ const SPEC_SCHEMA = {
     },
     ...checkOutputField(true),
   },
-  required: ['slug', 'specPath', 'namedGates', 'testFiles', 'layersTouched', 'openQuestions', 'assumptions', 'dependencies', 'guardEdits', 'failingForRightReason', 'failures', 'checkOutput'],
+  required: ['slug', 'specPath', 'namedGates', 'testFiles', 'layersTouched', 'touchesUI', 'openQuestions', 'assumptions', 'dependencies', 'guardEdits', 'failingForRightReason', 'failures', 'checkOutput'],
 }
 
 const DISPUTES_FIELD = {
@@ -660,6 +664,42 @@ const RECORDED_OUTPUTS_FIELD = {
   },
 }
 
+const VISUAL_VERIFICATION_FIELD = {
+  visualVerification: {
+    type: 'object',
+    description: 'Proof of visual inspection whenever the change introduces or modifies any user-facing UI (required with applicable: true whenever spec.touchesUI is true): the command(s) used to boot the live UI and capture screenshots, every inspected surface/state with its scratch screenshot path and visual observation against DESIGN.md, and any visual defects spotted and fixed. When no UI is touched, return { applicable: false, command: "", surfaces: [], defectsFixed: [] }.',
+    properties: {
+      applicable: {
+        type: 'boolean',
+        description: 'true when the change introduces or modifies any user-facing UI; false only for non-visual changes',
+      },
+      command: {
+        type: 'string',
+        description: 'Command(s) run to boot the live deliverable and capture screenshots; empty only when applicable is false',
+      },
+      surfaces: {
+        type: 'array',
+        description: 'Every new or changed screen, route, component, or visual state inspected in the live rendered UI; empty only when applicable is false',
+        items: {
+          type: 'object',
+          properties: {
+            target: { type: 'string', description: 'Route, screen name, or component and state inspected (including viewport sizes where relevant)' },
+            screenshot: { type: 'string', description: 'Path or identifier of the rendered screenshot you visually inspected (kept in temp/scratch space, never committed to git)' },
+            observation: { type: 'string', description: 'What you actually observed in the rendered screenshot against DESIGN.md, layout, spacing, contrast, hierarchy, and interactive states' },
+          },
+          required: ['target', 'screenshot', 'observation'],
+        },
+      },
+      defectsFixed: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Visual defects spotted during screenshot inspection and fixed before returning (re-verified by screenshot); empty when the first capture was clean',
+      },
+    },
+    required: ['applicable', 'command', 'surfaces', 'defectsFixed'],
+  },
+}
+
 const IMPLEMENT_SCHEMA = {
   type: 'object',
   properties: {
@@ -667,6 +707,7 @@ const IMPLEMENT_SCHEMA = {
     allNewTestsPass: { type: 'boolean' },
     checkPasses: { type: 'boolean', description: 'true only if `check` exited 0' },
     ...RECORDED_OUTPUTS_FIELD,
+    ...VISUAL_VERIFICATION_FIELD,
     ...CHANGE_SIZE_FIELD,
     notes: { type: 'string', description: 'Design decisions and trade-offs' },
     ...DISPUTES_FIELD,
@@ -674,7 +715,7 @@ const IMPLEMENT_SCHEMA = {
     ...DEPARTURES_FIELD,
     ...checkOutputField(),
   },
-  required: ['filesChanged', 'allNewTestsPass', 'checkPasses', 'recordedOutputs', 'notes', 'disputes', 'unstated', 'departures', 'checkOutput'],
+  required: ['filesChanged', 'allNewTestsPass', 'checkPasses', 'recordedOutputs', 'visualVerification', 'notes', 'disputes', 'unstated', 'departures', 'checkOutput'],
 }
 
 const NAMED_GATES_RUN_FIELD = {
@@ -1319,9 +1360,16 @@ ${UNSTATED_RULE}
 ${DEPARTURE_RULE}
 
 Load the \`${COMPANIONS.tdd}\` skill and work its loop one slice at a time: run the listed
-tests, implement the smallest change that makes one pass, re-run, repeat. If the change touches
-a user interface, load \`${COMPANIONS.ui_design}\` as well: \`shape\` before you build the surface,
-\`polish\` before you return, and DESIGN.md is the standard you build to. The spec's tests and expected text are fixed inputs: a test you believe wrong stays red and is
+tests, implement the smallest change that makes one pass, re-run, repeat. ${spec.touchesUI ? 'This feature touches a user interface (`touchesUI: true`): ' : 'If the change touches a user interface, '}load \`${COMPANIONS.ui_design}\` as well: \`shape\` before you build the surface,
+\`polish\` before you return, and DESIGN.md is the standard you build to. Visually verify every new
+or changed screen, route, component, and interactive state before returning: boot the live
+deliverable (via binding.md's \`start\` convenience entry point or the project's preview command),
+capture rendered screenshots to temporary scratch space (never commit scratch screenshots), inspect
+each screenshot visually against DESIGN.md, fix any layout, spacing, contrast, overflow, or state
+defects you spot and re-capture to confirm, and return that evidence in \`visualVerification\`
+(the script forces \`request_changes\` when \`touchesUI\` is true and \`visualVerification\` is
+missing or incomplete). When no UI is touched, return \`visualVerification\` with
+\`applicable: false\` and empty fields. The spec's tests and expected text are fixed inputs: a test you believe wrong stays red and is
 named in \`notes\`. Only where an expected output is too large to state by hand may you record it
 with the recorded-output tool binding.md's \`## Tests\` section names, placing any recorded files
 beside the tests (never under \`quality/**\`) and returning every such path in
@@ -1355,7 +1403,7 @@ Inputs you may read:
 - Tests a critic added, if any (some currently fail on purpose): ${JSON.stringify(testsAdded)}
 - AGENTS.md, GLOSSARY.md, docs/process/binding.md, docs/adr/, and the code under change
 
-Load the \`${COMPANIONS.tdd}\` skill and work one slice at a time.
+Load the \`${COMPANIONS.tdd}\` skill and work one slice at a time. ${spec.touchesUI ? 'This feature touches a user interface (`touchesUI: true`): after your fix, re-boot the live deliverable, re-capture and visually inspect screenshots of the affected surfaces (in temp/scratch space, never committed), and return the updated proof in `visualVerification`.' : 'If your fix alters any user-facing UI, visually verify the rendered result by screenshot and return `visualVerification` with `applicable: true`; otherwise return `visualVerification` with `applicable: false` and empty fields.'}
 
 Findings you MUST resolve (blocker, major, or a test the critic kept failing):
 ${JSON.stringify(blockingFindings, null, 2)}
@@ -1436,7 +1484,8 @@ ${DEPARTURE_RULE}
 
 \`filesChanged\` lists the files you edited after the rebase finished; \`allNewTestsPass\` is
 whether the spec's tests pass; \`notes\` names each conflict and how you resolved it, since
-the reviewer reads the result and not your reasoning.
+the reviewer reads the result and not your reasoning. Return \`visualVerification\` with
+\`applicable: false\` and empty fields unless conflict resolution altered a user-facing UI.
 
 ${CHANGE_SIZE_RULE}`
 }
@@ -1548,7 +1597,7 @@ finding with no test kept, or with a test that proves nothing yet, leaves both f
 owed a fix if it is a blocker or major.`
 }
 
-function reviewPrompt(spec, again, settled, recordedOutputs = []) {
+function reviewPrompt(spec, again, settled, recordedOutputs = [], visualVerification = null) {
   const readings = settled
     ? `Before the build a ticket check read the ticket against spec.md, and spec.md was
    settled on these readings:
@@ -1592,6 +1641,7 @@ ${parentInput()}- The spec: \`${spec.specPath}\`
 - AGENTS.md, GLOSSARY.md, docs/adr/, docs/process/binding.md, docs/disputes/, DESIGN.md
 - Any generated contract artefacts that binding.md names
 - Recorded outputs recorded by implement/fix with the tool: ${JSON.stringify(recordedOutputs || [])} (plus any recorded output added or altered in the diff, which the plugin's \`scripts/expect_outputs.py\` lists against the base branch)
+- Visual verification reported by implement/fix (\`spec.touchesUI=${spec.touchesUI === true}\`): ${JSON.stringify(visualVerification)}
 ${outsideInputs(CRITIC)} are outside your inputs:
 judge the spec against the ticket, and the code against the spec and the standards.
 
@@ -1613,7 +1663,11 @@ B. Standards conformance:
    - Declared-path rules as AGENTS.md and binding.md define them: dependency direction, purity
      of the paths they call pure, no forbidden imports
    - Every AGENTS.md non-negotiable, checked one by one against the diff
-   - For a user interface, DESIGN.md: tokens, components and patterns used as it records them
+   - For a user interface, DESIGN.md: tokens, components and patterns used as it records them; if
+     the diff introduces or modifies any user-facing UI, verify \`visualVerification\` covers every
+     changed surface and state with real rendered screenshot observations (if the diff touches UI
+     while \`spec.touchesUI\` is false or \`visualVerification\` is missing or incomplete, file a
+     major issue on the standards axis)
    - Contracts: the pre/postcondition mechanism binding.md names, where the spec states them;
      generated contract artefacts match the code they describe
    - Type strictness, lint, test placement and coverage as the gates in binding.md require
@@ -1682,6 +1736,7 @@ async function fixRound(findings, testsAdded, round, rounds) {
   )
   filesChanged = union(filesChanged, fix.filesChanged)
   recordedOutputs = union(recordedOutputs, fix.recordedOutputs)
+  if (fix.visualVerification !== undefined) lastVisualVerification = fix.visualVerification
   disputes.push(...(fix.disputes || []))
   const stop = noRoom(`fix round ${round}`, fix.changeSize, false)
   lastCheckOutput = fix.checkOutput
@@ -1704,6 +1759,28 @@ function haltAfter(after, result, entries = result.unstated || []) {
       testsAdded: critique.testsAdded,
     },
   })
+}
+
+function missingVisualVerification(touchesUI, visual) {
+  const needed = touchesUI === true || (visual && visual.applicable === true)
+  if (!needed) return null
+  if (!visual || visual.applicable !== true) {
+    return 'the spec touches a user interface, but visualVerification was omitted or marked not applicable'
+  }
+  if (!String(visual.command || '').trim()) {
+    return 'visualVerification lists no command used to boot the UI and capture screenshots'
+  }
+  const surfaces = Array.isArray(visual.surfaces) ? visual.surfaces : []
+  if (surfaces.length === 0) {
+    return 'visualVerification lists no inspected UI surfaces'
+  }
+  const incomplete = surfaces.some(
+    s => !s || !String(s.target || '').trim() || !String(s.screenshot || '').trim() || !String(s.observation || '').trim(),
+  )
+  if (incomplete) {
+    return 'visualVerification has a surface entry missing target, screenshot, or visual observation'
+  }
+  return null
 }
 
 function fixableByReview(review) {
@@ -2305,6 +2382,7 @@ const impl = must(
 )
 let filesChanged = union(spec.testFiles, impl.filesChanged)
 let recordedOutputs = union(impl.recordedOutputs)
+let lastVisualVerification = impl.visualVerification || null
 const disputes = [...(impl.disputes || [])]
 const implStop = noRoom('the implementation', impl.changeSize, CRITIC)
 if (implStop) return tooLarge(implStop, spec, { filesChanged, disputes, checkOutput: impl.checkOutput })
@@ -2421,7 +2499,7 @@ function parkCarried() {
 if (carriedStillOwed.length) return parkCarried()
 
 phase('Review')
-let review = readReview(must(await agent(reviewPrompt(spec, false, settled, recordedOutputs), { label: 'review', phase: 'Review', schema: REVIEW_SCHEMA }), 'review'))
+let review = readReview(must(await agent(reviewPrompt(spec, false, settled, recordedOutputs, lastVisualVerification), { label: 'review', phase: 'Review', schema: REVIEW_SCHEMA }), 'review'))
 const reviewHalt = reviewStop('review', review)
 if (reviewHalt) return reviewHalt
 function reviewStop(after, result) {
@@ -2435,7 +2513,7 @@ if (!CRITIC && fixableByReview(review)) {
   const stop = await fixRound(review.issues, [], iterations, YOUNG_FIX_ROUNDS)
   if (stop) return stop
   phase('Review')
-  review = readReview(must(await agent(reviewPrompt(spec, false, settled, recordedOutputs), { label: `review-${iterations}`, phase: 'Review', schema: REVIEW_SCHEMA }), `review-${iterations}`))
+  review = readReview(must(await agent(reviewPrompt(spec, false, settled, recordedOutputs, lastVisualVerification), { label: `review-${iterations}`, phase: 'Review', schema: REVIEW_SCHEMA }), `review-${iterations}`))
   const reReviewHalt = reviewStop(`review-${iterations}`, review)
   if (reReviewHalt) return reReviewHalt
   log(`Re-review after the one fix pass: ${review.verdict}`)
@@ -2466,6 +2544,8 @@ if (!spec.failingForRightReason) forcedReasons.push('the spec reported failingFo
 const unquoted = (spec.testFiles || []).filter(f => !(spec.failures || []).some(x => x && x.testFile === f && String(x.content || '').trim()))
 if (unquoted.length) forcedReasons.push(`spec test files with no quoted failure content: ${unquoted.join(', ')}`)
 if (criticSilent(CRITIC, critique)) forcedReasons.push('the critic found nothing and lists nothing attempted')
+const visualGap = missingVisualVerification(spec.touchesUI, lastVisualVerification)
+if (visualGap) forcedReasons.push(visualGap)
 const verdict = forcedReasons.length ? 'request_changes' : review.verdict
 if (verdict !== review.verdict) log(`Verdict forced to request_changes: ${forcedReasons.join('; ')}`)
 else if (forcedReasons.length) log(`Reviewer and script agree on request_changes: ${forcedReasons.join('; ')}`)
@@ -2478,6 +2558,8 @@ return {
   iterations,
   filesChanged,
   recordedOutputs,
+  touchesUI: spec.touchesUI === true,
+  visualVerification: lastVisualVerification,
   critic: { ran: CRITIC, reason: CRITIC ? CRITIC_REASON : `the critic was not run: ${CRITIC_REASON || 'the preflight says it does not run'}` },
   criticFindings: critique.findings,
   criticFindingsByRound: allCriticFindings,
@@ -2538,6 +2620,7 @@ return {
     'adrSuggested, if set, is written in docs/adr/ in the same PR, under the next free number; the guard lets a new ADR through and asks the owner for one that supersedes another or carries a Relaxes: line',
     'every addition in recordNotes (each new term, Avoid item and ADR) is listed in the pull request under Decisions',
     'every entry in assumptions is listed in the pull request under Conjecture, with its refuter, for the owner to counter',
+    'when touchesUI is true, list the visually inspected surfaces (and any visual defects fixed) from visualVerification in the pull request description; keep scratch screenshots out of the commit',
     'after the change is committed, verdictRecord goes on stdin to the `merge-ready` entry point with `record`, and the docs/features/<slug>/verdict.json it writes is committed alone, last: a commit after it sends the merge to the owner',
     'the merge is the merge judge\'s to decide, never the orchestrator\'s: report `merge: agent` or `merge: owner` with the judge\'s reasons, and merge nothing by hand',
   ],
