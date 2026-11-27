@@ -592,6 +592,48 @@ def test_change_size_measures_against_the_ceiling(tmp_path: Path, capsys: Out) -
         run(change_size, root, "--set")
 
 
+def test_change_size_exempts_safeguard_only_when_it_binds_a_later_row(
+    tmp_path: Path, capsys: Out
+) -> None:
+    binding = (
+        "# Binding\n\n## Gates\n\n"
+        "| Question | Tool | Tier | Threshold source | Entry point |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "| load smoke | later: code:entry-point | 1 | | `just load-smoke` |\n"
+    )
+    root = repository(
+        tmp_path,
+        {
+            "docs/process/binding.md": binding,
+            "quality/thresholds.toml": "[ceilings.change]\nproduct_files = 1\nproduct_lines = 5\n",
+        },
+    )
+    branch(root)
+    write(root, "a.txt", "1\n2\n3\n4\n5\n6\n")
+    commit(root, "chore(method): safeguard spoofed without binding")
+    assert run(change_size, root) == 1, "spoofing the commit subject without binding stays red"
+
+    write(
+        root,
+        "docs/process/binding.md",
+        binding.replace("later: code:entry-point", "none: skipped"),
+    )
+    commit(root, "chore(method): safeguard none is not bound")
+    assert run(change_size, root) == 1, "moving later: to none: is not a safeguard binding"
+
+    write(
+        root,
+        "docs/process/binding.md",
+        binding.replace("later: code:entry-point", "a real tool"),
+    )
+    commit(root, "chore(method): safeguard entry-point")
+    assert run(change_size, root) == 0
+    assert "the safeguard binding is exempt" in capsys.readouterr().out
+
+    commit(root, "feat(core): mixed commit")
+    assert run(change_size, root) == 1, "mixing a feature commit revokes the safeguard exemption"
+
+
 def test_change_size_ceilings_are_rewritten_in_place() -> None:
     before = "[ceilings.change]\nfiles = 1\nlines = 2\n"
     after = "[ceilings.change]\nproduct_files = 3\nproduct_lines = 4\ntest_lines = 5\n"

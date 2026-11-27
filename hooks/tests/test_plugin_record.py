@@ -172,7 +172,7 @@ def guarded_recipes() -> list[tuple[str, list[str]]]:
                 [
                     p
                     for p in recipe["parameters"]
-                    if p["default"] is None and p["kind"] == "singular"
+                    if p["default"] is None and p["kind"] in {"singular", "plus"}
                 ]
             ),
         )

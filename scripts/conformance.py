@@ -5143,7 +5143,10 @@ def upgrade_mutations() -> list[Mutation]:
             "binding without the triggers entry point",
             rewrite(BINDING_PATH, "| triggers | `just triggers` |\n", ""),
         ),
-        ("justfile without a recipe the binding names", rewrite("justfile", "bite-one gate:", "")),
+        (
+            "justfile without a recipe the binding names",
+            rewrite("justfile", "bite-one +gates:", ""),
+        ),
         (
             "justfile whose tier 1 never runs a gate the binding binds",
             rewrite("justfile", " conformance triggers incidents ", " conformance triggers "),

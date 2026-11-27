@@ -14,6 +14,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import dependencies
 
 ADOPTION = "chore(method): adopt"
+SAFEGUARD = "chore(method): safeguard"
+LATER_ROW = re.compile(r"^\|\s*([^|]+?)\s*\|\s*`?later:", re.MULTILINE | re.IGNORECASE)
+GATE_ROW = re.compile(r"^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|", re.MULTILINE)
 CEILINGS_TABLE = "[ceilings.change]"
 RECORDS = [
     "docs/features/**/*.md",
@@ -167,6 +170,24 @@ def is_adoption(root: Path, base: str) -> bool:
     return bool(found) and all(s.startswith(ADOPTION) for s in found)
 
 
+def bound_questions(text: str) -> set[str]:
+    return {
+        m.group(1).strip()
+        for m in GATE_ROW.finditer(text)
+        if (tool := m.group(2).strip(" `").lower()) and not tool.startswith(("later:", "none"))
+    }
+
+
+def is_safeguard(root: Path, base: str) -> bool:
+    found = gatelib.subjects(root, base)
+    if not found or not all(s.startswith(SAFEGUARD) for s in found):
+        return False
+    before = gatelib.show(root, base, str(gatelib.BINDING)) or ""
+    now = gatelib.read_text(root / gatelib.BINDING) or ""
+    later_at_base = {m.group(1).strip() for m in LATER_ROW.finditer(before)}
+    return bool(later_at_base & bound_questions(now))
+
+
 def merged_on_default(root: Path) -> bool:
     head = gatelib.git(root, "rev-parse", "--abbrev-ref", "HEAD")
     default = gatelib.default_branches(root)[0].removeprefix("origin/")
@@ -180,6 +201,8 @@ def exemption(root: Path, base: str) -> str | None:
         return "HEAD merges a change the owner already judged; size reported only"
     if is_adoption(root, base):
         return "the adoption commit is exempt; carry the size in the PR's Criticism"
+    if is_safeguard(root, base):
+        return "the safeguard binding is exempt; carry the size in the PR's Criticism"
     return None
 
 

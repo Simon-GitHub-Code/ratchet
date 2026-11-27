@@ -452,8 +452,8 @@ bite-all: _plugin
     @if [ "${SHARD:-1}" = "1" ]; then {{plugin_py}} "{{ratchet_plugin}}/scripts/bite.py"; fi
     {{plugin_py}} "{{ratchet_plugin}}/scripts/project_bite.py" --shard "${SHARD:-1}/${SHARDS:-1}"
 
-bite-one gate: _plugin
-    {{plugin_py}} "{{ratchet_plugin}}/scripts/project_bite.py" --gate {{gate}}
+bite-one +gates: _plugin
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/project_bite.py" --gate {{gates}}
 
 formal:
     @echo "bind: run the project-local formal verification skill's command"; exit 1
