@@ -110,7 +110,7 @@ test-files *files:
 tier0_tree_gates := "fmt-check lint types imports deadcode lint-workflows secrets flags pins limits markers prose snapshots-check ratchet-lowered suppressions comments"
 tier0_staged_gates := "fmt-check lint types imports deadcode lint-workflows secrets flags pins limits markers-staged prose snapshots-check ratchet-lowered suppressions-staged comments"
 tier0_gates := tier0_tree_gates + " commits"
-tier1_gates := "test coverage diff-coverage test-counts tests-changed test-stability-changed mutation-changed contracts-check audit duplication build smoke telemetry flag-states load-smoke bite api-check data-compat doctests sast iac artefact-scan type-coverage doc-coverage change-size guard-diff settings-check conformance triggers incidents rollback dependency-faults config-refusal graceful-stop"
+tier1_gates := "test coverage diff-coverage test-counts tests-changed test-stability-changed mutation-changed contracts-check audit duplication build smoke telemetry flag-states load-smoke bite api-check data-compat doctests sast authz-check log-redaction iac artefact-scan type-coverage doc-coverage change-size guard-diff settings-check conformance triggers incidents rollback dependency-faults config-refusal graceful-stop"
 tier2_gates := "mutation api-deep symbolic fuzz e2e test-stability reproducible sanitizers perf dast pentest load telemetry-e2e flags-expired a11y formal bite-all"
 
 tier1_sharded := "test mutation-changed bite"
@@ -365,6 +365,12 @@ doctests:
 
 sast:
     @echo "bind: static security analysis with the stack's rule set"; exit 1
+
+authz-check:
+    @echo "bind: authorization fitness and cross-tenant isolation tests; red when no policy or isolation test runs"; exit 1
+
+log-redaction:
+    @echo "bind: runtime log, error and telemetry redaction tests; red when no check runs"; exit 1
 
 iac:
     @echo "bind: configuration scanner over the container build files, manifests and infrastructure code"; exit 1
