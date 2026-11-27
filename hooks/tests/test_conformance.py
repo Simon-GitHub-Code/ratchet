@@ -2340,3 +2340,58 @@ def test_bound_accessibility_gate_requires_forced_colors_and_reduced_motion_proo
 
     replace(BINDING, later_cell, "| accessibility | none: not a web-ui or an app |")(repo)
     assert red(repo) == []
+
+
+def test_bound_authz_and_log_redaction_gates_require_their_proofs(repo: Path) -> None:
+    assert red(repo) == []
+    registry_path = str(project_bite.REGISTRY)
+    original_registry = (repo / registry_path).read_text(encoding="utf-8")
+
+    replace(registry_path, 'proof = "unprotected-route"\n', "")(repo)
+    assert red(repo) == [
+        (
+            "quality/bites.toml: gate 'authz-check' (authorization and tenant isolation) has no"
+            ' [[bite]] with proof = "unprotected-route": an entry point registered with no'
+            " explicit authorization policy"
+        )
+    ]
+
+    (repo / registry_path).write_text(original_registry, encoding="utf-8")
+    replace(registry_path, 'proof = "cross-tenant-read"\n', "")(repo)
+    assert red(repo) == [
+        (
+            "quality/bites.toml: gate 'authz-check' (authorization and tenant isolation) has no"
+            ' [[bite]] with proof = "cross-tenant-read": one actor or tenant reading or modifying'
+            " another actor's or tenant's record"
+        )
+    ]
+
+    (repo / registry_path).write_text(original_registry, encoding="utf-8")
+    replace(registry_path, 'proof = "secret-logged"\n', "")(repo)
+    assert red(repo) == [
+        (
+            "quality/bites.toml: gate 'log-redaction' (sensitive data kept out of logs) has no"
+            ' [[bite]] with proof = "secret-logged": a credential, token or sensitive field'
+            " emitted to runtime logs, error responses or telemetry"
+        )
+    ]
+
+    (repo / registry_path).write_text(
+        re.sub(
+            r'\[\[bite\]\]\ngate = "(?:authz-check|log-redaction)"\n(?:(?!\[\[bite\]\]).*\n)*',
+            "",
+            original_registry,
+        ),
+        encoding="utf-8",
+    )
+    replace(
+        BINDING,
+        "| authorization and tenant isolation | a tool |",
+        "| authorization and tenant isolation | later: code:access-control |",
+    )(repo)
+    replace(
+        BINDING,
+        "| sensitive data kept out of logs | a tool |",
+        "| sensitive data kept out of logs | later: code:entry-point and code:access-control |",
+    )(repo)
+    assert red(repo) == []

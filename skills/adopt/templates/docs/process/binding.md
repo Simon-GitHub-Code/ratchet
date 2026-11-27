@@ -134,6 +134,8 @@ For `static security analysis`, state in the row or beside it whether the gate r
 | rolls back safely | | 1 | | `just rollback` |
 | documentation examples run | | 1 | | `just doctests` |
 | static security analysis | | 1 | | `just sast` |
+| authorization and tenant isolation | | 1 | | `just authz-check` |
+| sensitive data kept out of logs | | 1 | | `just log-redaction` |
 | configuration hardening | | 1 | | `just iac` |
 | artefact and image scan | | 1 | | `just artefact-scan` |
 | type coverage, ratcheted | | 1 | `quality/thresholds.toml` | `just type-coverage` |
