@@ -1,0 +1,149 @@
+{
+  "tracker_setup": {
+    "plugin": "mattpocock-skills",
+    "slug": "setup-matt-pocock-skills",
+    "kind": "owner",
+    "fallback": "run mattpocock-skills's tracker setup",
+    "signals": ["issue tracker", "triage label"]
+  },
+  "grill": {
+    "plugin": "mattpocock-skills",
+    "slug": "grill-with-docs",
+    "kind": "owner",
+    "fallback": "run mattpocock-skills's grilling interview with docs",
+    "signals": ["interview", "glossary"]
+  },
+  "to_spec": {
+    "plugin": "mattpocock-skills",
+    "slug": "to-spec",
+    "kind": "owner",
+    "fallback": "turn the conversation into a spec with mattpocock-skills",
+    "signals": ["spec", "issue tracker"]
+  },
+  "to_tickets": {
+    "plugin": "mattpocock-skills",
+    "slug": "to-tickets",
+    "kind": "owner",
+    "fallback": "split the spec into tickets with mattpocock-skills",
+    "signals": ["tickets", "blocking"]
+  },
+  "triage": {
+    "plugin": "mattpocock-skills",
+    "slug": "triage",
+    "kind": "owner",
+    "fallback": "triage and label the ticket with mattpocock-skills",
+    "signals": ["triage", "agent-ready"]
+  },
+  "pr": {
+    "plugin": "mattpocock-skills",
+    "slug": "pr",
+    "kind": "agent",
+    "fallback": "mattpocock-skills's pull-request body skill",
+    "signals": ["pr body"]
+  },
+  "tdd": {
+    "plugin": "mattpocock-skills",
+    "slug": "tdd",
+    "kind": "agent",
+    "fallback": "mattpocock-skills's test-driven development skill",
+    "signals": ["test-driven", "red-green-refactor"]
+  },
+  "codebase_design": {
+    "plugin": "mattpocock-skills",
+    "slug": "codebase-design",
+    "kind": "agent",
+    "fallback": "mattpocock-skills's deep-module design skill",
+    "signals": ["deep modules"]
+  },
+  "code_review": {
+    "plugin": "mattpocock-skills",
+    "slug": "code-review",
+    "kind": "agent",
+    "fallback": "mattpocock-skills's code-review skill",
+    "signals": ["standards", "spec", "review"]
+  },
+  "domain_modeling": {
+    "plugin": "mattpocock-skills",
+    "slug": "domain-modeling",
+    "kind": "agent",
+    "fallback": "mattpocock-skills's domain-modeling skill",
+    "signals": ["domain model", "glossary"]
+  },
+  "research": {
+    "plugin": "mattpocock-skills",
+    "slug": "research",
+    "kind": "agent",
+    "fallback": "mattpocock-skills's research skill",
+    "signals": ["primary sources", "investigate"]
+  },
+  "retro": {
+    "plugin": "mattpocock-skills",
+    "slug": "retro",
+    "kind": "owner",
+    "fallback": "run mattpocock-skills's retrospective skill",
+    "signals": ["retrospective"]
+  },
+  "wayfinder": {
+    "plugin": "mattpocock-skills",
+    "slug": "wayfinder",
+    "kind": "owner",
+    "fallback": "run mattpocock-skills's orientation skill",
+    "signals": ["shared map", "decision tickets"]
+  },
+  "diagnosing_bugs": {
+    "plugin": "mattpocock-skills",
+    "slug": "diagnosing-bugs",
+    "kind": "agent",
+    "fallback": "mattpocock-skills's bug-diagnosis skill",
+    "signals": ["hard bugs", "diagnosis"]
+  },
+  "pstack_setup": {
+    "plugin": "pstack",
+    "slug": "setup-pstack",
+    "kind": "agent",
+    "fallback": "pstack's model setup skill",
+    "signals": ["models pstack uses"]
+  },
+  "poteto_mode": {
+    "plugin": "pstack",
+    "slug": "poteto-mode",
+    "kind": "agent",
+    "fallback": "pstack's build-mode skill",
+    "signals": ["poteto's agent style"]
+  },
+  "formal_create": {
+    "plugin": "pstack",
+    "slug": "create-formal-verification-skill",
+    "kind": "agent",
+    "fallback": "pstack's formal-verification generator skill",
+    "signals": ["formally verifies", "project-local skill"]
+  },
+  "formal_maintain": {
+    "plugin": "pstack",
+    "slug": "maintain-formal-verification-skill",
+    "kind": "agent",
+    "fallback": "pstack's formal-verification maintenance skill",
+    "signals": ["formal verification", "back in line"]
+  },
+  "benchmark_checklist": {
+    "plugin": "pstack",
+    "slug": "benchmark-checklist",
+    "kind": "agent",
+    "fallback": "pstack's benchmark checklist skill",
+    "signals": ["perf measurement"]
+  },
+  "statechart": {
+    "plugin": "pstack",
+    "slug": "statechart",
+    "kind": "agent",
+    "fallback": "pstack's statechart skill",
+    "signals": ["tla+", "mermaid statechart"]
+  },
+  "ui_design": {
+    "plugin": "impeccable",
+    "slug": "impeccable",
+    "kind": "agent",
+    "fallback": "impeccable's frontend design skill",
+    "signals": ["frontend", "design"]
+  }
+}
