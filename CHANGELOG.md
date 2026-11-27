@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.15.12
+
+This patch release holds pull requests #453 and #454, fixing a P0 CI workflow bug where a skipped `proven` job silently skipped `tier1` and `tier1-long` on every `pull_request`, and smoothing `/ratchet:safeguard` binding ergonomics and config-refusal testing.
+
+Upgrade from 0.15.11 as the README's Upgrading section says. These changes reach the project:
+
+- **Prevent a skipped `proven` job from silently skipping `tier1` and `tier1-long` on pull requests (#454).** In `.github/workflows/ci.yml`, `tier1` and `tier1-long` depend on `shape` (which depends on `proven`, skipped on `pull_request`). Because their `if:` expressions lacked a status check function (`!cancelled()`), the workflow runner implicitly wrapped them in `success() && (...)` where `success()` checks all transitive ancestors — skipping every Tier 1 gate on pull requests. Both jobs now guard on `!cancelled() && needs.shape.result == 'success' && needs.shape.outputs.tier1[_long] != '[]'`, and `scripts/conformance.py` (`ci_proven_guard_findings` / `with_tier1_proven_guard`) detects and auto-upgrades affected workflows via `just upgrade`.
+- **Verified `safeguard` `change-size` exemption, batch `bite-one`, `--refuses NAME=VALUE`, and safeguard/mutation guidance (#453).** `scripts/change_size.py` now exempts `chore(method): safeguard` branches from product-file and line ceilings only when every commit starts with `chore(method): safeguard` and `docs/process/binding.md` moves at least one `later:` row from the merge base to bound (never `none:`). `scripts/project_bite.py` (`--gate`) and the template `justfile` (`bite-one +gates:`) now accept multiple gates in one call so newly bound gates share `setup` and parallel lanes. `scripts/with_service.py` (`--refuses`) now accepts `NAME=VALUE` alongside `NAME` to test invalid values for settings that carry safe defaults. `skills/safeguard/SKILL.md` adds defect-at-binding guidance for ordinary gates, and `skills/method/tiers.md` documents scoping mutation runners over pure `## Absolute paths` modules to fast unit, property, and oracle suites.
+
 ## 0.15.11
 
 This patch release holds pull requests #450 and #451, fixing 30-issue queue truncation and parent-spec scheduling in `route.py`/`drain.py`, keeping "the first one is free" true for `## Comments` on first-arrival triggered files, preventing adoption bite filename collisions, and making guard-blocked feature runs fail fast.
