@@ -1,23 +1,14 @@
 # The route
 
-Most skills of the four plugins that build software on the method are the owner's keystrokes, so at every stage the method says which one comes next. `scripts/route.py` decides it from the checkout, never from a guess. `/ratchet:next` relays it, every ratchet skill ends with it, and the session hook prints it.
+At every stage the method says which command comes next. `scripts/route.py` decides it from the checkout, never from a guess. `/ratchet:next` relays it, every ratchet skill ends with it, and the session hook prints it.
 
 ## The invocation rule
 
-The harness refuses a skill marked `disable-model-invocation` to an agent, in the main session and in every subagent, with the instruction not to reproduce it another way.
+An agent loads a companion skill whenever it fits the task, without waiting to be asked. A skill whose `SKILL.md` sets `disable-model-invocation: true` is the owner's command on every harness, and Ratchet names it only as a command the owner types.
 
-- **A user-invoked skill is the owner's.**
-  - mattpocock-skills: `setup-matt-pocock-skills`, `grill-with-docs`, `wayfinder`, `to-spec`, `to-tickets`, `triage`, `implement`, `implement-spec`, `retro`, `handoff`.
-  - pstack: everything except `setup-pstack`, so `poteto-mode`, `how`, `why`, `architect`, `arena`, `swarm`, `interrogate`, `blast-radius`, `no-comments`, `correct`, `reflect`, the verification skills.
-
-  A page of this method names one of these only as a command for the owner to type, never as a skill an agent loads or a file an agent follows.
-- **A model-invoked skill is anyone's.**
-  - mattpocock-skills: `tdd`, `code-review`, `codebase-design`, `domain-modeling`, `diagnosing-bugs`, `grilling`, `prototype`, `research`, `pr`, `wizard`, `writing-for-agents`.
-  - `impeccable`, with every sub-command.
-  - `pstack:setup-pstack`.
-
-  An agent calls these through the Skill tool by name, without waiting to be asked. The pipeline's roles use only these. Where the stage table below lists one under "The owner types", the owner may type it for a pass of their own, and an agent building or reviewing the work runs it anyway. So an agent that builds a surface runs `impeccable` even where the table names it as a keystroke.
-- **Nothing is lost by the rule.** The owner types `/pstack:poteto-mode` once and it reaches `how`, `architect`, `arena`, `interrogate` and the principles on its own, since pstack chains its own skills by reading their files. `/mattpocock-skills:to-tickets` grills and models on its own.
+- **A user-invoked skill is the owner's.** The harness refuses a skill marked `disable-model-invocation: true` to an agent, in the main session and in every subagent, with the instruction not to reproduce it another way. Where a harness does not enforce the flag, the agent reads the frontmatter itself and follows a flagged skill only when the owner names it.
+- **A model-invoked skill is anyone's.** An agent calls it through the Skill tool by name, without waiting to be asked. The pipeline's roles use only model-invoked skills, and a typed command or a role's brief is the playbook for its run.
+- **No page lists a companion's skills.** Each companion routes its own skills; Ratchet names a companion skill only where a Ratchet step uses it, recorded in `scripts/companions.json`.
 
 ## The stages
 
@@ -29,14 +20,12 @@ Stages 4 to 9 repeat per feature.
 | 2 Tracker | `/mattpocock-skills:setup-matt-pocock-skills` | `docs/agents/issue-tracker.md`, `triage-labels.md`, `domain.md`; the labels on the forge | the guard allows `gh label create` for a recorded name on this checkout |
 | 3 Adopt | `/ratchet:adopt` | the binding, the gates and their thresholds, the manifest, CI, ADR 0001, the design brief and glossary from `grilling` and `domain-modeling` | the floor bites from the first commit, and every other row is bound or `later: <trigger>`; the path guards switch on when the adoption merges |
 | 3b Hooks (whenever missing) | nothing where the repository's own hooks are missing: the route prints the `hooks-install` entry point and an agent runs it. A change of git config is the owner's command (`git config --unset core.hooksPath` where the repository sets one; `git config core.hooksPath <the repository's hooks>` where a global hook does not chain to them) | the commit hooks installed, so tier 0 runs on every commit | `hooks_installed.py` proves it by running the hooks; the route, the feature preflight and `just ratchet` are red until then, and the guard refuses a change of git config from an agent |
-| 4 Understand and decide | `/mattpocock-skills:grill-with-docs`; `/mattpocock-skills:wayfinder` when the effort is too big for one session; `/pstack:how` and `/pstack:why` on code that exists; `/pstack:architect` at a boundary; `impeccable shape` before a surface | `GLOSSARY.md`, ADRs with their refuters, a design sketch, `DESIGN.md` | conformance checks the records; the records are guard paths |
+| 4 Understand and decide | `/mattpocock-skills:grill-with-docs`; `/mattpocock-skills:wayfinder` when the effort is too big for one session | `GLOSSARY.md`, ADRs with their refuters, a design sketch, `DESIGN.md` | conformance checks the records; the records are guard paths |
 | 5 Specify | `/mattpocock-skills:to-spec`, then `/mattpocock-skills:to-tickets`; `/mattpocock-skills:triage` for an issue that arrived | the spec issue; tickets with blocking edges, each with the agent-ready label the skill applies | the guard asks once per call that applies the agent-ready label, since the label is the owner's agreement; one call over the tickets of a spec (`gh issue edit <n>... --add-label`, one command over the local ticket files) is one ask that names each |
 | 6 Conjecture | `/ratchet:conjecture <ticket>` | `## Conjecture` on the ticket, or on the spec its tickets name as parent: the approach, its refuter, the alternatives and the criticism that killed each | the feature preflight refuses a ticket without one |
-| 7 Build | `/ratchet:feature <ticket>` when the owner steps away, or `/ratchet:feature` alone for every agent-ready ticket at once; `/pstack:poteto-mode <ticket, goal, done check>` when they stay | code, tests, commits on `feature/<n>-<slug>`; after a drain, the changes the judge passed merged and one report | the preflight before any agent; `check` on every commit; the guards hold whoever is building |
-| 8 Criticise and open | `/pstack:interrogate`, `/pstack:blast-radius`, `/pstack:no-comments`, as the change warrants; agents run `impeccable audit`, `critique` and `polish` on a surface, and `code-review`, themselves | findings with the runs that prove them; the pull request with every template section, `check` green | every finding is a criticism the pull request answers; the merge judge decides who merges |
-| 9 Keep | `/mattpocock-skills:retro`, `/pstack:correct`, `/pstack:reflect`; an agent runs `impeccable document` itself on a branch, and the owner merges `DESIGN.md`, a guard path | new lints and tests, skill edits, `DESIGN.md` current | a check that `correct` writes is a gate: `/ratchet:adopt` again binds it; `ratchet` raises the thresholds |
-
-Debugging enters at stage 7: `diagnosing-bugs`, which an agent may call, or `/pstack:poteto-mode` with its bug-fix playbook.
+| 7 Build | `/ratchet:feature <ticket>` when the owner steps away, or `/ratchet:feature` alone for every agent-ready ticket at once; ask this session to build it with you here when you stay | code, tests, commits on `feature/<n>-<slug>`; after a drain, the changes the judge passed merged and one report | the preflight before any agent; `check` on every commit; the guards hold whoever is building |
+| 8 Criticise and open | agents run `impeccable audit`, `critique` and `polish` on a surface, and `code-review`, themselves | findings with the runs that prove them; the pull request with every template section, `check` green | every finding is a criticism the pull request answers; the merge judge decides who merges |
+| 9 Keep | `/mattpocock-skills:retro`; an agent runs `impeccable document` itself on a branch, and the owner merges `DESIGN.md`, a guard path | new lints and tests, skill edits, `DESIGN.md` current | a new check that catches a recurring mistake is a gate: `/ratchet:adopt` again binds it; `ratchet` raises the thresholds |
 
 ## The order the route asks in
 
@@ -178,10 +167,10 @@ After its three lines the route prints an `also:` line for each of these, in thi
 
 **An incident.** When the owner reports one (something broke for them or a user, data was lost, a deploy went wrong), the agent they told proposes an incident record ([records.md](records.md#incident-record-docsincidentsnnnn-slugmd)).
 
-## Where poteto-mode meets the guard
+## Where a build hands over to Ratchet
 
-`/pstack:poteto-mode` is pstack's front door and runs its own playbooks. On a repository on the method they run under the guard, and three of them meet it:
+From a ready change on a branch onward, the pull request body, the gates, the merge judge and the merge job (or `merge` entry point with no forge) are Ratchet's. The guard holds regardless of which companion skill built the branch:
 
-- **Opening a PR** rebases unpushed commits into small ordered ones, which the guard allows. It amends only unpushed commits, since an amend of a pushed one is refused. Its `/deslop` and the control skills come from a Cursor kit that is not installed, and pstack's own adapter says to skip them.
-- **Babysit, Shipping, Autopilot-full and Orchestrate** merge, retarget or land pull requests. Once the project is adopted the guard denies a merge an agent types, and before that it asks the owner, one question per pull request. The merge job has by then merged what the merge judge passes, so what is left to land is the owner's, by their own hand.
-- **Autonomy** in poteto-mode proceeds on ticket updates without asking. Applying the agent-ready label is the one update the guard asks on, because the label is the agreement the preflight reads.
+- **History.** Force-pushes in every spelling (`--force-with-lease` included), pushes to the default branch, resets that move it and amending a pushed commit are denied on every branch ([guards.md](guards.md)). Bring the branch up to date without rewriting pushed commits.
+- **Merges.** Once the project is adopted the guard denies a merge an agent types, and before that it asks the owner, one question per pull request. The merge job merges what the merge judge passes, so what is left to land is the owner's, by their own hand.
+- **Labels.** Applying the agent-ready label is the one ticket update the guard asks on, because the label is the agreement the preflight reads.

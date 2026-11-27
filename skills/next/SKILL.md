@@ -33,7 +33,7 @@ disable-model-invocation: true
 3. **Report the route.** The reply runs in this order: the route's three lines, the one sentence on what the command will produce, each `also:` line with what it needs (step 4), then the owed line (step 5).
    - Print the three lines as they are.
    - Add one sentence on what the command will produce, taken from the stage's row in [route.md](../method/route.md).
-   - **`next:` offers two commands for stage 7:** say which fits. `/ratchet:feature` fits when the owner is stepping away, `/pstack:poteto-mode` when they stay at the keyboard. `/ratchet:feature` with no ticket is the drain: it builds every agent-ready ticket.
+   - **`next:` offers two routes for stage 7:** say which fits. `/ratchet:feature` fits when the owner is stepping away; asking this session to build it fits when they stay at the keyboard. `/ratchet:feature` with no ticket is the drain: it builds every agent-ready ticket.
    - **`next:` names `/ratchet:safeguard` or `/ratchet:architecture`:** the line offers the step it would otherwise name. Say both, and that carrying on is free until another instance of the owed kind is added.
 
    Done when the owner has the three lines and the sentence, and, in either case above, the choice spelled out.
