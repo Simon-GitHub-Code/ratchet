@@ -35,6 +35,7 @@ JUSTFILE = "justfile"
 NONE_PREFIX = "none:"
 MIN_REASON = 10
 DOCUMENTS = (".md", ".markdown")
+VERDICT_RECORDS = ("docs/features/**/verdict.json",)
 SNIFFED = 8000
 RECORD_REFUSED = (
     f"{RULE}: refused: only the adoption and the change that first fills the lister record what"
@@ -164,7 +165,7 @@ def first_listed(root: Path, base: str | None) -> str | None:
 
 
 def judgeable(root: Path, path: str) -> bool:
-    if path.lower().endswith(DOCUMENTS):
+    if path.lower().endswith(DOCUMENTS) or gatelib.matches(path, list(VERDICT_RECORDS)):
         return False
     try:
         with (root / path).open("rb") as handle:

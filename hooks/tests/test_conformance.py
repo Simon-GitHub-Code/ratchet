@@ -1499,6 +1499,9 @@ def test_a_comments_table_that_is_unfilled_or_malformed_is_red(
 
 def test_a_tracked_text_file_no_comments_row_matches_is_red(repo: Path) -> None:
     git(repo, "init", "-q")
+    verdict = repo / "docs/features/first-feature/verdict.json"
+    verdict.parent.mkdir(parents=True, exist_ok=True)
+    verdict.write_text('{"verdict": "green"}\n', encoding="utf-8")
     replace(BINDING, COMMENTS_ROW, "| `src/**` | none: the self-test writes no code by hand |")(
         repo
     )
@@ -1508,6 +1511,9 @@ def test_a_tracked_text_file_no_comments_row_matches_is_red(repo: Path) -> None:
         " `listed` or `none: <reason>`"
     ) in lines
     assert not any("matching `README.md`" in line for line in lines), "a document needs no row"
+    assert not any(
+        "matching `docs/features/first-feature/verdict.json`" in line for line in lines
+    ), "a method-written verdict record needs no row"
 
 
 def test_comments_exempts_first_instance_of_triggered_kind_until_it_lands(repo: Path) -> None:
