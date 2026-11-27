@@ -1,5 +1,3 @@
-"""Fail-closed pages lane classifier for pure documentation changes (ADR 0103)."""
-
 from __future__ import annotations
 
 import os
