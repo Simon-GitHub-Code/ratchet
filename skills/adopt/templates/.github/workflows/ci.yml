@@ -111,7 +111,7 @@ jobs:
         run: |
           python3 "$RATCHET_PLUGIN/scripts/ci_jobs.py" --output "$GITHUB_OUTPUT"
   tier1:
-    if: needs.shape.outputs.tier1 != '[]'
+    if: ${{ !cancelled() && needs.shape.result == 'success' && needs.shape.outputs.tier1 != '[]' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: shape
@@ -142,7 +142,7 @@ jobs:
         if: always()
         with: { name: "timing-${{ matrix.gate }}", path: .ratchet/timing.jsonl }
   tier1-long:
-    if: needs.shape.outputs.tier1_long != '[]'
+    if: ${{ !cancelled() && needs.shape.result == 'success' && needs.shape.outputs.tier1_long != '[]' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: shape

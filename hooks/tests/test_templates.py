@@ -138,7 +138,11 @@ def test_a_tier_with_no_long_gate_skips_its_long_job_rather_than_an_empty_matrix
     assert none != JUSTFILE
     code, outputs, _ = shards(BINDING, tmp_path, workflow, justfile=none)
     assert (code, outputs[f"{tier}_long"]) == (0, "[]")
-    assert f"    if: needs.shape.outputs.{tier}_long != '[]'\n" in WORKFLOWS[workflow]
+    assert re.search(
+        rf"^    if: .*needs\.shape\.outputs\.{tier}_long != '\[\]'(?: \}}\}})?$",
+        WORKFLOWS[workflow],
+        flags=re.MULTILINE,
+    )
 
 
 @pytest.mark.parametrize("workflow", sorted(WORKFLOWS))
@@ -1602,6 +1606,14 @@ def test_ci_wires_already_proven_skip_with_least_privilege_actions_read() -> Non
         job = ci.split(f"\n  {job_name}:\n", 1)[1].split(f"\n  {next_job}:\n", 1)[0]
         assert "needs: proven" in job
         assert "needs.proven.result == 'skipped' || needs.proven.outputs.skip != 'true'" in job
+    for job_name, next_job, output in (
+        ("tier1", "tier1-long", "tier1"),
+        ("tier1-long", "loop", "tier1_long"),
+    ):
+        job = ci.split(f"\n  {job_name}:\n", 1)[1].split(f"\n  {next_job}:\n", 1)[0]
+        assert "!cancelled()" in job
+        assert "needs.shape.result == 'success'" in job
+        assert f"needs.shape.outputs.{output} != '[]'" in job
     tier0 = ci.split("\n  tier0:\n", 1)[1].split("\n  shape:\n", 1)[0]
     assert "already_proven.py" in tier0
     assert "proven.json" in tier0

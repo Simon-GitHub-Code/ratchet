@@ -2052,6 +2052,7 @@ def workflow_speed_findings(root: Path, path: Path) -> Iterable[Finding]:
             yield agent(f"{path.relative_to(root)}: nothing {meaning} ('{marker}' absent)")
     yield from tier_step_findings(root, path, content)
     yield from ci_loop_findings(root, path, content)
+    yield from ci_proven_guard_findings(root, path, content)
     regroupable_ci = (
         path.name == "ci.yml"
         and JOB_LIST_SHAPE[0] not in content
@@ -2978,6 +2979,52 @@ def ci_loop_findings(root: Path, path: Path, content: str) -> Iterable[Finding]:
         yield agent(f"{name}: job `loop` `needs:` omits {joined}")
 
 
+TIER1_PROVEN_OLD = {
+    "tier1": "    if: needs.shape.outputs.tier1 != '[]'",
+    "tier1-long": "    if: needs.shape.outputs.tier1_long != '[]'",
+}
+
+
+def ci_proven_guard_findings(root: Path, path: Path, content: str) -> Iterable[Finding]:
+    if path.name != "ci.yml":
+        return
+    blocks = dict(workflow_job_blocks(content))
+    if "proven" not in blocks:
+        return
+    name = str(path.relative_to(root))
+    for job, job_lines in blocks.items():
+        if job not in TIER1_PROVEN_OLD:
+            continue
+        cond = mapping_section(job_lines, "if")
+        cond_text = f"{cond[0]} {' '.join(cond[1])}" if cond else ""
+        has_status = "!cancelled()" in cond_text or "always()" in cond_text
+        if has_status and "needs.shape.result == 'success'" in cond_text:
+            continue
+        problem = (
+            f"job `{job}` runs after `proven` through `shape` without `!cancelled()` and"
+            " `needs.shape.result == 'success'`, so it is skipped whenever `proven` is skipped"
+            " on a pull request"
+        )
+        does = f"guard `{job}` with `!cancelled()` and `needs.shape.result == 'success'`"
+        yield Finding(name, problem, Edit(does, with_tier1_proven_guard(job), Agent()))
+
+
+@functools.cache
+def with_tier1_proven_guard(job: str) -> gatelib.Want:
+    old = TIER1_PROVEN_OLD[job]
+    output = "tier1" if job == "tier1" else "tier1_long"
+    new = next(
+        line
+        for line in template_file(".github/workflows/ci.yml").split("\n")
+        if line.startswith("    if:") and f"needs.shape.outputs.{output} " in line
+    )
+
+    def want(current: str | None) -> str:
+        return (current or "").replace(old, new)
+
+    return want
+
+
 @functools.cache
 def with_ci_run(name: str) -> gatelib.Want:
     template = template_file(f".github/workflows/{name}").splitlines()
@@ -3097,7 +3144,16 @@ def regroup_hunks() -> tuple[Hunk, ...]:
     end = next(i for i in range(at + 1, len(lines)) if not lines[i].startswith(STEP_BODY))
     run = next(line for line in lines if line.endswith(NEW_RUN))
     tier0_run = next(line for line in lines if '" tier0 ' in line)
-    guard = next(line for line in lines if line.startswith("    if: needs.shape.outputs.tier1 "))
+    guard = next(
+        line
+        for line in lines
+        if line.startswith("    if:") and "needs.shape.outputs.tier1 " in line
+    )
+    long_guard = next(
+        line
+        for line in lines
+        if line.startswith("    if:") and "needs.shape.outputs.tier1_long " in line
+    )
     proven_at = lines.index("  proven:")
     tier0_at = lines.index("  tier0:")
     tier0_runs_at = lines.index("    runs-on: ubuntu-latest", tier0_at)
@@ -3121,6 +3177,7 @@ def regroup_hunks() -> tuple[Hunk, ...]:
     return (
         ("the shape job's steps", OLD_SHAPE_STEP, tuple(lines[at - 2 : end])),
         ("the `tier1:` line", ("  tier1:",), ("  tier1:", guard)),
+        ("the `tier1-long:` guard", (TIER1_PROVEN_OLD["tier1-long"],), (long_guard,)),
         ("the tier 1 jobs' `needs:` lines", (OLD_NEEDS,), (NEW_NEEDS,)),
         (
             "the tier 0 budget call's run line",
@@ -5351,6 +5408,15 @@ def speed_mutations() -> list[Mutation]:
         ),
         ("CI loop job without always()", rewrite(ci, "always() && ", "")),
         ("CI loop job omitting a job from needs", rewrite(ci, ", tier1-long]", "]")),
+        (
+            "CI tier1 job skipped under transitive proven",
+            rewrite(
+                ci,
+                "    if: ${{ !cancelled() && needs.shape.result == 'success'"
+                " && needs.shape.outputs.tier1 != '[]' }}",
+                TIER1_PROVEN_OLD["tier1"],
+            ),
+        ),
         (
             "job list that drops the gates no job names",
             rewrite("justfile", TIER1_JOBS_LINE, BARE_PROOF),
