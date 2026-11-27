@@ -40,6 +40,7 @@ import build_cache
 import gatelib
 import justfile_text
 import markdown_text
+import pages_lane
 import parallel
 import project_bite
 import runrecord
@@ -417,6 +418,11 @@ def run(root: Path, name: str, options: argparse.Namespace) -> int:
         return 0
     gates = plan.jobs[0].gates
     if job.alone:
+        lane = pages_lane.classify(root, [name])
+        _, skipped = pages_lane.filter_gates([name], lane)
+        if skipped:
+            say(pages_lane.summary(lane, skipped))
+            return 0
         command = [*shlex.split(options.runner), name]
         return subprocess.run(command, cwd=root, check=False).returncode
     group_log = Path(group_path) if group_path else None

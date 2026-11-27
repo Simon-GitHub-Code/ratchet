@@ -133,6 +133,7 @@ import gatelib
 import loop_budget
 import machine
 import markdown_text
+import pages_lane
 import project_bite
 import runrecord
 import schedule
@@ -1224,6 +1225,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="subset run; skip checking Local caches paths owned by other jobs",
     )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="run every gate even on a pages-only change",
+    )
     parser.add_argument("--root", type=Path, default=Path(), help="directory the gates run in")
     parser.add_argument("--report", type=Path, help="append one budget.py record per gate")
     parser.add_argument("--budget", choices=("loop",), help="judge the run against a budget")
@@ -1289,6 +1295,27 @@ def finish_run(
     return exit_code
 
 
+def apply_pages_lane(options: argparse.Namespace, gates: list[str]) -> tuple[list[str], bool]:
+    if options.full:
+        return gates, False
+    lane = pages_lane.classify(options.root, gates)
+    kept, skipped = pages_lane.filter_gates(gates, lane)
+    if not skipped:
+        return gates, False
+    say(pages_lane.summary(lane, skipped))
+    options.partial = True
+    kept_set = frozenset(kept)
+    options.serial = [
+        filtered
+        for group in options.serial
+        if len(filtered := [name for name in group if name in kept_set]) > 1
+    ]
+    options.after = [
+        rule for rule in options.after if all(part in kept_set for part in rule.partition(":")[::2])
+    ]
+    return kept, not kept
+
+
 def main(argv: list[str], *, group_log: Path | None = None) -> int:
     parser = build_parser()
     rest = argv[1:]
@@ -1300,6 +1327,9 @@ def main(argv: list[str], *, group_log: Path | None = None) -> int:
         options.report = options.root / options.report
     if options.jobs < 1:
         parser.error("--jobs is at least 1")
+    gates, all_skipped = apply_pages_lane(options, gates)
+    if all_skipped:
+        return 0
     options.alone = [name for name in gates if name in options.alone]
     given = schedule.Schedule(
         {
