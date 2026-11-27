@@ -26,6 +26,7 @@ formal-model = "a formal model or proof the project keeps"
 state-machine = "a fixed set of named states that something moves between: a status, a phase, a lifecycle, the steps of a protocol"
 scheduled-work = "work a clock starts rather than a caller: a timer, a recurring task, a schedule entry"
 access-control = "a check of who is acting or what they may see or do: a sign-in, a session, a role"
+exact-quantity = "a quantity that must keep exact precision or carry units rather than bare floating-point numbers: amounts, counts, rates, balances, measurements"
 
 [architecture]
 "code:stored-format" = "the project now keeps data: where it lives, which part alone reads and writes it, and how its shape changes without losing what is kept"
@@ -144,6 +145,15 @@ code-departs-from-model = "a change to the code the model mirrors that breaks a 
 unprotected-route = "an entry point registered with no explicit authorization policy"
 cross-tenant-read = "one actor or tenant reading or modifying another actor's or tenant's record"
 secret-logged = "a credential, token or sensitive field emitted to runtime logs, error responses or telemetry"
+ambient-nondeterminism = "a direct wall-clock, unseeded random or nondeterministic-order call inside deterministic domain logic"
+replay-drift = "replaying the same recorded input sequence twice produces divergent state or outputs"
+imprecise-or-untyped-quantity = "a bare floating-point value or mismatched unit accepted where an exact or unit-typed quantity is required"
+oracle-divergence = "a domain calculation that disagrees with an independent reference oracle on the same inputs"
+duplicate-action = "replaying a request or message with the same idempotency key executes the side effect twice"
+concurrent-race = "two overlapping writers over the same record or balance leave a lost update or broken invariant"
+stale-input-accepted = "an expired or stale external value accepted to drive a decision instead of failing closed"
+bound-bypassed = "an out-of-range quantity, rate or threshold accepted instead of rejected at the boundary"
+schema-integrity = "a corrupted record or unbalanced transition persisted past the storage schema's integrity constraints"
 
 [[question]]
 name = "lint, near-all rules"
@@ -292,8 +302,53 @@ proofs = ["unprotected-route", "cross-tenant-read"]
 name = "sensitive data kept out of logs"
 applies-to = ["service", "web-ui", "app", "cli", "job"]
 trigger = "code:entry-point and code:access-control"
+high-consequence-trigger = "code:entry-point"
 collection = true
 proofs = ["secret-logged"]
+
+[[question]]
+name = "execution determinism and replay"
+stakes = "high-consequence"
+trigger = "code:source"
+collection = true
+proofs = ["ambient-nondeterminism", "replay-drift"]
+
+[[question]]
+name = "exact-value and unit safety"
+stakes = "high-consequence"
+trigger = "code:exact-quantity"
+proofs = ["imprecise-or-untyped-quantity"]
+
+[[question]]
+name = "differential oracle agreement"
+stakes = "high-consequence"
+trigger = "code:source"
+collection = true
+proofs = ["oracle-divergence"]
+
+[[question]]
+name = "idempotency and concurrent write safety"
+stakes = "high-consequence"
+applies-to = ["service", "app", "job"]
+trigger = "code:stored-format"
+collection = true
+proofs = ["duplicate-action", "concurrent-race"]
+
+[[question]]
+name = "fail-closed on stale or out-of-bounds input"
+stakes = "high-consequence"
+applies-to = ["service", "app", "cli", "job"]
+trigger = "code:outbound-call"
+collection = true
+proofs = ["stale-input-accepted", "bound-bypassed"]
+
+[[question]]
+name = "schema and ledger integrity"
+stakes = "high-consequence"
+applies-to = ["service", "app", "job"]
+trigger = "code:stored-format"
+collection = true
+proofs = ["schema-integrity"]
 
 [[question]]
 name = "changed tests order-independent"

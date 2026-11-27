@@ -908,7 +908,7 @@ def test_nothing_hides_a_gates_row_behind_the_types_line(tmp_path: Path) -> None
     held = {
         question for question, _ in markdown_text.table_cells(markdown_text.section(text, GATES))
     }
-    owed = application_types.load().questions - held
+    owed = application_types.load().required_questions() - held
     assert owed, "an 0.8.2 adoption lacks rows the catalogue has since gained"
     for question in owed:
         assert any(line.startswith(application_types.dropped(question)) for line in without)
@@ -2420,13 +2420,76 @@ def test_stakes_profile_is_validated_and_promotes_triggers_in_conformance(repo: 
         "| rolls back safely | later: life:deployed and code:stored-format |",
         "| rolls back safely | later: code:stored-format |",
     )(repo)
+    replace(
+        BINDING,
+        "| sensitive data kept out of logs | a tool |",
+        "| sensitive data kept out of logs | later: code:entry-point and code:access-control |",
+    )(repo)
     registry_path = str(project_bite.REGISTRY)
     (repo / registry_path).write_text(
         re.sub(
-            r'\[\[bite\]\]\ngate = "mutation-changed"\n(?:(?!\[\[bite\]\]).*\n)*',
+            r'\[\[bite\]\]\ngate = "(?:mutation-changed|log-redaction)"\n(?:(?!\[\[bite\]\]).*\n)*',
             "",
             (repo / registry_path).read_text(encoding="utf-8"),
         ),
         encoding="utf-8",
     )
+    found = red(repo)
+    assert any("write `later: code:entry-point`" in line for line in found), found
+    assert any("exact-quantity" in line for line in found), found
+
+    replace(
+        BINDING,
+        "| sensitive data kept out of logs | later: code:entry-point and code:access-control |",
+        "| sensitive data kept out of logs | later: code:entry-point |",
+    )(repo)
+    replace(
+        BINDING,
+        "| access-control | none: the self-test has none | |",
+        (
+            "| access-control | none: the self-test has none | |\n"
+            "| exact-quantity | none: the self-test has none | |"
+        ),
+    )(repo)
     assert red(repo) == []
+
+
+def test_standard_stakes_allows_omitting_or_waiving_high_consequence_questions(repo: Path) -> None:
+    assert red(repo) == []
+    registry_path = str(project_bite.REGISTRY)
+    gates = "determinism|exact-values|oracle|idempotency|fail-closed|schema-integrity"
+    (repo / registry_path).write_text(
+        re.sub(
+            rf'\[\[bite\]\]\ngate = "(?:{gates})"\n(?:(?!\[\[bite\]\]).*\n)*',
+            "",
+            (repo / registry_path).read_text(encoding="utf-8"),
+        ),
+        encoding="utf-8",
+    )
+    high_rows = (
+        "execution determinism and replay",
+        "exact-value and unit safety",
+        "differential oracle agreement",
+        "idempotency and concurrent write safety",
+        "fail-closed on stale or out-of-bounds input",
+        "schema and ledger integrity",
+    )
+    for question in high_rows:
+        replace(BINDING, f"| {question} | a tool |", f"| {question} | none: standard stakes |")(
+            repo
+        )
+    assert red(repo) == []
+
+    text = (repo / BINDING).read_text(encoding="utf-8")
+    lines = [
+        line
+        for line in text.splitlines(keepends=True)
+        if not any(line.startswith(f"| {question} |") for question in high_rows)
+    ]
+    (repo / BINDING).write_text("".join(lines), encoding="utf-8")
+    assert red(repo) == []
+
+    replace(BINDING, "- Stakes: standard", "- Stakes: high-consequence")(repo)
+    found = red(repo)
+    for question in high_rows:
+        assert any(f"has no '{question}' row" in line for line in found), (question, found)
