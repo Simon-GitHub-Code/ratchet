@@ -1576,6 +1576,29 @@ COMMENTS_STOPS = "the comments gate, which judges nothing until its lister is bo
 COMMENTS_QUESTION = "no prose comments"
 
 
+def first_arrival_kinds(root: Path) -> tuple[triggers.Kind, ...]:
+    base = gatelib.base_commit(root)
+    if base is None or gatelib.adoption(root, base):
+        return ()
+    kinds, _ = triggers.parse(triggers.binding_at(root, base))
+    at_base = triggers.instances(root, base, kinds)
+    return tuple(
+        kind
+        for name, kind in kinds.items()
+        if kind.paths and not at_base.get(name) and triggers.held_before(root, base, kind) is None
+    )
+
+
+def unmatched_comments(root: Path, found: comments.Table) -> list[str]:
+    unmatched = [
+        path for path in comments.tracked_text(root) if comments.row_of(found, path) is None
+    ]
+    if not unmatched:
+        return []
+    arriving = first_arrival_kinds(root)
+    return [path for path in unmatched if not any(kind.finds(path) for kind in arriving)]
+
+
 def check_comments_section(root: Path) -> Iterable[Finding]:
     text = read(root / BINDING_PATH)
     if text is None:
@@ -1594,12 +1617,11 @@ def check_comments_section(root: Path) -> Iterable[Finding]:
     for problem in found.problems:
         yield replace(agent(f"{BINDING_PATH}: {problem}"), stops=COMMENTS_STOPS)
     if found.rows:
-        for path in comments.tracked_text(root):
-            if comments.row_of(found, path) is None:
-                yield agent(
-                    f"{BINDING_PATH}: '{comments.SECTION}' has no row matching `{path}`; add a"
-                    " row for its kind, `listed` or `none: <reason>`"
-                )
+        for path in unmatched_comments(root, found):
+            yield agent(
+                f"{BINDING_PATH}: '{comments.SECTION}' has no row matching `{path}`; add a"
+                " row for its kind, `listed` or `none: <reason>`"
+            )
     listed = [row for row in found.rows if row.listed]
     if listed and comments.placeholder(read_justfile(root)):
         problem = f"the `{comments.LISTER}` recipe still holds the template's `bind:` placeholder"

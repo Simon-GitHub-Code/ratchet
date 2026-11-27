@@ -155,6 +155,7 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` from what the o
    - Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" <ticket> --root .` in one Bash call and report its verdict.
    - **Red on the label:** say that the ticket needs the agent-ready label and that applying it is the owner's keystroke.
    - **Red on `size`:** say that the ticket's size passes a ceiling and that `/ratchet:feature` splits it by size before it builds, asking the owner nothing.
+   - **Ticket criteria require editing a guard path:** when the ticket's criteria cannot be met without changing a path protected by `guards/manifest.toml` (outside new ADRs in `docs/adr/`, `flags.toml`, dependency manifests/lockfiles and their snapshots, and append-only `GLOSSARY.md` additions), flag those guard paths explicitly before the owner runs unattended `/ratchet:feature`, recommending either landing the guard/tooling edits in a small interactive change first or building the ticket interactively with them present.
    - **Green, or red on `size` alone:** the last line is the next command, `/ratchet:feature <ticket>` (or ask this session to build the ticket with you here when the owner stays).
    - **The owner counters the conjecture:** an alternative they name goes in with its criticism. An approach they change replaces the draft's. Write the changed conjecture again as step 4 says, and print it again.
 

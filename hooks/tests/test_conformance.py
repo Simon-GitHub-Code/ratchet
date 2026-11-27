@@ -1510,6 +1510,43 @@ def test_a_tracked_text_file_no_comments_row_matches_is_red(repo: Path) -> None:
     assert not any("matching `README.md`" in line for line in lines), "a document needs no row"
 
 
+def test_comments_exempts_first_instance_of_triggered_kind_until_it_lands(repo: Path) -> None:
+    assert red(repo) == []
+    rows = (
+        "| `justfile`, `src/**`, `**/*.toml`, `**/*.json`, `**/*.yml`, `**/*.yaml`,"
+        " `gitignore`, `**/.gitkeep`, `collection/**`, `quality/**`, `guards/**`,"
+        " `.claude/**`, `.github/**` | none: the self-test writes no code by hand |"
+    )
+    replace(BINDING, COMMENTS_ROW, rows)(repo)
+    replace(
+        BINDING,
+        "| container | none: the self-test has none | |",
+        "| container | `Containerfile*` | |",
+    )(repo)
+    assert red(repo) == []
+    git(repo, "init", "-b", "main")
+    git(repo, "config", "user.email", "test@example.invalid")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "chore(method): adopt")
+    git(repo, "checkout", "-b", "feat/first-container")
+
+    (repo / "Containerfile").write_text("FROM scratch\n", encoding="utf-8")
+    git(repo, "add", "Containerfile")
+    assert red(repo) == [], "first arrival of a triggered kind stays free in ## Comments"
+
+    (repo / "stray.txt").write_text("hello\n", encoding="utf-8")
+    git(repo, "add", "stray.txt")
+    assert any("matching `stray.txt`" in line for line in red(repo))
+    git(repo, "rm", "-f", "stray.txt")
+
+    git(repo, "commit", "-m", "feat(container): add first container file")
+    git(repo, "checkout", "main")
+    git(repo, "merge", "--ff-only", "feat/first-container")
+    git(repo, "checkout", "-b", "chore/safeguard-container")
+    assert any("matching `Containerfile`" in line for line in red(repo))
+
+
 def test_a_listed_row_needs_a_bound_lister_and_a_bite_that_plants_into_its_files(
     repo: Path,
 ) -> None:
