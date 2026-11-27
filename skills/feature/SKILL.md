@@ -64,7 +64,7 @@ Pick the mode from what the owner typed:
 
    Then, for each of these the result holds:
    - **`openQuestions`:** ask each as `feature.open-question`, as [Questions for the owner](#questions-for-the-owner) says. When every one is answered and there is no guard edit, build the ticket again from step 1 in the same turn.
-   - **`guardEdits`:** list them. The owner lands them on the default branch, or builds the ticket with `/pstack:poteto-mode` while present.
+   - **`guardEdits`:** list them. The owner lands them on the default branch, or asks this session to make the guard edits and build the ticket while present.
    - **`tooLarge`:** split it yourself and go on, as [Too large](#too-large-the-agent-splits-it) says. Splitting by size is no product decision, so the owner is asked nothing and is told afterwards, in the hand-over.
    - **A dispute:** relay it to the owner.
    - **`unresolvedBlockingFindings`, and `reviewIssues` when a review ran:** list each blocker or major in the hand-over with the record it breaks and the sentence it quotes. A result with `stop` `carried` ran no review, so its findings are in `unresolvedBlockingFindings` alone; its `openQuestions` hold each critic finding no role classified, with the critic's view as the first option.

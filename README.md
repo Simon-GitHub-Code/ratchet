@@ -102,7 +102,7 @@ A feature goes from an idea to a merge in five steps. You type the first four, a
 1. **Describe it.** `/mattpocock-skills:to-spec` turns a conversation into a spec.
 2. **State the bet.** `/ratchet:conjecture <spec>` writes down how it will be built, what would show that approach wrong, and what each thing you said became. It asks you, in one message, every product choice your words did not settle.
 3. **Split it.** `/mattpocock-skills:to-tickets` cuts the spec into tickets and applies the agent-ready label. The label is your agreement that a ticket may be built, so applying it asks you once.
-4. **Build it.** `/ratchet:feature` builds every agent-ready ticket while you are away, each in its own work tree, and merges them one at a time. `/ratchet:feature <ticket>` builds one. If you would sooner stay at the keyboard, type `/pstack:poteto-mode <ticket>` instead.
+4. **Build it.** `/ratchet:feature` builds every agent-ready ticket while you are away, each in its own work tree, and merges them one at a time. `/ratchet:feature <ticket>` builds one. If you would sooner stay at the keyboard, ask this session to build the ticket with you here instead.
 5. **Read the report.** It says what merged, and what waits for you and why. Each change lists what was assumed on your behalf.
 
 ### What merges without you

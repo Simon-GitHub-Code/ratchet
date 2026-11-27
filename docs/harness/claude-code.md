@@ -27,7 +27,7 @@ Nothing to wire. `hooks/hooks.json` registers `hooks/guard.py` on PreToolUse for
 | `${CLAUDE_PLUGIN_ROOT}` | set by Claude Code to the plugin's install folder. `hooks/hooks.json` and the script commands in the skills rely on it |
 | `disable-model-invocation: true` | the Skill tool refuses it to an agent, in the main session and in every subagent, with the instruction not to reproduce it another way. The command is the owner's keystroke, and the route names it (`skills/method/route.md`). pstack's own adapter lets a pstack skill read another pstack skill's file. That holds between pstack skills only |
 | the question tool | `AskUserQuestion`, up to four questions per dialog |
-| subagents | `Agent`, with `pstack:poteto-agent` and friends by name |
+| subagents | `Agent`; a plugin's agent types by their full name |
 | the plugin cache | `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/` |
 | `/ratchet:init`, `/ratchet:adopt`, `/ratchet:feature`, `/ratchet:conjecture`, `/ratchet:safeguard`, `/ratchet:architecture`, `/ratchet:next` | as written |
 
