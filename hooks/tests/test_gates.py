@@ -441,6 +441,10 @@ def test_change_size_does_not_count_the_methods_own_records(tmp_path: Path) -> N
     write(root, ".scratch/changes/feature-1-a.md", "# a\n")
     write(root, "docs/features/f/helper.py", "x = 1\n")
     write(root, "docs/disputes/0001-slug.md", "# Dispute\n\nwhy\n")
+    write(root, "docs/adr/0001-decision.md", "".join(f"line {n}\n" for n in range(50)))
+    write(root, "docs/architecture/blueprint.md", "# Blueprint\n\ndetails\n")
+    write(root, "README.md", "# Readme\n\nupdated\n")
+    write(root, "notes.markdown", "# Notes\n")
     assert change_size.measure(root, "main") == change_size.Size(2, 2), "code, and no record"
 
 
@@ -534,7 +538,7 @@ def test_change_size_counts_a_moved_file_by_its_changed_lines(tmp_path: Path) ->
     (root / "old/a.py").rename(root / "new/a.py")
     write(root, "new/a.py", body.replace("line 1\n", "changed\n"))
     (root / "docs/features/f/spec.md").rename(root / "docs/features/f/plan.md")
-    (root / "docs/features/f/plan.md").rename(root / "plan.md")
+    (root / "docs/features/f/plan.md").rename(root / "plan.txt")
     commit(root, "refactor(core): move a")
     assert change_size.measure(root, "main") == change_size.Size(2, 2), "the edit, no record"
 
