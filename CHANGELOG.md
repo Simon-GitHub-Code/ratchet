@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.15.10
+
+This release holds pull requests #432 through #448, introducing the `- Stakes: standard | high-consequence` profile with six universal high-consequence Tier 1 gates, adding default-deny authorization isolation and runtime log-redaction gates, hardening Codex plugin pinning and companion skill resolution, and fixing multiple field-reported gate and upgrade issues.
+
+Upgrade from 0.15.9 as the README's Upgrading section says. These changes reach the project:
+
+- **Add `- Stakes: standard | high-consequence` profile and six universal high-consequence Tier 1 gates (#447, #448, ADR 0101, ADR 0102).** Repositories can now declare `- Stakes: high-consequence` beside `- Life events:` to promote mutation testing (`code:source`), rollback verification (`code:stored-format`), and runtime log redaction (`code:entry-point`) to code arrival, hold changes to `## Absolute paths`, one-way doors, and altered recorded outputs for human owner review, and require six universal Tier 1 questions with nine named proofs (`execution determinism and replay`, `exact-value and unit safety` via `code:exact-quantity`, `differential oracle agreement`, `idempotency and concurrent write safety`, `fail-closed on stale or out-of-bounds input`, and `schema and ledger integrity`), plus formal execution-trace validation guidance. Standard repositories experience zero upgrade noise and may write `none: standard stakes` (no ADR) or omit those six rows.
+- **Add `authorization and tenant isolation` and `sensitive data kept out of logs` gates (#446, ADR 0100).** Wires existing `code:access-control` triggers to `just authz-check` (proven by `unprotected-route` and `cross-tenant-read`) and `just log-redaction` (proven by `secret-logged`, triggered on `code:entry-point and code:access-control` under `standard` stakes and `code:entry-point` under `high-consequence`).
+- **Protect pinned plugin records and harden Codex hook installation (#444).** Prevents stale or unpinned harness hooks from overwriting a repo's `.git/ratchet-plugin` pin, adds in-place adapter upgrade and `--remove` cleanup, and refuses installing hooks from temporary marketplace clones.
+- **Centralize companion skill slugs and enforce registry in CI (#441, #445).** Centralizes companion skill slug resolution across skills and adds CI enforcement plus a weekly canary workflow.
+- **Field reliability fixes (#432–#440).** Fixes `plugin-pin` release-tag cleanliness for excluded harness files (#432), lockfile diffing for added dependencies (#433), offline vs empty forge state in `route.py` (#434), cross-harness plugin cache fallback in the template `justfile` (#435), optional binding-declared `- Exclude:` globs for generated files in `suppressions.py` (#436), build-cache seeding from linked worktrees (#437), ignoring `.impeccable/questions/` in secret scans (#438), deduplicating shared-recipe gate faults in `project_bite.py` (#439), and avoiding glob expansion inside inline interpreter strings in `ratchet_guards` (#440).
+
 ## 0.15.9
 
 This patch release holds pull requests #429 and #430, adding the read-only `/ratchet:audit` compliance command and documenting `merge_ready.py record` in `--help`.
