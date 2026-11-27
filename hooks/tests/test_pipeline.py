@@ -240,6 +240,12 @@ IMPLEMENTED = {
     "allNewTestsPass": True,
     "checkPasses": True,
     "recordedOutputs": [],
+    "visualVerification": {
+        "applicable": False,
+        "command": "",
+        "surfaces": [],
+        "defectsFixed": [],
+    },
     "namedGatesRun": [],
     "checkOutput": "check: green",
     "disputes": [],
@@ -266,6 +272,7 @@ SPECIFIED = {
     "namedGates": [],
     "testFiles": ["tests/test_expiry.py"],
     "layersTouched": [],
+    "touchesUI": False,
     "openQuestions": [],
     "assumptions": [{"question": "q", "assumed": "a", "refuter": "r"}],
     "dependencies": [],
@@ -2894,3 +2901,116 @@ def test_prompts_steer_expect_tests_and_hold_recorded_outputs_to_spec_criteria()
         assert "recordedOutputs" in ran["schemas"][label]["required"], label
         without = {k: v for k, v in IMPLEMENTED.items() if k != "recordedOutputs"}
         assert not _valid(without, ran["schemas"][label]), label
+
+
+def test_ui_changes_require_structured_visual_verification_even_before_depended_on() -> None:
+    ui_spec = {**SPECIFIED, "touchesUI": True}
+    verified = {
+        "applicable": True,
+        "command": "just start & capture /login at 1440px and 390px",
+        "surfaces": [
+            {
+                "target": "/login empty and error states",
+                "screenshot": "scratch/login-desktop.png",
+                "observation": "Matches DESIGN.md spacing and contrast; error banner aligns",
+            }
+        ],
+        "defectsFixed": ["increased submit button spacing on mobile viewport"],
+    }
+    ran = _run(
+        {"ref": "4"},
+        preflight=YOUNG,
+        spec=ui_spec,
+        implement={**IMPLEMENTED, "visualVerification": verified},
+        review=REVIEW,
+    )
+    assert ran["result"]["verdict"] == "approve"
+    assert ran["result"]["touchesUI"] is True
+    assert ran["result"]["visualVerification"] == verified
+    assert "touchesUI: true" in ran["prompts"]["implement"]
+    assert "spec.touchesUI=true" in ran["prompts"]["review"]
+    assert "scratch/login-desktop.png" in ran["prompts"]["review"]
+    assert "touchesUI" in ran["schemas"]["spec"]["required"]
+    assert "visualVerification" in ran["schemas"]["implement"]["required"]
+    without_visual = {k: v for k, v in IMPLEMENTED.items() if k != "visualVerification"}
+    assert not _valid(without_visual, ran["schemas"]["implement"])
+
+    for bad_visual, expected in (
+        (
+            {"applicable": False, "command": "", "surfaces": [], "defectsFixed": []},
+            "omitted or marked not applicable",
+        ),
+        (
+            {
+                "applicable": True,
+                "command": "   ",
+                "surfaces": verified["surfaces"],
+                "defectsFixed": [],
+            },
+            "lists no command",
+        ),
+        (
+            {"applicable": True, "command": "just start", "surfaces": [], "defectsFixed": []},
+            "lists no inspected UI surfaces",
+        ),
+        (
+            {
+                "applicable": True,
+                "command": "just start",
+                "surfaces": [
+                    {"target": "/login", "screenshot": "scratch/a.png", "observation": "  "}
+                ],
+                "defectsFixed": [],
+            },
+            "missing target, screenshot, or visual observation",
+        ),
+    ):
+        failed = _run(
+            {"ref": "4"},
+            preflight=YOUNG,
+            spec=ui_spec,
+            implement={**IMPLEMENTED, "visualVerification": bad_visual},
+            review=REVIEW,
+        )
+        assert failed["result"]["verdict"] == "request_changes"
+        assert any(expected in reason for reason in failed["result"]["verdictForcedBy"])
+
+    incomplete_undeclared = _run(
+        {"ref": "4"},
+        preflight=YOUNG,
+        spec=SPECIFIED,
+        implement={
+            **IMPLEMENTED,
+            "visualVerification": {
+                "applicable": True,
+                "command": "just start",
+                "surfaces": [],
+                "defectsFixed": [],
+            },
+        },
+        review=REVIEW,
+    )
+    assert incomplete_undeclared["result"]["verdict"] == "request_changes"
+
+    missing_issue = {
+        "axis": "standards",
+        "severity": "major",
+        "title": "UI changed without visual verification evidence",
+        "location": "src/ui/login.tsx",
+        "evidence": "visualVerification was marked not applicable on a UI screen",
+    }
+    repaired = _run(
+        {"ref": "4"},
+        preflight=YOUNG,
+        spec=ui_spec,
+        implement=IMPLEMENTED,
+        review=_quoted(
+            {**REVIEW, "verdict": "request_changes", "issues": [missing_issue]}, "issues"
+        ),
+        **{"fix-1": {**IMPLEMENTED, "visualVerification": verified}},
+        **{"review-1": REVIEW},
+    )
+    assert repaired["result"]["verdict"] == "approve"
+    assert repaired["result"]["visualVerification"] == verified
+    assert "visualVerification" in repaired["schemas"]["fix-1"]["required"]
+    assert "scratch/login-desktop.png" in repaired["prompts"]["review-1"]

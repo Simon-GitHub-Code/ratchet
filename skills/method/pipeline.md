@@ -160,6 +160,7 @@ The script is a pure function of its arguments and the agents' structured result
    - the review's own run of `check` on the final tree was not green;
    - the spec's tests did not fail for the right reason, or a test file has no quoted failure;
    - the critic ran and found nothing and attempted nothing;
+   - the spec declared `touchesUI: true` (or `visualVerification.applicable` is `true`) and `visualVerification` is missing, marked not applicable, or lacks a boot/capture command or inspected surface observations (ADR 0105 — enforced before and after `depended-on`);
    - a guard path changed without a dispute naming it, unless it is a dependency the spec named or a record whose `guard-diff` note is `additions:`.
 
 8. **Cases no record states.** The critic, the builders and the review return `unstated`: each case where no record says which behaviour is right, put through [the fork test](#the-fork-test).
