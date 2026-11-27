@@ -138,7 +138,11 @@ def test_a_tier_with_no_long_gate_skips_its_long_job_rather_than_an_empty_matrix
     assert none != JUSTFILE
     code, outputs, _ = shards(BINDING, tmp_path, workflow, justfile=none)
     assert (code, outputs[f"{tier}_long"]) == (0, "[]")
-    assert f"    if: needs.shape.outputs.{tier}_long != '[]'\n" in WORKFLOWS[workflow]
+    assert re.search(
+        rf"^    if: .*needs\.shape\.outputs\.{tier}_long != '\[\]'(?: \}}\}})?$",
+        WORKFLOWS[workflow],
+        flags=re.MULTILINE,
+    )
 
 
 @pytest.mark.parametrize("workflow", sorted(WORKFLOWS))
