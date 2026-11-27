@@ -82,12 +82,15 @@ The second table's entry points are conveniences for the roles and the owner, wh
 
 - Application types: <one or more of `service`, `web-ui`, `app`, `cli`, `job`, `library`>
 - Life events: none
+- Stakes: standard
 
 One row per question the method asks. The application types decide which rows apply (`skills/method/application-types.toml` in the `ratchet` plugin); they never decide the tool. A row that applies names the tool for this stack, or `none` with the reason and the ADR that accepts the gap: green, and a standing criticism of the binding. A row that does not apply says `none: not a <type>`, naming a type the question is asked of, and needs no ADR. A row is never dropped, and an empty Tool cell is an unfinished binding: the conformance gate is red on both.
 
 Every question also has a trigger in the same file (ADR 0028): `always`, `code:<kind>`, `life:<event>`, or those two joined by ` and `. Until the trigger has fired, the Tool cell says `later: <trigger>`, copied from the catalogue exactly (`later: code:outbound-call`, `later: life:deployed`, or a compound such as `later: life:deployed and code:stored-format`, which fires when every part has), and the row judges nothing, needs no bite and has a recipe that prints the same words and exits 0. Adoption writes `later:` for every row whose trigger has not fired in this repository, and binds only the rest. The change that brings a kind of code is free, however many files it touches (ADR 0030): the `triggers` gate notes it and the route makes binding the owed rows the next step (`/ratchet:safeguard`); another instance added while a row is still `later:` is red. A row that is bound stays bound: nothing here unbinds a gate.
 
 `Life events` lists the events the owner has declared, from `deployed`, `irreplaceable-data` and `depended-on` (`none` until then). A declared event owes its rows in the same way and is never red. The route proposes an event when it sees a sign of it; only the owner declares one.
+
+`Stakes` is `standard` (default when absent) or `high-consequence` (ADR 0101). Under `high-consequence`, mutation and rollback triggers promote to code arrival (`code:source` and `code:stored-format`), high-consequence catalogue questions apply, one-way doors and altered recorded outputs are never waived before life events are declared, and changes touching `## Absolute paths` (or `absolute = true` coverage groups) route to the owner for human review.
 
 For `static security analysis`, state in the row or beside it whether the gate reads product code or every file with its reason; when narrowed to product code, record what is given up and which gates still read test files (such as secrets scan, typed lint, and import rules), and keep exclusions visible in the gate's command rather than a hidden ignore file.
 

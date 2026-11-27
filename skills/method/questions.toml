@@ -47,6 +47,12 @@ kind = "product"
 text = "<a choice about what happens to someone's things that would be hard to undo later, asked as someone using it would put it>"
 
 [[ask]]
+key = "adopt.stakes"
+skills = ["adopt"]
+kind = "product"
+text = "If this software produces a wrong answer, runs an action twice, or leaks data across users, what is the consequence?"
+
+[[ask]]
 key = "event.deployed"
 skills = ["adopt", "next"]
 kind = "product"

@@ -194,6 +194,10 @@ Steering files (`.scratch/<unit>/spec.md`, `.scratch/<unit>/issues/*.md`, and `d
 
 When a door, new surface or an altered recorded output is let through because no event is declared yet, the judge prints a `note:` line saying what it let through and why, so the owner sees it. The judge reads the binding's `- Life events:` line at the merge base and at the default branch's tip, never at the head, so a change that declares an event, or drops one, is not judged by its own line. The binding is a guard path, so declaring an event is itself a change the owner merges. Guard paths, disputes, agreement on labelled tickets and their specs, a `yes` ticket's flag check, an asked project's flag registry doors, before-deployment `unflagged`, and the clean-approval rule below hold from the first commit whatever the events.
 
+### High-consequence repositories
+
+When the merge base or default-branch tip declares `- Stakes: high-consequence` in `docs/process/binding.md` (ADR 0101), the merge judge never waives one-way doors or altered recorded outputs before life events are declared, and any change touching a path matched by `## Absolute paths` in `docs/process/binding.md` or an `absolute = true` coverage group in `quality/thresholds.toml` returns `stakes` and waits for the owner's review.
+
 ### A dispute
 
 The change adds or edits a dispute, or a dispute not yet decided names a path the change touches.

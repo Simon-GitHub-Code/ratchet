@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 import application_types
+import coverage_groups
 import documents
 import expect_outputs
 import feature_preflight as preflight
@@ -95,6 +96,7 @@ REGULAR = frozenset({"100644", "100755", "000000"})
 IRREGULAR = {"120000": "a symbolic link", "160000": "a submodule"}
 RECORD_MODES = frozenset({"100644", "000000"})
 BOUND_KEY = ("ceilings", "deep", "unproven")
+ABSOLUTE_SECTION = "## Absolute paths"
 LEAVES = "The merge judge leaves this pull request to the owner"
 WAITS = (
     "Nothing here is the owner's to decide: the merge judge holds this pull request until what"
@@ -1418,6 +1420,48 @@ def setting_reasons(change: Change, base_ref: str, asked: Asked) -> list[Reason]
     return reasons
 
 
+def high_consequence(change: Change) -> bool:
+    return any(
+        application_types.stakes_of(text) == application_types.HIGH_CONSEQUENCE
+        for text in (change.before(BINDING), change.tip(BINDING))
+        if text is not None
+    )
+
+
+def absolute_globs(change: Change) -> tuple[str, ...]:
+    globs: list[str] = []
+    for text in (change.before(BINDING), change.tip(BINDING)):
+        if text is not None:
+            globs.extend(markdown_text.ticked(markdown_text.section(text, ABSOLUTE_SECTION)))
+    for text in (change.before(THRESHOLDS), change.tip(THRESHOLDS)):
+        if text is None:
+            continue
+        try:
+            data = tomllib.loads(text)
+        except ValueError:
+            continue
+        for group in coverage_groups.groups(data):
+            if group.absolute:
+                globs.extend(group.paths)
+    return tuple(dict.fromkeys(glob for glob in globs if glob))
+
+
+def stakes_reasons(change: Change) -> list[Reason]:
+    if not high_consequence(change):
+        return []
+    globs = absolute_globs(change)
+    hit = [path for path in change.paths if any(matches(path, glob) for glob in globs)]
+    if not hit:
+        return []
+    return [
+        Reason(
+            "stakes",
+            f"{', '.join(hit)}: touches an absolute path in a high-consequence repository,"
+            " which is the owner's merge (ADR 0101)",
+        )
+    ]
+
+
 def waiting(
     change: Change,
     reasons: list[Reason],
@@ -1434,7 +1478,7 @@ def waiting(
             if text is not None
         )
     )
-    if not reasons or declared & needs:
+    if not reasons or high_consequence(change) or declared & needs:
         return reasons
     notes.append(
         f"{what} let through: the merge base's binding declares none of"
@@ -1660,6 +1704,7 @@ def judge(
         *setting_reasons(change, base_ref, asked or Asked()),
         *file_reasons(change, manifest),
         *guard_reasons(change, manifest),
+        *stakes_reasons(change),
         *registry_reasons(change),
         *waiting(
             change,

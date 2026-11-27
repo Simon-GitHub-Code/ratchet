@@ -91,6 +91,10 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` from what the o
    - `- Signal:` the span, metric or log that shows it working.
    - `- Load:` the route or input the load gates gain.
    - `- Security:` the surface it adds: routes, inputs, who may call.
+   - When the binding declares `- Stakes: high-consequence`, also write:
+     - `- Determinism:` the inputs that govern the output (clock, snapshot, seed) and how replay reproduces it (or `none` and why).
+     - `- Idempotency:` the duplicate-delivery or retry key and atomic boundary (or `none: read-only`).
+     - `- Bounds & fail-closed:` the stale data, missing input, or hard ceiling that refuses execution (or `none: no action emitted`).
 
    Done when the draft holds the five parts, a table row for every thing the owner said that the ticket or spec touches and for every behaviour of the spec nothing they said asked for, the two size lines for a ticket (none for a spec that has not been split) and an operability line for every concern asked. When the estimate of a spec that has not been split passes a ceiling, the reply also names the `/mattpocock-skills:to-tickets` argument.
 
