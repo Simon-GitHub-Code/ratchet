@@ -246,8 +246,8 @@ def state_dir(root: Path) -> Path:
     return directory
 
 
-def subjects(root: Path, base: str) -> list[str]:
-    listed = git(root, "log", "--no-merges", "--format=%s", f"{base}..HEAD")
+def subjects(root: Path, base: str, head: str = "HEAD") -> list[str]:
+    listed = git(root, "log", "--no-merges", "--format=%s", f"{base}..{head}")
     return [line for line in (listed or "").splitlines() if line]
 
 

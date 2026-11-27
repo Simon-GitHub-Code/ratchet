@@ -313,9 +313,10 @@ Optional (ADR 0096): when a change edits shared files (such as shell, layout, ro
 
 ## Test paths
 
-What the change-size gate reads to count tests apart from product code (ADR 0045): the ceiling on product lines and files bounds the unguarded code a change brings, and test lines have a ceiling of their own that only stops a runaway. The method knows no stack, so name the files of this one, from what you know of its tools. The gate reads this section at the merge base, so a change cannot widen what it exempts; until it is filled every changed line counts as product.
+What the change-size gate reads to count tests apart from product code and exclude declared generated artefacts (ADR 0045, ADR 0104): `[ceilings.change]` counts added hand-written product lines (`product_lines` autonomous ceiling, optional `product_lines_hard` runaway ceiling; `product_files` and optional `product_files_hard`), and test lines have a ceiling of their own (`test_lines`) that only stops a runaway. Whole-file `## Recorded outputs` rows, method records, lockfiles, snapshots, and the owed ledger are excluded automatically. The method knows no stack, so name the files of this one from what you know of its tools. The gate reads this section at the merge base, so a change cannot widen what it exempts; until `- Tests:` is filled every added line counts as product.
 
 - Tests: <globs of every file that is a test, a fixture or test support, the critique directory included, each in backticks, or `none: <reason>`>
+- Generated: <globs of machine-generated product files such as schemas or generated clients, each in backticks, or `none: <reason>`; leave this placeholder while none is>
 
 ## Critique tests
 

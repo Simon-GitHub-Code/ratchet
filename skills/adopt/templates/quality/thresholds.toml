@@ -1,4 +1,6 @@
 [ceilings.change]
 product_files = 25
+product_files_hard = 60
 product_lines = 1000
+product_lines_hard = 2500
 test_lines = 3000

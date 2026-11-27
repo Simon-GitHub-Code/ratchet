@@ -1277,6 +1277,21 @@ def test_a_ticket_that_states_a_size_over_the_product_ceiling_is_refused_before_
     assert "orchestrator splits the ticket itself" in report.failures[0].produce
     assert checks(sized("\n## Size\n\n- Product files: 26\n")) == ["size"]
 
+    write(
+        root,
+        "quality/thresholds.toml",
+        (
+            "[ceilings.change]\nproduct_files = 25\nproduct_files_hard = 60\n"
+            "product_lines = 1000\nproduct_lines_hard = 2500\ntest_lines = 3000\n"
+        ),
+    )
+    snapshot(root, "chore: add hard ceilings")
+    assert sized("\n## Size\n\n- Product lines: 1800\n- Product files: 40\n").ok
+    over_hard = sized("\n## Size\n\n- Product lines: 2600\n- Product files: 65\n")
+    assert checks(over_hard) == ["size"]
+    assert "2600 product lines, ceiling 2500" in over_hard.failures[0].detail
+    assert "65 product files, ceiling 60" in over_hard.failures[0].detail
+
 
 def test_an_owed_item_an_agent_writes_stops_a_feature_and_names_the_step(tmp_path: Path) -> None:
     files = {"docs/process/binding.md": "# Binding\n"}

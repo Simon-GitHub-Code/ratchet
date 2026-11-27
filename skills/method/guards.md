@@ -198,6 +198,10 @@ When a door, new surface or an altered recorded output is let through because no
 
 When the merge base or default-branch tip declares `- Stakes: high-consequence` in `docs/process/binding.md` (ADR 0101), the merge judge never waives one-way doors or altered recorded outputs before life events are declared, and any change touching a path matched by `## Absolute paths` in `docs/process/binding.md` or an `absolute = true` coverage group in `quality/thresholds.toml` returns `stakes` and waits for the owner's review.
 
+### Over the autonomous change-size ceiling
+
+When `quality/thresholds.toml` at the merge base records `[ceilings.change]`, a change whose added hand-written product lines or touched product files exceed `product_lines` or `product_files` (measured from the merge base's `## Test paths`, `## Recorded outputs`, and lockfiles; excluding verified safeguard bindings) returns `size` and waits for the owner's merge (ADR 0104). When `product_lines_hard` or `product_files_hard` is set above the autonomous ceiling, changes in that band pass `change-size` with a warning instead of failing red, while changes above the hard ceiling still fail `change-size` red.
+
 ### A dispute
 
 The change adds or edits a dispute, or a dispute not yet decided names a path the change touches.
