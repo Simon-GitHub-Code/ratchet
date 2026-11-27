@@ -18,6 +18,7 @@ import budget
 import ci_jobs
 import gatelib
 import justfile_text
+import pages_lane
 import runrecord
 import schedule
 
@@ -197,7 +198,14 @@ def cmd_record(root: Path, out: Path) -> int:
     head = merge_head(root)
     if isinstance(head, str):
         return 0
-    payload = {"schema": SCHEMA, "base": head.base, "head": head.head, "tree": head.tree}
+    payload: dict[str, object] = {
+        "schema": SCHEMA,
+        "base": head.base,
+        "head": head.head,
+        "tree": head.tree,
+    }
+    if pages_lane.classify(root).active:
+        payload["lane"] = "pages"
     try:
         atomic_write(out, json.dumps(payload) + "\n")
     except OSError:
@@ -427,6 +435,21 @@ def validate_timings_dir(
     return counts
 
 
+def proven_mismatch(proven: dict[str, object], head: MergeHead) -> str:
+    schema = proven.get("schema")
+    if (
+        not is_exact_int(schema)
+        or schema != SCHEMA
+        or proven.get("base") != head.base
+        or proven.get("head") != head.head
+        or proven.get("tree") != head.tree
+    ):
+        return "proven.json does not match HEAD base, head, and tree"
+    if proven.get("lane") == "pages":
+        return "PR ran in pages lane"
+    return ""
+
+
 def verify_run_and_proven(options: argparse.Namespace, head: MergeHead, now: datetime) -> int | str:
     run_obj = read_json_dict(Path(options.run), "run")
     if isinstance(run_obj, str):
@@ -439,15 +462,8 @@ def verify_run_and_proven(options: argparse.Namespace, head: MergeHead, now: dat
     proven = read_json_dict(Path(options.proven), "proven")
     if isinstance(proven, str):
         return proven
-    schema = proven.get("schema")
-    if (
-        not is_exact_int(schema)
-        or schema != SCHEMA
-        or proven.get("base") != head.base
-        or proven.get("head") != head.head
-        or proven.get("tree") != head.tree
-    ):
-        return "proven.json does not match HEAD base, head, and tree"
+    if err := proven_mismatch(proven, head):
+        return err
     return cast("int", run_obj["id"])
 
 
