@@ -100,6 +100,8 @@ In the `pre-commit` hook (`tier0-staged`), tier 0 splits into per-file or staged
 | Does old persisted data still load? | golden fixtures from earlier versions read cleanly; migrations apply and reverse |
 | Do the documentation's examples run? | doctests, or extracted snippets executed |
 | Does the code contain a known insecure pattern? | static security analysis with the stack's rule set, over product code or every file as the binding states; findings fail |
+| Does every entry point enforce authorization and isolate actors or tenants? | authorization fitness tests proving default-deny policy registration and cross-actor or cross-tenant isolation, proven by `unprotected-route` and `cross-tenant-read` bites |
+| Are credentials and sensitive payloads kept out of runtime logs and telemetry? | runtime tests asserting no token, credential or sensitive payload reaches structured logs, error responses or telemetry spans, proven by a `secret-logged` bite |
 | Does the container, infrastructure or deployment configuration break a hardening rule? | a configuration scanner over the container build files, the deployment manifests and the infrastructure code |
 | Does the shipped artefact or base image carry a known vulnerability? | an image or artefact scanner, over the built image when the deliverable is one |
 | How much of the code is typed, and did it fall? | type coverage, ratcheted, for gradually typed languages |
@@ -121,10 +123,10 @@ In the `pre-commit` hook (`tier0-staged`), tier 0 splits into per-file or staged
 | Does the suite pass in any order, twice? | shuffled order, repeated runs, fresh seeds, printing a `replay:` command with the failing seed; a failure here is a bug, never "flaky" |
 | Is the build reproducible? | build twice, compare hashes |
 | Does the code hold under a race or memory detector? | race detector and sanitizers where the stack has them |
-| Is it within the performance budget? | benchmarks against the ceilings the binding holds for latency, allocation and bundle size; the owner's `/pstack:benchmark-checklist` before a number is trusted |
+| Is it within the performance budget? | benchmarks against the ceilings the binding holds for latency, allocation and bundle size; `pstack:benchmark-checklist` before a number is trusted |
 | Does the running system resist a dynamic scan? | a passive scan of the running deliverable, fed the routes of the published contract: headers, cookies, transport, disclosure |
 | Can an attacker's toolkit break in? | an active scan with a signed-in session, and requests generated from the published contract that try each route's authentication, authorisation and input handling; a finding fails |
-| Does it hold its latency and throughput under the load the binding names? | a load test against the end-to-end environment with the thresholds the binding's Limits hold: the arrival rate, the percentile latency, the error rate; the owner's `/pstack:benchmark-checklist` before a number is trusted |
+| Does it hold its latency and throughput under the load the binding names? | a load test against the end-to-end environment with the thresholds the binding's Limits hold: the arrival rate, the percentile latency, the error rate; `pstack:benchmark-checklist` before a number is trusted |
 | Does the telemetry arrive? | the method's `scripts/telemetry_sink.py`; a project with a collector reads the traces, metrics and logs back from it instead |
 | Is any flag past its removal date? | the method's flags gate with `--expired`; it goes red by the calendar, so it is asked here and never on a pull request |
 | Is the interface usable by everyone? | accessibility checks over the components and pages, for user interfaces, inside the end-to-end suite once there is one, including computed-style assertions under emulated forced-colors mode (borders, focus outlines, and contrast stay visible) and emulated reduced-motion preference (animations and transitions do not stay active); `impeccable audit` is the agent-side pass, the gate is the deterministic one, proven by `forced-colors` and `reduced-motion` bites |
@@ -221,6 +223,8 @@ Each group says why its questions wait for that trigger and no later. A row's ap
 | `code:layer`: a part declared in the binding's Architecture section | dependency direction (0) | Every project declares its parts at adoption (ADR 0049), so the direction is held from the first feature. |
 | `code:formal-model`: a model or proof the project keeps | formal verification (2) | Asked of the model the project chose to write, from the day it exists. |
 | `code:state-machine`: a fixed set of named states something moves between | formal verification of state (2) | Modelled at the first, while it has a few states and one writer, so the next is written against the model. |
+| `code:access-control`: a check of who is acting or what they may see or do | authorization and tenant isolation (1) | Default-deny authorization and tenant isolation are cheap around the first protected resource and costly to retrofit across forty handlers. |
+| `code:entry-point and code:access-control` | sensitive data kept out of logs (1) | Once a project both serves callers and distinguishes actors or credentials, redaction at the logging and telemetry boundary prevents runtime leaks from the first protected route. |
 | `life:deployed` | end to end (2), reproducible build (2), dynamic security scan (2), active security scan (2), telemetry arrives (2), production answers (weekly and after a deploy) | They judge what other people meet. Before anyone else can reach it there is nothing to attack, nothing to watch arrive and nothing to redeploy or roll back. Running the merge base's build on the head's data, and a flow suite, cost the same whenever they are added. |
 | `life:deployed and code:stored-format` | rolls back safely (1) | Running the merge base's build on the head's data needs data to run it on: a deployed project that stores nothing (a static site) has none, so the question is asked only once a stored format exists too. |
 | `life:irreplaceable-data` | backup restores (weekly) | A restore drill before there is data worth restoring tests nothing. |
@@ -242,7 +246,7 @@ Once a concern's trigger has fired, the part a developer waits for is the cheap 
 | --- | --- | --- | --- | --- |
 | Telemetry | | every entry point emits its span, in memory | the signals arrive at a collector | |
 | Feature flags | the registry: declared, owned, off when new | the suite with each changed flag off and on | no flag past its removal date | |
-| Security | secrets, pins | static analysis, dependency audit, configuration hardening, artefact or image scan | passive and active scans over the contract's routes, fuzzing | `audit-all` |
+| Security | secrets, pins | static analysis, authorization and tenant isolation, log redaction, dependency audit, configuration hardening, artefact or image scan | passive and active scans over the contract's routes, fuzzing | `audit-all` |
 | Load | | concurrent requests, zero errors | latency and throughput against the Limits | soak and breaking point |
 | Reliability | | a failing dependency survived, bad configuration refused, a graceful shutdown, the merge base's build on the head's data | | the latest backup restores, production answers |
 

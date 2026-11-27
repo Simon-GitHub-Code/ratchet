@@ -766,7 +766,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert first.startswith(f"upgrade: {root} from 0.8.2 at {adopted.RELEASES['0.8.2'][:12]} (CI")
     assert f"to {plugin_pin.in_use(PLUGIN_ROOT)}." in first
     assert "Would write 13 files (run with --apply):" in out
-    assert "  quality/owed.toml\n    - write down 112 things owed since" in out
+    assert "  quality/owed.toml\n    - write down 114 things owed since" in out
     assert "  .claude/settings.json\n    - regenerate the permission rules" in out
     assert f"    - pinned: {plugin_pin.line_for(PLUGIN_ROOT)}" in out
     assert out.index("\n  docs/process/binding.md\n") > out.index("\n  justfile\n")
@@ -778,7 +778,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert "        settled by the owner's answer to: Which of these has already happened" in out
     assert "        seen: no file in the tree is a sign of a life event" in out
     assert "        then: `deployed` owes the Gates rows " in out
-    assert verdict(out).startswith("upgrade: would write 86 edits in 13 files. 112 items are owed")
+    assert verdict(out).startswith("upgrade: would write 86 edits in 13 files. 114 items are owed")
     assert "and 0 red; 5 of them hold an assumption" in verdict(out)
     assert "The change touches guard paths" in verdict(out)
     assert plain(out) == "\n".join(
@@ -787,18 +787,19 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
             (
                 "This project would move from Ratchet 0.8.2 to"
                 f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 86 changes in 13"
-                " files. The project owes 112 things since the upgrade. None of them turns a check"
+                " files. The project owes 114 things since the upgrade. None of them turns a check"
                 " red or stops a merge, and between upgrades the list only gets shorter. Nothing"
                 " fixes them by itself: ask an agent to. Each is in a guard path: an agent can"
                 " make all the fixes in one change on a branch, and you decide at that one merge."
             ),
             (
                 "Checks that do not run until then: the weekly checks,"
+                " authorization and tenant isolation,"
                 " changed tests order-independent, changed tests run,"
                 " configuration hardening, formal verification of concurrency, formal"
                 " verification of state, formal verification of untrusted input, load smoke,"
                 " refuses bad configuration, rolls back"
-                " safely, shuts down gracefully,"
+                " safely, sensitive data kept out of logs, shuts down gracefully,"
                 " survives failing dependencies, telemetry emitted, the dependency-only"
                 " judgement of guard-diff and the merge judge, which sends every dependency change"
                 " to the owner until the section is filled, the suppressions gate and the coverage"

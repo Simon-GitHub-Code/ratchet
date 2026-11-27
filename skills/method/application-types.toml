@@ -141,6 +141,9 @@ doc-comment = "a doc comment in a file outside the published interface"
 forced-colors = "an element that loses its visible border, outline, or contrast under emulated forced-colors mode"
 reduced-motion = "an animation or transition that remains active under emulated reduced-motion preference"
 code-departs-from-model = "a change to the code the model mirrors that breaks a property the model holds, with the model left as it was"
+unprotected-route = "an entry point registered with no explicit authorization policy"
+cross-tenant-read = "one actor or tenant reading or modifying another actor's or tenant's record"
+secret-logged = "a credential, token or sensitive field emitted to runtime logs, error responses or telemetry"
 
 [[question]]
 name = "lint, near-all rules"
@@ -277,6 +280,20 @@ high-consequence-trigger = "code:source"
 [[question]]
 name = "static security analysis"
 trigger = "code:source"
+
+[[question]]
+name = "authorization and tenant isolation"
+applies-to = ["service", "web-ui", "app", "job"]
+trigger = "code:access-control"
+collection = true
+proofs = ["unprotected-route", "cross-tenant-read"]
+
+[[question]]
+name = "sensitive data kept out of logs"
+applies-to = ["service", "web-ui", "app", "cli", "job"]
+trigger = "code:entry-point and code:access-control"
+collection = true
+proofs = ["secret-logged"]
 
 [[question]]
 name = "changed tests order-independent"

@@ -1451,8 +1451,7 @@ may have broken things.`
   return `${PREAMBLE}
 You are the CRITIC for feature \`${spec.slug}\` of this repository. Your job is to BREAK it.
 You are the one adversary of this pipeline (its agent count is fixed, so you do the work
-in-process; the owner may run \`/pstack:interrogate\` on the branch afterwards, which is theirs
-to type, not yours to imitate). The rule of evidence: a finding survives only when a run proves
+in-process and load nothing that spawns agents). The rule of evidence: a finding survives only when a run proves
 it, so each carries the exact command, the output it printed and the output the spec requires;
 leave out anything you did not run; "no findings" is a valid result when you name what you ran.
 ${commonRules('critic')}

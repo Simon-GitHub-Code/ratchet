@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import commits
+import companions
 import conformance
 import feature_preflight as preflight
 import snapshots
@@ -326,7 +327,6 @@ def companion_references() -> list[tuple[str, int, str, str, bool]]:
     ]
 
 
-@pytest.mark.xfail(strict=True, reason="pages land in the companion PR")
 def test_each_companion_skill_is_named_in_one_form_and_no_pstack_command_appears() -> None:
     forms: dict[str, set[bool]] = {}
     where: dict[str, list[str]] = {}
@@ -342,6 +342,28 @@ def test_each_companion_skill_is_named_in_one_form_and_no_pstack_command_appears
         if "/pstack:" in line
     ]
     assert not commands, f"names a pstack command: {commands}"
+
+
+def test_every_companion_reference_is_registered_and_scripts_hardcode_none() -> None:
+    registered = {
+        (role.plugin, role.slug): role.kind == companions.OWNER
+        for role in companions.roles().values()
+    }
+    unregistered: list[str] = []
+    wrong_form: list[str] = []
+    in_scripts: list[str] = []
+    for name, number, plugin, skill, slash in companion_references():
+        loc = f"{name}:{number} ({'/' if slash else ''}{plugin}:{skill})"
+        if name.startswith("scripts/") and name.endswith(".py"):
+            in_scripts.append(loc)
+        expected = registered.get((plugin, skill))
+        if expected is None:
+            unregistered.append(loc)
+        elif expected != slash:
+            wrong_form.append(loc)
+    assert not in_scripts, f"scripts must resolve via companions.py: {in_scripts}"
+    assert not unregistered, f"unregistered companion skills: {unregistered}"
+    assert not wrong_form, f"companion skill form disagrees with registry: {wrong_form}"
 
 
 def test_the_remote_needs_an_accepting_answer() -> None:

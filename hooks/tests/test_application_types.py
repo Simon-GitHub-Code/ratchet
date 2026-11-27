@@ -78,10 +78,17 @@ def test_every_proof_a_question_requires_is_described_and_every_description_is_r
         "fuzzing": ("guarded-crash",),
         "symbolic checking": ("related-fields",),
         "accessibility": ("forced-colors", "reduced-motion"),
+        "authorization and tenant isolation": ("unprotected-route", "cross-tenant-read"),
+        "sensitive data kept out of logs": ("secret-logged",),
         "formal verification of concurrency": ("code-departs-from-model",),
         "formal verification of untrusted input": ("code-departs-from-model",),
         "formal verification of state": ("code-departs-from-model",),
     }
+    assert SHIPPED.trigger_of("authorization and tenant isolation") == "code:access-control"
+    assert (
+        SHIPPED.trigger_of("sensitive data kept out of logs")
+        == "code:entry-point and code:access-control"
+    )
     assert SHIPPED.trigger_of("symbolic checking") == "code:untrusted-input"
     assert SHIPPED.trigger_of("formal verification") == "code:formal-model"
     assert SHIPPED.trigger_of("formal verification of concurrency") == "code:concurrency"
