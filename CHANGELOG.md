@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.15.11
+
+This patch release holds pull requests #450 and #451, fixing 30-issue queue truncation and parent-spec scheduling in `route.py`/`drain.py`, keeping "the first one is free" true for `## Comments` on first-arrival triggered files, preventing adoption bite filename collisions, and making guard-blocked feature runs fail fast.
+
+Upgrade from 0.15.10 as the README's Upgrading section says. These changes reach the project:
+
+- **Paginate agent-ready issue lists, skip parent specs, and cache `gh issue view` reads (#450).** `scripts/route.py` (`tracker_tickets`) now passes `--limit 1000` to `gh issue list` so queues with more than 30 open agent-ready tickets do not silently drop their oldest/unblocked tickets. `agent_ready` now excludes open tickets referenced as `Parent` by another open agent-ready ticket (preventing parent specs carrying `ready-for-agent` from sorting ahead of their child tickets in both `route.py` and `drain.py`), and `fetched_ready` / `cached_runner` pre-seed and memoize `gh issue view` lookups across both `route.py` and `drain.py plan`.
+- **Exempt first-arrival triggered files in `## Comments`, prevent bite path collisions, and fail fast on guard-path tickets (#451).** `scripts/conformance.py` (`check_comments_section`) now exempts unmatched tracked text files during their first-instance arrival under a `## Triggers` kind at the merge base until that change lands on the default branch (when `/ratchet:safeguard` adds their `## Comments` row). `/ratchet:adopt`, `/ratchet:safeguard`, and `skills/method/tiers.md` now cover `## Triggers` file patterns in `## Comments` upfront and require synthetic non-colliding filenames for `write` and new-file `patch` bites. `/ratchet:conjecture` now warns on tickets whose criteria require guard-path edits, and `workflows/pipeline.js` checks `guards/manifest.toml` first before drafting a full spec or running gates.
+
 ## 0.15.10
 
 This release holds pull requests #432 through #448, introducing the `- Stakes: standard | high-consequence` profile with six universal high-consequence Tier 1 gates, adding default-deny authorization isolation and runtime log-redaction gates, hardening Codex plugin pinning and companion skill resolution, and fixing multiple field-reported gate and upgrade issues.
