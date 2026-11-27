@@ -259,7 +259,7 @@ A comment is allowed only where a tool reads it: a line a kind of the Suppressio
 
 The method knows no language, so the lister is yours to write, from what you know of this stack's file kinds. `just comments-list <file>...` reads the files as data and runs nothing. It prints one record per line a comment occupies, fields separated by tabs: path, line, kind (`comment` or `doc`) and the comment's text without its delimiters. It exits non-zero on a file it cannot read. The gate refuses a record whose text is not on the line it names. The lister is a guard path, so changing it is the owner's merge.
 
-One row per kind of file. `Files` are globs over tracked files, each in backticks. `Comments` is `listed` where the lister reads them, or `none: <reason>` for code nobody writes by hand, such as generated code, vendored code or a fixture that reproduces outside input. Every tracked text file other than a Markdown document matches a row, and the `conformance` gate is red on one that matches none.
+One row per kind of file. `Files` are globs over tracked files, each in backticks. `Comments` is `listed` where the lister reads them, or `none: <reason>` for code nobody writes by hand, such as generated code, vendored code or a fixture that reproduces outside input. Every tracked text file other than a Markdown document or a method-written `docs/features/<slug>/verdict.json` record matches a row, and the `conformance` gate is red on one that matches none.
 
 | Files | Comments |
 | --- | --- |
