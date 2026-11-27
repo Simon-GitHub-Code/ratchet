@@ -1222,10 +1222,12 @@ section, its comments, the design brief, PRODUCT.md, GLOSSARY.md or an ADR alrea
 neither a question nor an assumption: build what it says.
 
 Guard edits stop it too. This run has no owner at the keyboard, so no agent in it can change a
-guard path. Before writing tests, check each criterion against \`guards/manifest.toml\`: when
-one cannot be met without changing a guard path (a new import contract, a shared test fixture,
-a Layers row, the definition of a term the glossary already has), list it in \`guardEdits\`
-with the concrete edit. A word the glossary lacks is not one where the manifest marks the
+guard path. Check each criterion against \`guards/manifest.toml\` FIRST — before drafting
+\`spec.md\`, writing tests, or running gates: when any criterion cannot be met without changing a
+guard path (a new import contract, a tool config, an instruction file, a shared test fixture,
+a Layers row, the definition of a term the glossary already has), stop immediately and return
+\`guardEdits\` with the concrete edit (leaving \`testFiles\` empty and skipping gate runs) rather
+than drafting a full spec first. A word the glossary lacks is not one where the manifest marks the
 glossary \`edit = "append"\`: add the entry to GLOSSARY.md yourself before a test uses the
 word, in the format of the entries there (the bold term, one to three sentences, its
 \`_Avoid_\` list), and name it in spec.md. The hook lets the addition through; if it asks,
