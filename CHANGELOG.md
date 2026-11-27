@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.15.15
+
+This patch release holds pull request #463 (ADR 0105), closing the visual-verification gap in the feature pipeline so UI changes carry structured proof of live rendering and visual inspection from the very first commit (before and after `life:depended-on`).
+
+Upgrade from 0.15.14 as the README's Upgrading section says. These changes reach the project:
+
+- **Require structured visual verification evidence on UI changes (#463, ADR 0105).** `SPEC_SCHEMA` in `workflows/pipeline.js` (inherited by `workflows/pipeline.py`) now requires `touchesUI`, and `IMPLEMENT_SCHEMA` / `BUILD_SCHEMA` require `visualVerification` (`applicable`, `command`, `surfaces` with `target`/`screenshot`/`observation`, and `defectsFixed`). Implement and Fix prompts enforce a live-boot, scratch-screenshot, visual-inspection, and defect-fix feedback loop whenever UI is touched (keeping scratch screenshots out of git); Review receives `spec.touchesUI` and the latest `visualVerification` record to verify surface coverage and flag undeclared UI diffs; and `missingVisualVerification()` deterministically forces `verdict = "request_changes"` from commit #1 whenever UI verification is missing or incomplete.
+
 ## 0.15.14
 
 This patch release holds pull request #461 (ADR 0104), making `change-size` measure added hand-written product lines only, exclude declared generated artefacts and whole-file recorded outputs, and escalate large coherent changes to the owner (`merge: owner`) before hitting a hard runaway ceiling.
