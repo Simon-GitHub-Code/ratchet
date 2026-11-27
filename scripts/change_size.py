@@ -19,10 +19,9 @@ LATER_ROW = re.compile(r"^\|\s*([^|]+?)\s*\|\s*`?later:", re.MULTILINE | re.IGNO
 GATE_ROW = re.compile(r"^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|", re.MULTILINE)
 CEILINGS_TABLE = "[ceilings.change]"
 RECORDS = [
-    "docs/features/**/*.md",
+    "**/*.md",
+    "**/*.markdown",
     "docs/features/**/verdict.json",
-    "docs/disputes/**/*.md",
-    ".scratch/**/*.md",
     str(owed.LEDGER),
     "quality/snapshots/**",
     ".mise/locks/**",
