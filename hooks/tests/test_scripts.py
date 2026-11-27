@@ -582,6 +582,77 @@ def test_an_installed_codex_entry_with_the_bare_interpreter_is_replaced_not_join
     assert hooks["PreToolUse"][0]["hooks"][0]["command"].startswith("python3 -E -s ")
 
 
+def test_codex_hooks_replaces_an_older_ratchet_path_and_strips_ratchet_cleanly(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stale = {
+        "other": 1,
+        "hooks": {
+            "PreToolUse": [
+                "not a dict",
+                {
+                    "matcher": adapter.MATCHER,
+                    "hooks": [
+                        "not a dict",
+                        {"command": 'python3 -E -s "/old/marketplaces/ratchet/hooks/guard.py"'},
+                    ],
+                },
+            ],
+            "SessionStart": [
+                {"hooks": [{"command": 'python3 "/old/marketplaces/ratchet/hooks/session.py"'}]},
+                {"hooks": [{"command": "custom-session-hook"}]},
+            ],
+        },
+    }
+    upgraded = adapter.codex_hooks(stale, Path("/cache/ratchet/0.15.9"))
+    hooks = upgraded["hooks"]
+    assert isinstance(hooks, dict)
+    assert len(hooks["PreToolUse"]) == 2
+    assert hooks["PreToolUse"][1]["hooks"][1]["command"] == (
+        'python3 -E -s "/cache/ratchet/0.15.9/hooks/guard.py"'
+    )
+    assert len(hooks["SessionStart"]) == 2
+    assert hooks["SessionStart"][0]["hooks"][0]["command"] == (
+        'python3 -E -s "/cache/ratchet/0.15.9/hooks/session.py"'
+    )
+
+    cleaned = adapter.codex_hooks_without_ratchet(upgraded)
+    assert cleaned["other"] == 1
+    assert cleaned["hooks"] == {
+        "PreToolUse": ["not a dict", {"matcher": adapter.MATCHER, "hooks": ["not a dict"]}],
+        "SessionStart": [{"hooks": [{"command": "custom-session-hook"}]}],
+    }
+    only_ratchet = adapter.codex_hooks({}, Path("/cache/ratchet/0.15.9"))
+    assert adapter.codex_hooks_without_ratchet(only_ratchet) == {"hooks": {}}
+    assert adapter.codex_hooks_without_ratchet({"hooks": {"PreToolUse": "bad"}}) == {
+        "hooks": {"PreToolUse": "bad"}
+    }
+    assert adapter.codex_hooks_without_ratchet({"other": 1}) == {"other": 1}
+
+    home = tmp_path / "home"
+    assert adapter.main(["adapter", "claude", "--home", str(home), "--remove"]) == 0
+    assert "nothing to remove" in capsys.readouterr().out
+    assert adapter.main(["adapter", "codex", "--home", str(home), "--remove"]) == 0
+    assert "absent, nothing to remove" in capsys.readouterr().out
+    hooks_file = home / adapter.CODEX_HOOKS
+    hooks_file.parent.mkdir(parents=True)
+    hooks_file.write_text(json.dumps(only_ratchet), encoding="utf-8")
+    assert adapter.main(["adapter", "codex", "--home", str(home), "--remove"]) == 0
+    assert json.loads(hooks_file.read_text(encoding="utf-8")) == {"hooks": {}}
+    assert "updated" in capsys.readouterr().out
+
+    clone = tmp_path / "marketplace-ratchet"
+    clone.mkdir()
+    (clone / adapter.CODEX_MARKETPLACE_MARKER).write_text("{}\n", encoding="utf-8")
+    assert (
+        adapter.main(
+            ["adapter", "codex", "--home", str(home), "--plugin-root", str(clone), "--apply"]
+        )
+        == 1
+    )
+    assert "marketplace clone" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("name", ["pi", "opencode"])
 def test_the_typescript_adapters_start_the_guard_without_the_environment(name: str) -> None:
     source = (adapter.PLUGIN_ROOT / f"adapters/{name}/ratchet-guard.ts").read_text(encoding="utf-8")

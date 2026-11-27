@@ -343,3 +343,41 @@ def test_the_route_runs_with_the_options_the_hook_was_started_with(
 ) -> None:
     monkeypatch.setattr(sys, "flags", SimpleNamespace(ignore_environment=1, no_user_site=1))
     assert session.child_interpreter() == [sys.executable, "-E", "-s"]
+
+
+def test_a_non_matching_plugin_does_not_overwrite_a_pinned_record(tmp_path: Path) -> None:
+    pinned_copy = tmp_path / "pinned"
+    pinned_copy.mkdir()
+    (pinned_copy / "marker.txt").write_text("v1\n", encoding="utf-8")
+    tree = plugin_pin.copy_tree_id(pinned_copy)
+    assert tree is not None
+    other_copy = tmp_path / "other"
+    other_copy.mkdir()
+    (other_copy / "marker.txt").write_text("v2\n", encoding="utf-8")
+    same_copy = tmp_path / "same"
+    same_copy.mkdir()
+    (same_copy / "marker.txt").write_text("v1\n", encoding="utf-8")
+    pin_line = f"- Ratchet plugin: 0.15.9 at {'a' * 40} tree {tree}\n"
+    root = repos.repository(tmp_path / "repo", {"docs/process/binding.md": pin_line})
+
+    session.record_plugin(root, other_copy)
+    assert recorded(root).read_text(encoding="utf-8") == f"{other_copy}\n"
+
+    session.record_plugin(root, pinned_copy)
+    assert recorded(root).read_text(encoding="utf-8") == f"{pinned_copy}\n"
+
+    session.record_plugin(root, other_copy)
+    assert recorded(root).read_text(encoding="utf-8") == f"{pinned_copy}\n"
+
+    session.record_plugin(root, same_copy)
+    assert recorded(root).read_text(encoding="utf-8") == f"{same_copy}\n"
+
+    recorded(root).write_text(f"{tmp_path / 'gone'}\n", encoding="utf-8")
+    session.record_plugin(root, other_copy)
+    assert recorded(root).read_text(encoding="utf-8") == f"{other_copy}\n"
+
+    recorded(root).unlink()
+    recorded(root).symlink_to(tmp_path / "target")
+    session.record_plugin(root, other_copy)
+    assert not recorded(root).is_symlink()
+    assert recorded(root).read_text(encoding="utf-8") == f"{other_copy}\n"
