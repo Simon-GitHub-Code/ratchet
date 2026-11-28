@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.15.19
+
+This patch release holds pull requests #473 and #474: steering formal verification toward fast, native single-binary model checkers with built-in trace conformance, and requiring adopting and safeguarding repositories to verify real code across all modeled actions against the unmodified formal model.
+
+Upgrade from 0.15.18 as the README's Upgrading section says. These changes reach the project:
+
+- **Require verifying real code against the unmodified formal model (#474).** `skills/adopt/templates/docs/process/binding.md` (`## Formal verification`), `skills/safeguard/SKILL.md`, `skills/method/tiers.md`, and `skills/audit/SKILL.md` now make clear that a formal model of the design alone or one or two hand-picked assertions does not satisfy `just formal`: projects must either run a verifier directly over the mirrored code, or drive every modeled action through randomized or property-driven multi-step traces of the real implementation validated against the unmodified model. `/ratchet:audit` now flags formal gates that skip full real-code trace conformance.
+- **Prefer fast, native single-binary model checkers with built-in trace conformance (#473).** `skills/safeguard/SKILL.md` and `skills/method/tiers.md` direct agents binding `code:state-machine` or `code:concurrency` formal verification rows to check `PATH` first, prefer a fast native single-binary model checker with built-in structured trace conformance and no extra virtual-machine runtime, pin release versions by publisher checksum for fresh environments, and wrap execution in `scripts/timed.py`.
+
 ## 0.15.18
 
 This patch release holds pull requests #469, #470, and #471: resolving the `prose` vs `conformance` heading-comment deadlock, adding a portable session-isolated timeout helper with a conformance guard against bare `timeout` in `justfile` recipes, and fixing `test_pages_lane.py` on `main` push CI runs.
