@@ -1420,7 +1420,8 @@ def test_an_upgrade_renders_opt_ins_before_summary_without_altering_plain_or_owe
         .read_text(encoding="utf-8")
         .replace(
             '@echo "bind: coverage-guided fuzzing of each target with a kept corpus for {{each}}'
-            ' seconds, {{cap}} at most in total; red when there is no fuzz target"; exit 1',
+            " seconds, capped through scripts/timed.py {{cap}} -- ...;"
+            ' red when there is no fuzz target"; exit 1',
             '{{plugin_py}} "{{ratchet_plugin}}/scripts/parser_fuzz.py" -- ./parser',
         )
         .replace(

@@ -44,6 +44,7 @@ import runrecord
 import settings_rules
 import suites
 import suppressions
+import timed
 import triggers
 import unproven
 from ratchet_guards import committed
@@ -4836,6 +4837,20 @@ def check_pr_template(root: Path) -> Iterable[Finding]:
             yield missing_section(relative, problem, heading, template_text=wanted)
 
 
+def check_justfile_timeouts(root: Path) -> Iterable[Finding]:
+    justfile = read_justfile(root)
+    if justfile is None:
+        return
+    for recipe, missing in timed.unsafe_justfile_timeouts(justfile):
+        flags = " and ".join(f"`{flag}`" for flag in missing)
+        yield agent(
+            f"justfile: recipe `{recipe}` calls `timeout` without {flags}; on a terminal a"
+            " background process group stops on SIGTTOU and ignores SIGTERM without"
+            " `--kill-after` — run through `scripts/timed.py <seconds> -- <command>` or add"
+            " `--foreground --kill-after=10`"
+        )
+
+
 CHECKS: tuple[Check, ...] = (
     check_plugin_pin,
     check_agent_instructions,
@@ -4871,6 +4886,7 @@ CHECKS: tuple[Check, ...] = (
     check_settings,
     check_commit_hooks,
     check_runner,
+    check_justfile_timeouts,
     check_installs,
     check_quality,
     check_bite_all_ceiling,
@@ -5047,6 +5063,17 @@ def mutations() -> list[Mutation]:
         *architecture_mutations(),
         *comments_mutations(),
         *documents_mutations(),
+        *timeout_mutations(),
+    ]
+
+
+def timeout_mutations() -> list[Mutation]:
+    def bare_timeout(root: Path) -> None:
+        path = root / "justfile"
+        path.write_text(path.read_text(encoding="utf-8") + "\ntimed-demo:\n    timeout 30 true\n")
+
+    return [
+        ("justfile recipe calling bare timeout without --foreground and --kill-after", bare_timeout)
     ]
 
 

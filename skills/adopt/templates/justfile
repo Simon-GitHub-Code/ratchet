@@ -412,10 +412,10 @@ api-deep:
     @echo "bind: deep and stateful interface conformance, the deliverable booted through probed"; exit 1
 
 symbolic each="30" cap="600":
-    @echo "bind: symbolic or concolic search of each parser target, alone or as the fuzzer's hybrid mode, for {{each}} seconds, {{cap}} at most in total; red when there is no target"; exit 1
+    @echo "bind: symbolic or concolic search of each parser target, alone or as the fuzzer's hybrid mode, for {{each}} seconds, capped through scripts/timed.py {{cap}} -- ...; red when there is no target"; exit 1
 
 fuzz each="30" cap="600":
-    @echo "bind: coverage-guided fuzzing of each target with a kept corpus for {{each}} seconds, {{cap}} at most in total; red when there is no fuzz target"; exit 1
+    @echo "bind: coverage-guided fuzzing of each target with a kept corpus for {{each}} seconds, capped through scripts/timed.py {{cap}} -- ...; red when there is no fuzz target"; exit 1
 
 e2e *files:
     @echo "bind: end-to-end suite, shard {{shard}} of {{shards}}, building what it needs first; with files given, only those files; red when it holds no test"; exit 1

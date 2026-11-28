@@ -2594,3 +2594,17 @@ def test_binding_heading_with_glossary_allow_comment_passes_conformance_and_pros
     )(repo)
     assert red(repo) == []
     assert prose.problems(repo, None) == []
+
+
+def test_conformance_rejects_bare_timeout_in_justfile_and_accepts_safe_forms(repo: Path) -> None:
+    justfile = repo / JUSTFILE
+    base = justfile.read_text(encoding="utf-8")
+    justfile.write_text(base + "\nslow-job:\n    timeout 30 true\n", encoding="utf-8")
+    found = red(repo)
+    want = "recipe `slow-job` calls `timeout` without `--foreground` and `--kill-after`"
+    assert any(want in line for line in found)
+    justfile.write_text(
+        base + "\nslow-job:\n    timeout --foreground --kill-after=10 30 true\n",
+        encoding="utf-8",
+    )
+    assert red(repo) == []
