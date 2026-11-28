@@ -9,7 +9,7 @@
       "source": {
         "source": "url",
         "url": "https://github.com/Simon-GitHub-Code/ratchet.git",
-        "ref": "v0.15.15"
+        "ref": "v0.15.16"
       },
       "description": "The Ratchet method: tiered deterministic gates with ceilings that only fall, guards, disputes, the four-role pipeline and the merge rule of critical rationalism; runs in Claude Code, Grok, Codex, Antigravity, pi and OpenCode; composes with mattpocock-skills, pstack and impeccable.",
       "dependencies": [
