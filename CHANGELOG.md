@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.15.16
+
+This patch release holds pull request #465, fixing a P0 bug in the Antigravity CLI PreToolUse hook adapter where every `write_file` and `edit_file` call failed closed with `force_ask` (`unreadable`).
+
+Upgrade from 0.15.15 as the README's Upgrading section says. These changes reach the project:
+
+- **Map Antigravity CLI `write_file`/`edit_file` arguments and append/replace-all semantics (#465).** `hooks/ratchet_guards/hook.py` (`ANTIGRAVITY_ARGS`) now maps Antigravity CLI's `Path`, `Content`, `Target`, `Replacement`, and `Append` parameters alongside the older IDE parameter names, defaults `edit_file` to `replace_all = True`, and routes Antigravity's exact edit/write tools into `hooks/ratchet_guards/records.py` (`written()`). Both `records.py` and `hooks/ratchet_guards/tickets.py` now handle `Append: true` on `Write`, eliminating false `unreadable` (`force_ask`) prompts on unguarded files, restoring `deny` enforcement on locked guard paths via `write_file`/`edit_file`, and letting additive edits to `GLOSSARY.md` and `docs/adr/**` pass cleanly.
+
 ## 0.15.15
 
 This patch release holds pull request #463 (ADR 0105), closing the visual-verification gap in the feature pipeline so UI changes carry structured proof of live rendering and visual inspection from the very first commit (before and after `life:depended-on`).
