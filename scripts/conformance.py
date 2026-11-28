@@ -726,7 +726,7 @@ def with_moved_items(text: str, items: Sequence[str]) -> str:
     lines = text.splitlines(keepends=True)
     if lines and not lines[-1].endswith(("\n", "\r")):
         lines[-1] += newline
-    starts = [i for i, line in enumerate(lines) if line.rstrip() == MOVED]
+    starts = [i for i, line in enumerate(lines) if markdown_text.strip_comment(line) == MOVED]
     if not starts:
         return "".join([*lines, newline, MOVED, newline, newline, *added])
     start = starts[-1]
