@@ -1025,6 +1025,62 @@ def test_without_a_merge_base_or_a_checkout_the_hook_refuses() -> None:
     assert verdict.detail.endswith("the guard cannot tell what this Write call would write")
 
 
+def test_antigravity_cli_write_file_and_edit_file_simulate_additive_records() -> None:
+    filesystem = FakeFilesystem(contents=dict(ON_DISK), merged=dict(MERGED))
+    guard = make_guard(FakeRepo(branch="main"), filesystem=filesystem)
+    append_glossary = {
+        "toolCall": {
+            "name": "write_file",
+            "args": {"Path": "GLOSSARY.md", "Content": CLICK, "Append": True},
+        },
+        "cwd": str(ROOT),
+    }
+    assert hook.decide(append_glossary, guard) is None
+
+    overwrite_drop = {
+        "toolCall": {
+            "name": "write_file",
+            "args": {"Path": "GLOSSARY.md", "Content": CLICK, "Overwrite": True},
+        },
+        "cwd": str(ROOT),
+    }
+    dropped = hook.decide(overwrite_drop, guard)
+    assert dropped is not None
+    assert dropped.rule == "guard-path-default"
+    assert "is not an addition" in dropped.detail
+
+    repeated = GLOSSARY + "\n## Notes\n\nplaceholder\n\nplaceholder\n"
+    edit_fs = FakeFilesystem(
+        contents={**ON_DISK, f"{ROOT}/GLOSSARY.md": repeated},
+        merged={**MERGED, "GLOSSARY.md": repeated},
+    )
+    edit_guard = make_guard(FakeRepo(branch="main"), filesystem=edit_fs)
+    edit_bad = {
+        "toolCall": {
+            "name": "edit_file",
+            "args": {"Path": "GLOSSARY.md", "Target": "placeholder", "Replacement": "changed"},
+        },
+        "cwd": str(ROOT),
+    }
+    edited = hook.decide(edit_bad, edit_guard)
+    assert edited is not None
+    assert "is not an addition" in edited.detail
+    assert "cannot tell" not in edited.detail
+
+    edit_good = {
+        "toolCall": {
+            "name": "edit_file",
+            "args": {
+                "Path": "GLOSSARY.md",
+                "Target": "_Avoid_: customer",
+                "Replacement": "_Avoid_: customer, buyer",
+            },
+        },
+        "cwd": str(ROOT),
+    }
+    assert hook.decide(edit_good, guard) is None
+
+
 def test_a_codex_patch_on_a_record_is_refused_on_main_even_as_an_addition() -> None:
     patch = (
         "*** Begin Patch\n*** Add File: docs/adr/0004-links-expire.md\n+# A title\n*** End Patch"

@@ -220,6 +220,16 @@ def test_the_label_is_the_record_of_the_checkout_holding_the_ticket() -> None:
     [
         ("write_to_file", {"TargetFile": TICKET, "CodeContent": "Status: agent:ready\n"}, None),
         (
+            "write_file",
+            {"Path": TICKET, "Content": "\nStatus: agent:ready\n", "Append": True},
+            "# 01\n",
+        ),
+        (
+            "edit_file",
+            {"Path": TICKET, "Target": "needs-triage", "Replacement": "agent:ready"},
+            TRIAGED,
+        ),
+        (
             "replace_file_content",
             {
                 "TargetFile": TICKET,

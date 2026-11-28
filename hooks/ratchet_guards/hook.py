@@ -55,10 +55,22 @@ ANTIGRAVITY_CALL = "toolCall"
 ANTIGRAVITY_ARGS = {
     "CommandLine": "command",
     "TargetFile": "file_path",
+    "Path": "file_path",
     "CodeContent": "content",
+    "Content": "content",
     "TargetContent": "old_string",
+    "Target": "old_string",
     "ReplacementContent": "new_string",
+    "Replacement": "new_string",
     "AllowMultiple": "replace_all",
+    "Append": "append",
+}
+ANTIGRAVITY_SIMULATED = {
+    "write_to_file": "Write",
+    "write_file": "Write",
+    "replace_file_content": "Edit",
+    "edit_file": "Edit",
+    "multi_replace_file_content": "MultiEdit",
 }
 ANTIGRAVITY_CHUNKS = "ReplacementChunks"
 ANTIGRAVITY_DECISIONS = {Decision.DENY: "deny", Decision.ASK: "force_ask"}
@@ -306,8 +318,10 @@ def is_antigravity(payload: object) -> bool:
     return isinstance(payload, dict) and ANTIGRAVITY_CALL in payload
 
 
-def _claude_args(args: dict[str, object]) -> dict[str, object]:
+def _claude_args(args: dict[str, object], *, tool_name: object = None) -> dict[str, object]:
     renamed = {ANTIGRAVITY_ARGS.get(key, key): value for key, value in args.items()}
+    if tool_name == "edit_file":
+        renamed.setdefault("replace_all", True)
     chunks = args.get(ANTIGRAVITY_CHUNKS)
     if isinstance(chunks, list):
         renamed["edits"] = [_claude_args(chunk) for chunk in chunks if isinstance(chunk, dict)]
@@ -317,11 +331,12 @@ def _claude_args(args: dict[str, object]) -> dict[str, object]:
 def from_antigravity(payload: dict[str, object]) -> dict[str, object]:
     call = payload.get(ANTIGRAVITY_CALL)
     call = call if isinstance(call, dict) else {}
+    name = call.get("name")
     args = call.get("args")
     own = args.get("Cwd") if isinstance(args, dict) else None
     return {
-        "tool_name": call.get("name"),
-        "tool_input": _claude_args(args) if isinstance(args, dict) else args,
+        "tool_name": name,
+        "tool_input": _claude_args(args, tool_name=name) if isinstance(args, dict) else args,
         "cwd": own if isinstance(own, str) and own else payload.get("cwd"),
     }
 
@@ -386,11 +401,17 @@ def _edit(call: Call, path: Path, context: Context, *, guard: Guard) -> Verdict 
     return None if reason is None else _hit_verdict(hit, f" This edit is not an addition: {reason}")
 
 
+def _simulated_tool(reported: str) -> str:
+    return ANTIGRAVITY_SIMULATED.get(reported, reported)
+
+
 def _not_additive(call: Call, path: Path, guard: Guard) -> str | None:
     filesystem = guard.locator.filesystem
     canonical = filesystem.canonical(path)
     root = filesystem.checkout(canonical)
-    after = records.written(call.reported, call.tool_input, filesystem.read_text(canonical))
+    after = records.written(
+        _simulated_tool(call.reported), call.tool_input, filesystem.read_text(canonical)
+    )
     if root is None or after is None:
         return f"the guard cannot tell what this {call.reported} call would write"
     relative = canonical.relative_to(root).as_posix()
@@ -406,7 +427,9 @@ def _not_additive(call: Call, path: Path, guard: Guard) -> str | None:
 
 def _manifest_edit(call: Call, hit: Hit, context: Context, *, guard: Guard) -> Verdict | None:
     filesystem = guard.locator.filesystem
-    after = records.written(call.reported, call.tool_input, filesystem.read_text(hit.at))
+    after = records.written(
+        _simulated_tool(call.reported), call.tool_input, filesystem.read_text(hit.at)
+    )
     checkout = filesystem.guarded_checkout(hit.at)
     reason: str | None = f"the guard cannot tell what this {call.reported} call would write"
     if after is not None and checkout is not None:

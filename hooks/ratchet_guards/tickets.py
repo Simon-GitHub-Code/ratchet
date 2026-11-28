@@ -64,7 +64,8 @@ def _replace(text: str, edit: Mapping[str, object]) -> str:
 
 def after(tool: str, tool_input: Mapping[str, object], before: str) -> str:
     if tool == "Write":
-        return str(tool_input.get("content", ""))
+        content = str(tool_input.get("content", ""))
+        return before + content if tool_input.get("append") is True else content
     if tool == "Edit":
         return _replace(before, tool_input)
     edits = tool_input.get("edits")
