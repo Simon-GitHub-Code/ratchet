@@ -9,6 +9,7 @@ from pathlib import Path
 
 import expect_outputs
 import gatelib
+import markdown_text
 import owed
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
@@ -102,7 +103,10 @@ def not_counted(
 
 def _section_lines(binding: str | None) -> list[str] | None:
     lines = (binding or "").split("\n")
-    start = next((i for i, line in enumerate(lines) if line.rstrip() == SECTION), None)
+    start = next(
+        (i for i, line in enumerate(lines) if markdown_text.strip_comment(line) == SECTION),
+        None,
+    )
     if start is None:
         return None
     body: list[str] = []

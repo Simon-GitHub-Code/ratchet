@@ -281,7 +281,9 @@ def added_specs(root: Path, tree: Mapping[str, str]) -> list[str]:
 
 def with_lines(text: str, lines: Sequence[str]) -> str:
     rows = text.split("\n")
-    start = next(i for i, row in enumerate(rows) if row.rstrip() == OWNERS_WORDS)
+    start = next(
+        i for i, row in enumerate(rows) if markdown_text.strip_comment(row) == OWNERS_WORDS
+    )
     end = next(
         (i for i in range(start + 1, len(rows)) if rows[i].startswith(markdown_text.SECTION_START)),
         len(rows),
@@ -346,7 +348,7 @@ def expire(root: Path, today: dt.date) -> Expiry:
 
 def sections_of(text: str) -> tuple[list[str], list[str], list[str]] | None:
     rows = text.split("\n")
-    starts = [i for i, row in enumerate(rows) if row.rstrip() == OWNERS_WORDS]
+    starts = [i for i, row in enumerate(rows) if markdown_text.strip_comment(row) == OWNERS_WORDS]
     if not starts:
         return None
     end = next(
@@ -526,7 +528,7 @@ def filled(text: str) -> int:
 
 def cuttable(text: str, keeps: Collection[str]) -> int:
     kept = sum(
-        sum(row.rstrip() == heading for row in text.split("\n"))
+        sum(markdown_text.strip_comment(row) == heading for row in text.split("\n"))
         + filled(markdown_text.section(text, heading))
         for heading in keeps
     )
