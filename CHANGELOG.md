@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.15.18
+
+This patch release holds pull requests #469, #470, and #471: resolving the `prose` vs `conformance` heading-comment deadlock, adding a portable session-isolated timeout helper with a conformance guard against bare `timeout` in `justfile` recipes, and fixing `test_pages_lane.py` on `main` push CI runs.
+
+Upgrade from 0.15.17 as the README's Upgrading section says. These changes reach the project:
+
+- **Add `scripts/timed.py` and reject bare `timeout` in `justfile` recipes (#471).** `scripts/timed.py` runs time-capped commands in a detached session (`start_new_session=True`, `stdin=DEVNULL`) so terminal `SIGTTOU`/`SIGTTIN` freezes cannot occur, and tears down the entire process group (`SIGTERM` → grace → `SIGKILL`) on expiration (exit `124`) or external signal. `scripts/conformance.py` (`check_justfile_timeouts`) now flags any `justfile` recipe invoking `timeout` without both `--foreground` and `-k`/`--kill-after`, and the template `symbolic` and `fuzz` placeholders point at `scripts/timed.py {{cap}} -- ...`.
+- **Ignore trailing HTML comments on Markdown section headings and bullets (#470).** `scripts/markdown_text.py` (`strip_comment`) strips well-formed trailing `<!-- ... -->` comments when matching headings and bullet values (wired across `markdown_text.py`, `change_size.py`, `plugin_pin.py`, `documents.py`, and `conformance.py`). Projects whose `GLOSSARY.md` avoids a mandatory binding heading word can now place `<!-- glossary: allow: ... -->` on the heading line and pass both `just prose` and `just conformance` without weakening their glossary.
+- **Keep `GITHUB_EVENT_NAME` cleared across monkeypatch scope in `test_pages_lane.py` (#469).** Fixes a test-isolation bug where `monkeypatch.undo()` restored `GITHUB_EVENT_NAME=push` on `main`-branch CI pushes.
+
 ## 0.15.17
 
 This patch release holds pull request #467, fixing `pre-commit` gate failures inside linked git worktrees where `git commit` exports `GIT_DIR` into the hook environment.
