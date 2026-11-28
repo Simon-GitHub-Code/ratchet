@@ -186,9 +186,9 @@ def test_pages_lane_fails_closed_on_empty_diff_git_error_and_sensitive_paths(
     root = adopted_repo(tmp_path)
     assert pages_lane.classify(root).active is False
 
-    monkeypatch.setattr(pages_lane.gatelib, "git", lambda *_args: None)
-    assert pages_lane.changed_paths(root, "HEAD") is None
-    monkeypatch.undo()
+    with monkeypatch.context() as scoped:
+        scoped.setattr(pages_lane.gatelib, "git", lambda *_args: None)
+        assert pages_lane.changed_paths(root, "HEAD") is None
 
     sensitive_cases = [
         ("src/app.py", "x = 2\n"),
