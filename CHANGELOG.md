@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.15.17
+
+This patch release holds pull request #467, fixing `pre-commit` gate failures inside linked git worktrees where `git commit` exports `GIT_DIR` into the hook environment.
+
+Upgrade from 0.15.16 as the README's Upgrading section says. These changes reach the project:
+
+- **Strip repository `GIT_*` variables from gate environments while preserving `GIT_INDEX_FILE` (#467).** `scripts/parallel.py` now strips `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, and `GIT_PREFIX` before spawning child gates, and the template `pre-commit:` recipe in `skills/adopt/templates/justfile` unsets the same variables before invoking `just tier0-staged`. Tools invoked inside `pre-commit` that inspect another git repository (such as SDK version checks or package managers) are no longer hijacked by a linked worktree's `GIT_DIR`, while `GIT_INDEX_FILE` stays intact so `--staged` gates (`markers-staged`, `suppressions-staged`) continue to see partial commits accurately.
+
 ## 0.15.16
 
 This patch release holds pull request #465, fixing a P0 bug in the Antigravity CLI PreToolUse hook adapter where every `write_file` and `edit_file` call failed closed with `force_ask` (`unreadable`).
