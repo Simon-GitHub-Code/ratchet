@@ -2333,3 +2333,44 @@ def test_cold_build_shared_none_and_edge_cases(
     other_sched = parallel.Scheduler([], [], options, kept=schedule.Schedule())
     other_sched.finished = [parallel.Finished("lint", 8.0, 0, "")]
     assert parallel.cold_build_info(other_sched) is None
+
+
+def test_parallel_strips_repository_git_vars_while_preserving_index_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    main = repos.repository(tmp_path / "main")
+    elsewhere = repos.repository(tmp_path / "elsewhere")
+    worktree = tmp_path / "wt"
+    git(main, "worktree", "add", "-q", "-b", "feat/worktree", str(worktree))
+    (worktree / "staged.txt").write_text("hello\n", encoding="utf-8")
+    git(worktree, "add", "staged.txt")
+
+    wt_git_dir = git(worktree, "rev-parse", "--git-dir").strip()
+    wt_index = str(Path(wt_git_dir) / "index")
+    monkeypatch.setenv("GIT_DIR", wt_git_dir)
+    monkeypatch.setenv("GIT_WORK_TREE", str(worktree))
+    monkeypatch.setenv("GIT_COMMON_DIR", str(main / ".git"))
+    monkeypatch.setenv("GIT_PREFIX", "sub/")
+    monkeypatch.setenv("GIT_INDEX_FILE", wt_index)
+
+    probe = (
+        "import os, subprocess, sys\n"
+        "names = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_PREFIX')\n"
+        "leaked = [k for k in names if k in os.environ]\n"
+        "cmd = ['git', '-C', sys.argv[1], 'rev-parse', '--show-toplevel']\n"
+        "other = subprocess.check_output(cmd, text=True).strip()\n"
+        "staged = subprocess.check_output(\n"
+        "    ['git', 'diff', '--cached', '--name-only'], text=True\n"
+        ").strip()\n"
+        "print(f'leaked={leaked}')\n"
+        "print(f'index={os.environ.get(\"GIT_INDEX_FILE\")}')\n"
+        "print(f'other={other}')\n"
+        "print(f'staged={staged}')\n"
+    )
+    code = run("--root", str(worktree), "--", gate(probe, elsewhere))
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "leaked=[]" in out
+    assert f"index={wt_index}" in out
+    assert f"other={elsewhere.resolve()}" in out
+    assert "staged=staged.txt" in out

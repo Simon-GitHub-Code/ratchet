@@ -159,6 +159,7 @@ WINDOW = 2**20
 UNREADABLE = (ValueError, TypeError, KeyError, OverflowError, RecursionError)
 NO_RECORD: Mapping[str, float] = MappingProxyType({})
 NO_DEPS: Mapping[str, frozenset[str]] = MappingProxyType({})
+STRIPPED_ENV = (gatelib.REPOSITORY_VARIABLES - {"GIT_INDEX_FILE"}) | {budget.GROUP_ENV}
 WAITING = re.compile(r"(?P<standing>later|none): \S.*")
 
 
@@ -570,7 +571,7 @@ class Scheduler:
         command = [*self.runner, *shlex.split(name)]
         log = tempfile.TemporaryFile()  # noqa: SIM115 # -- held until the gate is settled
         say(f"parallel: {name}: started")
-        env = {key: value for key, value in os.environ.items() if key != budget.GROUP_ENV}
+        env = {key: value for key, value in os.environ.items() if key not in STRIPPED_ENV}
         if name in self.shares:
             env["RATCHET_JOBS"] = str(self.shares[name])
         used = {gate.lane for gate in self.live.values()}

@@ -211,7 +211,10 @@ def test_every_tier_runs_its_gates_at_once_through_the_runner(
 
 def test_tier_zero_is_the_tree_gates_and_the_history_gate() -> None:
     assert gate_list("tier0_gates") == [*gate_list("tier0_tree_gates"), "commits"]
-    assert "just tier0-staged" in recipe("pre-commit")
+    pre_commit = recipe("pre-commit")
+    assert "just tier0-staged" in pre_commit
+    assert "unset GIT_DIR" in pre_commit
+    assert "GIT_INDEX_FILE" not in pre_commit
     staged = gate_list("tier0_staged_gates")
     expected = [
         {"markers": "markers-staged", "suppressions": "suppressions-staged"}.get(g, g)
