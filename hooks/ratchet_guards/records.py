@@ -342,7 +342,9 @@ def written(tool: str, tool_input: Mapping[str, object], existing: str | None) -
         return None
     if tool == "Write":
         content = tool_input.get("content")
-        return content if isinstance(content, str) else None
+        if not isinstance(content, str):
+            return None
+        return (existing or "") + content if tool_input.get("append") is True else content
     edits = [tool_input] if tool == "Edit" else tool_input.get("edits")
     if not isinstance(edits, list) or not edits:
         return None

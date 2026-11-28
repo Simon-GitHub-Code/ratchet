@@ -527,12 +527,20 @@ def agy(name: str, cwd: Path, **args: object) -> dict[str, object]:
         ("run_command", {"CommandLine": "agy plugin disable ratchet"}, "plugin-removal"),
         ("write_to_file", {"TargetFile": "justfile", "CodeContent": "x"}, P),
         ("write_file", {"TargetFile": ".claude/settings.json"}, "guard-path-locked"),
+        ("write_file", {"Path": ".claude/settings.json", "Content": "{}"}, "guard-path-locked"),
+        ("write_file", {"Path": "justfile", "Content": "x", "Overwrite": True}, P),
         (
             "replace_file_content",
             {"TargetFile": "justfile", "TargetContent": "a", "ReplacementContent": "b"},
             P,
         ),
         ("edit_file", {"TargetFile": "justfile"}, P),
+        ("edit_file", {"Path": "justfile", "Target": "a", "Replacement": "b"}, P),
+        (
+            "edit_file",
+            {"Path": "guards/manifest.toml", "Target": "a", "Replacement": "b"},
+            "guard-path-locked",
+        ),
         (
             "multi_replace_file_content",
             {"TargetFile": ".claude/settings.json", "ReplacementChunks": []},
@@ -561,6 +569,8 @@ def test_antigravity_calls_are_judged_as_claude_tools(
             {"TargetFile": "justfile", "TargetContent": "a", "ReplacementContent": "b"},
         ),
         ("edit_file", {"TargetFile": "justfile"}),
+        ("write_file", {"Path": "justfile", "Content": "x", "Overwrite": True}),
+        ("edit_file", {"Path": "justfile", "Target": "a", "Replacement": "b"}),
     ],
 )
 def test_antigravity_edits_of_a_guard_path_get_no_verdict_on_a_branch(
@@ -577,6 +587,8 @@ def test_antigravity_edits_of_a_guard_path_get_no_verdict_on_a_branch(
     [
         ("run_command", {"CommandLine": "git status"}),
         ("write_to_file", {"TargetFile": "notes.md", "CodeContent": "x"}),
+        ("write_file", {"Path": "tests/__init__.py", "Content": "", "Overwrite": True}),
+        ("edit_file", {"Path": "src/app.py", "Target": "old", "Replacement": "new"}),
         ("view_file", {"AbsolutePath": "CLAUDE.md"}),
     ],
 )
