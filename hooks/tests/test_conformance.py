@@ -2576,3 +2576,17 @@ def test_standard_stakes_allows_omitting_or_waiving_high_consequence_questions(r
 def test_conformance_rejects_malformed_generated_paths_under_test_paths(repo: Path) -> None:
     replace(BINDING, "- Tests: `tests/**`", "- Tests: `tests/**`\n- Generated: `**`")(repo)
     assert any("'- Generated:' refuses the pattern `**`" in line for line in red(repo))
+
+
+def test_conformance_rejects_bare_timeout_in_justfile_and_accepts_safe_forms(repo: Path) -> None:
+    justfile = repo / JUSTFILE
+    base = justfile.read_text(encoding="utf-8")
+    justfile.write_text(base + "\nslow-job:\n    timeout 30 true\n", encoding="utf-8")
+    found = red(repo)
+    want = "recipe `slow-job` calls `timeout` without `--foreground` and `--kill-after`"
+    assert any(want in line for line in found)
+    justfile.write_text(
+        base + "\nslow-job:\n    timeout --foreground --kill-after=10 30 true\n",
+        encoding="utf-8",
+    )
+    assert red(repo) == []
