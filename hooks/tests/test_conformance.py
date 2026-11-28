@@ -17,6 +17,7 @@ import justfile_text
 import markdown_text
 import owed
 import project_bite
+import prose
 import upgrade
 from tests import adopted, repos
 from tests.repos import git, repository
@@ -2576,6 +2577,23 @@ def test_standard_stakes_allows_omitting_or_waiving_high_consequence_questions(r
 def test_conformance_rejects_malformed_generated_paths_under_test_paths(repo: Path) -> None:
     replace(BINDING, "- Tests: `tests/**`", "- Tests: `tests/**`\n- Generated: `**`")(repo)
     assert any("'- Generated:' refuses the pattern `**`" in line for line in red(repo))
+
+
+def test_binding_heading_with_glossary_allow_comment_passes_conformance_and_prose(
+    repo: Path,
+) -> None:
+    glossary = (repo / "GLOSSARY.md").read_text(encoding="utf-8")
+    (repo / "GLOSSARY.md").write_text(
+        glossary + "\n**Receipt**:\nA session record.\n_Avoid_: telemetry\n",
+        encoding="utf-8",
+    )
+    replace(
+        BINDING,
+        "## Telemetry",
+        "## Telemetry <!-- glossary: allow: the method's own section heading -->",
+    )(repo)
+    assert red(repo) == []
+    assert prose.problems(repo, None) == []
 
 
 def test_conformance_rejects_bare_timeout_in_justfile_and_accepts_safe_forms(repo: Path) -> None:

@@ -19,8 +19,18 @@ MIN_WIDTH = 3
 MIN_TABLE_LINES = 2
 
 
+def strip_comment(line: str) -> str:
+    text = line.rstrip()
+    while text.endswith("-->"):
+        start = text.rfind("<!--", 0, len(text) - 3)
+        if start < 0 or "-->" in text[start + 4 : -3]:
+            break
+        text = text[:start].rstrip()
+    return text
+
+
 def _headings_at(lines: Sequence[str], heading: str) -> list[int]:
-    return [i for i, line in enumerate(lines) if line.rstrip() == heading]
+    return [i for i, line in enumerate(lines) if strip_comment(line) == heading]
 
 
 def has_section(text: str, heading: str) -> bool:
@@ -169,7 +179,7 @@ TICKED = re.compile(r"`([^`\n]+)`")
 def bullets(body: str) -> dict[str, str]:
     found: dict[str, str] = {}
     for label, value in BULLET.findall(body):
-        found.setdefault(label.strip(), value)
+        found.setdefault(label.strip(), strip_comment(value))
     return found
 
 

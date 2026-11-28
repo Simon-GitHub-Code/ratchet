@@ -15,6 +15,7 @@ from enum import Enum
 from pathlib import Path
 
 import gatelib
+import markdown_text
 
 PLUGIN = Path(__file__).resolve().parents[1]
 MANIFEST = Path(".claude-plugin/plugin.json")
@@ -247,7 +248,10 @@ def with_pin(line: str) -> gatelib.Want:
         if PIN_LINE.search(text):
             return PIN_LINE.sub(lambda _: line, text)
         lines = text.split("\n")
-        heading = next((i for i, held in enumerate(lines) if held.rstrip() == RUNNER), None)
+        heading = next(
+            (i for i, held in enumerate(lines) if markdown_text.strip_comment(held) == RUNNER),
+            None,
+        )
         if heading is None:
             kept = text if text.endswith("\n") or not text else text + "\n"
             gap = "\n" if kept else ""

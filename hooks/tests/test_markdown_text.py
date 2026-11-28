@@ -445,3 +445,37 @@ def test_a_heading_that_is_repeated_gives_the_lines_under_every_copy() -> None:
     assert "first" in held
     assert "second" in held
     assert "middle" not in held
+
+
+def test_trailing_html_comments_on_headings_and_bullets_are_stripped() -> None:
+    assert markdown_text.strip_comment("## Telemetry") == "## Telemetry"
+    assert (
+        markdown_text.strip_comment("## Telemetry <!-- glossary: allow: method heading -->")
+        == "## Telemetry"
+    )
+    assert markdown_text.strip_comment("## Telemetry <!-- a --> <!-- b -->  ") == "## Telemetry"
+    assert markdown_text.strip_comment("## Telemetry -->") == "## Telemetry -->"
+    assert (
+        markdown_text.strip_comment("## Telemetry <!-- a --> extra -->")
+        == "## Telemetry <!-- a --> extra -->"
+    )
+    assert (
+        markdown_text.strip_comment("## Telemetry <!-- a --> trailing")
+        == "## Telemetry <!-- a --> trailing"
+    )
+    assert markdown_text.strip_comment("## Telemetry <!-- unclosed") == "## Telemetry <!-- unclosed"
+
+    commented = (
+        "## Telemetry <!-- glossary: allow: the method's own section heading -->\n\n"
+        "- Signal: spans and logs <!-- glossary: allow: method bullet -->\n"
+        "Body text long enough to be non-empty.\n"
+    )
+    assert markdown_text.has_section(commented, "## Telemetry")
+    assert not markdown_text.empty_body(commented, "## Telemetry")
+    assert markdown_text.bullets(markdown_text.section(commented, "## Telemetry")) == {
+        "Signal": "spans and logs"
+    }
+    block = "## Telemetry\n\nReplacement.\n"
+    assert markdown_text.with_section("## Telemetry", block, ["## Telemetry"])(commented) == (
+        commented
+    )
